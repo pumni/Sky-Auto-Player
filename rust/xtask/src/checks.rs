@@ -221,8 +221,15 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
         .get("build")
         .and_then(Value::as_object)
         .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
-    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some("bun run build") {
-        return Err("Tauri packaging must use `bun run build` as beforeBuildCommand".to_owned());
+    let before_build = build.get("beforeBuildCommand").and_then(Value::as_str);
+    if !before_build.is_some_and(|command| {
+        command.starts_with("bun run build && pwsh ")
+            && command.contains("../scripts/build_native_calibration.ps1")
+    }) {
+        return Err(
+            "Tauri packaging must build and stage native calibration in beforeBuildCommand"
+                .to_owned(),
+        );
     }
     let watch_folders = build
         .get("additionalWatchFolders")
@@ -1787,6 +1794,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "-Mode Create",
         "-BundleDir",
         "-PublicKeyPath",
+        "-CalibrationBinaryPath",
         "-OutputRoot",
         "-SourceSha",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
@@ -1862,6 +1870,9 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
+        "verify_installed_calibration.ps1",
+        "INSTALLED_CALIBRATION_EVIDENCE.json",
+        "calibration_binary_sha256",
         "actions/upload-artifact@",
     ] {
         if !packaged.contains(marker) {
@@ -1927,6 +1938,21 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+    let install_position = packaged
+        .find("installerRun = Start-Process")
+        .ok_or("packaged consumer must execute the exact NSIS installer")?;
+    let calibration_position = packaged
+        .find("verify_installed_calibration.ps1")
+        .ok_or("packaged consumer must verify installed native calibration")?;
+    let launch_position = packaged
+        .find("Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru")
+        .ok_or("packaged consumer must launch the installed application")?;
+    if calibration_position <= install_position || calibration_position >= launch_position {
+        return Err(
+            "installed calibration verification must follow installation and precede app launch"
+                .into(),
+        );
     }
 
     for marker in [
@@ -2037,7 +2063,12 @@ fn packaged_ci_contract_source_legacy(source: &str) -> Result<()> {
         "SBOM generation failed with exit code",
         "SBOM verification failed with exit code",
         "Tauri bundle verification failed with exit code",
-        "Installed Authenticode verification failed with exit code",
+        "& scripts/verify_v4_authenticode.ps1",
+        "-Artifact $installedPe.FullName",
+        "Installed Authenticode verification failed:",
+        "scripts/test_installed_calibration.ps1",
+        "verify_installed_calibration.ps1",
+        "INSTALLED_CALIBRATION_EVIDENCE.json",
         "cargo xtask builtin-catalog verify-installed",
         "CI self-signed credentials remain test-only",
         "Tauri updater signer generation failed with exit code",
@@ -2194,6 +2225,9 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     for marker in [
         "schema_version",
         "source_sha",
+        "calibration_binary_size",
+        "calibration_binary_sha256",
+        "calibration_binary_architecture",
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
@@ -2212,6 +2246,17 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     let validator_test = root.join("scripts/test_ci_validate_candidate.ps1");
     if !validator_test.exists() {
         return Err("current-candidate validator self-test is missing".into());
+    }
+    for script in [
+        "scripts/build_native_calibration.ps1",
+        "scripts/verify_installed_calibration.ps1",
+        "scripts/test_installed_calibration.ps1",
+    ] {
+        if !root.join(script).exists() {
+            return Err(
+                format!("native calibration package contract script is missing: {script}").into(),
+            );
+        }
     }
     let bridge_validator = fs::read_to_string(root.join("scripts/ci_validate_bridge.ps1"))?;
     for marker in [
@@ -2551,11 +2596,24 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let first_repository_check_position = validate
         .find("name: Repository verification — Rust")
         .ok_or("Windows validation is missing its first repository verification step")?;
+    let calibration_resource_position = validate
+        .find("name: Stage calibration resource for Tauri validation")
+        .ok_or("Windows validation must stage the calibration resource before Tauri checks")?;
     if rust_cache_position >= dependency_check_position
-        || dependency_check_position >= first_repository_check_position
+        || dependency_check_position >= calibration_resource_position
+        || calibration_resource_position >= first_repository_check_position
     {
         return Err(
-            "Windows validation dependency check must follow setup/cache and precede repository verification".into(),
+            "Windows validation must cache dependencies, stage the calibration resource, then run repository checks".into(),
+        );
+    }
+    if validate.matches("scripts/build_native_calibration.ps1").count() != 1
+        || !validate.contains(
+            "run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build_native_calibration.ps1",
+        )
+    {
+        return Err(
+            "Windows validation must stage the locked calibration resource exactly once".into(),
         );
     }
     if validate.contains(
@@ -2963,6 +3021,104 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn v4_production_calibration_gate_contract(orchestrator: &str) -> Result<()> {
+    let smoke_start = orchestrator
+        .find("# 10. Install / Smoke Test")
+        .ok_or("v4 production release orchestrator is missing its install smoke section")?;
+    let evidence_start = orchestrator
+        .find("# 11. Emit Deterministic Machine-Readable Evidence")
+        .ok_or("v4 production release orchestrator is missing its evidence boundary")?;
+    if evidence_start <= smoke_start {
+        return Err("v4 production calibration gate must precede qualification evidence".into());
+    }
+    let smoke = &orchestrator[smoke_start..evidence_start];
+    let staged_gate_start = smoke
+        .find("# Production-only staged calibration gate.")
+        .ok_or("production release must verify the staged calibration resource")?;
+    let install_position = smoke
+        .find("Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot")
+        .ok_or("production release smoke must install the exact NSIS candidate")?;
+    let installed_gate_start = smoke
+        .find("# Production-only installed calibration gate")
+        .ok_or("production release must verify installed native calibration")?;
+    let launch_position = smoke
+        .find("Start-Process -FilePath $appPath")
+        .ok_or("production release smoke must launch the installed application")?;
+    if staged_gate_start >= install_position
+        || install_position >= installed_gate_start
+        || installed_gate_start >= launch_position
+    {
+        return Err(
+            "production calibration verification must validate the staged child, install, verify the installed child, then launch".into(),
+        );
+    }
+
+    let staged_gate = &smoke[staged_gate_start..install_position];
+    for marker in [
+        "if (-not $InternalTestFixture) {",
+        r#"Join-Path $repoRoot "desktop\src-tauri\resources\native_calibration.exe""#,
+        "Test-Path -LiteralPath $calibrationResourcePath -PathType Leaf",
+        "$calibrationResource.Attributes -band [IO.FileAttributes]::ReparsePoint",
+        "$calibrationResourceSize = [long]$calibrationResource.Length",
+        "Get-FileHash -LiteralPath $calibrationResourcePath -Algorithm SHA256",
+        "$calibrationResourceRoot = Split-Path -Parent $calibrationResourcePath",
+        "Invoke-CalibrationPayloadVerification",
+        "-InstallRoot $calibrationResourceRoot",
+        "-ExpectedSize $calibrationResourceSize",
+        "-ExpectedSha256 $calibrationResourceSha256",
+    ] {
+        if !staged_gate.contains(marker) {
+            return Err(format!(
+                "production staged calibration verification is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let installed_gate = &smoke[installed_gate_start..launch_position];
+    for marker in [
+        "if (-not $InternalTestFixture) {",
+        "Invoke-CalibrationPayloadVerification",
+        "-InstallRoot $installRoot",
+        "-ExpectedSize $calibrationResourceSize",
+        "-ExpectedSha256 $calibrationResourceSha256",
+        "-Context \"Installed calibration verification\"",
+    ] {
+        if !installed_gate.contains(marker) {
+            return Err(format!(
+                "production installed calibration verification is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let verifier = orchestrator
+        .split_once("function Invoke-CalibrationPayloadVerification")
+        .map(|(_, remainder)| remainder)
+        .ok_or("production release is missing the installed calibration verifier adapter")?;
+    let verifier = verifier
+        .split_once("\nfunction ")
+        .map(|(function, _)| function)
+        .ok_or("installed calibration verifier adapter must be a bounded function")?;
+    for marker in [
+        "verify_installed_calibration.ps1",
+        "-InstallRoot $InstallRoot",
+        "-ExpectedSize $ExpectedSize",
+        "-ExpectedSha256 $ExpectedSha256",
+        "$verificationExitCode = $LASTEXITCODE",
+        "if ($verificationExitCode -ne 0)",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "production installed calibration verifier adapter is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let config_path = root.join("desktop/src-tauri/tauri.conf.json");
     let config = fs::read_to_string(&config_path)?;
@@ -3340,6 +3496,23 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         if !orchestrator.contains(marker) {
             return Err(format!(
                 "v4 production release orchestrator is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    v4_production_calibration_gate_contract(&orchestrator)?;
+    let installed_calibration_verifier =
+        fs::read_to_string(root.join("scripts/verify_installed_calibration.ps1"))?;
+    for marker in [
+        "ExpectedSize -le 0",
+        "$sha256 -cne $ExpectedSha256.ToLowerInvariant()",
+        "$machine -ne 0x8664",
+        "WaitForExit(5000)",
+        "installed calibration --help exited with",
+    ] {
+        if !installed_calibration_verifier.contains(marker) {
+            return Err(format!(
+                "production calibration verifier is missing its fail-closed check: {marker}"
             )
             .into());
         }
@@ -3766,20 +3939,13 @@ const CANONICAL_DISPATCH_FILES: &[&str] = &[
     "observer_trace.rs",
     "prepared.rs",
 ];
-const ALLOWED_UNSAFE_MODULES: &[&str] = &[
-    "rust/crates/sky_dispatch_win32/src/calibration.rs",
-    "rust/crates/sky_dispatch_win32/src/clock.rs",
-    "rust/crates/sky_dispatch_win32/src/cpu.rs",
-    "rust/crates/sky_dispatch_win32/src/event.rs",
-    "rust/crates/sky_dispatch_win32/src/focus.rs",
-    "rust/crates/sky_dispatch_win32/src/input.rs",
-    "rust/crates/sky_dispatch_win32/src/input/physical.rs",
-    "rust/crates/sky_dispatch_win32/src/input/raw.rs",
-    "rust/crates/sky_dispatch_win32/src/mmcss.rs",
-    "rust/crates/sky_dispatch_win32/src/power.rs",
-    "rust/crates/sky_dispatch_win32/src/timer.rs",
-    "rust/crates/sky_dispatch_win32/src/wait.rs",
-    "rust/crates/sky_dispatch_win32/src/wait/timer.rs",
+const UNSAFE_AUDIT_SOURCE_ROOTS: &[&str] = &[
+    "rust/crates/sky_dispatch_core/src",
+    "rust/crates/sky_dispatch_win32/src",
+    "rust/crates/sky_app_core/src",
+    "rust/crates/sky_player/src",
+    "rust/crates/sky_native_adapters/src",
+    "desktop/src-tauri/src",
 ];
 
 fn load_architecture_allowlist(root: &Path) -> Result<BTreeMap<(String, String), String>> {
@@ -3950,11 +4116,110 @@ fn line_is_gated(lines: &[String], index: usize) -> bool {
         .any(|line| line.contains("cfg(any(test, feature = \"test-support\"))"))
 }
 
+#[cfg(test)]
 fn contains_unsafe_code(source: &str) -> bool {
     let source = source.replace("#![forbid(unsafe_code)]", "");
     source
         .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         .any(|word| word == "unsafe")
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct UnsafeCodeInventory {
+    production_lines: Vec<usize>,
+    cfg_test_lines: Vec<usize>,
+}
+
+fn unsafe_code_inventory(path: &str, source: &str) -> UnsafeCodeInventory {
+    let file_is_test = path.contains("/tests/")
+        || path.ends_with("/tests.rs")
+        || source.lines().any(|line| line.trim() == "#![cfg(test)]");
+    let source = source
+        .replace("#![forbid(unsafe_code)]", "")
+        .replace("#![cfg(test)]", "");
+    let clean = strip_rust_comments(&source);
+    let lines = clean.lines().map(str::to_owned).collect::<Vec<_>>();
+    let mut test_only = vec![file_is_test; lines.len()];
+
+    for (attribute, line) in lines.iter().enumerate() {
+        if line.trim() != "#[cfg(test)]" {
+            continue;
+        }
+        let mut declaration = None;
+        for (index, candidate) in lines.iter().enumerate().skip(attribute + 1).take(5) {
+            let candidate = candidate.trim();
+            if candidate.is_empty() || candidate.starts_with("#[") {
+                continue;
+            }
+            let item = candidate
+                .strip_prefix("pub(crate) ")
+                .or_else(|| candidate.strip_prefix("pub(super) "))
+                .or_else(|| candidate.strip_prefix("pub "))
+                .unwrap_or(candidate);
+            if item.starts_with("mod ")
+                || item.starts_with("fn ")
+                || item.starts_with("const ")
+                || item.starts_with("static ")
+                || item.starts_with("struct ")
+                || item.starts_with("enum ")
+                || item.starts_with("impl ")
+                || item.starts_with("trait ")
+            {
+                declaration = Some(index);
+            }
+            break;
+        }
+        if let Some(start) = declaration {
+            let end = brace_end(&lines, start).unwrap_or(start);
+            for line in test_only
+                .iter_mut()
+                .take(end.saturating_add(1))
+                .skip(attribute)
+            {
+                *line = true;
+            }
+        }
+    }
+
+    let mut inventory = UnsafeCodeInventory::default();
+    for (index, line) in lines.iter().enumerate() {
+        let contains_token = line
+            .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+            .any(|word| word == "unsafe");
+        if contains_token {
+            let line_number = index + 1;
+            if test_only.get(index).copied().unwrap_or(false) {
+                inventory.cfg_test_lines.push(line_number);
+            } else {
+                inventory.production_lines.push(line_number);
+            }
+        }
+    }
+    inventory
+}
+
+fn audit_unsafe_source(
+    path: &str,
+    source: &str,
+    allowlist: &BTreeMap<(String, String), String>,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> UnsafeCodeInventory {
+    let inventory = unsafe_code_inventory(path, source);
+    if !inventory.production_lines.is_empty() {
+        architecture_record(
+            errors,
+            warnings,
+            allowlist,
+            path,
+            "unsafe_boundary",
+            format!(
+                "production unsafe code requires a documented module exception at lines {:?}",
+                inventory.production_lines
+            ),
+        );
+    }
+    inventory
 }
 
 pub(crate) fn architecture(root: &Path) -> Result<()> {
@@ -4157,17 +4422,6 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     );
                 }
             }
-            if contains_unsafe_code(&joined) && !ALLOWED_UNSAFE_MODULES.contains(&relative.as_str())
-            {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &relative,
-                    "unsafe_boundary",
-                    "unsafe code outside allowlist",
-                );
-            }
             if crate_name == "sky_dispatch_core"
                 && (joined.contains("sky_dispatch_win32::")
                     || joined.contains("use sky_dispatch_win32"))
@@ -4269,6 +4523,67 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             }
         }
     }
+    let mut production_unsafe_modules = BTreeSet::new();
+    let mut cfg_test_unsafe_modules = Vec::new();
+    for source_root in UNSAFE_AUDIT_SOURCE_ROOTS {
+        let absolute_root = root.join(source_root);
+        if !absolute_root.is_dir() {
+            continue;
+        }
+        for path in WalkDir::new(&absolute_root).follow_links(false) {
+            let path = path?;
+            if !path.file_type().is_file()
+                || path
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("rs")
+            {
+                continue;
+            }
+            let relative = path
+                .path()
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = fs::read_to_string(path.path())?;
+            let inventory =
+                audit_unsafe_source(&relative, &source, &allowlist, &mut errors, &mut warnings);
+            if !inventory.production_lines.is_empty() {
+                production_unsafe_modules.insert(relative.clone());
+            }
+            if !inventory.cfg_test_lines.is_empty() {
+                cfg_test_unsafe_modules.push(format!(
+                    "{relative}:{}",
+                    inventory
+                        .cfg_test_lines
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            }
+        }
+    }
+    for (path, rule) in allowlist.keys() {
+        if rule == "unsafe_boundary" && !production_unsafe_modules.contains(path) {
+            errors.push(format!(
+                "[stale_unsafe_allowlist_entry] {path}: no production unsafe code remains"
+            ));
+        }
+    }
+    let production_inventory = production_unsafe_modules
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!(
+        "[xtask] unsafe boundary inventory: production={} [{}]; cfg(test)-only={} [{}]",
+        production_unsafe_modules.len(),
+        production_inventory,
+        cfg_test_unsafe_modules.len(),
+        cfg_test_unsafe_modules.join("; ")
+    );
     if !warnings.is_empty() {
         for warning in &warnings {
             println!("[xtask] architecture warning: {warning}");
@@ -4745,6 +5060,43 @@ mod tests {
         assert!(completed);
     }
 
+    #[test]
+    fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
+        let source = include_str!("../../../scripts/orchestrate_v4_production_release.ps1");
+        v4_production_calibration_gate_contract(source)
+            .expect("production release must verify staged and installed calibration");
+
+        let gate_start = source
+            .find("# Production-only installed calibration gate")
+            .expect("installed calibration gate marker");
+        let launch_start = source[gate_start..]
+            .find("Start-Process -FilePath $appPath")
+            .map(|offset| gate_start + offset)
+            .expect("application launch marker");
+        let installed_gate = source[gate_start..launch_start].to_owned();
+
+        let mut removed_gate = source.to_owned();
+        removed_gate.replace_range(gate_start..launch_start, "");
+        assert!(
+            v4_production_calibration_gate_contract(&removed_gate).is_err(),
+            "release contract must reject removal of installed calibration verification"
+        );
+
+        let mut moved_gate = removed_gate;
+        let evidence_start = moved_gate
+            .find("# 11. Emit Deterministic Machine-Readable Evidence")
+            .expect("qualification evidence boundary");
+        let evidence_line_end = moved_gate[evidence_start..]
+            .find('\n')
+            .map(|offset| evidence_start + offset + 1)
+            .expect("qualification evidence line end");
+        moved_gate.insert_str(evidence_line_end, &installed_gate);
+        assert!(
+            v4_production_calibration_gate_contract(&moved_gate).is_err(),
+            "release contract must reject installed calibration verification moved after evidence"
+        );
+    }
+
     const VALID_TAURI_FEATURE_MANIFEST: &str = r#"
 [dependencies]
 tauri = { version = "2.11.5", default-features = false }
@@ -4785,7 +5137,7 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_accepts_scoped_watchers_and_build_hook() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build",
+                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
                 "additionalWatchFolders": [
                     "../../rust/crates",
                     "../../rust/Cargo.toml",
@@ -4800,7 +5152,7 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_rejects_the_workspace_root_watch() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build",
+                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
                 "additionalWatchFolders": [
                     "../../rust",
                     "../../rust/crates",
@@ -5378,7 +5730,7 @@ jobs:
       - run: bun run tauri build --ci --config candidate.json -- --profile dist
       - run: bun run dev:build-info -- --exe ..\\rust\\target\\dist\\sky_desktop_shell.exe
       - run: Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath
-      - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
+      - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -CalibrationBinaryPath desktop/src-tauri/resources/native_calibration.exe -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         path: ${{ runner.temp }}/sky-auto-player-current-candidate
   updater_contract:
@@ -5434,7 +5786,10 @@ jobs:
         run: cargo xtask verify-tauri-bundle
         # Tauri bundle verification failed with exit code
       - name: Qualify current-user install, launch, and uninstall
-        run: check sky_desktop_shell.exe uninstall.exe
+        run: installerRun = Start-Process -FilePath $installer -ArgumentList @('/S', '/NS') -Wait -PassThru
+      - run: pwsh scripts/verify_installed_calibration.ps1 -InstallRoot $installRoot -ExpectedSha256 $candidate.calibration_binary_sha256 -Evidence rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
+      - run: Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+      - run: check sky_desktop_shell.exe uninstall.exe
       - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@v7
@@ -5621,6 +5976,51 @@ jobs:
                 .iter()
                 .any(|pattern| "schedule.clone()".contains(pattern))
         );
+    }
+
+    #[test]
+    fn unsafe_inventory_separates_production_from_cfg_test_code() {
+        let source = r#"
+fn production_boundary() {
+    unsafe { core::hint::unreachable_unchecked() }
+}
+
+#[cfg(test)]
+mod tests {
+    fn test_boundary() {
+        unsafe { core::hint::unreachable_unchecked() }
+    }
+}
+"#;
+        let inventory = unsafe_code_inventory("desktop/src-tauri/src/inventory_fixture.rs", source);
+        assert_eq!(inventory.production_lines, vec![3]);
+        assert_eq!(inventory.cfg_test_lines, vec![9]);
+
+        let file_test = unsafe_code_inventory(
+            "rust/crates/sky_native_adapters/src/fixture.rs",
+            "#![cfg(test)]\nfn test_boundary() { unsafe { core::hint::unreachable_unchecked() } }\n",
+        );
+        assert!(file_test.production_lines.is_empty());
+        assert_eq!(file_test.cfg_test_lines, vec![2]);
+    }
+
+    #[test]
+    fn unauthorized_unsafe_is_rejected_in_shell_and_adapter_sources() {
+        let source = "fn injected() { unsafe { core::hint::unreachable_unchecked() } }\n";
+        for path in [
+            "desktop/src-tauri/src/injected.rs",
+            "rust/crates/sky_native_adapters/src/injected.rs",
+        ] {
+            let mut errors = Vec::new();
+            let mut warnings = Vec::new();
+            audit_unsafe_source(path, source, &BTreeMap::new(), &mut errors, &mut warnings);
+            assert_eq!(warnings.len(), 0, "{path}");
+            assert_eq!(errors.len(), 1, "{path}");
+            assert!(
+                errors[0].contains("[unsafe_boundary]"),
+                "{path}: {errors:?}"
+            );
+        }
     }
 
     #[test]

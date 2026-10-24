@@ -6,6 +6,7 @@ param(
 
     [string]$BundleDir,
     [string]$PublicKeyPath,
+    [string]$CalibrationBinaryPath,
     [string]$OutputRoot,
     [string]$CandidateRoot,
     [Parameter(Mandatory = $true)]
@@ -77,6 +78,55 @@ function Get-Sha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-PeMachine([string]$Path) {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $reader = [IO.BinaryReader]::new($stream)
+    try {
+        if ($stream.Length -lt 0x40) { Fail "calibration binary is not a complete PE file" }
+        $stream.Position = 0
+        if ([Text.Encoding]::ASCII.GetString($reader.ReadBytes(2)) -cne "MZ") {
+            Fail "calibration binary is missing the DOS header"
+        }
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        if ($peOffset -lt 0x40 -or $peOffset -gt ($stream.Length - 6)) {
+            Fail "calibration binary has an invalid PE header offset"
+        }
+        $stream.Position = $peOffset
+        $signature = @($reader.ReadByte(), $reader.ReadByte(), $reader.ReadByte(), $reader.ReadByte())
+        if ($signature[0] -ne 0x50 -or $signature[1] -ne 0x45 -or
+            $signature[2] -ne 0 -or $signature[3] -ne 0) {
+            Fail "calibration binary is missing the PE signature"
+        }
+        return [int]$reader.ReadUInt16()
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Get-CalibrationBinaryDetails([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Fail "calibration binary is missing: $Path"
+    }
+    $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($item.PSIsContainer -or (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        Fail "calibration binary must be a regular file"
+    }
+    if ($item.Name -cne "native_calibration.exe" -or $item.Length -le 0) {
+        Fail "calibration binary must be a non-empty native_calibration.exe"
+    }
+    if ((Get-PeMachine $item.FullName) -ne 0x8664) {
+        Fail "calibration binary must be an x86_64 PE executable"
+    }
+    return [pscustomobject]@{
+        Path = $item.FullName
+        Size = [long]$item.Length
+        Sha256 = Get-Sha256 $item.FullName
+        Architecture = "x86_64"
+    }
+}
+
 function Validate-PublicKey([string]$Path) {
     $item = Get-Item -LiteralPath $Path -ErrorAction Stop
     if ($item.Length -le 0 -or $item.Length -gt 4096) {
@@ -104,7 +154,9 @@ function Read-CandidateContract([string]$Root, [string]$ExpectedSourceSha, [stri
 
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     $requiredFields = @(
-        "schema_version", "source_sha", "version", "installer", "installer_sha256",
+        "schema_version", "source_sha", "version", "calibration_binary",
+        "calibration_binary_size", "calibration_binary_sha256", "calibration_binary_architecture",
+        "installer", "installer_sha256",
         "updater_signature", "updater_signature_sha256", "updater_public_key",
         "updater_public_key_sha256"
     )
@@ -112,7 +164,7 @@ function Read-CandidateContract([string]$Root, [string]$ExpectedSourceSha, [stri
     if (($observedFields -join "|") -cne ($requiredFields -join "|")) {
         Fail "candidate.json fields are not the locked contract: $($observedFields -join ', ')"
     }
-    if ([int]$metadata.schema_version -ne 1) {
+    if ([int]$metadata.schema_version -ne 2) {
         Fail "unsupported candidate contract schema: $($metadata.schema_version)"
     }
     $expectedSource = Assert-CommitSha $ExpectedSourceSha "expected source SHA"
@@ -121,6 +173,21 @@ function Read-CandidateContract([string]$Root, [string]$ExpectedSourceSha, [stri
     }
     if ([string]$metadata.version -cne $ExpectedVersion -or [string]$metadata.version -notmatch $semVerPattern) {
         Fail "candidate version does not match the checked-out source version"
+    }
+    if ([string]$metadata.calibration_binary -cne "native_calibration.exe") {
+        Fail "candidate calibration binary filename is not the locked executable name"
+    }
+    if (($metadata.calibration_binary_size -isnot [int]) -and ($metadata.calibration_binary_size -isnot [long])) {
+        Fail "candidate calibration binary size is not an integer"
+    }
+    if ([long]$metadata.calibration_binary_size -le 0) {
+        Fail "candidate calibration binary size must be positive"
+    }
+    if ([string]$metadata.calibration_binary_sha256 -notmatch $shaPattern) {
+        Fail "candidate calibration binary SHA-256 is not a digest"
+    }
+    if ([string]$metadata.calibration_binary_architecture -cne "x86_64") {
+        Fail "candidate calibration binary architecture is not x86_64"
     }
 
     foreach ($field in @("installer", "updater_signature", "updater_public_key")) {
@@ -175,16 +242,21 @@ function Read-CandidateContract([string]$Root, [string]$ExpectedSourceSha, [stri
         InstallerSha256 = $installerSha
         SignatureSha256 = $signatureSha
         PublicKeySha256 = $publicKeySha
+        CalibrationBinary = [string]$metadata.calibration_binary
+        CalibrationBinarySize = [long]$metadata.calibration_binary_size
+        CalibrationBinarySha256 = ([string]$metadata.calibration_binary_sha256).ToLowerInvariant()
+        CalibrationBinaryArchitecture = [string]$metadata.calibration_binary_architecture
     }
 }
 
 function New-CandidateContract {
     if ([string]::IsNullOrWhiteSpace($BundleDir) -or [string]::IsNullOrWhiteSpace($PublicKeyPath) -or
-        [string]::IsNullOrWhiteSpace($OutputRoot)) {
-        Fail "Create mode requires BundleDir, PublicKeyPath, and OutputRoot"
+        [string]::IsNullOrWhiteSpace($CalibrationBinaryPath) -or [string]::IsNullOrWhiteSpace($OutputRoot)) {
+        Fail "Create mode requires BundleDir, PublicKeyPath, CalibrationBinaryPath, and OutputRoot"
     }
     $sourceSha = Assert-CommitSha $SourceSha "source SHA"
     $version = Get-ProjectVersion $RepositoryRoot
+    $calibration = Get-CalibrationBinaryDetails ((Resolve-Path -LiteralPath $CalibrationBinaryPath -ErrorAction Stop).Path)
     $bundlePath = (Resolve-Path -LiteralPath $BundleDir -ErrorAction Stop).Path
     $bundleFiles = Get-DirectFiles $bundlePath
     $installers = @($bundleFiles | Where-Object { $_.Name -match '-setup\.exe$' })
@@ -207,9 +279,13 @@ function New-CandidateContract {
     $signaturePath = Join-Path $OutputRoot $signature.Name
     $publicKeyOutputPath = Join-Path $OutputRoot $publicKeyFileName
     $metadata = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         source_sha = $sourceSha
         version = $version
+        calibration_binary = "native_calibration.exe"
+        calibration_binary_size = $calibration.Size
+        calibration_binary_sha256 = $calibration.Sha256
+        calibration_binary_architecture = $calibration.Architecture
         installer = $installer.Name
         installer_sha256 = Get-Sha256 $installerPath
         updater_signature = $signature.Name

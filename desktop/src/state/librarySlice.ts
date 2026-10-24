@@ -20,6 +20,9 @@ import { LIBRARY_PAGE_SIZE } from './types';
 import type { DetailEntry, DesktopStore } from './types';
 
 const MAX_CATALOG_RECONCILIATION_ATTEMPTS = 3;
+// At 200 rows per page, retain at most 12,800 lightweight song summaries
+// across query/source/generation history. In-flight requests are tracked apart.
+export const MAX_CACHED_SEARCH_PAGES = 64;
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
@@ -71,13 +74,42 @@ export interface LibrarySlice {
 export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const { bridge, get, set } = context;
   const pageSize = LIBRARY_PAGE_SIZE;
-  const pageCache = new Map<string, Map<number, SearchResult>>();
+  const pageCache = new Map<string, SearchResult>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
   let catalogReadyRecorded = false;
 
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
+  const pageKey = (key: string, offset: number) => `${key}\u0000${offset}`;
+
+  const getCachedPage = (key: string, offset: number): SearchResult | undefined => {
+    const cacheKey = pageKey(key, offset);
+    const result = pageCache.get(cacheKey);
+    if (result) {
+      pageCache.delete(cacheKey);
+      pageCache.set(cacheKey, result);
+    }
+    return result;
+  };
+
+  const cachePage = (key: string, result: SearchResult): void => {
+    const cacheKey = pageKey(key, result.offset);
+    pageCache.delete(cacheKey);
+    pageCache.set(cacheKey, result);
+    while (pageCache.size > MAX_CACHED_SEARCH_PAGES) {
+      const oldest = pageCache.keys().next().value;
+      if (oldest === undefined) break;
+      pageCache.delete(oldest);
+    }
+  };
+
+  const invalidateStaleGenerations = (generation: number): void => {
+    const activePrefix = `${generation}\u0000`;
+    for (const key of pageCache.keys()) {
+      if (!key.startsWith(activePrefix)) pageCache.delete(key);
+    }
+  };
 
   const invalidateSourceCache = (source: LibrarySource): void => {
     const marker = `\u0000${sourceKey(source)}\u0000`;
@@ -172,13 +204,18 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     mergeIntoLibrary = true,
   ): Promise<SearchResult> => {
     const key = cacheKey(source, query, generation);
-    const cached = pageCache.get(key)?.get(offset);
+    const cached = getCachedPage(key, offset);
     if (cached) {
       if (mergeIntoLibrary) mergePage(cached, token);
       return cached;
     }
-    const inFlight = pageRequests.get(`${key}\u0000${offset}`);
-    if (inFlight) return inFlight;
+    const requestKey = pageKey(key, offset);
+    const inFlight = pageRequests.get(requestKey);
+    if (inFlight) {
+      const result = await inFlight;
+      if (mergeIntoLibrary) mergePage(result, token);
+      return result;
+    }
 
     const request: SearchRequest = {
       query,
@@ -188,14 +225,15 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       ...(generation > 0 ? { generation } : {}),
     };
     const requestPromise = bridge.searchSongs(request);
-    const requestKey = `${key}\u0000${offset}`;
     pageRequests.set(requestKey, requestPromise);
     try {
       const result = await requestPromise;
-      const generationPages =
-        pageCache.get(cacheKey(source, query, result.generation)) ?? new Map();
-      generationPages.set(result.offset, result);
-      pageCache.set(cacheKey(source, query, result.generation), generationPages);
+      if (
+        pageRequests.get(requestKey) === requestPromise &&
+        result.generation >= get().library.generation
+      ) {
+        cachePage(cacheKey(source, query, result.generation), result);
+      }
       if (mergeIntoLibrary) mergePage(result, token);
       return result;
     } finally {
@@ -226,6 +264,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const syncCatalogGeneration = async (generation: number): Promise<void> => {
     const current = get().library;
     if (generation <= current.generation) return;
+    invalidateStaleGenerations(generation);
     context.nextDetailRequestToken();
     const playback = get().playback;
     const cancelPreparing = playback.transportOperation === 'preparing';
@@ -293,8 +332,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         sourceKey(current.source) !== sourceKey(nextSource) ||
         sourceKey(current.searchSource) !== sourceKey(nextSearchSource);
       const nextSearchKey = cacheKey(nextSearchSource, nextQuery, current.generation);
-      const cachedFirstPage = pageCache.get(nextSearchKey)?.get(0);
-      const firstPageRequestKey = `${nextSearchKey}\u0000${0}`;
+      const cachedFirstPage = getCachedPage(nextSearchKey, 0);
+      const firstPageRequestKey = pageKey(nextSearchKey, 0);
       // Same-generation reconciliation may reuse the authoritative first page. A
       // catalog reload publishes a newer generation, so its cache key necessarily misses.
       if (
@@ -329,7 +368,10 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         const latest = get().library;
         if (latest.searchRequestGeneration !== token) return;
         const generationChanged = latest.generation !== result.generation;
-        if (generationChanged) context.nextDetailRequestToken();
+        if (generationChanged) {
+          context.nextDetailRequestToken();
+          invalidateStaleGenerations(result.generation);
+        }
         set({
           library: {
             ...latest,
@@ -463,28 +505,24 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         if (result.generation !== get().library.generation) return;
         if (result.items.length === 0) return;
         const latest = get().library;
-        const cachedPages = pageCache.get(
-          cacheKey(latest.searchSource, latest.query, latest.generation),
-        );
-        if (cachedPages) {
-          const updatesByPage = new Map<number, SongRow[]>();
-          for (const row of result.items) {
-            const index = latest.indexById.get(row.song_id);
-            if (index === undefined) continue;
-            const offset = Math.floor(index / pageSize) * pageSize;
-            let items = updatesByPage.get(offset);
-            if (!items) {
-              const cached = cachedPages.get(offset);
-              if (!cached) continue;
-              items = [...cached.items];
-              updatesByPage.set(offset, items);
-            }
-            items[index - offset] = row;
+        const cachedSearchKey = cacheKey(latest.searchSource, latest.query, latest.generation);
+        const updatesByPage = new Map<number, SongRow[]>();
+        for (const row of result.items) {
+          const index = latest.indexById.get(row.song_id);
+          if (index === undefined) continue;
+          const offset = Math.floor(index / pageSize) * pageSize;
+          let items = updatesByPage.get(offset);
+          if (!items) {
+            const cached = getCachedPage(cachedSearchKey, offset);
+            if (!cached) continue;
+            items = [...cached.items];
+            updatesByPage.set(offset, items);
           }
-          for (const [offset, items] of updatesByPage) {
-            const cached = cachedPages.get(offset);
-            if (cached) cached.items = items;
-          }
+          items[index - offset] = row;
+        }
+        for (const [offset, items] of updatesByPage) {
+          const cached = getCachedPage(cachedSearchKey, offset);
+          if (cached) cachePage(cachedSearchKey, { ...cached, items });
         }
         set({
           library: updateLoadedRows(latest, result.items),

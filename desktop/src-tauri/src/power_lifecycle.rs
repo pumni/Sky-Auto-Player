@@ -295,6 +295,8 @@ impl Drop for SuspendResumeRegistration {
     }
 }
 
+// SAFETY: Windows calls this function only with the registered callback
+// context; the process-lifetime owner keeps it valid through callback rundown.
 unsafe extern "system" fn on_suspend_resume(
     context: *const c_void,
     event_type: u32,
@@ -347,6 +349,7 @@ impl PowerPlatform for WindowsPowerPlatform {
         // the call; both the context and UTF-16 string remain alive here.
         let handle = unsafe { windows_sys::Win32::System::Power::PowerCreateRequest(&context) };
         if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            // SAFETY: GetLastError has no pointer or handle preconditions.
             Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         } else {
             Ok(handle as isize)
@@ -354,6 +357,8 @@ impl PowerPlatform for WindowsPowerPlatform {
     }
 
     fn set_system_required(&self, handle: isize) -> Result<(), u32> {
+        // SAFETY: handle is the live request owned by SystemRequiredPowerRequest;
+        // PowerRequestSystemRequired is the documented request type.
         let ok = unsafe {
             windows_sys::Win32::System::Power::PowerSetRequest(
                 handle as windows_sys::Win32::Foundation::HANDLE,
@@ -363,11 +368,14 @@ impl PowerPlatform for WindowsPowerPlatform {
         if ok != 0 {
             Ok(())
         } else {
+            // SAFETY: GetLastError has no pointer or handle preconditions.
             Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         }
     }
 
     fn clear_system_required(&self, handle: isize) -> Result<(), u32> {
+        // SAFETY: handle is the live request owned by SystemRequiredPowerRequest;
+        // this clears the same documented request type it previously set.
         let ok = unsafe {
             windows_sys::Win32::System::Power::PowerClearRequest(
                 handle as windows_sys::Win32::Foundation::HANDLE,
@@ -377,11 +385,14 @@ impl PowerPlatform for WindowsPowerPlatform {
         if ok != 0 {
             Ok(())
         } else {
+            // SAFETY: GetLastError has no pointer or handle preconditions.
             Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         }
     }
 
     fn close_request(&self, handle: isize) -> Result<(), u32> {
+        // SAFETY: the request wrapper transfers its owned Win32 handle here
+        // once during teardown.
         let ok = unsafe {
             windows_sys::Win32::Foundation::CloseHandle(
                 handle as windows_sys::Win32::Foundation::HANDLE,
@@ -390,6 +401,7 @@ impl PowerPlatform for WindowsPowerPlatform {
         if ok != 0 {
             Ok(())
         } else {
+            // SAFETY: GetLastError has no pointer or handle preconditions.
             Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         }
     }
@@ -405,6 +417,9 @@ impl PowerPlatform for WindowsPowerPlatform {
             Context: context,
         };
         let mut handle = std::ptr::null_mut();
+        // SAFETY: parameters and handle are writable/live for the call; the
+        // callback uses the system ABI and its context is retained for the
+        // process lifetime by the registration owner.
         let result = unsafe {
             windows_sys::Win32::System::Power::PowerRegisterSuspendResumeNotification(
                 windows_sys::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_CALLBACK,
@@ -420,6 +435,8 @@ impl PowerPlatform for WindowsPowerPlatform {
     }
 
     fn unregister_suspend_resume(&self, handle: isize) -> Result<(), u32> {
+        // SAFETY: handle is the successful registration owned by the
+        // SuspendResumeRegistration being torn down.
         let result = unsafe {
             windows_sys::Win32::System::Power::PowerUnregisterSuspendResumeNotification(handle)
         };

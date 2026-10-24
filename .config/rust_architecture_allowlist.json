@@ -22,10 +22,16 @@
     {"path":"rust/crates/sky_dispatch_win32/src/focus/window_identity.rs","rule":"unsafe_boundary","reason":"retained target process identity queries with PROCESS_QUERY_LIMITED_INFORMATION in the Win32 focus boundary","review_trigger":"review before the next Win32 boundary expansion"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/physical.rs","rule":"unsafe_boundary","reason":"existing physical keyboard Win32 seam","review_trigger":"review before the next Win32 boundary expansion"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/packet.rs","rule":"unsafe_boundary","reason":"SendInput packet construction and syscall boundary remains isolated in the Win32 input module","review_trigger":"review before the next Win32 boundary expansion"},
+    {"path":"rust/crates/sky_dispatch_win32/src/input/raw.rs","rule":"unsafe_boundary","reason":"raw SendInput buffers are built and passed only within the physical-input adapter","review_trigger":"review before changing raw SendInput packet construction"},
     {"path":"rust/crates/sky_dispatch_win32/src/mmcss.rs","rule":"unsafe_boundary","reason":"existing MMCSS Win32 seam","review_trigger":"review before the next Win32 boundary expansion"},
     {"path":"rust/crates/sky_dispatch_win32/src/power.rs","rule":"unsafe_boundary","reason":"existing power Win32 seam","review_trigger":"review before the next Win32 boundary expansion"},
     {"path":"rust/crates/sky_dispatch_win32/src/timer.rs","rule":"unsafe_boundary","reason":"existing timer Win32 seam","review_trigger":"review before the next Win32 boundary expansion"},
     {"path":"rust/crates/sky_dispatch_win32/src/wait/hybrid.rs","rule":"unsafe_boundary","reason":"existing waitable-timer and multi-wait Win32 seam moved from wait facade","review_trigger":"review before the next Win32 boundary expansion"},
+    {"path":"rust/crates/sky_native_adapters/src/lib.rs","rule":"unsafe_boundary","reason":"MoveFileExW replacement uses live NUL-terminated path buffers and owned filesystem paths","review_trigger":"review before changing persisted-file replacement semantics"},
+    {"path":"desktop/src-tauri/src/power_lifecycle.rs","rule":"unsafe_boundary","reason":"Win32 power request and suspend callback use a retained process-lifetime context","review_trigger":"review before changing callback registration or context lifetime"},
+    {"path":"desktop/src-tauri/src/single_instance.rs","rule":"unsafe_boundary","reason":"Win32 singleton/window calls use owned handles and PROCESS_QUERY_LIMITED_INFORMATION only","review_trigger":"review before changing singleton process/window access"},
+    {"path":"desktop/src-tauri/src/windows_caption.rs","rule":"unsafe_boundary","reason":"Win32 caption overlay callbacks are scoped to the main-thread HWND lifecycle and detached on destruction","review_trigger":"review before changing caption subclass or overlay lifecycle"},
+    {"path":"desktop/src-tauri/src/windows_icon.rs","rule":"unsafe_boundary","reason":"Win32 icon handles are owned in the HWND registry and released on window destruction","review_trigger":"review before changing icon ownership or subclass lifecycle"},
 
     {"path":"rust/crates/sky_dispatch_win32/src/input/physical.rs","rule":"production_glob_import","reason":"make physical input dependencies explicit","review_trigger":"review before adding new production imports"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/raw.rs","rule":"production_glob_import","reason":"make raw input dependencies explicit","review_trigger":"review before adding new production imports"},
@@ -34,7 +40,6 @@
     {"path":"rust/crates/sky_player/src/engine/worker/orchestration.rs","rule":"production_glob_import","reason":"make orchestration dependencies explicit","review_trigger":"review before adding new production imports"},
 
     {"path":"rust/crates/sky_player/src/engine/config.rs","rule":"context_fields","reason":"replace WorkerConfig parameter bag with validated options","review_trigger":"review before adding another worker option"},
-    {"path":"rust/crates/sky_player/src/engine/shared.rs","rule":"context_fields","reason":"consolidate direct shared ownership","review_trigger":"review before changing shared ownership policy"},
-    {"path":"rust/crates/sky_player/src/engine/telemetry/metrics.rs","rule":"unsafe_boundary","reason":"bounded dual-slot telemetry snapshot synchronization uses a reviewed UnsafeCell boundary","review_trigger":"review before the next Win32 boundary expansion"}
+    {"path":"rust/crates/sky_player/src/engine/shared.rs","rule":"context_fields","reason":"consolidate direct shared ownership","review_trigger":"review before changing shared ownership policy"}
   ]
 }

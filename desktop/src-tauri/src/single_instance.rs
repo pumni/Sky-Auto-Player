@@ -63,6 +63,9 @@ impl SingleInstanceGuard {
 
     fn acquire_named(name: &str) -> Result<Self, AcquireError> {
         let name = wide_null(name);
+        // SAFETY: `name` is NUL-terminated and remains alive for the call;
+        // CreateMutexW accepts a null security descriptor, and any returned
+        // handle is either closed here or owned by the guard.
         unsafe {
             // CreateMutexW documents ERROR_ALREADY_EXISTS on success when the
             // named mutex already existed. Clear the thread-local last-error
@@ -83,6 +86,8 @@ impl SingleInstanceGuard {
 
 impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
+        // SAFETY: acquire_named stores only a successful CreateMutexW handle,
+        // and Drop runs once for this guard.
         unsafe {
             let _ = CloseHandle(self.handle);
         }
@@ -91,6 +96,8 @@ impl Drop for SingleInstanceGuard {
 
 pub(crate) fn focus_existing_instance() {
     let title = wide_null(MAIN_WINDOW_TITLE);
+    // SAFETY: title is a live NUL-terminated UTF-16 string; FindWindowW
+    // returns an HWND used only by window APIs, without dereferencing it.
     unsafe {
         let window = FindWindowW(std::ptr::null(), title.as_ptr());
         if window.is_null() {
@@ -103,6 +110,9 @@ pub(crate) fn focus_existing_instance() {
 
 pub(crate) fn existing_instance_details() -> Option<String> {
     let title = wide_null(MAIN_WINDOW_TITLE);
+    // SAFETY: title is NUL-terminated and live for the calls. The process
+    // handle requests query-only access, the output buffer is writable and
+    // sized from its capacity, and the handle is closed on the success path.
     unsafe {
         let window = FindWindowW(std::ptr::null(), title.as_ptr());
         if window.is_null() {
