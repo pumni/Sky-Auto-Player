@@ -251,6 +251,24 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
+test('rapid A-B-A search keeps the newest query results visible', async ({ page }) => {
+  await page.goto('/?mockSearchDelayMs=1000');
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  const search = page.getByLabel('Search All Songs');
+
+  await search.fill('Aurora');
+  await expect(page.locator('[role="status"][aria-busy="true"]')).toBeVisible();
+  await search.fill('Moonlit');
+  await page.waitForTimeout(150);
+  await search.fill('Aurora');
+
+  const auroraRow = page.getByRole('row', { name: /Aurora Landing/ });
+  await expect(auroraRow).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toHaveCount(0);
+  await expect(search).toHaveValue('Aurora');
+  await expect(search).toBeFocused();
+});
+
 test('search clears browser selection while Now Playing remains on the active song', async ({
   page,
 }) => {

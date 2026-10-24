@@ -161,6 +161,7 @@ function initialSettings(): Settings {
 
 export interface MockBridgeOptions {
   catalogRows?: SearchResult['items'];
+  searchDelayMs?: number;
   diagnosticsBackendStatus?: DiagnosticsBackend;
   readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
   playbackDurationMs?: number;
@@ -203,6 +204,7 @@ export interface MockBridgeOptions {
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
   const catalogRows = options.catalogRows ?? rows;
+  const searchDelayMs = Math.max(0, Math.min(options.searchDelayMs ?? 0, 5_000));
   const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
   const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
     Math.max(50, duration),
@@ -559,6 +561,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       };
     },
     async searchSongs(request: SearchRequest) {
+      if (searchDelayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, searchDelayMs));
+      }
       const query = request.query.trim().toLocaleLowerCase();
       const sourceRows =
         request.source.kind === 'smart' && request.source.id === 'liked'

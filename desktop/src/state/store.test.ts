@@ -1,7 +1,14 @@
 import { act, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
-import type { SearchRequest, Settings, SettingsPatch, UiEvent } from '../bridge/DesktopBridge';
+import type {
+  LibrarySource,
+  SearchRequest,
+  SearchResult,
+  Settings,
+  SettingsPatch,
+  UiEvent,
+} from '../bridge/DesktopBridge';
 import {
   AUTO_PLAY_HANDOFF_MS,
   createShuffleTraversal,
@@ -14,6 +21,7 @@ import {
   type PlaybackContext,
   selectSelectedDetail,
 } from './store';
+import { MAX_CACHED_SEARCH_PAGES } from './librarySlice';
 import { WORKBENCH_STORAGE_KEY } from './workbenchPreferences';
 
 afterEach(() => window.localStorage.clear());
@@ -352,6 +360,80 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.title).toBe('Aurora Landing');
   });
 
+  it('merges a joined in-flight page for the newest A-B-A search token', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    const firstAResponse = deferred<SearchResult>();
+    const staleBResponse = deferred<SearchResult>();
+    const requests: SearchRequest[] = [];
+    bridge.searchSongs = (request) => {
+      if (request.query === 'Aurora') {
+        requests.push(request);
+        return firstAResponse.promise;
+      }
+      if (request.query === 'Moonlit') {
+        requests.push(request);
+        return staleBResponse.promise;
+      }
+      return originalSearch(request);
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const currentLibrary = store.getState().library;
+    const playing = rowAt(store, 0);
+    if (!playing) throw new Error('mock library is empty');
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        sessionId: 'native-session',
+        state: 'playing',
+        currentSong: {
+          songId: playing.song_id,
+          title: playing.title,
+          liked: playing.liked,
+          durationUs: playing.duration_us,
+          formatLabel: playing.format_label,
+          noteCount: playing.note_count,
+          riskLevel: playing.risk_level,
+          generation: currentLibrary.generation,
+        },
+      },
+    });
+
+    const firstA = store.getState().search('Aurora');
+    const searchB = store.getState().search('Moonlit');
+    const latestA = store.getState().search('Aurora');
+    expect(requests.map((request) => request.query)).toEqual(['Aurora', 'Moonlit']);
+    expect(requests.every((request) => request.generation === currentLibrary.generation)).toBe(
+      true,
+    );
+
+    const requestA = requests[0];
+    const requestB = requests[1];
+    if (!requestA || !requestB) throw new Error('expected both deferred search requests');
+    const firstAResult = await originalSearch(requestA);
+    firstAResponse.resolve(firstAResult);
+    await Promise.all([firstA, latestA]);
+
+    expect(store.getState().library.query).toBe('Aurora');
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.generation).toBe(currentLibrary.generation);
+    expect(store.getState().library.pages.get(0)).toEqual(firstAResult.items);
+    expect(rowAt(store, 0)?.title).toBe('Aurora Landing');
+    expect(requests).toHaveLength(2);
+
+    const staleBResult = await originalSearch(requestB);
+    staleBResponse.resolve(staleBResult);
+    await searchB;
+
+    expect(store.getState().library.query).toBe('Aurora');
+    expect(store.getState().library.pages.get(0)).toEqual(firstAResult.items);
+    expect(store.getState().playback.sessionId).toBe('native-session');
+    expect(store.getState().playback.currentSong?.songId).toBe(playing.song_id);
+    expect(selectNowPlayingSongId(store.getState())).toBe(playing.song_id);
+  });
+
   it('scopes browser selection to its search while preserving native Now Playing', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
@@ -430,6 +512,60 @@ describe('desktop store', () => {
     expect(searchRequests.at(-1)?.generation).toBe(2);
     expect(store.getState().library.selectedSongId).toBeNull();
     expect(selectSelectedDetail(store.getState()).value).toBeNull();
+  });
+
+  it('bounds resolved page history across playlist switches and catalog generations', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    const requests: SearchRequest[] = [];
+    bridge.searchSongs = (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const initialGeneration = store.getState().library.generation;
+
+    await store.getState().search('Aurora');
+    const afterAllSongs = requests.length;
+    const playlistSource = { kind: 'playlist' as const, id: 'cache-playlist' };
+    await store.getState().search('Aurora', playlistSource);
+    expect(requests).toHaveLength(afterAllSongs + 1);
+    await store.getState().search('Aurora', { kind: 'smart', id: 'all' });
+    expect(requests).toHaveLength(afterAllSongs + 1);
+
+    await act(async () => store.getState().reloadLibrary());
+    const currentGeneration = store.getState().library.generation;
+    expect(currentGeneration).toBeGreaterThan(initialGeneration);
+    expect(requests.at(-1)?.generation).toBe(currentGeneration);
+
+    const sourceForCacheQuery = (index: number): LibrarySource =>
+      index % 2 === 0
+        ? { kind: 'playlist' as const, id: `cache-playlist-${index}` }
+        : { kind: 'smart' as const, id: 'all' };
+    for (let index = 0; index < MAX_CACHED_SEARCH_PAGES; index += 1) {
+      await store.getState().search(`cache-${index}`, sourceForCacheQuery(index));
+    }
+    const afterFillingCache = requests.length;
+
+    await store
+      .getState()
+      .search(
+        `cache-${MAX_CACHED_SEARCH_PAGES - 2}`,
+        sourceForCacheQuery(MAX_CACHED_SEARCH_PAGES - 2),
+      );
+    await store
+      .getState()
+      .search(
+        `cache-${MAX_CACHED_SEARCH_PAGES - 1}`,
+        sourceForCacheQuery(MAX_CACHED_SEARCH_PAGES - 1),
+      );
+    expect(requests).toHaveLength(afterFillingCache);
+
+    await store.getState().search('Aurora', { kind: 'smart', id: 'all' });
+    expect(requests).toHaveLength(afterFillingCache + 1);
+    expect(requests.at(-1)?.query).toBe('Aurora');
+    expect(requests.at(-1)?.generation).toBe(currentGeneration);
   });
 
   it('clears browser selection when its source or playlist-add scope changes', async () => {
