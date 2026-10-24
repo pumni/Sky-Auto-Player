@@ -248,7 +248,7 @@ foreach ($marker in @(
     'release-context.json',
     'if: always()',
     'cleanup_v4_release_state.ps1',
-    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+    'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9'
 )) {
     if (-not $draftWorkflow.Contains($marker)) {
         Fail "production qualification workflow marker is missing: $marker"
@@ -795,7 +795,7 @@ foreach ($marker in @(
     'environment: v4-production-release',
     'Mint release-metadata GitHub App token',
     'id: metadata-app-token',
-    'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1',
+    'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510',
     'client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}',
     'private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}',
     'owner: ${{ github.repository_owner }}',
