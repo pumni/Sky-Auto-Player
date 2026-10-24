@@ -4437,7 +4437,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             }
         }
     }
-    for ((path, rule), _) in &allowlist {
+    for (path, rule) in allowlist.keys() {
         if rule == "unsafe_boundary" && !production_unsafe_modules.contains(path) {
             errors.push(format!(
                 "[stale_unsafe_allowlist_entry] {path}: no production unsafe code remains"
