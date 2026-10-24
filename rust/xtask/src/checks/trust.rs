@@ -1,0 +1,757 @@
+use crate::{Result, tauri_bundle};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use minisign_verify::PublicKey;
+use serde_json::Value;
+use std::fs;
+use std::path::Path;
+use walkdir::WalkDir;
+
+fn v4_production_calibration_gate_contract(orchestrator: &str) -> Result<()> {
+    let smoke_start = orchestrator
+        .find("# 10. Install / Smoke Test")
+        .ok_or("v4 production release orchestrator is missing its install smoke section")?;
+    let evidence_start = orchestrator
+        .find("# 11. Emit Deterministic Machine-Readable Evidence")
+        .ok_or("v4 production release orchestrator is missing its evidence boundary")?;
+    if evidence_start <= smoke_start {
+        return Err("v4 production calibration gate must precede qualification evidence".into());
+    }
+    let smoke = &orchestrator[smoke_start..evidence_start];
+    let staged_gate_start = smoke
+        .find("# Production-only staged calibration gate.")
+        .ok_or("production release must verify the staged calibration resource")?;
+    let install_position = smoke
+        .find("Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot")
+        .ok_or("production release smoke must install the exact NSIS candidate")?;
+    let installed_gate_start = smoke
+        .find("# Production-only installed calibration gate")
+        .ok_or("production release must verify installed native calibration")?;
+    let launch_position = smoke
+        .find("Start-Process -FilePath $appPath")
+        .ok_or("production release smoke must launch the installed application")?;
+    if staged_gate_start >= install_position
+        || install_position >= installed_gate_start
+        || installed_gate_start >= launch_position
+    {
+        return Err(
+            "production calibration verification must validate the staged child, install, verify the installed child, then launch".into(),
+        );
+    }
+
+    let staged_gate = &smoke[staged_gate_start..install_position];
+    for marker in [
+        "if (-not $InternalTestFixture) {",
+        r#"Join-Path $repoRoot "desktop\src-tauri\resources\native_calibration.exe""#,
+        "Test-Path -LiteralPath $calibrationResourcePath -PathType Leaf",
+        "$calibrationResource.Attributes -band [IO.FileAttributes]::ReparsePoint",
+        "$calibrationResourceSize = [long]$calibrationResource.Length",
+        "Get-FileHash -LiteralPath $calibrationResourcePath -Algorithm SHA256",
+        "$calibrationResourceRoot = Split-Path -Parent $calibrationResourcePath",
+        "Invoke-CalibrationPayloadVerification",
+        "-InstallRoot $calibrationResourceRoot",
+        "-ExpectedSize $calibrationResourceSize",
+        "-ExpectedSha256 $calibrationResourceSha256",
+    ] {
+        if !staged_gate.contains(marker) {
+            return Err(format!(
+                "production staged calibration verification is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let installed_gate = &smoke[installed_gate_start..launch_position];
+    for marker in [
+        "if (-not $InternalTestFixture) {",
+        "Invoke-CalibrationPayloadVerification",
+        "-InstallRoot $installRoot",
+        "-ExpectedSize $calibrationResourceSize",
+        "-ExpectedSha256 $calibrationResourceSha256",
+        "-Context \"Installed calibration verification\"",
+    ] {
+        if !installed_gate.contains(marker) {
+            return Err(format!(
+                "production installed calibration verification is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let verifier = orchestrator
+        .split_once("function Invoke-CalibrationPayloadVerification")
+        .map(|(_, remainder)| remainder)
+        .ok_or("production release is missing the installed calibration verifier adapter")?;
+    let verifier = verifier
+        .split_once("\nfunction ")
+        .map(|(function, _)| function)
+        .ok_or("installed calibration verifier adapter must be a bounded function")?;
+    for marker in [
+        "verify_installed_calibration.ps1",
+        "-InstallRoot $InstallRoot",
+        "-ExpectedSize $ExpectedSize",
+        "-ExpectedSha256 $ExpectedSha256",
+        "$verificationExitCode = $LASTEXITCODE",
+        "if ($verificationExitCode -ne 0)",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "production installed calibration verifier adapter is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
+    let config_path = root.join("desktop/src-tauri/tauri.conf.json");
+    let config = fs::read_to_string(&config_path)?;
+    for marker in ["sign_v4_authenticode.ps1", "plugins", "updater", "pubkey"] {
+        if !config.contains(marker) {
+            return Err(
+                format!("v4 Tauri trust config is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if config.contains("release-2026") || config.contains("PRIVATE KEY") {
+        return Err("v4 Tauri config contains legacy or private key material".into());
+    }
+
+    let config_json: Value = serde_json::from_str(&config)?;
+    let config_key = config_json
+        .get("plugins")
+        .and_then(Value::as_object)
+        .and_then(|plugins| plugins.get("updater"))
+        .and_then(Value::as_object)
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(Value::as_str)
+        .ok_or("v4 Tauri config public trust root is not a string")?;
+    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
+    let native = fs::read_to_string(&native_path)?;
+    let native_key = extract_rust_string_constant(&native, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
+    if config_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || native_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || !native.contains(
+            "const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];",
+        )
+    {
+        return Err("v4 production updater public-root copies do not match byte-for-byte".into());
+    }
+    let decoded = STANDARD.decode(config_key)?;
+    let decoded = String::from_utf8(decoded)?;
+    PublicKey::decode(&decoded)?;
+    crate::updater_trust::inventory_public_trust_roots(root)?;
+
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path)?.replace("\r\n", "\n");
+    for marker in [
+        "scripts/setup_v4_test_signing.ps1",
+        "scripts/verify_v4_authenticode.ps1",
+        "scripts/cleanup_v4_test_signing.ps1",
+        "scripts/test_v4_updater_key_rotation.ps1",
+        "scripts/ci_tauri_update_e2e.ps1",
+        "scripts/ci_validate_bridge.ps1",
+        "scripts/ci_require_windows_tools.ps1",
+        "TimeoutSeconds 30",
+        "qualify packaged Tauri updater rotation",
+        "scripts/ci_validate_candidate.ps1",
+        "CandidateInstallerPath",
+        "CandidateSignaturePath",
+        "CandidateVersion",
+        "CandidatePublicKeyPath",
+        "cargo xtask sbom generate",
+        "cargo xtask sbom verify",
+        "workflow_dispatch:",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
+        }
+    }
+    let ordinary_ci = ci.split("  deploy_pages:").next().unwrap_or(ci.as_str());
+    if ordinary_ci.contains("actions/attest@")
+        || ordinary_ci.contains("id-token: write")
+        || ordinary_ci.contains("attestations: write")
+    {
+        return Err(
+            "ordinary CI must not retain artifact attestation creation or permissions".into(),
+        );
+    }
+    for marker in [
+        "#[cfg(feature = \"tauri-update-fixture\")]",
+        "FIXTURE_NEW_ONLY_ARG",
+        "FIXTURE_PORT_ARG",
+        "FIXTURE_PUBLIC_KEY_ARG",
+        "fixture_runtime_config_from_args",
+        "read_fixture_public_key",
+        "fixture_public_keys",
+        ".last()",
+        "fixture_new_only_mode_selects_only_the_last_supplied_root",
+    ] {
+        if !native.contains(marker) {
+            return Err(format!(
+                "fixture-only updater new-root runtime seam is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
+    for marker in [
+        "Updater N-to-N+1 preservation",
+        "Updater N-to-N+1 resource replacement",
+        "catalog-sentinel",
+        "SKY_APP_DATA_ROOT",
+        "updater-preserved-user.json",
+        "user_song_sha256_before",
+        "built_in_manifest_sha256_before",
+        "built_in_manifest_sha256_after",
+        "selected_builtin_id_before",
+        "selected_builtin_id_after",
+        "selected_builtin_content_sha256_before",
+        "selected_builtin_content_sha256_after",
+        "Restore-CanonicalBuiltinCatalog",
+        "Clear-FixtureResourceStaging",
+        "source_tree_restore",
+        "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
+        "candidateInstallerSha256",
+        "oldSigningInstallerSha256",
+        "Get-HigherSemVer",
+        "preservedBridgeRoot",
+        "--selftest-update-fixture-new-only",
+        "selftest-update-fixture-port",
+        "selftest-update-fixture-public-key",
+        "negativeRequestStart",
+        "negativeManifestRequests",
+        "negativeCandidateRequests",
+        "n_to_n_plus_1_installer_sha256",
+        "old-root",
+        "old_root_rejection_copy_matches",
+        "BridgeRootPath",
+        "BridgeInstallerPath",
+        "ci_validate_bridge.ps1",
+    ] {
+        if !updater_fixture.contains(marker) {
+            return Err(format!(
+                "updater fixture is missing its required preservation marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if native.contains("option_env!(\"SKY_TAURI_UPDATE_FIXTURE")
+        || updater_fixture.contains("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS")
+        || updater_fixture.contains("SKY_TAURI_UPDATE_FIXTURE_PORT")
+    {
+        return Err(
+            "fixture updater must not use compile-time roots or port environment inputs".into(),
+        );
+    }
+    if ci.matches("cargo install cargo-vet").count() != 1 {
+        return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
+    }
+    if ci
+        .matches("google/osv-scanner-action/osv-scanner-action@")
+        .count()
+        != 1
+    {
+        return Err("CI must run exactly one pinned OSV-Scanner action".into());
+    }
+    if !ci.contains("--lockfile=./desktop/bun.lock") {
+        return Err("CI OSV-Scanner must audit the desktop Bun lockfile".into());
+    }
+
+    let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
+    for marker in [
+        "unsigned-zero-budget",
+        "NotSigned",
+        "authenticode-unsigned-zero-budget",
+        "unsigned-zero-budget-policy",
+        "SKY_AUTHENTICODE_TEST_THUMBPRINT",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "expected_signer_thumbprint",
+        "Resolve-TestPfxPath",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodeIntegrityProof",
+        "platform_status",
+        "UnknownError",
+        "signer thumbprint mismatch",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let crypto = fs::read_to_string(root.join("scripts/v4_authenticode_crypto.ps1"))?;
+    for marker in [
+        "Get-AuthenticodePeLayout",
+        "Get-AuthenticodeImageDigest",
+        "Get-AuthenticodeSpcDigest",
+        "SizeOfHeaders",
+        "sumOfBytesHashed",
+        "Sort-Object PointerToRawData",
+        "SignedCms",
+        "CheckSignature($true)",
+        "signature-valid-independent-cryptographic-integrity",
+        "signedcms-spc-indirect-data-authenticode-hash",
+    ] {
+        if !crypto.contains(marker) {
+            return Err(format!(
+                "v4 independent Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let setup = fs::read_to_string(root.join("scripts/setup_v4_test_signing.ps1"))?;
+    for marker in [
+        "CertificateRequest",
+        "X509ContentType]::Pfx",
+        "EphemeralKeySet",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "::add-mask::",
+        "RUNNER_TEMP",
+    ] {
+        if !setup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let mask_position = setup
+        .find("::add-mask::")
+        .ok_or("v4 Authenticode test PFX setup must mask the generated password")?;
+    let password_environment_position = setup
+        .find("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
+        .ok_or("v4 Authenticode test PFX setup must publish the generated password")?;
+    if mask_position >= password_environment_position {
+        return Err(
+            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV"
+                .into(),
+        );
+    }
+    for forbidden in [
+        "New-SelfSignedCertificate",
+        "certutil.exe",
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if setup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_test_signing.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "RUNNER_TEMP",
+        "sky-v4-test-signing-[0-9a-fA-F]{32}\\.pfx",
+        "Clear-TestSigningEnvironment",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+    ] {
+        if !cleanup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    for forbidden in [
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if cleanup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let signer = fs::read_to_string(root.join("scripts/sign_v4_authenticode.ps1"))?;
+    for marker in [
+        "unsigned-zero-budget",
+        "no signing performed",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "/f $pfxPath",
+        "/p $pfxPassword",
+        "EphemeralKeySet",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "SKY_AUTHENTICODE_PROVIDER",
+        "SKY_AUTHENTICODE_PROVIDER_COMMAND",
+    ] {
+        if !signer.contains(marker) {
+            return Err(
+                format!("v4 Authenticode signer is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
+    for marker in [
+        "v4_authenticode_crypto.ps1",
+        "sign_v4_authenticode.ps1",
+        "Get-AuthenticodeSignature",
+        "clean signed PE PASS",
+        "Tampered signed PE unexpectedly passed independent Authenticode verification",
+        "Get-AuthenticodePeLayout",
+        "WriteAllBytes",
+    ] {
+        if !tamper.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode tamper regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let contract_test =
+        fs::read_to_string(root.join("scripts/test_v4_production_signing_contract.ps1"))?;
+    for marker in [
+        "unsigned-zero-budget mode succeeds without a provider",
+        "Production signing rejects test credentials",
+        "Production verification rejects CI test certificate",
+        "unsigned-zero-budget verification rejects signed binary",
+        "Production verification rejects test thumbprint",
+        "CI test certificate cannot satisfy production mode or zero-budget unsigned state",
+    ] {
+        if !contract_test.contains(marker) {
+            return Err(format!(
+                "v4 production signing contract test is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let key_verifier = fs::read_to_string(root.join("scripts/verify_v4_updater_private_key.ps1"))?;
+    if !key_verifier.contains("updater-trust verify-private-key") {
+        return Err(
+            "v4 updater key verification script must delegate to updater-trust verify-private-key"
+                .into(),
+        );
+    }
+    for forbidden in ["::add-mask::", "19AABD2E7838818C"] {
+        if key_verifier.contains(forbidden) {
+            return Err(format!(
+                "v4 updater key verification script must not emit or hard-code production secret/output data: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let key_verifier_test =
+        fs::read_to_string(root.join("scripts/test_v4_updater_private_key.ps1"))?;
+    for marker in [
+        "V4_TEST_ONLY_PASS_PHRASE_MARKER",
+        "verify_v4_updater_private_key.ps1",
+        "Assert-NoPasswordMarker",
+        "Verifier mismatch path",
+        "Verifier success path",
+        "throwaway.key",
+    ] {
+        if !key_verifier_test.contains(marker) {
+            return Err(format!(
+                "v4 updater key verifier regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let orchestrator =
+        fs::read_to_string(root.join("scripts/orchestrate_v4_production_release.ps1"))?;
+    for marker in [
+        "ExpectedSourceSha",
+        "Version",
+        "Channel",
+        "UpdaterPrivateKeyPath",
+        "ApprovedSignerThumbprint",
+        "updater-trust verify-private-key",
+        "Redact-UpdaterVerifierOutput",
+        "updater-trust verify-signature",
+        "V4_QUALIFICATION_EVIDENCE.json",
+        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
+        "sign_v4_authenticode.ps1",
+        "verify_v4_authenticode.ps1",
+        "unsigned-zero-budget",
+        "Invoke-PrePackagingStaleOutputPurge",
+        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
+    ] {
+        if !orchestrator.contains(marker) {
+            return Err(format!(
+                "v4 production release orchestrator is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    v4_production_calibration_gate_contract(&orchestrator)?;
+    let installed_calibration_verifier =
+        fs::read_to_string(root.join("scripts/verify_installed_calibration.ps1"))?;
+    for marker in [
+        "ExpectedSize -le 0",
+        "$sha256 -cne $ExpectedSha256.ToLowerInvariant()",
+        "$machine -ne 0x8664",
+        "WaitForExit(5000)",
+        "installed calibration --help exited with",
+    ] {
+        if !installed_calibration_verifier.contains(marker) {
+            return Err(format!(
+                "production calibration verifier is missing its fail-closed check: {marker}"
+            )
+            .into());
+        }
+    }
+    let evidence_builder = fs::read_to_string(root.join("scripts/v4_qualification_evidence.ps1"))?;
+    for marker in [
+        "New-V4CanonicalQualificationEvidence",
+        "tauri-nsis-qualified-release",
+        "install-launch-uninstall",
+    ] {
+        if !evidence_builder.contains(marker) {
+            return Err(format!(
+                "v4 qualification evidence builder is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let orchestrator_test =
+        fs::read_to_string(root.join("scripts/test_v4_production_orchestrator.ps1"))?;
+    for marker in [
+        "[PASS] All V4 production orchestrator contract tests passed",
+        "Parameter validation fails closed on missing parameters",
+        "Source SHA mismatch fails closed before packaging",
+        "Channel policy validation fails closed on invalid SemVer / channel",
+        "Mutually exclusive provider configuration fails closed",
+        "Wrong updater private key fails pre-flight verification before packaging",
+        "Secret values are not emitted by expected error paths",
+        "Inherited signing key environment fails closed",
+        "Stale candidate artifacts and evidence are purged before packaging",
+        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
+        "Stale-output purge did not execute strictly BEFORE pre-packaging updater key verification",
+        "Updater signature verification rejects corrupted signature",
+        "Tampered candidate binary is detected",
+        "Production verification rejects CI test certificate",
+    ] {
+        if !orchestrator_test.contains(marker) {
+            return Err(format!(
+                "v4 production orchestrator test is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let topology_doc = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))?;
+    for marker in [
+        "Build Once, Qualify Exact Bytes",
+        "Runner Trust Boundaries and Key Custody",
+        "V4_QUALIFICATION_EVIDENCE.json",
+        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
+    ] {
+        if !topology_doc.contains(marker) {
+            return Err(format!(
+                "v4 release execution topology documentation is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+    let rsa_private_begin = ["BEGIN", "RSA", "PRIVATE", "KEY"].join(" ");
+    let ec_private_begin = ["BEGIN", "EC", "PRIVATE", "KEY"].join(" ");
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.path().components().any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some(".git" | "target" | "node_modules" | "dist")
+                )
+            })
+        })
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if [".key", ".pem", ".pfx", ".p12"]
+            .iter()
+            .any(|suffix| filename.ends_with(suffix))
+        {
+            return Err(format!(
+                "private signing material file is present in the repository tree: {}",
+                path.display()
+            )
+            .into());
+        }
+        let bytes = fs::read(path)?;
+        if is_tauri_minisign_private_key(&bytes) {
+            return Err(format!(
+                "Tauri/minisign private key material found at {}",
+                path.display()
+            )
+            .into());
+        }
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
+        for (line_number, line) in content.lines().enumerate() {
+            if line.contains(&private_begin)
+                || line.contains(&rsa_private_begin)
+                || line.contains(&ec_private_begin)
+            {
+                return Err(format!(
+                    "private key material marker found at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+            let secret_name = ["TAURI_SIGNING_PRIVATE", "_KEY"].concat();
+            if line.contains(&secret_name)
+                && ["Write-Host", "Write-Output", "echo", "Add-Content"]
+                    .iter()
+                    .any(|sink| line.contains(sink))
+            {
+                return Err(format!(
+                    "signing secret is sent to a logging/output sink at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+        }
+    }
+    println!("[xtask] v4 trust-material and secret-output guards: PASS");
+    Ok(())
+}
+
+fn extract_rust_string_constant(source: &str, name: &str) -> Result<String> {
+    let marker = format!("const {name}: &str = \"");
+    let values = source
+        .lines()
+        .filter_map(|line| {
+            let start = line.find(&marker)? + marker.len();
+            let value = line.get(start..)?.split_once('"')?.0;
+            Some(value.to_owned())
+        })
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] => Ok(value.clone()),
+        _ => Err(format!("Rust source must contain exactly one {name} string constant").into()),
+    }
+}
+
+fn is_tauri_minisign_private_key(bytes: &[u8]) -> bool {
+    let mut candidate = bytes.to_vec();
+    for _ in 0..3 {
+        if is_minisign_secret_text(&candidate) {
+            return true;
+        }
+        let Ok(text) = std::str::from_utf8(&candidate) else {
+            return false;
+        };
+        let Ok(decoded) = STANDARD.decode(text.trim()) else {
+            return false;
+        };
+        candidate = decoded;
+    }
+    false
+}
+
+fn is_minisign_secret_text(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.len() != 2 {
+        return false;
+    }
+    let comment = lines[0].to_ascii_lowercase();
+    if !comment.starts_with("untrusted comment:")
+        || (!comment.contains("secret key") && !comment.contains("private key"))
+    {
+        return false;
+    }
+    STANDARD
+        .decode(lines[1])
+        .map(|payload| (64..=1024).contains(&payload.len()))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
+        let source = include_str!("../../../../scripts/orchestrate_v4_production_release.ps1");
+        v4_production_calibration_gate_contract(source)
+            .expect("production release must verify staged and installed calibration");
+
+        let gate_start = source
+            .find("# Production-only installed calibration gate")
+            .expect("installed calibration gate marker");
+        let launch_start = source[gate_start..]
+            .find("Start-Process -FilePath $appPath")
+            .map(|offset| gate_start + offset)
+            .expect("application launch marker");
+        let installed_gate = source[gate_start..launch_start].to_owned();
+
+        let mut removed_gate = source.to_owned();
+        removed_gate.replace_range(gate_start..launch_start, "");
+        assert!(
+            v4_production_calibration_gate_contract(&removed_gate).is_err(),
+            "release contract must reject removal of installed calibration verification"
+        );
+
+        let mut moved_gate = removed_gate;
+        let evidence_start = moved_gate
+            .find("# 11. Emit Deterministic Machine-Readable Evidence")
+            .expect("qualification evidence boundary");
+        let evidence_line_end = moved_gate[evidence_start..]
+            .find('\n')
+            .map(|offset| evidence_start + offset + 1)
+            .expect("qualification evidence line end");
+        moved_gate.insert_str(evidence_line_end, &installed_gate);
+        assert!(
+            v4_production_calibration_gate_contract(&moved_gate).is_err(),
+            "release contract must reject installed calibration verification moved after evidence"
+        );
+    }
+
+    #[test]
+    fn trust_guard_rejects_renamed_and_encoded_minisign_secret_keys() {
+        let secret_payload = STANDARD.encode([0_u8; 158]);
+        let secret_text =
+            format!("untrusted comment: minisign encrypted secret key\n{secret_payload}");
+        assert!(is_tauri_minisign_private_key(secret_text.as_bytes()));
+        assert!(is_tauri_minisign_private_key(
+            STANDARD.encode(&secret_text).as_bytes()
+        ));
+
+        let public_text = format!(
+            "untrusted comment: minisign public key: fixture\n{}",
+            STANDARD.encode([0_u8; 32])
+        );
+        assert!(!is_tauri_minisign_private_key(
+            STANDARD.encode(public_text).as_bytes()
+        ));
+
+        let fixture = std::env::temp_dir().join(format!(
+            "sky-xtask-renamed-secret-{}-{:?}.txt",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::write(&fixture, STANDARD.encode(secret_text)).unwrap();
+        let renamed_fixture = fs::read(&fixture).unwrap();
+        assert!(is_tauri_minisign_private_key(&renamed_fixture));
+        fs::remove_file(fixture).unwrap();
+    }
+}
