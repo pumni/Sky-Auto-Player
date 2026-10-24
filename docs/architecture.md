@@ -68,9 +68,10 @@ the official Tauri updater. The native test suites are grouped under
 integration.
 
 The architecture audit applies explicit size budgets to the native composition
-root, its ownership modules, and their grouped test suites. Remaining module
-size debt in `rust/xtask/src/checks.rs` and
-`rust/crates/sky_player/src/engine/tests.rs` is outside this maintenance scope.
+root, its ownership modules, and their grouped test suites. The larger regression
+suites in `rust/crates/sky_player/src/engine/tests.rs` and
+`desktop/src-tauri/src/native_runtime/tests/playback_integration.rs` remain
+deferred maintenance debt.
 
 ## Playback boundary
 
@@ -156,6 +157,33 @@ Production parity is proven by direct Rust/TypeScript tests and committed
 fixtures. Historical words and frozen fixture data may remain as evidence, but
 they are not executable tooling. The canonical release/check tooling is
 `cargo xtask` and Bun.
+
+The xtask ownership root in `rust/xtask/src/checks.rs` keeps the check-group
+dispatch order, check-session verification memoization, supply-chain skip
+policy, and desktop/native orchestration. Focused owners contain the validators:
+
+- `audits/security.rs` owns the forbidden API, DLL, and Windows module scanner
+  and its baseline behavior.
+- `audits/architecture.rs` owns dependency direction, architecture allowlist,
+  module sizing, unsafe inventory, and module budget checks.
+- `audits/source.rs` owns shared Rust comment stripping and the shared source
+  walker used by audit and release-metadata validation.
+- `checks/tauri_metadata.rs` owns Tauri feature/build freshness, release
+  metadata, and legacy topology contracts.
+- `checks/release_runner.rs` owns protected runner, release workflow, and
+  metadata-token scope contracts.
+- `checks/release_pipeline.rs` owns release-state ordering and production
+  qualification contracts; `checks/workflow.rs` owns shared workflow parsing
+  and state-invocation validation.
+- `checks/ci_contracts.rs` owns active CI wiring and packaged-CI contracts;
+  `checks/trust.rs` owns production calibration and v4 trust-material guards.
+- `checks/bindings.rs` owns TypeScript and IPC binding generation and checks.
+
+The architecture audit budgets each owner module and requires the root
+`checks.rs` to remain at or below 1,600 lines. The larger regression suites in
+`rust/crates/sky_player/src/engine/tests.rs` and
+`desktop/src-tauri/src/native_runtime/tests/playback_integration.rs` remain
+deferred maintenance debt.
 
 Use the Rust repository tool for current verification groups:
 
