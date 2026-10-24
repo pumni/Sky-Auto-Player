@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import { BootstrapGate } from './BootstrapGate';
 import { AppTitleBar } from '../components/chrome/AppTitleBar';
@@ -9,6 +9,10 @@ import { createWindowControls } from '../platform/windowControls';
 import { usePackagedSmokeTest } from './usePackagedSmokeTest';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 import { applyAppearance } from '../appearance/applyAppearance';
+import {
+  revealStartupWindow,
+  scheduleStartupWindowRevealFallback,
+} from '../platform/startupWindowReveal';
 
 const SettingsPanel = lazy(() =>
   import('../components/settings/SettingsPanel').then(({ SettingsPanel: component }) => ({
@@ -49,6 +53,7 @@ export function App({ bridge }: AppProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const useStore = useMemo(() => createDesktopStore(bridge), [bridge]);
   const bootstrap = useStore((store) => store.bootstrap);
+  const bootstrapState = useStore((store) => store.bootstrapState);
   const settingsOpen = useStore((store) => store.settingsOpen);
   const calibrationOpen = useStore((store) => store.calibration.open);
   const updateDialogOpen = useStore((store) => store.update.dialogOpen);
@@ -56,6 +61,7 @@ export function App({ bridge }: AppProps) {
   const [settingsMounted, setSettingsMounted] = useState(false);
 
   useEffect(() => {
+    scheduleStartupWindowRevealFallback();
     recordStartupTelemetry('react.initialize.start');
     void useStore.getState().initialize();
   }, [useStore]);
@@ -65,9 +71,14 @@ export function App({ bridge }: AppProps) {
     recordStartupTelemetry('react.shell_ready');
   }, [bootstrap, useStore]);
 
-  useEffect(() => {
-    if (bootstrap) applyAppearance(bootstrap.settings.palette);
-  }, [bootstrap]);
+  useLayoutEffect(() => {
+    applyAppearance(bootstrap?.settings.palette ?? 'graphite');
+    if (bootstrapState === 'ready' && bootstrap) {
+      revealStartupWindow('bootstrap-ready');
+    } else if (bootstrapState === 'fatal') {
+      revealStartupWindow('bootstrap-failed');
+    }
+  }, [bootstrap, bootstrapState]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

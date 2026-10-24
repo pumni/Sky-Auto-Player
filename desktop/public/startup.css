@@ -1,0 +1,53 @@
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: #0b1018;
+  color: #e7edf6;
+}
+
+body {
+  font-family: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+}
+
+.startup-fallback {
+  box-sizing: border-box;
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.startup-fallback-mark {
+  color: #9b8cff;
+  font-size: 2.75rem;
+  line-height: 1;
+}
+
+.startup-fallback-eyebrow {
+  margin: 0;
+  color: #9b8cff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.startup-fallback h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 650;
+}
+
+.startup-fallback-message {
+  margin: 0;
+  color: #b7c2d1;
+  font-size: 0.9rem;
+}

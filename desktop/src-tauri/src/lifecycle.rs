@@ -9,7 +9,10 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
     if exit_after_close {
         crate::record_gui_smoke_phase("lifecycle.close.enter");
     }
-    if !state.begin_close() {
+    let startup_failsafe = app_handle
+        .try_state::<crate::startup_window::StartupWindowFailsafe>()
+        .map(|failsafe| failsafe.inner().clone());
+    if !accept_close(&state, startup_failsafe.as_ref()) {
         if exit_after_close {
             crate::record_gui_smoke_phase("lifecycle.close.duplicate");
         }
@@ -45,9 +48,22 @@ pub fn close_window<R: Runtime + 'static>(window: Window<R>) {
     });
 }
 
+fn accept_close(
+    state: &AppState,
+    startup_failsafe: Option<&crate::startup_window::StartupWindowFailsafe>,
+) -> bool {
+    // Cancellation shares the fallback's lock and must precede close acceptance.
+    // The fallback keeps that lock through show, so close either cancels it or
+    // commits only after the reveal request has completed.
+    if let Some(startup_failsafe) = startup_failsafe {
+        startup_failsafe.cancel_for_close();
+    }
+    state.begin_close()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::AppState;
+    use super::{AppState, accept_close};
 
     fn close_sequence_for_test(
         state: &AppState,
@@ -61,6 +77,20 @@ mod tests {
         native_shutdown(order);
         destroy(order);
         true
+    }
+
+    #[test]
+    fn startup_failsafe_cancellation_precedes_close_commit() {
+        let state = AppState::default();
+        let failsafe = crate::startup_window::StartupWindowFailsafe::default();
+
+        assert!(accept_close(&state, Some(&failsafe)));
+        assert_eq!(
+            failsafe.cancel_for_close(),
+            crate::startup_window::CloseOutcome::AlreadyClosing
+        );
+        assert!(!accept_close(&state, Some(&failsafe)));
+        assert!(!state.begin_close());
     }
 
     #[test]

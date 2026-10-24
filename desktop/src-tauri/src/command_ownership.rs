@@ -25,6 +25,7 @@ pub(crate) fn matrix_is_complete() -> bool {
             .iter()
             .all(|command| owner_for(command.method) == Some(CommandOwner::Native))
         && owner_for(crate::ipc_contract::UI_EVENTS_COMMAND).is_none()
+        && owner_for(crate::ipc_contract::STARTUP_WINDOW_REVEALED_COMMAND).is_none()
 }
 
 #[cfg(test)]
@@ -105,6 +106,10 @@ mod tests {
             generated_command_names
                 .contains(&format!("'{}'", crate::ipc_contract::UI_EVENTS_COMMAND))
         );
+        assert!(generated_command_names.contains(&format!(
+            "export const STARTUP_WINDOW_REVEALED_COMMAND = '{}' as const",
+            crate::ipc_contract::STARTUP_WINDOW_REVEALED_COMMAND
+        )));
 
         let handler_source = include_str!("lib.rs");
         let handler_block = handler_source

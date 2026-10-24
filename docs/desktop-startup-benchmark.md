@@ -22,6 +22,23 @@ The startup milestones are intentionally separate:
 - `react.shell_ready` means the React shell has rendered after native bootstrap and settings.
 - `react.catalog_ready` means the initial catalog search and navigation reconciliation completed.
 
+## Native window visibility
+
+The main Tauri window starts hidden. The pinned window-state plugin restores its existing size,
+position, and maximized state before the frontend can reveal it; visibility is not persisted. React
+applies the bootstrapped palette in a layout effect and then requests one native show. A 2.5-second
+frontend timer reveals the existing branded loading screen during slow bootstrap. If frontend
+JavaScript never starts, a one-shot 10-second native fallback shows the static loading markup from
+`desktop/index.html`. The successful frontend show is acknowledged by a main-window-only native
+command, which ends the fallback's pending state so a later hide does not trigger another show.
+Fallback expiry and accepted close use the same locked state transition; close acceptance follows
+fallback cancellation. When startup telemetry is enabled, `window.startup_failsafe.normal_success`,
+`.expired`, `.cancelled`, and `.show_failed` distinguish the outcomes alongside `window.reveal.*`.
+
+The native fallback cannot render app-authored UI if WebView2 fails before loading the HTML
+document; in that case the configured dark WebView background is the only available surface. A
+fallback show failure is written to startup telemetry when enabled and to the process error stream.
+
 The initial bootstrap uses the settings snapshot loaded during native runtime
 construction. `settings.reload.start/end` therefore belong to an explicit
 settings refresh boundary after bootstrap, not to the initial shell bootstrap

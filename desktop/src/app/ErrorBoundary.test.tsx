@@ -1,8 +1,12 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isTauriRuntime } from '../platform/runtime';
+import { revealStartupWindow } from '../platform/startupWindowReveal';
 import { ErrorBoundary } from './ErrorBoundary';
 
+vi.mock('../platform/startupWindowReveal', () => ({
+  revealStartupWindow: vi.fn(),
+}));
 vi.mock('../platform/runtime', () => ({
   isTauriRuntime: vi.fn(),
 }));
@@ -46,6 +50,7 @@ describe('ErrorBoundary recovery', () => {
       screen.getByText('Close and reopen the full application to recover.'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reload window' })).not.toBeInTheDocument();
+    expect(revealStartupWindow).toHaveBeenCalledWith('render-error');
   });
 
   it('retains the page reload action for browser users', () => {

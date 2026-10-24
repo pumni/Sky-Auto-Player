@@ -138,15 +138,17 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
 ];
 
 pub(crate) const UI_EVENTS_COMMAND: &str = "subscribe_ui_events";
+pub(crate) const STARTUP_WINDOW_REVEALED_COMMAND: &str = "startup_window_revealed";
 
-const fn tauri_command_names() -> [&'static str; 33] {
-    let mut names = [""; 33];
+const fn tauri_command_names() -> [&'static str; 34] {
+    let mut names = [""; 34];
     let mut index = 0;
     while index < COMMANDS.len() {
         names[index] = COMMANDS[index].invoke_name;
         index += 1;
     }
     names[COMMANDS.len()] = UI_EVENTS_COMMAND;
+    names[COMMANDS.len() + 1] = STARTUP_WINDOW_REVEALED_COMMAND;
     names
 }
 
@@ -154,12 +156,13 @@ pub(crate) const TAURI_COMMANDS: &[&str] = &tauri_command_names();
 
 pub(crate) fn is_complete() -> bool {
     COMMANDS.len() == 32
-        && TAURI_COMMANDS.len() == COMMANDS.len() + 1
+        && TAURI_COMMANDS.len() == COMMANDS.len() + 2
         && COMMANDS
             .iter()
             .enumerate()
             .all(|(index, spec)| TAURI_COMMANDS[index] == spec.invoke_name)
         && TAURI_COMMANDS[COMMANDS.len()] == UI_EVENTS_COMMAND
+        && TAURI_COMMANDS[COMMANDS.len() + 1] == STARTUP_WINDOW_REVEALED_COMMAND
         && COMMANDS.iter().all(|spec| {
             !spec.invoke_name.is_empty()
                 && !spec.method.is_empty()
@@ -213,8 +216,9 @@ mod tests {
             }
         );
         assert_eq!(UI_EVENTS_COMMAND, "subscribe_ui_events");
-        assert_eq!(TAURI_COMMANDS.len(), 33);
+        assert_eq!(TAURI_COMMANDS.len(), 34);
         assert_eq!(TAURI_COMMANDS[0], "bootstrap");
         assert_eq!(TAURI_COMMANDS[32], UI_EVENTS_COMMAND);
+        assert_eq!(TAURI_COMMANDS[33], STARTUP_WINDOW_REVEALED_COMMAND);
     }
 }
