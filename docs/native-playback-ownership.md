@@ -37,6 +37,32 @@ supervisor, one per-session presentation consumer, and one app-wide asynchronous
 UI event publisher. The extraction adds no sender, service container, queue, or
 safety authority.
 
+## Native runtime module ownership
+
+The current control-plane layout keeps one `NativeDesktopRuntime` in
+`native_runtime.rs` and moves focused operations into sibling modules:
+
+```text
+NativeDesktopRuntime                  native_runtime.rs
+  ├─ command routing, settings, shutdown, and app coordination
+  ├─ NativeEventHub                    shared event queue and publisher
+  ├─ catalog.rs                        catalog/library load, cache, and import operations
+  ├─ calibration.rs                    worker lifecycle and evidence/cache publication
+  └─ playback/                         NativePlaybackService and playback integration
+```
+
+Catalog and calibration modules operate on the existing runtime-owned state;
+they do not add a second state owner. Catalog and settings generation changes
+continue to fence prepared playback. Admitted calibration publication retains
+the same publication gate and invalidates prepared plans before terminal
+publication. The app-wide `NativeEventHub` remains in the composition root with
+its existing subscribe, publish, queue, and fail-closed rules.
+
+Runtime unit tests now live in `native_runtime/tests.rs` with grouped suites in
+`native_runtime/tests/{catalog,calibration,event_delivery,playback_integration}.rs`.
+The move preserves all 107 test functions and all 17 `tauri-test` feature gates;
+fully qualified test IDs gain the matching suite module segment.
+
 ## Owners, locks, and lifetimes
 
 | Owner | State and synchronization | Responsibility |

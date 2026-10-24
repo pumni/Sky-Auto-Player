@@ -12,6 +12,44 @@ const FORBIDDEN_APP_CORE_DEPENDENCIES: &[&str] = &[
 ];
 const ADAPTER_DEPENDENCY_KINDS: &[&str] =
     &["dependencies", "build-dependencies", "dev-dependencies"];
+const NATIVE_RUNTIME_MODULE_BUDGETS: &[(&str, usize)] = &[
+    ("desktop/src-tauri/src/native_runtime.rs", 2_000),
+    ("desktop/src-tauri/src/native_runtime/calibration.rs", 1_550),
+    ("desktop/src-tauri/src/native_runtime/catalog.rs", 1_650),
+    ("desktop/src-tauri/src/native_runtime/tests.rs", 900),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/calibration.rs",
+        650,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/catalog.rs",
+        1_100,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/event_delivery.rs",
+        800,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration.rs",
+        4_200,
+    ),
+];
+
+fn native_runtime_line_budget_violation(path: &str, source: &str, budget: usize) -> Option<String> {
+    let line_count = source.lines().count();
+    (line_count > budget)
+        .then(|| format!("[native_runtime_module_lines] {path}: {line_count} lines (> {budget})"))
+}
+
+fn native_runtime_module_budgets(root: &Path) -> Result<()> {
+    for (path, budget) in NATIVE_RUNTIME_MODULE_BUDGETS {
+        let source = fs::read_to_string(root.join(path))?;
+        if let Some(violation) = native_runtime_line_budget_violation(path, &source, *budget) {
+            return Err(violation.into());
+        }
+    }
+    Ok(())
+}
 
 fn dependency_table_contains(table: Option<&toml::Value>, dependency: &str) -> bool {
     table
@@ -127,7 +165,8 @@ fn app_core_boundary(root: &Path) -> Result<()> {
 pub(crate) fn run(root: &Path) -> Result<()> {
     app_core_boundary(root)?;
     adapter_boundary(root)?;
-    crate::checks::architecture(root)
+    crate::checks::architecture(root)?;
+    native_runtime_module_budgets(root)
 }
 
 #[cfg(test)]
@@ -142,6 +181,20 @@ mod tests {
     #[test]
     fn current_adapter_dependency_boundary_passes() {
         adapter_boundary(&crate::repo::root()).expect("sky_native_adapters dependency boundary");
+    }
+
+    #[test]
+    fn native_runtime_module_budgets_reject_regrowth_and_cover_the_current_tree() {
+        assert_eq!(
+            native_runtime_line_budget_violation("native_runtime.rs", "one\ntwo\n", 1),
+            Some("[native_runtime_module_lines] native_runtime.rs: 2 lines (> 1)".to_owned())
+        );
+        assert_eq!(
+            native_runtime_line_budget_violation("native_runtime.rs", "one\ntwo\n", 2),
+            None
+        );
+        native_runtime_module_budgets(&crate::repo::root())
+            .expect("native runtime ownership modules stay within their budgets");
     }
 
     #[test]
