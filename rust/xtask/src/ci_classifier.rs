@@ -86,7 +86,7 @@ fn display_paths(paths: &[String]) -> String {
         .join(", ")
 }
 
-fn normalize_path(raw: &str) -> String {
+fn normalize_manual_path(raw: &str) -> String {
     let mut path = raw.trim().replace('\\', "/");
     while path.starts_with("./") {
         path.drain(..2);
@@ -426,12 +426,7 @@ fn is_release_script(path: &str) -> bool {
             .contains(&name))
 }
 
-pub(crate) fn classify_paths(raw_paths: impl IntoIterator<Item = String>) -> Classification {
-    let paths = raw_paths
-        .into_iter()
-        .map(|path| normalize_path(&path))
-        .filter(|path| !path.trim().is_empty())
-        .collect::<Vec<_>>();
+fn classify_normalized_paths(paths: Vec<String>) -> Classification {
     if paths.is_empty() {
         return Classification::new("no changed paths");
     }
@@ -482,6 +477,42 @@ pub(crate) fn classify_paths(raw_paths: impl IntoIterator<Item = String>) -> Cla
     classification
 }
 
+// Retain slash/dot/edge-whitespace normalization only for the explicit manual paths-file input.
+pub(crate) fn classify_paths(raw_paths: impl IntoIterator<Item = String>) -> Classification {
+    let paths = raw_paths
+        .into_iter()
+        .map(|path| normalize_manual_path(&path))
+        .filter(|path| !path.trim().is_empty())
+        .collect::<Vec<_>>();
+    classify_normalized_paths(paths)
+}
+
+fn classify_git_paths(paths: Vec<String>) -> Classification {
+    if paths.iter().any(|path| {
+        path.is_empty()
+            || path.trim() != path
+            || path.contains('\\')
+            || path.chars().any(char::is_control)
+    }) {
+        return Classification::full(format!(
+            "malformed changed path requires full validation: {}",
+            display_paths(&paths)
+        ));
+    }
+    classify_normalized_paths(paths)
+}
+
+fn decode_git_paths(output: &[u8]) -> Result<Vec<String>> {
+    output
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            String::from_utf8(path.to_vec())
+                .map_err(|_| "git changed path is not valid UTF-8; full validation required".into())
+        })
+        .collect()
+}
+
 fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
     Command::new("git")
         .args(args)
@@ -524,12 +555,7 @@ fn changed_paths_from_git(root: &Path, base: &str, head: &str) -> Result<Vec<Str
     if !output.status.success() {
         return Err("git diff failed for the requested base/head range".into());
     }
-    Ok(output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-        .map(|path| String::from_utf8_lossy(path).into_owned())
-        .collect())
+    decode_git_paths(&output.stdout)
 }
 
 fn parse_arguments(args: &[String]) -> Result<Classification> {
@@ -581,22 +607,26 @@ fn parse_arguments(args: &[String]) -> Result<Classification> {
     if paths_file.is_some() && (base.is_some() || head.is_some()) {
         return Err("paths file cannot be combined with base/head SHAs".into());
     }
-    let raw_paths = if let Some(path) = paths_file {
+    if let Some(path) = paths_file {
         let source = fs::read_to_string(path).map_err(|_| "paths file does not exist")?;
-        source
+        let raw_paths = source
             .strip_prefix('\u{feff}')
             .unwrap_or(&source)
             .lines()
             .map(str::to_owned)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        Ok(classify_paths(raw_paths))
     } else {
         match (base, head) {
-            (Some(base), Some(head)) => changed_paths_from_git(&crate::repo::root(), &base, &head)?,
-            (None, None) => return Err("base and head SHAs are required".into()),
-            _ => return Err("base and head SHAs must be supplied together".into()),
+            (Some(base), Some(head)) => Ok(classify_git_paths(changed_paths_from_git(
+                &crate::repo::root(),
+                &base,
+                &head,
+            )?)),
+            (None, None) => Err("base and head SHAs are required".into()),
+            _ => Err("base and head SHAs must be supplied together".into()),
         }
-    };
-    Ok(classify_paths(raw_paths))
+    }
 }
 
 fn github_delimiter(value: &str) -> String {
@@ -1109,6 +1139,41 @@ mod tests {
             &classify_paths([".\\desktop\\src\\App.tsx".to_owned()]),
             &["desktop_required", "desktop_e2e_required"],
         );
+    }
+
+    #[test]
+    fn git_paths_are_exact_and_malformed_names_fail_closed() {
+        for path in [
+            "README.md ",
+            "README.md\n",
+            "desktop\\src\\App.tsx",
+            " README.md",
+        ] {
+            let classification = classify_git_paths(vec![path.to_owned()]);
+            assert_lanes(&classification, &LANES);
+            assert!(
+                classification
+                    .classification_reason
+                    .starts_with("malformed changed path")
+            );
+        }
+
+        assert_lanes(
+            &classify_git_paths(vec!["desktop/src/App.tsx".to_owned()]),
+            &["desktop_required", "desktop_e2e_required"],
+        );
+        // Manual paths-file input deliberately retains its historical normalization contract.
+        assert_lanes(
+            &classify_paths([" .\\desktop\\src\\App.tsx ".to_owned()]),
+            &["desktop_required", "desktop_e2e_required"],
+        );
+    }
+
+    #[test]
+    fn git_path_decoding_preserves_trailing_space_and_rejects_invalid_utf8() {
+        let paths = decode_git_paths(b"README.md \0desktop/src/App.tsx\0").unwrap();
+        assert_eq!(paths, ["README.md ", "desktop/src/App.tsx"]);
+        assert!(decode_git_paths(b"README.md\xff\0").is_err());
     }
 
     #[test]

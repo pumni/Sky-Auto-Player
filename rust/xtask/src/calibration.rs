@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -233,6 +233,102 @@ fn join_reader(reader: JoinHandle<Vec<u8>>) -> Result<Vec<u8>> {
         .map_err(|_| "calibration help output reader thread panicked".into())
 }
 
+fn wait_child_until(child: &mut Child, deadline: Instant) -> Result<Option<ExitStatus>> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_reader_until(reader: &JoinHandle<Vec<u8>>, deadline: Instant) -> bool {
+    while !reader.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+#[cfg(windows)]
+fn terminate_process_tree(process_id: u32, deadline: Instant) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let system_root = std::env::var_os("SystemRoot")
+        .ok_or("SystemRoot is unavailable; cannot terminate calibration process tree")?;
+    let taskkill = PathBuf::from(system_root)
+        .join("System32")
+        .join("taskkill.exe");
+    let mut killer = Command::new(taskkill)
+        .args(["/PID", &process_id.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()?;
+    match wait_child_until(&mut killer, deadline)? {
+        Some(status) if status.success() => Ok(()),
+        Some(status) => Err(format!(
+            "taskkill could not terminate calibration process tree (exit={})",
+            status.code().unwrap_or(-1)
+        )
+        .into()),
+        None => {
+            let _ = killer.kill();
+            Err("taskkill exceeded its process-tree teardown bound".into())
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn terminate_process_tree(_process_id: u32, _deadline: Instant) -> Result<()> {
+    Err("process-tree termination is only implemented on Windows".into())
+}
+
+fn cleanup_timed_out_process(
+    child: &mut Child,
+    stdout: JoinHandle<Vec<u8>>,
+    stderr: JoinHandle<Vec<u8>>,
+    deadline: Instant,
+) -> Result<()> {
+    let tree_deadline = (Instant::now() + Duration::from_millis(750)).min(deadline);
+    let mut errors = Vec::new();
+    if let Err(error) = terminate_process_tree(child.id(), tree_deadline) {
+        errors.push(format!("process-tree termination failed: {error}"));
+        let _ = child.kill();
+    }
+    match wait_child_until(child, deadline)? {
+        Some(_) => {}
+        None => {
+            errors.push("calibration helper process did not stop within the teardown bound".into());
+            let _ = child.kill();
+        }
+    }
+    for (stream, reader) in [("stdout", stdout), ("stderr", stderr)] {
+        if wait_reader_until(&reader, deadline) {
+            if join_reader(reader).is_err() {
+                errors.push(format!("calibration {stream} reader failed to join"));
+            }
+        } else {
+            drop(reader);
+            errors.push(format!(
+                "calibration {stream} reader did not stop within the teardown bound"
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; ").into())
+    }
+}
+
 fn usage_line_matches(line: &str) -> bool {
     let trimmed = line.trim_start();
     let folded = trimmed.to_ascii_lowercase();
@@ -247,14 +343,18 @@ fn usage_line_matches(line: &str) -> bool {
             .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
 }
 
-fn run_help(path: &Path) -> Result<i32> {
-    let mut child = Command::new(path)
-        .arg("--help")
+fn run_bounded_command(
+    mut command: Command,
+    timeout: Duration,
+    timeout_message: &str,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
         .spawn()
-        .map_err(|error| format!("installed calibration --help did not start: {error}"))?;
+        .map_err(|error| format!("bounded calibration helper did not start: {error}"))?;
     let stdout = drain_limited(
         child
             .stdout
@@ -267,22 +367,38 @@ fn run_help(path: &Path) -> Result<i32> {
             .take()
             .ok_or("calibration help stderr was not captured")?,
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    let deadline = Instant::now() + timeout;
+    let status = match wait_child_until(&mut child, deadline)? {
+        Some(status) => status,
+        None => {
+            let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+            return match cleanup_timed_out_process(&mut child, stdout, stderr, cleanup_deadline) {
+                Ok(()) => Err(timeout_message.into()),
+                Err(error) => Err(format!(
+                    "{timeout_message}; bounded process-tree and pipe cleanup incomplete: {error}"
+                )
+                .into()),
+            };
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = join_reader(stdout);
-            let _ = join_reader(stderr);
-            return Err("installed calibration --help exceeded the 5-second smoke bound".into());
-        }
-        thread::sleep(Duration::from_millis(25));
     };
+    if !wait_reader_until(&stdout, deadline) || !wait_reader_until(&stderr, deadline) {
+        drop(stdout);
+        drop(stderr);
+        return Err("calibration helper output pipes remained open beyond the smoke bound".into());
+    }
     let stdout = join_reader(stdout)?;
     let stderr = join_reader(stderr)?;
+    Ok((status, stdout, stderr))
+}
+
+fn run_help(path: &Path) -> Result<i32> {
+    let mut command = Command::new(path);
+    command.arg("--help");
+    let (status, stdout, stderr) = run_bounded_command(
+        command,
+        Duration::from_secs(5),
+        "installed calibration --help exceeded the 5-second smoke bound",
+    )?;
     let text = format!(
         "{}\n{}",
         String::from_utf8_lossy(&stdout),
@@ -524,6 +640,100 @@ mod tests {
         ));
         assert!(!usage_line_matches("Usage: another_program --help"));
         assert!(!usage_line_matches("native_calibration command"));
+    }
+
+    #[cfg(windows)]
+    fn windows_process_is_running(process_id: u32) -> bool {
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot must be set");
+        let tasklist = PathBuf::from(system_root)
+            .join("System32")
+            .join("tasklist.exe");
+        let output = Command::new(tasklist)
+            .args(["/FO", "CSV", "/NH", "/FI"])
+            .arg(format!("PID eq {process_id}"))
+            .output()
+            .expect("tasklist must be available on Windows");
+        String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            line.split(',')
+                .nth(1)
+                .and_then(|value| value.trim().trim_matches('"').parse::<u32>().ok())
+                == Some(process_id)
+        })
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_calibration_timeout_kills_descendants_and_bounds_pipe_readers() {
+        let root = temp_dir("sky-xtask-calibration-process-tree-timeout");
+        let script = root.join("calibration-timeout-helper.ps1");
+        let descendant_pid_file = root.join("descendant.pid");
+        fs::write(
+            &script,
+            r#"param([string]$PidFile)
+$descendant = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c ping 127.0.0.1 -n 60' -PassThru -NoNewWindow
+[System.IO.File]::WriteAllText($PidFile, [string]$descendant.Id)
+[Console]::Out.WriteLine('calibration timeout helper started its descendant')
+Start-Sleep -Seconds 60
+"#,
+        )
+        .unwrap();
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot must be set");
+        let powershell = PathBuf::from(system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let mut command = Command::new(powershell);
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(&script)
+            .arg(&descendant_pid_file);
+
+        let started = Instant::now();
+        let error = run_bounded_command(
+            command,
+            Duration::from_secs(2),
+            "test calibration helper exceeded its 2-second smoke bound",
+        )
+        .unwrap_err()
+        .to_string();
+        let elapsed = started.elapsed();
+        let descendant_pid = fs::read_to_string(&descendant_pid_file)
+            .expect("timeout helper must record its descendant PID")
+            .parse::<u32>()
+            .expect("timeout helper descendant PID must be numeric");
+        let process_deadline = Instant::now() + Duration::from_secs(2);
+        while windows_process_is_running(descendant_pid) && Instant::now() < process_deadline {
+            thread::sleep(Duration::from_millis(25));
+        }
+        let descendant_still_running = windows_process_is_running(descendant_pid);
+        if descendant_still_running {
+            let _ = terminate_process_tree(descendant_pid, Instant::now() + Duration::from_secs(1));
+        }
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(
+            error.contains("test calibration helper exceeded its 2-second smoke bound"),
+            "unexpected timeout result: {error}"
+        );
+        assert!(
+            !error.contains("cleanup incomplete"),
+            "bounded teardown failed: {error}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "teardown took {elapsed:?}"
+        );
+        assert!(
+            !descendant_still_running,
+            "timed-out helper descendant {descendant_pid} survived process-tree teardown"
+        );
     }
 
     #[test]
