@@ -888,23 +888,8 @@ fn validate_context(root: &Path, options: &Options, context: &Context) -> Result
     {
         return Err("release workflow SHA differs from release-context.json".into());
     }
-    if env::var("GITHUB_SHA").is_ok_and(|sha| sha.to_ascii_lowercase() != context.workflow_sha) {
-        return Err("release context workflow SHA differs from GITHUB_SHA".into());
-    }
-    if env::var("GITHUB_REPOSITORY").is_ok_and(|repository| repository != context.repository) {
-        return Err("release context repository differs from GITHUB_REPOSITORY".into());
-    }
-    if env::var("GITHUB_RUN_ID").is_ok_and(|run_id| run_id != context.run_id) {
-        return Err("release context run ID differs from GITHUB_RUN_ID".into());
-    }
     if context.run_id.is_empty() || !context.run_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("release context run ID must contain decimal digits only".into());
-    }
-    if env::var("GITHUB_EVENT_NAME").is_ok_and(|event| event != "workflow_dispatch") {
-        return Err("release context is not executing under workflow_dispatch".into());
-    }
-    if env::var("GITHUB_REF").is_ok_and(|reference| reference != "refs/heads/main") {
-        return Err("release context is not executing from refs/heads/main".into());
     }
     Ok(())
 }
@@ -3932,7 +3917,7 @@ fn self_test() -> Result<()> {
         mock_complete_transaction_and_raw_metadata(),
         mock_metadata_promotion_is_idempotent_after_committed_timeout(),
         mock_publication_identity_and_asset_inventory_fail_closed(),
-        mock_same_run_owned_draft_is_reconciled(),
+        mock_pr_merge_sha_does_not_break_release_or_owned_cleanup(),
         mock_conflicting_draft_is_not_deleted(),
         mock_digest_mismatch_cleans_owned_draft(),
         mock_partial_upload_cleans_owned_draft(),
@@ -4553,8 +4538,31 @@ fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
     Ok(())
 }
 
-fn mock_same_run_owned_draft_is_reconciled() -> Result<()> {
+fn mock_pr_merge_sha_does_not_break_release_or_owned_cleanup() -> Result<()> {
     let (root, options, context, manifest) = fixture()?;
+    let runtime = RuntimeIdentity::from_values(
+        Some(context.workflow_sha.clone()),
+        Some(context.repository.clone()),
+        Some(context.run_id.clone()),
+        Some("workflow_dispatch".to_owned()),
+        Some("refs/heads/main".to_owned()),
+        Some(RELEASE_WORKFLOW_REF.to_owned()),
+    )?;
+    let pr_merge_runtime = RuntimeIdentity {
+        github_sha: "0".repeat(40),
+        ..runtime
+    };
+    assert!(
+        validate_runtime_identity(
+            &context,
+            Some(&context.workflow_sha),
+            &pr_merge_runtime,
+            false
+        )
+        .is_err()
+    );
+    validate_context(&root, &options, &context)?;
+
     let mut github = FakeTransport::new();
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     let marker = format!(
@@ -5425,6 +5433,7 @@ mod tests {
     #[test]
     fn mock_release_success_and_reconciliation() {
         mock_publish_succeeds().unwrap();
+        mock_pr_merge_sha_does_not_break_release_or_owned_cleanup().unwrap();
         mock_draft_post_timeout_reconciles_exact_marker().unwrap();
         mock_patch_timeout_reconciles_exact_release_id().unwrap();
         mock_complete_transaction_and_raw_metadata().unwrap();

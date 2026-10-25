@@ -287,6 +287,7 @@ fn rust_release_state_machine_contract(
         "validate_monotonic",
         "fn delete_owned_draft",
         "mock_conflicting_draft_is_not_deleted",
+        "mock_pr_merge_sha_does_not_break_release_or_owned_cleanup",
         "current[\"draft\"] != true",
         "mock_upload_timeout_reconciles_exact_asset",
         "mutation_adapter_is_at_most_once",
@@ -299,6 +300,7 @@ fn rust_release_state_machine_contract(
         "GITHUB_WORKFLOW_REF",
         "--workflow-sha is required for Preflight",
         "runtime_identity_fails_closed_without_exact_workflow_context",
+        "require_runtime_context(root, &options, command == \"build-candidate\")?",
         "channels/{channel}/latest.json?ref=release-metadata",
         "metadata_token_probe_rejects_wrong_repository_state",
         "fn promote_metadata",
@@ -333,6 +335,31 @@ fn rust_release_state_machine_contract(
                 "Rust release authority is missing invariant `{marker}`"
             ));
         }
+    }
+    let context_validation = rust
+        .split_once("fn validate_context(")
+        .and_then(|(_, body)| body.split_once("\nfn preflight("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing pure transaction-context validation")?;
+    if context_validation.contains("env::var(") || context_validation.contains("GITHUB_") {
+        return Err(
+            "transaction-context validation must not depend on ambient GitHub Actions variables"
+                .into(),
+        );
+    }
+    let release_cli = rust
+        .split_once("pub(crate) fn run(")
+        .and_then(|(_, body)| body.split_once("\nfn require_runtime_context("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release CLI is missing its production runtime guard")?;
+    let runtime_guard = release_cli
+        .find("require_runtime_context(root, &options, command == \"build-candidate\")?")
+        .ok_or("release side-effect phases must require exact runtime identity")?;
+    let command_dispatch = release_cli
+        .find("match command")
+        .ok_or("release CLI phase dispatch is missing")?;
+    if runtime_guard >= command_dispatch {
+        return Err("release phases must validate runtime identity before dispatch".into());
     }
     let publish = rust
         .split_once("fn publish_release(")
@@ -572,12 +599,19 @@ GITHUB_WORKFLOW_REF
 RELEASE_WORKFLOW_REF
 REHEARSE_WORKFLOW_REF
 fn git_text(
+fn validate_context(
+pure_context_validation
+fn preflight(
+pub(crate) fn run(
+require_runtime_context(root, &options, command == "build-candidate")?
+match command
+fn require_runtime_context(
 fn probe_metadata_token(
 for channel in ["stable", "beta"]
 doctor_validate_metadata
 channels/{channel}/latest.json?ref=release-metadata
 fn cleanup_local_state(
-mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted mock_upload_timeout_reconciles_exact_asset mutation_adapter_is_at_most_once MutationOutcomeUnknown await_raw_metadata_convergence raw_metadata_retry_converges_after_cache_lag raw_metadata_retry_fails_with_bounded_diagnostics RuntimeIdentity::from_environment GITHUB_WORKFLOW_REF runtime_identity_fails_closed_without_exact_workflow_context metadata_token_probe_rejects_wrong_repository_state fn promote_metadata fn final_verify fn doctor fn verify_attestations POST_PUBLICATION_INCIDENT release_id sha256: raw.githubusercontent.com mock_publish_succeeds mock_draft_post_timeout_reconciles_exact_marker mock_digest_mismatch_cleans_owned_draft mock_patch_timeout_reconciles_exact_release_id mock_unknown_publication_never_cleans_up canonical_upload_url RELEASE_BUILD_STEP_TIMEOUT RELEASE_DEFENDER_STEP_TIMEOUT ATTESTATION_VERIFY_TIMEOUT mock_release_doctor_detects_metadata_endpoint_divergence mock_metadata_promotion_is_idempotent_after_committed_timeout mock_publication_identity_and_asset_inventory_fail_closed doctor_state_input_rejects_malformed_and_oversized_files malformed_github_api_json_fails_closed_with_endpoint_context retry_policy_retries_only_transient_responses env::current_exe()?"#
+mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted mock_pr_merge_sha_does_not_break_release_or_owned_cleanup mock_upload_timeout_reconciles_exact_asset mutation_adapter_is_at_most_once MutationOutcomeUnknown await_raw_metadata_convergence raw_metadata_retry_converges_after_cache_lag raw_metadata_retry_fails_with_bounded_diagnostics RuntimeIdentity::from_environment GITHUB_WORKFLOW_REF runtime_identity_fails_closed_without_exact_workflow_context metadata_token_probe_rejects_wrong_repository_state fn promote_metadata fn final_verify fn doctor fn verify_attestations POST_PUBLICATION_INCIDENT release_id sha256: raw.githubusercontent.com mock_publish_succeeds mock_draft_post_timeout_reconciles_exact_marker mock_digest_mismatch_cleans_owned_draft mock_patch_timeout_reconciles_exact_release_id mock_unknown_publication_never_cleans_up canonical_upload_url RELEASE_BUILD_STEP_TIMEOUT RELEASE_DEFENDER_STEP_TIMEOUT ATTESTATION_VERIFY_TIMEOUT mock_release_doctor_detects_metadata_endpoint_divergence mock_metadata_promotion_is_idempotent_after_committed_timeout mock_publication_identity_and_asset_inventory_fail_closed doctor_state_input_rejects_malformed_and_oversized_files malformed_github_api_json_fails_closed_with_endpoint_context retry_policy_retries_only_transient_responses env::current_exe()?"#
             .to_owned();
         let main = "\"release-v4\" => release_v4::run\n\"release-doctor\" =>\nrelease_v4::run(&repo::root(), &doctor_args)".to_owned();
         let ci = "cargo xtask release-v4 self-test\ncargo test --locked --manifest-path rust/xtask/Cargo.toml".to_owned();
@@ -614,6 +648,28 @@ mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted
                 &release,
                 &rehearsal,
                 &no_negative_test,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
+        let ambient_pr_sha = rust.replace(
+            "pure_context_validation\nfn preflight(",
+            "env::var(\"GITHUB_SHA\")\npure_context_validation\nfn preflight(",
+        );
+        assert!(
+            rust_release_state_machine_contract(&release, &rehearsal, &ambient_pr_sha, &main, &ci)
+                .is_err()
+        );
+        let runtime_guard_after_dispatch = rust.replace(
+            "require_runtime_context(root, &options, command == \"build-candidate\")?\nmatch command",
+            "match command\nrequire_runtime_context(root, &options, command == \"build-candidate\")?",
+        );
+        assert!(
+            rust_release_state_machine_contract(
+                &release,
+                &rehearsal,
+                &runtime_guard_after_dispatch,
                 &main,
                 &ci
             )
