@@ -10,7 +10,6 @@ use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 #[cfg(any(test, windows))]
 use std::thread::{self, JoinHandle};
-#[cfg(any(test, windows))]
 use std::time::Duration;
 #[cfg(any(test, windows))]
 use std::time::Instant;
@@ -454,7 +453,6 @@ fn capture_owned_timeout(
     capture_owned_timeout_filtered(program, args, cwd, env, &[], timeout)
 }
 
-#[cfg(any(windows, test))]
 pub(crate) fn capture_owned_timeout_filtered(
     program: &OsStr,
     args: &[String],

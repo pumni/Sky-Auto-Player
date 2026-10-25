@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 const MAX_PUBLIC_KEY_BYTES: usize = 4096;
+#[cfg(windows)]
 const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,6 +270,7 @@ pub fn verify_updater_signature(installer_path: &Path, signature_path: &Path) ->
 /// Verify a detached Minisign signature against an explicitly supplied public
 /// key. This is used for disposable fixture keys and does not alter the
 /// canonical production-root verifier above.
+#[cfg(windows)]
 pub(crate) fn verify_signature_text_with_public_key(
     payload: &[u8],
     signature_text: &str,

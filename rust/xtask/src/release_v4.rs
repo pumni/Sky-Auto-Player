@@ -8,9 +8,13 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const REPOSITORY: &str = "pumni/Sky-Auto-Player";
+const RELEASE_WORKFLOW_REF: &str =
+    "pumni/Sky-Auto-Player/.github/workflows/release-v4.yml@refs/heads/main";
+const REHEARSE_WORKFLOW_REF: &str =
+    "pumni/Sky-Auto-Player/.github/workflows/rehearse-v4.yml@refs/heads/main";
 const BOOTSTRAP_PATH: &str = ".release-metadata/README.md";
 const BOOTSTRAP_CONTENT: &str = "# Sky Auto Player v4 release metadata\n\nbootstrap_contract: sky-auto-player-v4-release-metadata-v1\nThis orphan branch contains deployment-state metadata only.\nThe channel latest.json files are created only by qualified immutable release promotion.";
 const EVIDENCE_NAMES: [&str; 6] = [
@@ -24,6 +28,8 @@ const EVIDENCE_NAMES: [&str; 6] = [
 const RELEASE_BUILD_STEP_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 const RELEASE_DEFENDER_STEP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const ATTESTATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const RAW_METADATA_RETRY_BUDGET: Duration = Duration::from_secs(60);
+const RAW_METADATA_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 fn decode_api_response(method: &str, endpoint: &str, bytes: &[u8]) -> Result<Option<Value>> {
     if bytes.is_empty() {
@@ -57,6 +63,80 @@ struct Context {
     workflow_sha: String,
     run_id: String,
     created_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RuntimeIdentity {
+    github_sha: String,
+    github_repository: String,
+    github_run_id: String,
+    github_event_name: String,
+    github_ref: String,
+    github_workflow_ref: String,
+}
+
+impl RuntimeIdentity {
+    fn from_environment() -> Result<Self> {
+        Self::from_values(
+            env::var("GITHUB_SHA").ok(),
+            env::var("GITHUB_REPOSITORY").ok(),
+            env::var("GITHUB_RUN_ID").ok(),
+            env::var("GITHUB_EVENT_NAME").ok(),
+            env::var("GITHUB_REF").ok(),
+            env::var("GITHUB_WORKFLOW_REF").ok(),
+        )
+    }
+
+    fn from_values(
+        github_sha: Option<String>,
+        github_repository: Option<String>,
+        github_run_id: Option<String>,
+        github_event_name: Option<String>,
+        github_ref: Option<String>,
+        github_workflow_ref: Option<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            github_sha: github_sha.ok_or("GITHUB_SHA is required")?,
+            github_repository: github_repository.ok_or("GITHUB_REPOSITORY is required")?,
+            github_run_id: github_run_id.ok_or("GITHUB_RUN_ID is required")?,
+            github_event_name: github_event_name.ok_or("GITHUB_EVENT_NAME is required")?,
+            github_ref: github_ref.ok_or("GITHUB_REF is required")?,
+            github_workflow_ref: github_workflow_ref.ok_or("GITHUB_WORKFLOW_REF is required")?,
+        })
+    }
+}
+
+fn validate_runtime_identity(
+    context: &Context,
+    workflow_sha_arg: Option<&str>,
+    runtime: &RuntimeIdentity,
+    allow_rehearsal: bool,
+) -> Result<()> {
+    let workflow_sha_arg =
+        workflow_sha_arg.ok_or("--workflow-sha is required for this release phase")?;
+    let workflow_ref_valid = runtime.github_workflow_ref == RELEASE_WORKFLOW_REF
+        || (allow_rehearsal && runtime.github_workflow_ref == REHEARSE_WORKFLOW_REF);
+    if runtime.github_repository != context.repository
+        || runtime.github_event_name != "workflow_dispatch"
+        || runtime.github_ref != "refs/heads/main"
+        || !workflow_ref_valid
+        || runtime.github_run_id != context.run_id
+        || !runtime
+            .github_sha
+            .eq_ignore_ascii_case(&context.workflow_sha)
+        || !runtime.github_sha.eq_ignore_ascii_case(&context.source_sha)
+        || !workflow_sha_arg.eq_ignore_ascii_case(&context.workflow_sha)
+        || runtime.github_run_id.is_empty()
+        || !runtime
+            .github_run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            "release runtime identity does not match the exact canonical workflow context".into(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -128,6 +208,25 @@ impl std::fmt::Display for HttpFailure {
 }
 
 impl std::error::Error for HttpFailure {}
+
+#[derive(Debug)]
+struct MutationOutcomeUnknown {
+    method: String,
+    endpoint: String,
+    detail: String,
+}
+
+impl std::fmt::Display for MutationOutcomeUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} outcome is unknown and must be reconciled before another mutation: {}",
+            self.method, self.endpoint, self.detail
+        )
+    }
+}
+
+impl std::error::Error for MutationOutcomeUnknown {}
 
 trait Transport {
     fn request(
@@ -326,7 +425,12 @@ impl Transport for GhTransport {
         endpoint: &str,
         body: Option<&Value>,
     ) -> Result<Option<Value>> {
-        retry_github(|| self.api_once(method, endpoint, body), std::thread::sleep)
+        request_with_retry_policy(
+            method,
+            endpoint,
+            || self.api_once(method, endpoint, body),
+            std::thread::sleep,
+        )
     }
 
     fn upload(&mut self, endpoint: &str, name: &str, path: &Path) -> Result<()> {
@@ -342,13 +446,15 @@ impl Transport for GhTransport {
             url.host_str().ok_or("upload host missing")?.to_owned(),
             "--method".to_owned(),
             "POST".to_owned(),
-            path_query,
+            path_query.clone(),
             "--input".to_owned(),
             "-".to_owned(),
             "--header".to_owned(),
             "Content-Type: application/octet-stream".to_owned(),
         ];
-        retry_github(
+        request_with_retry_policy(
+            "POST",
+            &path_query,
             || {
                 let mut request = args.clone();
                 if let Some(input) = request.iter_mut().find(|arg| arg.as_str() == "-") {
@@ -512,6 +618,25 @@ fn retry_github<T>(
     Err("GitHub retry loop exhausted unexpectedly".into())
 }
 
+fn request_with_retry_policy<T>(
+    method: &str,
+    endpoint: &str,
+    mut operation: impl FnMut() -> Result<T>,
+    sleep: impl FnMut(Duration),
+) -> Result<T> {
+    if method.eq_ignore_ascii_case("GET") {
+        retry_github(operation, sleep)
+    } else {
+        operation().map_err(|error| {
+            Box::new(MutationOutcomeUnknown {
+                method: method.to_owned(),
+                endpoint: endpoint.to_owned(),
+                detail: error.to_string(),
+            }) as Box<dyn std::error::Error + Send + Sync>
+        })
+    }
+}
+
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().ok_or("release-v4 requires a phase")?.as_str();
     if command == "self-test" {
@@ -546,6 +671,17 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         key_path,
         workflow_sha,
     };
+    if matches!(
+        command,
+        "build-candidate"
+            | "verify-attestations"
+            | "probe-metadata-token"
+            | "publish-release"
+            | "promote-metadata"
+            | "final-verify"
+    ) {
+        require_runtime_context(root, &options, command == "build-candidate")?;
+    }
     let mut transport = GhTransport::new();
     match command {
         "preflight" => preflight(root, &options, &mut transport),
@@ -558,6 +694,17 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         "probe-metadata-token" => probe_metadata_token(&mut transport),
         _ => Err(format!("unknown release-v4 phase: {command}").into()),
     }
+}
+
+fn require_runtime_context(root: &Path, options: &Options, allow_rehearsal: bool) -> Result<()> {
+    let context = read_context(root, options)?;
+    let runtime = RuntimeIdentity::from_environment()?;
+    validate_runtime_identity(
+        &context,
+        options.workflow_sha.as_deref(),
+        &runtime,
+        allow_rehearsal,
+    )
 }
 
 fn next_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -597,6 +744,14 @@ fn identity(root: &Path, workflow_sha: Option<&str>) -> Result<Context> {
     if env::var("GITHUB_REF").ok().as_deref() != Some("refs/heads/main") {
         return Err("official v4 release must run from the canonical main ref".into());
     }
+    let workflow_ref = env::var("GITHUB_WORKFLOW_REF")
+        .map_err(|_| "GITHUB_WORKFLOW_REF is required for v4 qualification")?;
+    if workflow_ref != RELEASE_WORKFLOW_REF && workflow_ref != REHEARSE_WORKFLOW_REF {
+        return Err(
+            "v4 qualification must run from the canonical release or rehearsal workflow on main"
+                .into(),
+        );
+    }
     let source_sha = git_text(root, &["rev-parse", "HEAD"])?.to_ascii_lowercase();
     if source_sha.len() != 40 || !source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("checked-out HEAD is not an exact commit SHA".into());
@@ -622,7 +777,9 @@ fn identity(root: &Path, workflow_sha: Option<&str>) -> Result<Context> {
     let env_sha = env::var("GITHUB_SHA")
         .map_err(|_| "GITHUB_SHA is required for a production release")?
         .to_ascii_lowercase();
-    let workflow_sha = workflow_sha.unwrap_or(&env_sha).to_ascii_lowercase();
+    let workflow_sha = workflow_sha
+        .ok_or("--workflow-sha is required for Preflight")?
+        .to_ascii_lowercase();
     if workflow_sha.len() != 40 || workflow_sha != source_sha || env_sha != source_sha {
         return Err("workflow provenance SHA must equal the exact checked-out source SHA".into());
     }
@@ -808,9 +965,16 @@ fn preflight(root: &Path, options: &Options, transport: &mut dyn Transport) -> R
                     .into(),
             );
         }
-        if !matches_transaction(&release, &context, false) {
+        if !matches_transaction(&release, &context) {
             return Err(
                 "repository contains a conflicting draft for the requested release tag".into(),
+            );
+        }
+        if release["id"].as_u64().filter(|id| *id > 0).is_none()
+            || release["immutable"].as_bool() != Some(false)
+        {
+            return Err(
+                "repository contains an owned draft with invalid id or immutable state".into(),
             );
         }
         matching_draft_id = release["id"].as_u64();
@@ -1718,7 +1882,7 @@ fn decode_contents(value: &Value) -> Result<Vec<u8>> {
     Ok(base64::engine::general_purpose::STANDARD.decode(compact.as_bytes())?)
 }
 
-fn matches_transaction(release: &Value, context: &Context, require_run: bool) -> bool {
+fn matches_transaction(release: &Value, context: &Context) -> bool {
     if release["tag_name"] != context.tag
         || release["target_commitish"]
             .as_str()
@@ -1761,7 +1925,7 @@ fn matches_transaction(release: &Value, context: &Context, require_run: bool) ->
         && value["tag"] == context.tag
         && value["run_id"]
             .as_str()
-            .is_some_and(|run| !run.is_empty() && (!require_run || run == context.run_id))
+            .is_some_and(|run| !run.is_empty() && run == context.run_id)
 }
 
 fn validate_stable_latest(release: &Value) -> Result<()> {
@@ -1967,6 +2131,14 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
     let manifest = read_manifest(root, options, &context)?;
     let latest_before = read_json::<Value>(&options.state_root.join("preflight-evidence.json"))?["pre_publication_latest"].clone();
     validate_stable_latest(&latest_before)?;
+    prepublication_metadata_qualification(
+        root,
+        options,
+        &context,
+        &manifest,
+        transport,
+        &latest_before,
+    )?;
     let notes = fs::read_to_string(root.join(&context.release_notes_path))?;
     let marker = format!(
         "<!-- v4-release-tx: {} -->",
@@ -1983,7 +2155,7 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
         &format!("repos/{REPOSITORY}/releases/tags/{}", context.tag),
         None,
     )? {
-        if !matches_transaction(&stale, &context, false) {
+        if !matches_transaction(&stale, &context) {
             return Err(
                 "existing release is published or its draft transaction identity conflicts".into(),
             );
@@ -2018,7 +2190,7 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
                 None,
             )?;
             match reconciled {
-                Some(release) if matches_transaction(&release, &context, true) => release,
+                Some(release) if matches_transaction(&release, &context) => release,
                 Some(_) => return Err("release draft POST outcome is ambiguous and remote draft identity does not match this transaction".into()),
                 None => return Err("release draft POST failed and no exact same-transaction draft could be reconciled".into()),
             }
@@ -2028,7 +2200,7 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
         .as_u64()
         .filter(|id| *id > 0)
         .ok_or("GitHub draft has no valid release id")?;
-    if !matches_transaction(&created, &context, true) {
+    if !matches_transaction(&created, &context) {
         return Err("GitHub draft response has mismatched transaction identity".into());
     }
     let upload_url = created["upload_url"]
@@ -2039,7 +2211,11 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
     let before_publish = (|| -> Result<()> {
         for record in &manifest.public_assets {
             let path = verify_record(&options.state_root, record)?;
-            transport.upload(&upload_url, &record.release_name, &path)?;
+            if let Err(upload_error) = transport.upload(&upload_url, &record.release_name, &path)
+                && !reconcile_uncertain_upload(transport, release_id, &context, record)?
+            {
+                return Err(upload_error);
+            }
         }
         let draft = required_api(
             transport,
@@ -2048,6 +2224,14 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
             None,
         )?;
         verify_public_assets(transport, &draft, &manifest.public_assets, false)?;
+        prepublication_metadata_qualification(
+            root,
+            options,
+            &context,
+            &manifest,
+            transport,
+            &latest_before,
+        )?;
         state.qualified_after_download = true;
         write_json_atomic(&options.state_root.join("release-state.json"), &state)?;
         let patch = json!({"draft":false,"make_latest":if context.channel == "stable" { "true" } else { "false" }});
@@ -2061,7 +2245,7 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
 
     if let Err(error) = before_publish {
         match transport.request("GET", &format!("repos/{REPOSITORY}/releases/{release_id}"), None) {
-            Ok(Some(remote)) if remote["draft"] == true && matches_transaction(&remote, &context, true) => {
+            Ok(Some(remote)) if remote["draft"] == true && matches_transaction(&remote, &context) => {
                 return match delete_owned_draft(transport, &remote, &context) {
                     Ok(()) => Err(error),
                     Err(cleanup_error) => Err(format!(
@@ -2133,6 +2317,150 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
     Ok(())
 }
 
+fn prepublication_metadata_qualification(
+    root: &Path,
+    options: &Options,
+    context: &Context,
+    manifest: &CandidateManifest,
+    transport: &mut dyn Transport,
+    preflight_latest: &Value,
+) -> Result<()> {
+    let signature_name = format!(
+        "{}.sig",
+        release_metadata::canonical_installer_name(&context.version)
+    );
+    let signature = manifest
+        .qualification_assets
+        .iter()
+        .find(|record| record.role == "updater-signature" && record.source_name == signature_name)
+        .ok_or("candidate manifest lacks the canonical signature for metadata dry-run")?;
+    let candidate_path = options
+        .state_root
+        .join("prepublication-candidate-metadata.json");
+    generate_expected_metadata(
+        root,
+        options,
+        context,
+        &json!({"published_at":"2000-01-01T00:00:00Z"}),
+        signature,
+        &candidate_path,
+    )?;
+    let channel = release_metadata::Channel::parse(&context.channel)?;
+    release_metadata::validate(channel, &candidate_path)?;
+
+    let endpoint = format!(
+        "repos/{REPOSITORY}/contents/channels/{}/latest.json?ref=release-metadata",
+        context.channel
+    );
+    if let Some(existing) = transport.request("GET", &endpoint, None)? {
+        let current_path = options
+            .state_root
+            .join(format!("prepublication-current-{}.json", context.channel));
+        fs::write(&current_path, decode_contents(&existing)?)?;
+        release_metadata::validate(channel, &current_path)?;
+        release_metadata::validate_monotonic(channel, &current_path, &candidate_path)?;
+    }
+
+    let current_latest = required_api(
+        transport,
+        "GET",
+        &format!("repos/{REPOSITORY}/releases/latest"),
+        None,
+    )?;
+    validate_stable_latest(&current_latest)?;
+    if !same_github_latest(preflight_latest, &current_latest) {
+        return Err(
+            "GitHub Latest changed after Preflight; refusing release publication on stale qualification evidence"
+                .into(),
+        );
+    }
+    if context.channel == "stable" {
+        let current_tag = current_latest["tag_name"]
+            .as_str()
+            .and_then(|tag| tag.strip_prefix('v'))
+            .ok_or("GitHub Latest tag is not a canonical v-prefixed SemVer")?;
+        if version::parse(&context.version)? <= version::parse(current_tag)? {
+            return Err(format!(
+                "stable candidate {} is not strictly newer than GitHub Latest {}",
+                context.version, current_tag
+            )
+            .into());
+        }
+    }
+    println!(
+        "V4 pre-publication metadata qualification: PASS (channel={}, candidate={}, GitHub Latest unchanged)",
+        context.channel, context.version
+    );
+    Ok(())
+}
+
+fn same_github_latest(before: &Value, after: &Value) -> bool {
+    before["id"].as_u64().is_some()
+        && before["id"] == after["id"]
+        && before["tag_name"] == after["tag_name"]
+        && before["target_commitish"]
+            .as_str()
+            .zip(after["target_commitish"].as_str())
+            .is_some_and(|(before, after)| before.eq_ignore_ascii_case(after))
+        && before["published_at"] == after["published_at"]
+}
+
+fn reconcile_uncertain_upload(
+    transport: &mut dyn Transport,
+    release_id: u64,
+    context: &Context,
+    record: &CandidateRecord,
+) -> Result<bool> {
+    let endpoint = format!("repos/{REPOSITORY}/releases/{release_id}");
+    let release = required_api(transport, "GET", &endpoint, None).map_err(|error| {
+        format!(
+            "release asset upload outcome is unknown and exact release readback failed: {error}"
+        )
+    })?;
+    if release["id"].as_u64() != Some(release_id)
+        || release["draft"] != true
+        || release["immutable"].as_bool() != Some(false)
+        || !matches_transaction(&release, context)
+    {
+        return Err(
+            "release asset upload outcome is unknown and exact draft identity failed validation"
+                .into(),
+        );
+    }
+    let assets = release["assets"]
+        .as_array()
+        .ok_or("release asset upload reconciliation omitted the assets array")?;
+    let matching = assets
+        .iter()
+        .filter(|asset| asset["name"] == record.release_name)
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return Ok(false);
+    }
+    if matching.len() != 1 {
+        return Err(format!(
+            "release asset upload outcome is ambiguous: duplicate {} assets",
+            record.release_name
+        )
+        .into());
+    }
+    let asset = matching[0];
+    let digest = asset["digest"]
+        .as_str()
+        .and_then(|value| value.strip_prefix("sha256:"));
+    if asset["size"].as_u64() != Some(record.size)
+        || asset["state"] != "uploaded"
+        || digest.is_none_or(|value| !value.eq_ignore_ascii_case(&record.sha256))
+    {
+        return Err(format!(
+            "release asset upload outcome is unknown and exact asset validation failed: {}",
+            record.release_name
+        )
+        .into());
+    }
+    Ok(true)
+}
+
 fn validate_state(state: &ReleaseState, context: &Context) -> Result<()> {
     if state.schema_version != 1
         || state.repository != context.repository
@@ -2157,17 +2485,44 @@ fn delete_owned_draft(
         .as_u64()
         .filter(|id| *id > 0)
         .ok_or("owned draft has no valid id")?;
-    if !matches_transaction(draft, context, false) {
+    if draft["id"].as_u64() != Some(id)
+        || draft["immutable"].as_bool() != Some(false)
+        || !matches_transaction(draft, context)
+    {
         return Err("refusing draft cleanup because transaction ownership did not match".into());
     }
-    transport.request("DELETE", &format!("repos/{REPOSITORY}/releases/{id}"), None)?;
-    if transport
-        .request("GET", &format!("repos/{REPOSITORY}/releases/{id}"), None)?
-        .is_some()
+    let endpoint = format!("repos/{REPOSITORY}/releases/{id}");
+    let current = transport.request("GET", &endpoint, None)?;
+    let Some(current) = current else {
+        return Ok(());
+    };
+    if current["id"].as_u64() != Some(id)
+        || current["draft"] != true
+        || current["immutable"].as_bool() != Some(false)
+        || !matches_transaction(&current, context)
     {
-        return Err("owned unpublished draft was not removed by exact release id".into());
+        return Err(
+            "refusing draft deletion because exact-id ownership/draft state changed".into(),
+        );
     }
-    Ok(())
+    let delete_result = transport.request("DELETE", &endpoint, None);
+    match transport.request("GET", &endpoint, None) {
+        Ok(None) => Ok(()),
+        Ok(Some(_remote)) => {
+            let detail = delete_result
+                .err()
+                .map(|error| format!("; DELETE outcome: {error}"))
+                .unwrap_or_default();
+            Err(
+                format!("owned unpublished draft was not removed by exact release id{detail}")
+                    .into(),
+            )
+        }
+        Err(read_error) => Err(format!(
+            "draft DELETE outcome is unknown and exact-id readback failed: {read_error}"
+        )
+        .into()),
+    }
 }
 
 fn verify_public_assets(
@@ -2392,6 +2747,59 @@ fn canonical_timestamp(value: &str) -> Result<String> {
     ))
 }
 
+fn await_raw_metadata_convergence(
+    expected: &[u8],
+    budget: Duration,
+    interval: Duration,
+    mut get: impl FnMut() -> Result<Option<Vec<u8>>>,
+    mut sleep: impl FnMut(Duration),
+    mut elapsed: impl FnMut() -> Duration,
+) -> Result<()> {
+    if budget.is_zero() || interval.is_zero() || interval > budget {
+        return Err("raw metadata retry budget and interval must be positive and bounded".into());
+    }
+    let expected_sha = sha256_hex(expected);
+    let mut last_http = "not-observed".to_owned();
+    let mut last_sha = "none".to_owned();
+    loop {
+        if elapsed() >= budget {
+            break;
+        }
+        match get() {
+            Ok(Some(bytes)) => {
+                last_http = "200".to_owned();
+                last_sha = sha256_hex(&bytes);
+                if bytes == expected {
+                    println!("V4 raw metadata convergence: PASS (sha256={expected_sha})");
+                    return Ok(());
+                }
+            }
+            Ok(None) => {
+                last_http = "404".to_owned();
+                last_sha = "none".to_owned();
+            }
+            Err(error) => {
+                last_http = error
+                    .downcast_ref::<HttpFailure>()
+                    .and_then(|failure| failure.status)
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|| "transport-error".to_owned());
+                last_sha = "none".to_owned();
+            }
+        }
+        let now = elapsed();
+        if now >= budget {
+            break;
+        }
+        sleep(interval.min(budget.saturating_sub(now)));
+    }
+    Err(format!(
+        "public raw metadata endpoint did not converge within {}s: expected_sha256={expected_sha} last_http={last_http} last_observed_sha256={last_sha}",
+        budget.as_secs_f64()
+    )
+    .into())
+}
+
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = year - i64::from(month <= 2);
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -2502,7 +2910,8 @@ fn promote_metadata(root: &Path, options: &Options, transport: &mut dyn Transpor
     } else {
         None
     };
-    let content = base64::engine::general_purpose::STANDARD.encode(fs::read(&output_path)?);
+    let expected_bytes = fs::read(&output_path)?;
+    let content = base64::engine::general_purpose::STANDARD.encode(&expected_bytes);
     let mut payload = json!({"message":format!("promote {} metadata for {}", context.channel, context.tag),"content":content,"branch":"release-metadata"});
     if let Some(sha) = current_sha {
         payload["sha"] = Value::String(sha);
@@ -2511,9 +2920,20 @@ fn promote_metadata(root: &Path, options: &Options, transport: &mut dyn Transpor
         "repos/{REPOSITORY}/contents/channels/{}/latest.json",
         context.channel
     );
-    required_api(transport, "PUT", &put_endpoint, Some(&payload))?;
-    let stored = required_api(transport, "GET", &endpoint, None)?;
-    if decode_contents(&stored)? != fs::read(&output_path)? {
+    let put_result = transport.request("PUT", &put_endpoint, Some(&payload));
+    let stored = match put_result {
+        Ok(Some(_)) => required_api(transport, "GET", &endpoint, None)?,
+        Ok(None) => reconcile_metadata_put(
+            transport,
+            &endpoint,
+            &expected_bytes,
+            "successful PUT response omitted JSON",
+        )?,
+        Err(error) => {
+            reconcile_metadata_put(transport, &endpoint, &expected_bytes, &error.to_string())?
+        }
+    };
+    if decode_contents(&stored)? != expected_bytes {
         return Err("release-metadata Contents API readback differs from candidate bytes".into());
     }
     state.promoted_at = Some(utc_now());
@@ -2523,6 +2943,33 @@ fn promote_metadata(root: &Path, options: &Options, transport: &mut dyn Transpor
         context.channel, context.tag
     );
     Ok(())
+}
+
+fn reconcile_metadata_put(
+    transport: &mut dyn Transport,
+    endpoint: &str,
+    expected_bytes: &[u8],
+    put_error: &str,
+) -> Result<Value> {
+    let readback = transport
+        .request("GET", endpoint, None)
+        .map_err(|error| {
+            format!(
+                "metadata PUT outcome is unknown ({put_error}) and exact Contents readback failed: {error}"
+            )
+        })?
+        .ok_or_else(|| {
+            format!(
+                "metadata PUT outcome is unknown ({put_error}); candidate bytes are absent and no retry was issued"
+            )
+        })?;
+    if decode_contents(&readback)? != expected_bytes {
+        return Err(format!(
+            "metadata PUT outcome is unknown ({put_error}); exact Contents readback does not match candidate bytes and no retry was issued"
+        )
+        .into());
+    }
+    Ok(readback)
 }
 
 fn final_verify(root: &Path, options: &Options, transport: &mut dyn Transport) -> Result<()> {
@@ -2575,12 +3022,15 @@ fn final_verify(root: &Path, options: &Options, transport: &mut dyn Transport) -
         "https://raw.githubusercontent.com/{REPOSITORY}/release-metadata/channels/{}/latest.json",
         context.channel
     );
-    let raw_bytes = transport
-        .raw_get(&raw_url)?
-        .ok_or("public metadata raw endpoint returned 404 after promotion")?;
-    if raw_bytes != expected_bytes {
-        return Err("unauthenticated raw metadata endpoint does not serve the exact qualified metadata bytes".into());
-    }
+    let started = Instant::now();
+    await_raw_metadata_convergence(
+        &expected_bytes,
+        RAW_METADATA_RETRY_BUDGET,
+        RAW_METADATA_RETRY_INTERVAL,
+        || transport.raw_get(&raw_url),
+        std::thread::sleep,
+        || started.elapsed(),
+    )?;
 
     let latest = required_api(
         transport,
@@ -2659,7 +3109,19 @@ fn probe_metadata_token(transport: &mut dyn Transport) -> Result<()> {
     if String::from_utf8(decode_contents(&bootstrap)?)?.trim() != BOOTSTRAP_CONTENT {
         return Err("metadata App token read the wrong repository or bootstrap state".into());
     }
-    println!("V4 Rust metadata App token probe: PASS (canonical repository and branch readable)");
+    for channel in ["stable", "beta"] {
+        let endpoint = format!(
+            "repos/{REPOSITORY}/contents/channels/{channel}/latest.json?ref=release-metadata"
+        );
+        if let Some(existing) = transport.request("GET", &endpoint, None)? {
+            doctor_validate_metadata(&decode_contents(&existing)?, channel).map_err(|error| {
+                format!("metadata App token returned invalid {channel} channel metadata: {error}")
+            })?;
+        }
+    }
+    println!(
+        "V4 Rust metadata App token probe: PASS (read-only branch, bootstrap, stable, and beta access)"
+    );
     Ok(())
 }
 
@@ -3464,11 +3926,13 @@ fn valid_workflow_run(run: &Value, sha: Option<&str>, repository: &str) -> bool 
 fn self_test() -> Result<()> {
     let outcomes = [
         mock_publish_succeeds(),
+        mock_non_monotonic_candidate_never_mutates(),
         mock_draft_post_timeout_reconciles_exact_marker(),
+        mock_upload_timeout_reconciles_exact_asset(),
         mock_complete_transaction_and_raw_metadata(),
         mock_metadata_promotion_is_idempotent_after_committed_timeout(),
         mock_publication_identity_and_asset_inventory_fail_closed(),
-        mock_matching_stale_draft_is_reconciled(),
+        mock_same_run_owned_draft_is_reconciled(),
         mock_conflicting_draft_is_not_deleted(),
         mock_digest_mismatch_cleans_owned_draft(),
         mock_partial_upload_cleans_owned_draft(),
@@ -3483,13 +3947,21 @@ fn self_test() -> Result<()> {
         doctor_state_input_rejects_malformed_and_oversized_files(),
         retry_policy_retries_only_transient_responses(),
         marker_parser_rejects_duplicates_and_multiple_markers(),
+        mutation_adapter_is_at_most_once(),
+        raw_metadata_retry_converges_after_cache_lag(),
+        raw_metadata_retry_fails_with_bounded_diagnostics(),
+        runtime_identity_fails_closed_without_exact_workflow_context(),
         workflow_run_identity_fails_closed(),
         timestamp_normalization_is_utc_and_strict(),
     ];
+    let scenario_count = outcomes.len();
     for outcome in outcomes {
         outcome?;
     }
-    println!("V4 Rust release state-machine mock self-test: PASS (22 scenarios)");
+    println!(
+        "V4 Rust release state-machine mock self-test: PASS ({} scenarios)",
+        scenario_count
+    );
     Ok(())
 }
 
@@ -3534,6 +4006,59 @@ fn mock_publish_succeeds() -> Result<()> {
     Ok(())
 }
 
+fn mock_non_monotonic_candidate_never_mutates() -> Result<()> {
+    {
+        let (root, options, context, manifest) = fixture()?;
+        let mut github = FakeTransport::new();
+        github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
+        let signature = manifest
+            .qualification_assets
+            .iter()
+            .find(|record| record.role == "updater-signature")
+            .ok_or("fixture signature missing")?;
+        let current_path = options.state_root.join("same-version-latest.json");
+        release_metadata::generate(release_metadata::GenerateInput {
+            channel: release_metadata::Channel::parse(&context.channel)?,
+            version: &context.version,
+            notes_path: &root.join(&context.release_notes_path),
+            pub_date: "2026-01-01T00:00:00Z",
+            platform: release_metadata::WINDOWS_PLATFORM,
+            asset_url: &release_metadata::canonical_asset_url(&context.version),
+            signature_path: &safe_state_asset_path(&options.state_root, signature)?,
+            output: &current_path,
+        })?;
+        github
+            .metadata_files
+            .insert(context.channel.clone(), fs::read(&current_path)?);
+        prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
+        assert!(publish_release(&root, &options, &mut github).is_err());
+        assert!(github.events.iter().all(|event| {
+            !(event.starts_with("POST ")
+                || event.starts_with("PATCH ")
+                || event.starts_with("PUT ")
+                || event.starts_with("DELETE ")
+                || event.starts_with("UPLOAD "))
+        }));
+        let _ = fs::remove_dir_all(&options.state_root);
+    }
+    {
+        let (root, options, context, manifest) = fixture()?;
+        let mut github = FakeTransport::new();
+        github.latest = fake_release(11, &context.tag, &context.source_sha, false, false, true);
+        prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
+        assert!(publish_release(&root, &options, &mut github).is_err());
+        assert!(github.events.iter().all(|event| {
+            !(event.starts_with("POST ")
+                || event.starts_with("PATCH ")
+                || event.starts_with("PUT ")
+                || event.starts_with("DELETE ")
+                || event.starts_with("UPLOAD "))
+        }));
+        let _ = fs::remove_dir_all(&options.state_root);
+    }
+    Ok(())
+}
+
 fn mock_draft_post_timeout_reconciles_exact_marker() -> Result<()> {
     let (root, options, context, manifest) = fixture()?;
     let mut github = FakeTransport::new();
@@ -3550,6 +4075,45 @@ fn mock_draft_post_timeout_reconciles_exact_marker() -> Result<()> {
         "timeout reconciliation must not duplicate the draft"
     );
     assert!(github.deletions.is_empty());
+    let _ = fs::remove_dir_all(&options.state_root);
+    Ok(())
+}
+
+fn mock_upload_timeout_reconciles_exact_asset() -> Result<()> {
+    let (root, options, context, manifest) = fixture()?;
+    let mut github = FakeTransport::new();
+    github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
+    github.fail_upload_after_commit = true;
+    prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
+    publish_release(&root, &options, &mut github)?;
+    assert_eq!(
+        github
+            .events
+            .iter()
+            .filter(|event| event.starts_with("UPLOAD "))
+            .count(),
+        manifest.public_assets.len(),
+        "committed upload timeout must be read back rather than blindly replayed"
+    );
+    let first_upload = github
+        .events
+        .iter()
+        .position(|event| event.starts_with("UPLOAD "))
+        .ok_or("expected first upload event")?;
+    let reconcile = github
+        .events
+        .iter()
+        .position(|event| event == "GET repos/pumni/Sky-Auto-Player/releases/12")
+        .ok_or("exact release readback after upload timeout missing")?;
+    let second_upload = github
+        .events
+        .iter()
+        .enumerate()
+        .skip(first_upload + 1)
+        .find(|(_, event)| event.starts_with("UPLOAD "))
+        .map(|(index, _)| index)
+        .ok_or("expected second upload event")?;
+    assert!(first_upload < reconcile && reconcile < second_upload);
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -3627,13 +4191,7 @@ fn mock_metadata_promotion_is_idempotent_after_committed_timeout() -> Result<()>
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
     publish_release(&root, &options, &mut github)?;
     github.fail_metadata_put_after_write = true;
-    let error = promote_metadata(&root, &options, &mut github)
-        .expect_err("simulated response loss after Contents commit must be visible");
-    assert!(
-        error
-            .to_string()
-            .contains("metadata write timeout after commit")
-    );
+    promote_metadata(&root, &options, &mut github)?;
     assert!(github.metadata_files.contains_key("stable"));
     assert_eq!(
         github
@@ -3875,6 +4433,91 @@ fn retry_policy_retries_only_transient_responses() -> Result<()> {
     Ok(())
 }
 
+fn mutation_adapter_is_at_most_once() -> Result<()> {
+    for method in ["POST", "PATCH", "PUT", "DELETE"] {
+        let attempts = std::cell::Cell::new(0);
+        let error = request_with_retry_policy(
+            method,
+            "repos/pumni/Sky-Auto-Player/releases/12",
+            || {
+                attempts.set(attempts.get() + 1);
+                Err::<(), _>(Box::new(HttpFailure {
+                    status: Some(504),
+                    detail: "injected committed mutation timeout".to_owned(),
+                })
+                    as Box<dyn std::error::Error + Send + Sync>)
+            },
+            |_| panic!("mutations must never enter the retry sleep path"),
+        )
+        .expect_err("mutation failures must be marked for reconciliation");
+        assert_eq!(attempts.get(), 1, "{method} was replayed");
+        let unknown = error
+            .downcast_ref::<MutationOutcomeUnknown>()
+            .ok_or("mutation error did not carry the typed uncertain outcome")?;
+        assert_eq!(unknown.method, method);
+    }
+    Ok(())
+}
+
+fn raw_metadata_retry_converges_after_cache_lag() -> Result<()> {
+    let expected = b"exact-qualified-metadata".to_vec();
+    let mut responses = std::collections::VecDeque::from([
+        Ok(None),
+        Ok(Some(b"stale-cdn-bytes".to_vec())),
+        Ok(Some(expected.clone())),
+    ]);
+    let reads = std::cell::Cell::new(0usize);
+    let elapsed = std::cell::Cell::new(Duration::ZERO);
+    await_raw_metadata_convergence(
+        &expected,
+        Duration::from_secs(15),
+        Duration::from_secs(5),
+        || {
+            reads.set(reads.get() + 1);
+            responses
+                .pop_front()
+                .ok_or("raw metadata test response queue exhausted")?
+        },
+        |delay| elapsed.set(elapsed.get() + delay),
+        || elapsed.get(),
+    )?;
+    assert_eq!(reads.get(), 3, "404 and stale bytes must be retried");
+    assert_eq!(elapsed.get(), Duration::from_secs(10));
+    Ok(())
+}
+
+fn raw_metadata_retry_fails_with_bounded_diagnostics() -> Result<()> {
+    let expected = b"expected-metadata";
+    let stale = b"permanently-stale-metadata".to_vec();
+    let reads = std::cell::Cell::new(0usize);
+    let elapsed = std::cell::Cell::new(Duration::ZERO);
+    let error = await_raw_metadata_convergence(
+        expected,
+        Duration::from_secs(10),
+        Duration::from_secs(5),
+        || {
+            reads.set(reads.get() + 1);
+            Ok(Some(stale.clone()))
+        },
+        |delay| elapsed.set(elapsed.get() + delay),
+        || elapsed.get(),
+    )
+    .expect_err("permanently stale public metadata must hit the deadline");
+    assert_eq!(reads.get(), 2);
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("expected_sha256={}", sha256_hex(expected)))
+    );
+    assert!(error.to_string().contains("last_http=200"));
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("last_observed_sha256={}", sha256_hex(&stale)))
+    );
+    Ok(())
+}
+
 fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
     for (bad_ref, bad_bootstrap) in [(true, false), (false, true)] {
         let mut github = FakeTransport::new();
@@ -3886,17 +4529,38 @@ fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
             event.starts_with("PUT ") || event.starts_with("POST ") || event.starts_with("DELETE ")
         }));
     }
+    let mut readable = FakeTransport::new();
+    probe_metadata_token(&mut readable)?;
+    for channel in ["stable", "beta"] {
+        assert!(readable.events.iter().any(|event| {
+            event == &format!(
+                "GET repos/{REPOSITORY}/contents/channels/{channel}/latest.json?ref=release-metadata"
+            )
+        }));
+    }
+    assert!(
+        readable
+            .events
+            .iter()
+            .all(|event| event.starts_with("GET "))
+    );
+    for channel in ["stable", "beta"] {
+        let mut invalid = FakeTransport::new();
+        invalid.bad_channel_metadata = Some(channel.to_owned());
+        assert!(probe_metadata_token(&mut invalid).is_err());
+        assert!(invalid.events.iter().all(|event| event.starts_with("GET ")));
+    }
     Ok(())
 }
 
-fn mock_matching_stale_draft_is_reconciled() -> Result<()> {
+fn mock_same_run_owned_draft_is_reconciled() -> Result<()> {
     let (root, options, context, manifest) = fixture()?;
     let mut github = FakeTransport::new();
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     let marker = format!(
         "<!-- v4-release-tx: {} -->",
         serde_json::to_string(&json!({
-            "repository":context.repository,"run_id":"previous-run","source_sha":context.source_sha,
+            "repository":context.repository,"run_id":context.run_id,"source_sha":context.source_sha,
             "version":context.version,"tag":context.tag
         }))?
     );
@@ -3925,9 +4589,7 @@ fn mock_conflicting_draft_is_not_deleted() -> Result<()> {
     let mut conflict = fake_release(12, &context.tag, &context.source_sha, true, false, false);
     conflict["body"] = json!(format!(
         "<!-- v4-release-tx: {{\"repository\":\"{REPOSITORY}\",\"run_id\":\"other\",\"source_sha\":\"{}\",\"version\":\"{}\",\"tag\":\"{}\"}} -->",
-        "c".repeat(40),
-        context.version,
-        context.tag
+        context.source_sha, context.version, context.tag
     ));
     github.releases.insert(12, conflict);
     github.next_id = 13;
@@ -4100,12 +4762,12 @@ fn marker_parser_rejects_duplicates_and_multiple_markers() -> Result<()> {
         "<!-- v4-release-tx: {{\"repository\":\"{REPOSITORY}\",\"repository\":\"{REPOSITORY}\",\"run_id\":\"run\",\"source_sha\":\"{}\",\"version\":\"{}\",\"tag\":\"{}\"}} -->",
         context.source_sha, context.version, context.tag
     ));
-    assert!(!matches_transaction(&release, &context, false));
+    assert!(!matches_transaction(&release, &context));
     release["body"] = json!(format!(
         "<!-- v4-release-tx: {{\"repository\":\"{REPOSITORY}\",\"run_id\":\"run\",\"source_sha\":\"{}\",\"version\":\"{}\",\"tag\":\"{}\"}} --><!-- v4-release-tx: {{}} -->",
         context.source_sha, context.version, context.tag
     ));
-    assert!(!matches_transaction(&release, &context, false));
+    assert!(!matches_transaction(&release, &context));
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -4122,6 +4784,73 @@ fn workflow_run_identity_fails_closed() -> Result<()> {
     ] {
         assert!(!valid_workflow_run(&bad, Some(&"a".repeat(40)), REPOSITORY));
     }
+    Ok(())
+}
+
+fn runtime_identity_fails_closed_without_exact_workflow_context() -> Result<()> {
+    let (_, options, context, _) = fixture()?;
+    let valid = RuntimeIdentity::from_values(
+        Some(context.workflow_sha.clone()),
+        Some(context.repository.clone()),
+        Some(context.run_id.clone()),
+        Some("workflow_dispatch".to_owned()),
+        Some("refs/heads/main".to_owned()),
+        Some(RELEASE_WORKFLOW_REF.to_owned()),
+    )?;
+    assert!(
+        validate_runtime_identity(&context, Some(&context.workflow_sha), &valid, false).is_ok()
+    );
+    assert!(validate_runtime_identity(&context, None, &valid, false).is_err());
+    assert!(
+        RuntimeIdentity::from_values(
+            None,
+            Some(context.repository.clone()),
+            Some(context.run_id.clone()),
+            Some("workflow_dispatch".to_owned()),
+            Some("refs/heads/main".to_owned()),
+            Some(RELEASE_WORKFLOW_REF.to_owned()),
+        )
+        .is_err()
+    );
+    for invalid in [
+        RuntimeIdentity {
+            github_sha: "f".repeat(40),
+            ..valid.clone()
+        },
+        RuntimeIdentity {
+            github_repository: "attacker/other".to_owned(),
+            ..valid.clone()
+        },
+        RuntimeIdentity {
+            github_run_id: "9002".to_owned(),
+            ..valid.clone()
+        },
+        RuntimeIdentity {
+            github_event_name: "push".to_owned(),
+            ..valid.clone()
+        },
+        RuntimeIdentity {
+            github_ref: "refs/heads/feature".to_owned(),
+            ..valid.clone()
+        },
+        RuntimeIdentity {
+            github_workflow_ref: REHEARSE_WORKFLOW_REF.to_owned(),
+            ..valid.clone()
+        },
+    ] {
+        assert!(
+            validate_runtime_identity(&context, Some(&context.workflow_sha), &invalid, false)
+                .is_err()
+        );
+    }
+    let rehearsal = RuntimeIdentity {
+        github_workflow_ref: REHEARSE_WORKFLOW_REF.to_owned(),
+        ..valid.clone()
+    };
+    assert!(
+        validate_runtime_identity(&context, Some(&context.workflow_sha), &rehearsal, true).is_ok()
+    );
+    let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
 
@@ -4151,11 +4880,13 @@ struct FakeTransport {
     fail_reconcile_after_patch: bool,
     preserve_latest_on_publish: bool,
     fail_upload_after_first: bool,
+    fail_upload_after_commit: bool,
     fail_delete: bool,
     post_created_then_timeout: bool,
     fail_metadata_put_after_write: bool,
     bad_metadata_ref: bool,
     bad_metadata_bootstrap: bool,
+    bad_channel_metadata: Option<String>,
     metadata: Vec<u8>,
     metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
     raw_metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
@@ -4221,6 +4952,13 @@ impl Transport for FakeTransport {
             }
             match method {
                 "GET" => {
+                    if self.bad_channel_metadata.as_deref() == Some(channel) {
+                        return Ok(Some(json!({
+                            "encoding":"base64",
+                            "content":base64::engine::general_purpose::STANDARD.encode(b"not valid release metadata"),
+                            "sha":"d".repeat(40)
+                        })));
+                    }
                     return Ok(self.metadata_files.get(channel).map(|bytes| {
                         json!({"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(bytes),"sha":"c".repeat(40)})
                     }));
@@ -4375,6 +5113,13 @@ impl Transport for FakeTransport {
         assets.push(
             json!({"name":name,"size":bytes.len(),"state":"uploaded","digest":digest,"url":url}),
         );
+        if self.fail_upload_after_commit {
+            self.fail_upload_after_commit = false;
+            return Err(Box::new(HttpFailure {
+                status: Some(504),
+                detail: "injected upload timeout after commit".to_owned(),
+            }));
+        }
         Ok(())
     }
 

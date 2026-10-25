@@ -281,6 +281,26 @@ fn rust_release_state_machine_contract(
         "trait Transport",
         "struct GhTransport",
         "fn publish_release",
+        "mock_non_monotonic_candidate_never_mutates",
+        "prepublication_metadata_qualification",
+        "same_github_latest",
+        "validate_monotonic",
+        "fn delete_owned_draft",
+        "mock_conflicting_draft_is_not_deleted",
+        "current[\"draft\"] != true",
+        "mock_upload_timeout_reconciles_exact_asset",
+        "mutation_adapter_is_at_most_once",
+        "MutationOutcomeUnknown",
+        "fn request_with_retry_policy",
+        "await_raw_metadata_convergence",
+        "raw_metadata_retry_converges_after_cache_lag",
+        "raw_metadata_retry_fails_with_bounded_diagnostics",
+        "RuntimeIdentity::from_environment",
+        "GITHUB_WORKFLOW_REF",
+        "--workflow-sha is required for Preflight",
+        "runtime_identity_fails_closed_without_exact_workflow_context",
+        "channels/{channel}/latest.json?ref=release-metadata",
+        "metadata_token_probe_rejects_wrong_repository_state",
         "fn promote_metadata",
         "fn final_verify",
         "fn doctor",
@@ -313,6 +333,90 @@ fn rust_release_state_machine_contract(
                 "Rust release authority is missing invariant `{marker}`"
             ));
         }
+    }
+    let publish = rust
+        .split_once("fn publish_release(")
+        .and_then(|(_, body)| body.split_once("\nfn prepublication_metadata_qualification("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing bounded publication qualification")?;
+    let gate_positions = publish
+        .match_indices("prepublication_metadata_qualification(")
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let post = publish
+        .find("\"POST\"")
+        .ok_or("Rust release authority is missing draft creation boundary")?;
+    let patch = publish
+        .find("\"PATCH\"")
+        .ok_or("Rust release authority is missing immutable publication boundary")?;
+    if gate_positions.len() != 2
+        || gate_positions[0] >= post
+        || post >= gate_positions[1]
+        || gate_positions[1] >= patch
+    {
+        return Err(
+            "metadata monotonicity and Latest checks must run before draft creation and again before publication"
+                .into(),
+        );
+    }
+    let mutation_policy = rust
+        .split_once("fn request_with_retry_policy")
+        .and_then(|(_, body)| body.split_once("\npub(crate) fn run("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing mutation retry policy")?;
+    let read_retry = mutation_policy
+        .find("method.eq_ignore_ascii_case(\"GET\")")
+        .ok_or("GitHub retry policy does not restrict retries to GET")?;
+    let retry = mutation_policy
+        .find("retry_github(operation, sleep)")
+        .ok_or("GitHub GET retry path is missing")?;
+    let mutation = mutation_policy
+        .find("operation().map_err")
+        .ok_or("GitHub mutation path must return an uncertain outcome without retry")?;
+    if read_retry >= retry || retry >= mutation {
+        return Err("GitHub mutation retries must remain disabled".into());
+    }
+    let delete = rust
+        .split_once("fn delete_owned_draft(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_public_assets("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing owned draft deletion")?;
+    let delete_get = delete
+        .find("transport.request(\"GET\"")
+        .ok_or("owned draft deletion must re-fetch the exact release id")?;
+    let delete_mutation = delete
+        .find("transport.request(\"DELETE\"")
+        .ok_or("owned draft deletion mutation is missing")?;
+    if delete_get >= delete_mutation {
+        return Err("owned draft state must be verified immediately before deletion".into());
+    }
+    let identity = rust
+        .split_once("fn identity(")
+        .and_then(|(_, body)| body.split_once("\nfn git_text("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing exact runtime identity validation")?;
+    if !identity
+        .contains("workflow_sha\n        .ok_or(\"--workflow-sha is required for Preflight\")")
+        || !identity.contains("GITHUB_WORKFLOW_REF")
+        || !identity.contains("RELEASE_WORKFLOW_REF")
+        || !identity.contains("REHEARSE_WORKFLOW_REF")
+    {
+        return Err(
+            "Preflight must require the explicit workflow SHA and an exact canonical workflow ref"
+                .into(),
+        );
+    }
+    let metadata_probe = rust
+        .split_once("fn probe_metadata_token(")
+        .and_then(|(_, body)| body.split_once("\nfn cleanup_local_state("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing metadata token probe")?;
+    if !metadata_probe.contains("for channel in [\"stable\", \"beta\"]")
+        || !metadata_probe.contains("doctor_validate_metadata")
+    {
+        return Err(
+            "metadata token probe must read and validate both stable and beta state".into(),
+        );
     }
     if rust.contains("process::capture(\"cargo\"") || rust.contains("Command::new(\"cargo\"") {
         return Err(
@@ -435,7 +539,46 @@ mod tests {
             release_steps
         );
         let rehearsal = "name: V4 Production Pre-Publication Qualification\non:\n  workflow_dispatch:\njobs:\n  qualification:\n    steps:\n      - name: Run Preflight\n        run: cargo xtask release-v4 preflight --state-root state --workflow-sha $env:GITHUB_SHA\n      - name: Run BuildCandidate\n        run: cargo xtask release-v4 build-candidate --state-root state --key-path key --workflow-sha $env:GITHUB_SHA\n      - name: Clean state\n        run: cargo xtask release-v4 cleanup --state-root state\n".to_owned();
-        let rust = "trait Transport struct GhTransport fn publish_release fn promote_metadata fn final_verify fn doctor fn verify_attestations delete_owned_draft POST_PUBLICATION_INCIDENT release_id sha256: raw.githubusercontent.com mock_publish_succeeds mock_draft_post_timeout_reconciles_exact_marker mock_digest_mismatch_cleans_owned_draft mock_patch_timeout_reconciles_exact_release_id mock_unknown_publication_never_cleans_up canonical_upload_url RELEASE_BUILD_STEP_TIMEOUT RELEASE_DEFENDER_STEP_TIMEOUT ATTESTATION_VERIFY_TIMEOUT mock_release_doctor_detects_metadata_endpoint_divergence mock_metadata_promotion_is_idempotent_after_committed_timeout mock_publication_identity_and_asset_inventory_fail_closed metadata_token_probe_rejects_wrong_repository_state doctor_state_input_rejects_malformed_and_oversized_files malformed_github_api_json_fails_closed_with_endpoint_context retry_policy_retries_only_transient_responses fn run_xtask env::current_exe()?".to_owned();
+        let rust = r#"trait Transport
+struct GhTransport
+fn publish_release(
+prepublication_metadata_qualification(
+transport.request(
+"POST"
+prepublication_metadata_qualification(
+transport.request(
+"PATCH"
+}
+fn prepublication_metadata_qualification(
+validate_monotonic
+same_github_latest
+fn same_github_latest(
+fn delete_owned_draft(
+transport.request("GET"
+current["id"]
+current["draft"] != true
+matches_transaction(&current, context)
+transport.request("DELETE"
+fn verify_public_assets(
+fn request_with_retry_policy(
+method.eq_ignore_ascii_case("GET")
+retry_github(operation, sleep)
+operation().map_err
+pub(crate) fn run(
+fn identity(
+workflow_sha
+        .ok_or("--workflow-sha is required for Preflight")
+GITHUB_WORKFLOW_REF
+RELEASE_WORKFLOW_REF
+REHEARSE_WORKFLOW_REF
+fn git_text(
+fn probe_metadata_token(
+for channel in ["stable", "beta"]
+doctor_validate_metadata
+channels/{channel}/latest.json?ref=release-metadata
+fn cleanup_local_state(
+mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted mock_upload_timeout_reconciles_exact_asset mutation_adapter_is_at_most_once MutationOutcomeUnknown await_raw_metadata_convergence raw_metadata_retry_converges_after_cache_lag raw_metadata_retry_fails_with_bounded_diagnostics RuntimeIdentity::from_environment GITHUB_WORKFLOW_REF runtime_identity_fails_closed_without_exact_workflow_context metadata_token_probe_rejects_wrong_repository_state fn promote_metadata fn final_verify fn doctor fn verify_attestations POST_PUBLICATION_INCIDENT release_id sha256: raw.githubusercontent.com mock_publish_succeeds mock_draft_post_timeout_reconciles_exact_marker mock_digest_mismatch_cleans_owned_draft mock_patch_timeout_reconciles_exact_release_id mock_unknown_publication_never_cleans_up canonical_upload_url RELEASE_BUILD_STEP_TIMEOUT RELEASE_DEFENDER_STEP_TIMEOUT ATTESTATION_VERIFY_TIMEOUT mock_release_doctor_detects_metadata_endpoint_divergence mock_metadata_promotion_is_idempotent_after_committed_timeout mock_publication_identity_and_asset_inventory_fail_closed doctor_state_input_rejects_malformed_and_oversized_files malformed_github_api_json_fails_closed_with_endpoint_context retry_policy_retries_only_transient_responses env::current_exe()?"#
+            .to_owned();
         let main = "\"release-v4\" => release_v4::run\n\"release-doctor\" =>\nrelease_v4::run(&repo::root(), &doctor_args)".to_owned();
         let ci = "cargo xtask release-v4 self-test\ncargo test --locked --manifest-path rust/xtask/Cargo.toml".to_owned();
         (release, rehearsal, rust, main, ci)
