@@ -505,6 +505,8 @@ fn v4_production_qualification_contract_source(workflow: &str, pipeline: &str) -
 }
 
 fn nsis_installed_catalog_contract(harness: &str) -> Result<()> {
+    let normalized_harness = super::normalize_source_line_endings(harness);
+    let harness = normalized_harness.as_str();
     let qualification = harness
         .split_once("fn qualify_package(")
         .map(|(_, body)| body)
@@ -932,8 +934,9 @@ mod tests {
             v4_release_pipeline_contract_source(&workflow, &duplicated_build, &regression).is_err()
         );
 
-        let nsis_harness = include_str!("../nsis_harness.rs");
-        nsis_installed_catalog_contract(nsis_harness)
+        let nsis_harness =
+            super::super::normalize_source_line_endings(include_str!("../nsis_harness.rs"));
+        nsis_installed_catalog_contract(&nsis_harness)
             .expect("Rust NSIS qualification must retain built-in catalog verification");
         let missing_builtin_qualification =
             nsis_harness.replace("crate::builtin_catalog::run(", "");
@@ -947,6 +950,21 @@ mod tests {
         assert!(
             nsis_installed_catalog_contract(&missing_empty_directory_regression).is_err(),
             "production qualification must retain the executable StrictMode empty-directory regression"
+        );
+
+        let crlf_harness = nsis_harness.replace('\n', "\r\n");
+        nsis_installed_catalog_contract(&crlf_harness)
+            .expect("CRLF NSIS source must satisfy the same ordered catalog contract");
+        let missing_crlf_builtin = crlf_harness.replace("crate::builtin_catalog::run(", "");
+        assert!(
+            nsis_installed_catalog_contract(&missing_crlf_builtin).is_err(),
+            "CRLF source must still reject removal of installed catalog verification"
+        );
+        let missing_crlf_empty_directory =
+            crlf_harness.replace("assert_user_songs_empty(&app_data.join(\"songs\"))?;", "");
+        assert!(
+            nsis_installed_catalog_contract(&missing_crlf_empty_directory).is_err(),
+            "CRLF source must still reject removal of the empty-directory regression"
         );
     }
 }

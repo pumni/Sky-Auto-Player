@@ -776,72 +776,167 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn installed_calibration_timeout_kills_descendants_and_bounds_pipe_readers() {
-        let root = temp_dir("sky-xtask-calibration-process-tree-timeout");
-        let script = root.join("calibration-timeout-helper.ps1");
-        let descendant_pid_file = root.join("descendant.pid");
-        fs::write(
-            &script,
-            r#"param([string]$PidFile)
-$descendant = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c ping 127.0.0.1 -n 60' -PassThru -NoNewWindow
-[System.IO.File]::WriteAllText($PidFile, [string]$descendant.Id)
-[Console]::Out.WriteLine('calibration timeout helper started its descendant')
-Start-Sleep -Seconds 60
-"#,
-        )
-        .unwrap();
-        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot must be set");
-        let powershell = PathBuf::from(system_root)
-            .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
-        let mut command = Command::new(powershell);
-        command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(&script)
-            .arg(&descendant_pid_file);
+    const CALIBRATION_PROBE_MODE_ENV: &str = "SKY_XTASK_CALIBRATION_PROBE_MODE";
+    #[cfg(windows)]
+    const CALIBRATION_PROBE_PID_FILE_ENV: &str = "SKY_XTASK_CALIBRATION_PROBE_PID_FILE";
+    #[cfg(windows)]
+    const CALIBRATION_PROBE_RESULT_FILE_ENV: &str = "SKY_XTASK_CALIBRATION_PROBE_RESULT_FILE";
+    #[cfg(windows)]
+    const CALIBRATION_HELPER_MODE_ENV: &str = "SKY_XTASK_CALIBRATION_HELPER_MODE";
+    #[cfg(windows)]
+    const CALIBRATION_HELPER_PID_FILE_ENV: &str = "SKY_XTASK_CALIBRATION_HELPER_PID_FILE";
 
+    #[cfg(windows)]
+    struct CalibrationProbeGuard {
+        root: PathBuf,
+        probe_process_id: u32,
+        probe_active: bool,
+        descendant_pid_file: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl Drop for CalibrationProbeGuard {
+        fn drop(&mut self) {
+            if let Ok(value) = fs::read_to_string(&self.descendant_pid_file)
+                && let Ok(process_id) = value.trim().parse::<u32>()
+                && windows_process_is_running(process_id)
+            {
+                terminate_test_process_tree(process_id);
+            }
+            if self.probe_active && windows_process_is_running(self.probe_process_id) {
+                terminate_test_process_tree(self.probe_process_id);
+            }
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[cfg(windows)]
+    fn run_calibration_process_tree_probe(mode: &str) -> (String, Duration, u32, bool) {
+        let root = temp_dir("sky-xtask-calibration-process-tree-probe");
+        let descendant_pid_file = root.join("descendant.pid");
+        let result_file = root.join("probe-result.txt");
+        let executable = std::env::current_exe().expect("test executable path");
+        let mut probe = Command::new(executable);
+        probe
+            .args([
+                "--exact",
+                "calibration::tests::calibration_process_tree_probe",
+                "--nocapture",
+            ])
+            .env(CALIBRATION_PROBE_MODE_ENV, mode)
+            .env(CALIBRATION_PROBE_PID_FILE_ENV, &descendant_pid_file)
+            .env(CALIBRATION_PROBE_RESULT_FILE_ENV, &result_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         let started = Instant::now();
-        let error = run_bounded_command(
-            command,
-            Duration::from_secs(2),
-            "test calibration helper exceeded its 2-second smoke bound",
-        )
-        .unwrap_err()
-        .to_string();
-        let elapsed = started.elapsed();
-        let descendant_pid = fs::read_to_string(&descendant_pid_file)
-            .expect("timeout helper must record its descendant PID")
-            .parse::<u32>()
-            .expect("timeout helper descendant PID must be numeric");
-        let process_deadline = Instant::now() + Duration::from_secs(2);
-        while windows_process_is_running(descendant_pid) && Instant::now() < process_deadline {
+        let mut probe = probe.spawn().expect("start bounded calibration probe");
+        let probe_process_id = probe.id();
+        let mut guard = CalibrationProbeGuard {
+            root,
+            probe_process_id,
+            probe_active: true,
+            descendant_pid_file: descendant_pid_file.clone(),
+        };
+
+        let startup_deadline = Instant::now() + Duration::from_secs(5);
+        let descendant_pid = loop {
+            if descendant_pid_file.is_file() {
+                let value = fs::read_to_string(&descendant_pid_file)
+                    .expect("read synthetic calibration helper PID marker");
+                break value
+                    .trim()
+                    .parse::<u32>()
+                    .expect("synthetic calibration helper PID marker must be numeric");
+            }
+            match probe.try_wait() {
+                Ok(Some(status)) => {
+                    guard.probe_active = false;
+                    let diagnostic = fs::read_to_string(&result_file)
+                        .unwrap_or_else(|error| format!("<probe result unavailable: {error}>"));
+                    panic!(
+                        "calibration process-tree helper exited before publishing its PID marker; exit={status}; probe diagnostic={diagnostic}"
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => panic!(
+                    "could not inspect calibration process-tree helper startup; safe diagnostic: {error}"
+                ),
+            }
+            if Instant::now() >= startup_deadline {
+                terminate_test_process_tree(probe_process_id);
+                let _ = probe.wait();
+                guard.probe_active = false;
+                let diagnostic = fs::read_to_string(&result_file)
+                    .unwrap_or_else(|error| format!("<probe result unavailable: {error}>"));
+                panic!(
+                    "calibration process-tree helper did not create its PID marker within the separate 5-second startup deadline; probe diagnostic={diagnostic}"
+                );
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+
+        let probe_deadline = Instant::now() + Duration::from_secs(6);
+        let status = loop {
+            match probe.try_wait() {
+                Ok(Some(status)) => {
+                    guard.probe_active = false;
+                    break status;
+                }
+                Ok(None) if Instant::now() < probe_deadline => {}
+                Ok(None) => {
+                    terminate_test_process_tree(probe_process_id);
+                    let _ = probe.kill();
+                    let _ = probe.wait();
+                    guard.probe_active = false;
+                    panic!(
+                        "calibration process-tree probe exceeded its separate 6-second test bound"
+                    );
+                }
+                Err(error) => panic!(
+                    "could not inspect calibration process-tree probe completion; safe diagnostic: {error}"
+                ),
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+        let diagnostic = fs::read_to_string(&result_file)
+            .unwrap_or_else(|error| format!("<probe result unavailable: {error}>"));
+        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+        while windows_process_is_running(descendant_pid) && Instant::now() < cleanup_deadline {
             thread::sleep(Duration::from_millis(25));
         }
         let descendant_still_running = windows_process_is_running(descendant_pid);
         if descendant_still_running {
             terminate_test_process_tree(descendant_pid);
         }
-        fs::remove_dir_all(&root).unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            status.success(),
+            "calibration process-tree probe failed; exit={status}; safe diagnostic={diagnostic}"
+        );
+        (
+            diagnostic,
+            elapsed,
+            descendant_pid,
+            descendant_still_running,
+        )
+    }
 
+    #[cfg(windows)]
+    #[test]
+    fn installed_calibration_timeout_kills_descendants_and_bounds_pipe_readers() {
+        let (diagnostic, elapsed, descendant_pid, descendant_still_running) =
+            run_calibration_process_tree_probe("timeout-parent");
         assert!(
-            error.contains("test calibration helper exceeded its 2-second smoke bound"),
-            "unexpected timeout result: {error}"
+            diagnostic.contains("test calibration helper exceeded its 2-second smoke bound"),
+            "unexpected timeout result: {diagnostic}"
         );
         assert!(
-            !error.contains("cleanup incomplete"),
-            "bounded teardown failed: {error}"
+            !diagnostic.contains("cleanup incomplete"),
+            "bounded teardown failed: {diagnostic}"
         );
         assert!(
-            elapsed < Duration::from_secs(5),
+            elapsed < Duration::from_secs(8),
             "teardown took {elapsed:?}"
         );
         assert!(
@@ -853,75 +948,110 @@ Start-Sleep -Seconds 60
     #[cfg(windows)]
     #[test]
     fn installed_calibration_early_exit_kills_descendant_holding_output_pipes() {
-        let root = temp_dir("sky-xtask-calibration-early-exit-pipes");
-        let script = root.join("calibration-early-exit-helper.ps1");
-        let descendant_pid_file = root.join("descendant.pid");
-        fs::write(
-            &script,
-            r#"param([string]$PidFile)
-$descendant = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c ping 127.0.0.1 -n 40' -PassThru -NoNewWindow
-[System.IO.File]::WriteAllText($PidFile, [string]$descendant.Id)
-exit 0
-"#,
-        )
-        .unwrap();
-        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot must be set");
-        let powershell = PathBuf::from(system_root)
-            .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
-        let mut command = Command::new(powershell);
-        command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(&script)
-            .arg(&descendant_pid_file);
-
-        let started = Instant::now();
-        let error = run_bounded_command(
-            command,
-            Duration::from_secs(2),
-            "test calibration helper exceeded its 2-second smoke bound",
-        )
-        .unwrap_err()
-        .to_string();
-        let elapsed = started.elapsed();
-        let descendant_pid = fs::read_to_string(&descendant_pid_file)
-            .expect("early-exit helper must record its descendant PID")
-            .parse::<u32>()
-            .expect("early-exit helper descendant PID must be numeric");
-        let process_deadline = Instant::now() + Duration::from_secs(2);
-        while windows_process_is_running(descendant_pid) && Instant::now() < process_deadline {
-            thread::sleep(Duration::from_millis(25));
-        }
-        let descendant_still_running = windows_process_is_running(descendant_pid);
-        if descendant_still_running {
-            terminate_test_process_tree(descendant_pid);
-        }
-        let _ = fs::remove_dir_all(&root);
-
+        let (diagnostic, elapsed, descendant_pid, descendant_still_running) =
+            run_calibration_process_tree_probe("early-exit-parent");
         assert!(
-            error.contains("output pipes remained open"),
-            "expected the inherited output pipes to hit their bound; got: {error}"
+            diagnostic.contains("output pipes remained open"),
+            "expected the inherited output pipes to hit their bound; got: {diagnostic}"
         );
         assert!(
-            !error.contains("cleanup incomplete"),
-            "bounded pipe and process-tree cleanup failed: {error}"
+            !diagnostic.contains("cleanup incomplete"),
+            "bounded pipe and process-tree cleanup failed: {diagnostic}"
         );
         assert!(
-            elapsed < Duration::from_secs(5),
+            elapsed < Duration::from_secs(8),
             "teardown took {elapsed:?}"
         );
         assert!(
             !descendant_still_running,
             "early-exit helper descendant {descendant_pid} survived process-tree teardown"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn calibration_process_tree_probe() {
+        let Ok(mode) = std::env::var(CALIBRATION_PROBE_MODE_ENV) else {
+            return;
+        };
+        let pid_file = std::env::var_os(CALIBRATION_PROBE_PID_FILE_ENV)
+            .expect("calibration process-tree probe requires a PID marker path");
+        let result_file = std::env::var_os(CALIBRATION_PROBE_RESULT_FILE_ENV)
+            .expect("calibration process-tree probe requires a result path");
+        let executable = std::env::current_exe().expect("test executable path");
+        let mut command = Command::new(executable);
+        command
+            .args([
+                "--exact",
+                "calibration::tests::calibration_process_tree_helper",
+                "--nocapture",
+            ])
+            .env(CALIBRATION_HELPER_MODE_ENV, &mode)
+            .env(CALIBRATION_HELPER_PID_FILE_ENV, &pid_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        let result = run_bounded_command(
+            command,
+            Duration::from_secs(2),
+            "test calibration helper exceeded its 2-second smoke bound",
+        );
+        let diagnostic = match result {
+            Err(error) => error.to_string(),
+            Ok((status, stdout, stderr)) => format!(
+                "unexpected helper completion: exit={}; stdout={}; stderr={}",
+                status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            ),
+        };
+        fs::write(result_file, diagnostic).expect("write safe calibration probe diagnostic");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn calibration_process_tree_helper() {
+        let Ok(mode) = std::env::var(CALIBRATION_HELPER_MODE_ENV) else {
+            return;
+        };
+        let pid_file = std::env::var_os(CALIBRATION_HELPER_PID_FILE_ENV)
+            .expect("calibration process-tree helper requires a PID marker path");
+        match mode.as_str() {
+            "timeout-parent" | "early-exit-parent" => {
+                let executable = std::env::current_exe().expect("test executable path");
+                let mut descendant = Command::new(executable);
+                descendant
+                    .args([
+                        "--exact",
+                        "calibration::tests::calibration_process_tree_helper",
+                        "--nocapture",
+                    ])
+                    .env(CALIBRATION_HELPER_MODE_ENV, "pipe-descendant")
+                    .env(CALIBRATION_HELPER_PID_FILE_ENV, pid_file)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit());
+                thread::sleep(Duration::from_millis(150));
+                drop(
+                    descendant
+                        .spawn()
+                        .expect("spawn synthetic process-tree descendant"),
+                );
+                if mode == "timeout-parent" {
+                    thread::sleep(Duration::from_secs(60));
+                }
+            }
+            "pipe-descendant" => {
+                let pid_file = PathBuf::from(pid_file);
+                let staging = pid_file.with_extension("pid.tmp");
+                fs::write(&staging, std::process::id().to_string())
+                    .expect("write staged synthetic calibration descendant PID");
+                fs::rename(staging, pid_file)
+                    .expect("atomically publish synthetic calibration descendant PID");
+                thread::sleep(Duration::from_secs(60));
+            }
+            other => panic!("unknown synthetic calibration helper mode: {other}"),
+        }
     }
 
     #[test]

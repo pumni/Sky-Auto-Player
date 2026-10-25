@@ -7,6 +7,8 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
+    let normalized_harness = super::normalize_source_line_endings(harness);
+    let harness = normalized_harness.as_str();
     let qualification = harness
         .split_once("fn qualify_package(")
         .map(|(_, body)| body)
@@ -690,8 +692,9 @@ mod tests {
 
     #[test]
     fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
-        let source = include_str!("../nsis_harness.rs");
-        v4_production_calibration_gate_contract(source)
+        let source =
+            super::super::normalize_source_line_endings(include_str!("../nsis_harness.rs"));
+        v4_production_calibration_gate_contract(&source)
             .expect("production release must verify staged and installed calibration");
 
         let install_start = source
@@ -726,6 +729,25 @@ mod tests {
         assert!(
             v4_production_calibration_gate_contract(&moved_gate).is_err(),
             "release contract must reject installed calibration verification moved after evidence"
+        );
+
+        let crlf_source = source.replace('\n', "\r\n");
+        v4_production_calibration_gate_contract(&crlf_source)
+            .expect("CRLF source must satisfy the same ordered calibration gate contract");
+        let crlf_without_gate = source
+            .replace(
+                "verify_calibration_artifact(\n        repository_root,\n        &install_root",
+                "removed_calibration_artifact(\n        repository_root,\n        &install_root",
+            )
+            .replace('\n', "\r\n");
+        assert!(
+            v4_production_calibration_gate_contract(&crlf_without_gate).is_err(),
+            "CRLF source must still reject removing the installed calibration gate"
+        );
+        let crlf_moved_gate = moved_gate.replace('\n', "\r\n");
+        assert!(
+            v4_production_calibration_gate_contract(&crlf_moved_gate).is_err(),
+            "CRLF source must still reject the calibration gate moved after release evidence"
         );
     }
 

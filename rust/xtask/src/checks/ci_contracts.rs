@@ -380,6 +380,9 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "wait_reader_until",
         "installed_calibration_timeout_kills_descendants_and_bounds_pipe_readers",
         "installed_calibration_early_exit_kills_descendant_holding_output_pipes",
+        "calibration_process_tree_probe",
+        "calibration_process_tree_helper",
+        "separate 5-second startup deadline",
         "installed calibration --help exceeded the 5-second smoke bound",
         "installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe",
         "successful_evidence_keeps_the_installed_calibration_schema",
@@ -417,13 +420,7 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
     }
     let process_tree =
         fs::read_to_string(root.join("rust/crates/sky_windows_security/src/process_tree.rs"))?;
-    if !process_tree.contains("#[cfg(not(windows))]\n    pub fn terminate")
-        || !process_tree.contains("Windows process-tree termination is unavailable")
-    {
-        return Err(
-            "Windows process-tree boundary must expose a fail-closed cross-platform API".into(),
-        );
-    }
+    process_tree_boundary_contract(&process_tree)?;
     for script in [
         "scripts/ci_classify.ps1",
         "scripts/test_ci_classify.ps1",
@@ -442,6 +439,18 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         }
     }
     println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
+    Ok(())
+}
+
+fn process_tree_boundary_contract(source: &str) -> Result<()> {
+    let source = super::normalize_source_line_endings(source);
+    if !source.contains("#[cfg(not(windows))]\n    pub fn terminate")
+        || !source.contains("Windows process-tree termination is unavailable")
+    {
+        return Err(
+            "Windows process-tree boundary must expose a fail-closed cross-platform API".into(),
+        );
+    }
     Ok(())
 }
 
@@ -605,6 +614,10 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "crate::ci_bridge::create_bridge",
         "crate::ci_bridge::read_bridge",
         "source SHA must match the checked-out Git HEAD",
+        "BRIDGE_SIGNER_CHALLENGE",
+        "verify_signature_text_with_public_key",
+        "bridge Tauri signer key pair failed Rust Minisign verification",
+        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -612,6 +625,12 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             )
             .into());
         }
+    }
+    if updater_fixture.contains("!private_key.contains(\"PRIVATE KEY\")") {
+        return Err(
+            "Rust updater bridge must validate the generated Tauri key through signing, not a PEM marker"
+                .into(),
+        );
     }
     if updater_fixture.matches("bun run tauri build").count() != 0
         || !updater_fixture.contains("\"tauri\".to_owned(),\n            \"build\".to_owned()")
@@ -627,6 +646,9 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "rustup toolchain install 1.99.1",
         "bun-version: 1.4.3",
         "bun install --frozen-lockfile",
+        "Test Tauri signer key pair interoperability",
+        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_fixture::tests::tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair -- --ignored --exact",
         "scripts/test_v4_updater_key_rotation.ps1",
         "contents: read",
     ] {
@@ -1062,6 +1084,25 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_tree_boundary_contract_normalizes_line_endings_and_keeps_negative_checks() {
+        let lf = "#[cfg(not(windows))]\n    pub fn terminate() {}\nWindows process-tree termination is unavailable\n";
+        let crlf = lf.replace('\n', "\r\n");
+        process_tree_boundary_contract(lf).expect("LF source must satisfy the boundary contract");
+        process_tree_boundary_contract(&crlf)
+            .expect("CRLF source must satisfy the same boundary contract");
+
+        for invalid in [
+            lf.replace("Windows process-tree termination is unavailable", "removed"),
+            crlf.replace("pub fn terminate", "pub fn removed"),
+        ] {
+            assert!(
+                process_tree_boundary_contract(&invalid).is_err(),
+                "line-ending normalization must not weaken fail-closed markers"
+            );
+        }
+    }
 
     #[test]
     fn active_github_hosted_ubuntu_contract_accepts_latest() {

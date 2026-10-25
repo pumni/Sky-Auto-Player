@@ -26,6 +26,8 @@ const MAX_HTTP_RESPONSE_DURATION: Duration = Duration::from_secs(120);
 const BRIDGE_BUILD_OWNER_SENTINEL: &str = ".sky-bridge-fixture-owner";
 #[cfg(windows)]
 const BRIDGE_BUILD_OWNER_BYTES: &[u8] = b"Sky Auto Player bridge build fixture v1\n";
+#[cfg(windows)]
+const BRIDGE_SIGNER_CHALLENGE: &[u8] = b"Sky Auto Player disposable updater signer check v1\n";
 const MAX_FIXTURE_SIGNATURE_BYTES: usize = 64 * 1024;
 #[cfg(windows)]
 const FIXTURE_ENV_REMOVALS: &[&str] = &[
@@ -2005,6 +2007,8 @@ fn build_bridge_internal(
     let desktop = worktree.join("desktop");
     let key_path = fixture_root.join("bridge.key");
     let config_path = fixture_root.join("bridge-updater.json");
+    let signer_challenge_path = fixture_root.join("bridge-signer-challenge.bin");
+    let signer_challenge_signature_path = with_sig_extension(&signer_challenge_path);
     let worktree_add = crate::process::run_owned_timeout_filtered(
         std::ffi::OsStr::new("git"),
         &[
@@ -2154,11 +2158,23 @@ fn build_bridge_internal(
         let public_key = read_bounded_text(&with_pub_extension(&key_path), 4096)?;
         validate_public_key_text(&public_key)?;
         let private_key = read_bounded_text(&key_path, 16 * 1024)?;
-        if private_key.trim().is_empty() || !private_key.contains("PRIVATE KEY") {
+        if private_key.trim().is_empty() || private_key.contains('\0') {
             return Err(
                 "bridge builder did not produce the expected ephemeral Tauri signing key".into(),
             );
         }
+        std::fs::write(&signer_challenge_path, BRIDGE_SIGNER_CHALLENGE)?;
+        sign_with_key(&worktree, &key_path, &signer_challenge_path)?;
+        let challenge_signature = read_bounded_text(
+            &signer_challenge_signature_path,
+            MAX_FIXTURE_SIGNATURE_BYTES,
+        )?;
+        crate::updater_trust::verify_signature_text_with_public_key(
+            BRIDGE_SIGNER_CHALLENGE,
+            &challenge_signature,
+            &public_key,
+        )
+        .map_err(|_| "bridge Tauri signer key pair failed Rust Minisign verification")?;
         let build_config = serde_json::json!({
             "plugins": {
                 "updater": {
@@ -2274,7 +2290,13 @@ fn build_bridge_internal(
     } else {
         false
     };
-    for path in [&key_path, &with_pub_extension(&key_path), &config_path] {
+    for path in [
+        &key_path,
+        &with_pub_extension(&key_path),
+        &config_path,
+        &signer_challenge_path,
+        &signer_challenge_signature_path,
+    ] {
         if path.exists()
             && let Err(error) = std::fs::remove_file(path)
         {
@@ -2632,6 +2654,7 @@ mod tests {
             ("user.name", "Sky Auto Player fixture"),
             ("user.email", "fixture@example.invalid"),
             ("commit.gpgsign", "false"),
+            ("core.autocrlf", "false"),
         ] {
             let configured = std::process::Command::new("git")
                 .args(["config", key, value])
@@ -2735,6 +2758,84 @@ mod tests {
                 .count(),
             1,
             "only the synthetic repository's primary worktree may remain"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the pinned Bun desktop dependencies; invoked by updater_contract CI"]
+    fn tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair() {
+        struct TestRoot(PathBuf);
+        impl Drop for TestRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-tauri-signer-pair-test-{}-{nonce:x}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).expect("create disposable signer test root");
+        let _root = TestRoot(root.clone());
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let first_key = root.join("first.key");
+        let second_key = root.join("second.key");
+        generate_signing_key(&repository_root, &first_key).expect("generate first Tauri key pair");
+        generate_signing_key(&repository_root, &second_key)
+            .expect("generate second Tauri key pair");
+
+        let payload = b"disposable Tauri signer verification fixture\n";
+        let payload_path = root.join("payload.bin");
+        std::fs::write(&payload_path, payload).expect("write harmless signer challenge");
+        sign_with_key(&repository_root, &first_key, &payload_path)
+            .expect("Tauri signer must sign the harmless challenge");
+        let signature = read_bounded_text(
+            &with_sig_extension(&payload_path),
+            MAX_FIXTURE_SIGNATURE_BYTES,
+        )
+        .expect("read bounded Tauri signature");
+        let first_public = read_bounded_text(&with_pub_extension(&first_key), 4096)
+            .expect("read first Tauri public key");
+        let second_public = read_bounded_text(&with_pub_extension(&second_key), 4096)
+            .expect("read second Tauri public key");
+
+        crate::updater_trust::verify_signature_text_with_public_key(
+            payload,
+            &signature,
+            &first_public,
+        )
+        .expect("Rust Minisign verifier must accept the actual Tauri signer output");
+        assert!(
+            crate::updater_trust::verify_signature_text_with_public_key(
+                payload,
+                &signature,
+                "malformed public key",
+            )
+            .is_err(),
+            "malformed public keys must fail closed"
+        );
+        assert!(
+            crate::updater_trust::verify_signature_text_with_public_key(
+                payload,
+                "malformed signature",
+                &first_public,
+            )
+            .is_err(),
+            "malformed signatures must fail closed"
+        );
+        assert!(
+            crate::updater_trust::verify_signature_text_with_public_key(
+                payload,
+                &signature,
+                &second_public,
+            )
+            .is_err(),
+            "a different Tauri key pair must not validate the signature"
         );
     }
 

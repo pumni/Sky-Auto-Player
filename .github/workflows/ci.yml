@@ -243,6 +243,11 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
+      - name: Test Tauri signer key pair interoperability
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_fixture::tests::tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair -- --ignored --exact
+
       - name: Exercise non-production updater key rotation fixture
         run: pwsh scripts/test_v4_updater_key_rotation.ps1
 
