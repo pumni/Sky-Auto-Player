@@ -987,16 +987,19 @@ fn prepare_and_run(
     let bridge_catalog = read_installed_catalog(
         &install_root.join("builtin-songs"),
         &bridge.manifest.sentinel_id,
-    )?;
+    )
+    .map_err(|error| format!("installed bridge catalog evidence failed: {error}"))?;
     if bridge_catalog.selected_content_sha256 != bridge.manifest.sentinel_content_sha256 {
         return Err("installed bridge catalog does not contain the exact N sentinel bytes".into());
     }
-    let bridge_sha = sha256_file(&bridge_app)?;
+    let bridge_sha = sha256_file(&bridge_app)
+        .map_err(|error| format!("installed bridge executable hashing failed: {error}"))?;
     let bridge_registry = assert_publisher_state(
         &bridge.manifest.publisher,
         &bridge.manifest.version,
         &install_root,
-    )?;
+    )
+    .map_err(|error| format!("installed bridge registry evidence failed: {error}"))?;
     details.bridge = serde_json::json!({
         "status": "PASS",
         "manifest": {
@@ -1650,8 +1653,16 @@ fn assert_publisher_state(
     if publisher_value != publisher || version_value != version {
         return Err(format!("uninstall identity publisher/version mismatch: observed {publisher_value}/{version_value}, expected {publisher}/{version}").into());
     }
-    let expected_root = std::fs::canonicalize(install_root)?;
-    let observed_root = std::fs::canonicalize(PathBuf::from(&install_location))?;
+    let expected_root = std::fs::canonicalize(install_root).map_err(|error| {
+        format!("could not canonicalize bounded updater fixture install root: {error}")
+    })?;
+    let observed_root =
+        std::fs::canonicalize(PathBuf::from(&install_location)).map_err(|error| {
+            let path_hint = install_location.chars().take(260).collect::<String>();
+            format!(
+                "registry InstallLocation {path_hint:?} is not a valid filesystem path: {error}"
+            )
+        })?;
     if observed_root != expected_root {
         return Err("uninstall InstallLocation does not match the bounded fixture root".into());
     }
