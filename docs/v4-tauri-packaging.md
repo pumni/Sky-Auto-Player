@@ -145,10 +145,10 @@ self-signed certificate only for test-mode integrity coverage. See
 and runner execution topology. To create the evidence used above, run:
 
 ```powershell
-pwsh scripts/verify_v4_authenticode.ps1 `
-  -Mode test `
-  -Artifact (Get-ChildItem rust/target/dist/bundle/nsis/*-setup.exe).FullName `
-  -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+cargo xtask authenticode verify `
+  --mode test `
+  --artifact (Get-ChildItem rust/target/dist/bundle/nsis/*-setup.exe).FullName `
+  --evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
 cargo xtask sbom generate --artifact-dir rust/target/dist/bundle/nsis --output rust/target/dist/SBOM.spdx.json
 cargo xtask sbom verify --artifact-dir rust/target/dist/bundle/nsis --sbom rust/target/dist/SBOM.spdx.json
 pwsh scripts/cleanup_v4_test_signing.ps1
@@ -207,9 +207,10 @@ That command is the canonical package build: it uses the normal production
 feature set and the generated test updater key/example endpoint only to
 exercise updater artifact signing. The Authenticode certificate is an
 ephemeral test fixture. The setup step creates its private key and certificate
-in a password-protected PFX under `RUNNER_TEMP`; it never imports the
-certificate into a Windows trust store. The CI always deletes the PFX and its
-password environment variable after signing and installed-PE verification.
+in a passwordless PFX under `RUNNER_TEMP`; signtool receives no PFX password on
+its command line, and the certificate is never imported into a Windows trust
+store. The CI always deletes the PFX and clears its empty compatibility
+environment variable after signing and installed-PE verification.
 It does not enable the updater fixture or insecure transport. The separate
 `updater_e2e` CI job builds both previous-v4 and
 candidate-v4 into a `RUNNER_TEMP` `CARGO_TARGET_DIR` with

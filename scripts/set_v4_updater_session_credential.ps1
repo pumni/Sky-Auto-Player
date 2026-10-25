@@ -1,14 +1,13 @@
-# scripts/set_v4_updater_session_credential.ps1
-# Secure operator provisioning script for Windows Credential Manager generic session credential.
-# Governed by docs/v4-release-execution-topology.md, docs/v4-updater-key-custody.md, and SECURITY.md.
+# Secure operator provisioning adapter for the Rust-owned Windows Credential Manager entry.
+# The prompt is hidden and plaintext crosses only the child stdin pipe, never argv or output.
 
 [CmdletBinding()]
 param(
-    # Non-interactive testing seam: only SecureString is accepted; no plaintext password CLI parameter exists.
+    # Internal regression seam accepts SecureString only; there is no plaintext password parameter.
     [Parameter(Mandatory = $false)]
     [System.Security.SecureString]$TestSecureString,
 
-    # Internal test seam only: non-production target isolation for regression tests.
+    # Isolated regression-test target; Rust validates its fixed test namespace.
     [Parameter(Mandatory = $false)]
     [string]$InternalTestTarget
 )
@@ -21,48 +20,81 @@ if (-not [System.OperatingSystem]::IsWindows()) {
     exit 1
 }
 
-$explicitTarget = $InternalTestTarget
-
-. (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
-
+$bstr = [IntPtr]::Zero
+$passwordValue = $null
+$process = $null
 try {
-    $targetToUse = if (-not [string]::IsNullOrWhiteSpace($explicitTarget)) {
-        $explicitTarget
-    } else {
-        $script:CanonicalCredentialTarget
-    }
-
     $secureInput = if ($null -ne $TestSecureString) {
         $TestSecureString
     } else {
         Read-Host -Prompt "Enter V4 updater production private key passphrase" -AsSecureString
     }
-
     if ($null -eq $secureInput -or $secureInput.Length -eq 0) {
-        Write-Host "[FAIL] Passphrase input cannot be empty"
-        exit 1
+        throw "Passphrase input cannot be empty"
     }
 
     $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureInput)
-    $passwordValue = $null
-    try {
-        $passwordValue = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-        if ([string]::IsNullOrEmpty($passwordValue)) {
-            Write-Host "[FAIL] Passphrase input cannot be empty"
-            exit 1
-        }
-        [SkyAutoPlayer.V4UpdaterCredentialBroker]::WriteSessionCredential($targetToUse, $passwordValue)
-    } finally {
-        if ($bstr -ne [IntPtr]::Zero) {
-            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-        }
-        $passwordValue = $null
-        Remove-Variable passwordValue -ErrorAction SilentlyContinue
+    $passwordValue = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    if ([string]::IsNullOrEmpty($passwordValue)) {
+        throw "Passphrase input cannot be empty"
     }
 
-    Write-Host "[PASS] V4 updater session credential provisioned for target: $targetToUse"
-    exit 0
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "cargo"
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+    foreach ($argument in @("xtask", "credential", "write-stdin")) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InternalTestTarget)) {
+        [void]$startInfo.ArgumentList.Add("--test-target")
+        [void]$startInfo.ArgumentList.Add($InternalTestTarget)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Rust credential owner did not start"
+    }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    try {
+        $process.StandardInput.Write($passwordValue)
+        $process.StandardInput.Flush()
+    } finally {
+        $process.StandardInput.Close()
+    }
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    if ($process.ExitCode -ne 0) {
+        $safeOutput = ($stdout + $stderr).Replace($passwordValue, "[REDACTED]").Trim()
+        if ([string]::IsNullOrWhiteSpace($safeOutput)) {
+            throw "Rust credential owner failed with exit code $($process.ExitCode)"
+        }
+        throw "Rust credential owner failed: $safeOutput"
+    }
+    Write-Output $stdout.TrimEnd()
 } catch {
-    Write-Host "[FAIL] Failed to provision session credential: $($_.Exception.Message)"
+    $safeError = $_.Exception.Message
+    if (-not [string]::IsNullOrEmpty($passwordValue)) {
+        $safeError = $safeError.Replace($passwordValue, "[REDACTED]")
+    }
+    Write-Host "[FAIL] Failed to provision session credential: $safeError"
     exit 1
+} finally {
+    if ($null -ne $process) {
+        $process.Dispose()
+    }
+    if ($bstr -ne [IntPtr]::Zero) {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+    $passwordValue = $null
+    Remove-Variable passwordValue -ErrorAction SilentlyContinue
 }

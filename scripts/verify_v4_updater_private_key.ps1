@@ -45,12 +45,21 @@ if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
     throw "Private key file does not exist"
 }
 
-# 2. Resolve password: prefer credential broker if requested, or specified environment variable, or secure interactive prompt
+# 2. Delegate broker-backed verification to Rust. Rust reads and deletes the
+#    session credential and passes it only to this child process environment.
+if ($UseCredentialBroker) {
+    Push-Location $repoRoot
+    try {
+        & cargo xtask credential run-action --action verify-private-key --key-path $keyFile
+        exit $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+}
+
+# Resolve password for local non-broker verification: environment or secure prompt.
 $envVal = [Environment]::GetEnvironmentVariable($PasswordEnv)
-$passwordValue = if ($UseCredentialBroker) {
-    . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
-    Get-V4UpdaterProductionCredential
-} elseif (-not [string]::IsNullOrWhiteSpace($envVal)) {
+$passwordValue = if (-not [string]::IsNullOrWhiteSpace($envVal)) {
     $envVal
 } elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
     Write-Host "Enter updater private key passphrase (press Enter if unencrypted): " -NoNewline

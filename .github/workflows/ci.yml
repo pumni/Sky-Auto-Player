@@ -1117,10 +1117,10 @@ jobs:
             throw "Expected exactly one Tauri NSIS installer before Authenticode verification; found $($installers.Count)"
           }
           $installer = $installers[0].FullName
-          pwsh scripts/verify_v4_authenticode.ps1 `
-            -Mode unsigned-zero-budget `
-            -Artifact $installer `
-            -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+          cargo xtask authenticode verify `
+            --mode unsigned-zero-budget `
+            --artifact $installer `
+            --evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
 
       - name: Generate Tauri SPDX SBOM
@@ -1188,13 +1188,12 @@ jobs:
             $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse |
               Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') -and $_.Name -ne 'uninstall.exe' })
             if ($installedPe.Count -eq 0) { throw "Installed Tauri tree contains no project PE files" }
-            try {
-              & scripts/verify_v4_authenticode.ps1 `
-                -Mode unsigned-zero-budget `
-                -Artifact $installedPe.FullName `
-                -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
-            } catch {
-              throw "Installed Authenticode verification failed: $($_.Exception.Message)"
+            $authArguments = @("xtask", "authenticode", "verify", "--mode", "unsigned-zero-budget")
+            foreach ($pe in $installedPe) { $authArguments += @("--artifact", $pe.FullName) }
+            $authArguments += @("--evidence", "rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json")
+            cargo @authArguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "Installed Authenticode verification failed with exit code $LASTEXITCODE"
             }
             $env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST = "1"
             try {

@@ -170,17 +170,19 @@ If compromise is suspected, disable the runner and production environment, revok
 updater key using [v4-updater-key-custody.md](v4-updater-key-custody.md), inspect release and
 metadata history, and reimage or replace the runner before restoring release access.
 
-### 2.5 Production Passphrase Transport: Windows Credential Manager Session Broker
+### 2.5 Production Passphrase Transport: Rust Windows Credential Manager Owner
 
 Incident #140 established that parent-process environment variable inheritance does not reach Actions step processes on dedicated runner hosts (such as PUMZ). Parent-process env inheritance is explicitly **not** the production transport.
 
-Production passphrase custody and transport is governed by the Windows Credential Manager generic session broker:
+Production passphrase custody and transport is governed by the Rust Windows Credential Manager
+owner in `sky_windows_security` and its `cargo xtask credential` CLI:
 
 ```text
 [Secure Operator Prompt (Read-Host -AsSecureString)]
                |
                v
   (1) PROVISION SESSION CREDENTIAL
+      - SecureString is sent only over child stdin to Rust
       - CredWriteW (CRED_TYPE_GENERIC, CRED_PERSIST_SESSION)
       - Fixed canonical target: SkyAutoPlayer/V4UpdaterProduction (public metadata)
                |
@@ -190,10 +192,11 @@ Production passphrase custody and transport is governed by the Windows Credentia
       - No passphrase in workflow inputs, secrets, or runner .env
                |
                v
-  (3) BROKER CONSUMPTION (v4_updater_credential_broker.ps1)
-      - CredReadW against fixed target SkyAutoPlayer/V4UpdaterProduction
+  (3) RUST ONE-SHOT ACTION (cargo xtask credential run-action)
+      - CredReadW against the fixed production target
       - Fail-closed if absent or empty
-      - Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD at Process scope only
+      - Passes TAURI_SIGNING_PRIVATE_KEY_PASSWORD only to the allowlisted child action
+      - Captures and redacts action output
                |
                v
   (4) ORCHESTRATION & PRE-PACKAGING VERIFIER
@@ -202,17 +205,17 @@ Production passphrase custody and transport is governed by the Windows Credentia
       - Single build once and qualify exact bytes
                |
                v
-  (5) MANDATORY CLEANUP (finally block)
-      - Restore / clear process-scoped TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-      - CredDeleteW against SkyAutoPlayer/V4UpdaterProduction
-      - Clear managed references
+  (5) MANDATORY CLEANUP (Rust action boundary)
+      - Caller process environment is never modified
+      - CredDeleteW runs after success, action failure, or read failure
+      - Action and cleanup failures are both reported without the secret
 ```
 
 **Security Invariants**:
 - **No Parent-Process Inheritance**: Production does not rely on ambient shell inheritance.
 - **Fixed Canonical Target**: The Credential Manager target name is `SkyAutoPlayer/V4UpdaterProduction`. This target name is public metadata committed in source; workflow dispatch never accepts arbitrary credential targets.
 - **Zero Cloud Secret Exposure**: The passphrase is never stored in GitHub Secrets, runner `.env` files, command-line flags, GitHub issues/PRs/chat, or repository source files.
-- **Ephemeral Session Material**: Provisioned under `CRED_PERSIST_SESSION` and deterministically deleted by the `finally` block of `BuildCandidate`.
+- **Ephemeral Session Material**: Provisioned under `CRED_PERSIST_SESSION` and deterministically deleted by the Rust one-shot action boundary.
 - **Pre-Packaging Verifier**: Pre-packaging verification remains mandatory and enforces Key ID `19AABD2E7838818C`.
 
 ---
@@ -295,7 +298,7 @@ Step 3: Exact Candidate Verification
   - Check installer candidate and signature exist and are non-empty.
 
 Step 4: Authenticode Verification
-  - Run `scripts/verify_v4_authenticode.ps1 -Mode unsigned-zero-budget` for the final installer.
+  - Run `cargo xtask authenticode verify --mode unsigned-zero-budget` for the final installer and installed project PEs.
   - Require `NotSigned` and no signer certificate for every project-owned shipped PE; fail closed
     on test/self-signed, partially signed, or other unexpected state.
 
@@ -345,10 +348,11 @@ new draft and retains the strict transaction-marker checks.
 
 Only `BuildCandidate` calls
 `scripts/orchestrate_v4_production_release.ps1`, exactly once. `BuildCandidate`
-acquires the updater key passphrase through the fixed Windows Credential Manager
-session broker (`scripts/v4_updater_credential_broker.ps1`, target `SkyAutoPlayer/V4UpdaterProduction`)
-into process-scoped `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, passing no plaintext password
-CLI arguments, and automatically deletes the session credential in its `finally` block.
+acquires the updater key passphrase through `cargo xtask credential run-action`, which uses the
+fixed Windows Credential Manager target `SkyAutoPlayer/V4UpdaterProduction`. Rust exposes the
+secret only in the orchestrator child environment, passes no plaintext password argument, and
+deletes the session credential after the action returns or fails. The caller process environment
+is never changed.
 The candidate manifest is the only asset upload authority. It contains a complete
 `qualification_assets` set and an explicit `public_assets` projection. The latter is fail-closed
 to exactly the normalized installer and updater signature names; `PublishRelease` uploads only

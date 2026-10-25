@@ -3328,6 +3328,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sky_windows_security"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
 name = "sky_xtask"
 version = "0.1.0"
 dependencies = [
@@ -3341,9 +3349,11 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "sky_app_core",
+ "sky_windows_security",
  "toml 1.1.8+spec-1.1.0",
  "url",
  "walkdir",
+ "zeroize",
 ]
 
 [[package]]

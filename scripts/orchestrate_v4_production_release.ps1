@@ -401,11 +401,10 @@ try {
     $authenticodeMode = if ($InternalTestFixture) { "test" } else { "unsigned-zero-budget" }
     Write-Host "[Step 4/7] Verifying Authenticode $authenticodeMode signature..."
     $authenticodeEvidencePath = Join-Path $resolvedEvidenceDir "TAURI_AUTHENTICODE_EVIDENCE.json"
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
-        -Mode $authenticodeMode `
-        -Artifact $installerPath `
-        -Evidence $authenticodeEvidencePath
+    & cargo xtask authenticode verify `
+        --mode $authenticodeMode `
+        --artifact $installerPath `
+        --evidence $authenticodeEvidencePath
     if ($LASTEXITCODE -ne 0) {
         throw "Authenticode verification failed on $installerPath (mode: $authenticodeMode)"
     }
@@ -505,13 +504,14 @@ try {
             if ($installedPe.Count -eq 0) { throw "Installed tree contains no PE files" }
 
             $installedAuthEvidence = Join-Path $resolvedEvidenceDir "INSTALLED_AUTHENTICODE_EVIDENCE.json"
-            try {
-                & (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
-                    -Mode $authenticodeMode `
-                    -Artifact $installedPe.FullName `
-                    -Evidence $installedAuthEvidence
-            } catch {
-                throw "Installed PE Authenticode verification failed: $($_.Exception.Message)"
+            $installedAuthArguments = @("xtask", "authenticode", "verify", "--mode", $authenticodeMode)
+            foreach ($pe in $installedPe) {
+                $installedAuthArguments += @("--artifact", $pe.FullName)
+            }
+            $installedAuthArguments += @("--evidence", $installedAuthEvidence)
+            & cargo @installedAuthArguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Installed PE Authenticode verification failed with exit code $LASTEXITCODE"
             }
 
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru

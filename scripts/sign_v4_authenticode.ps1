@@ -108,16 +108,18 @@ if ($thumbprint -notmatch '^[0-9a-fA-F]{40}$') {
 }
 $thumbprint = $thumbprint.Trim().ToUpperInvariant()
 $pfxPath = ([string]$env:SKY_AUTHENTICODE_TEST_PFX_PATH).Trim()
-$pfxPassword = [string]$env:SKY_AUTHENTICODE_TEST_PFX_PASSWORD
-if ([string]::IsNullOrWhiteSpace($pfxPath) -or [string]::IsNullOrWhiteSpace($pfxPassword)) {
-    throw "V4 test Authenticode signing requires the ephemeral PFX path and password"
+if ([string]::IsNullOrWhiteSpace($pfxPath)) {
+    throw "V4 test Authenticode signing requires the ephemeral PFX path"
+}
+if (-not [string]::IsNullOrEmpty($env:SKY_AUTHENTICODE_TEST_PFX_PASSWORD)) {
+    throw "V4 test Authenticode signing rejects PFX passwords because signtool exposes argv"
 }
 if (-not (Test-Path -LiteralPath $pfxPath -PathType Leaf)) {
     throw "V4 test Authenticode signing PFX does not exist: $pfxPath"
 }
 $pfxCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
     $pfxPath,
-    $pfxPassword,
+    [string]::Empty,
     [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
 try {
     if (-not $pfxCertificate.HasPrivateKey) {
@@ -151,7 +153,7 @@ function Find-SignTool {
 $signTool = Find-SignTool
 Write-Host "V4 Authenticode signer using signtool: $signTool"
 Write-Host "V4 Authenticode signer certificate thumbprint: $thumbprint"
-& $signTool sign /fd SHA256 /f $pfxPath /p $pfxPassword $Path
+& $signTool sign /fd SHA256 /f $pfxPath $Path
 if ($LASTEXITCODE -ne 0) {
     throw "signtool.exe failed to sign the Authenticode target"
 }

@@ -46,6 +46,21 @@ function Restore-SavedEnvironment {
     }
 }
 
+function Invoke-RustAuthenticodeVerify {
+    param([string]$Mode, [string]$Artifact)
+    Push-Location $repoRoot
+    try {
+        $output = (& cargo xtask authenticode verify --mode $Mode --artifact $Artifact 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($output)) {
+            Write-Host "Rust Authenticode verification diagnostic: $($output.Trim())"
+        }
+        return $exitCode
+    } finally {
+        Pop-Location
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
     Copy-Item -LiteralPath $sourcePe.FullName -Destination $targetExe -Force
@@ -163,11 +178,8 @@ try {
     }
 
     # Verify test mode succeeds
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-        -Mode test `
-        -Artifact $targetExe
-    if ($LASTEXITCODE -ne 0) {
+    $testVerificationExitCode = Invoke-RustAuthenticodeVerify -Mode "test" -Artifact $targetExe
+    if ($testVerificationExitCode -ne 0) {
         throw "Test-mode verification failed on signed target"
     }
 
@@ -175,11 +187,8 @@ try {
     Write-Host "Contract Test 3a: unsigned-zero-budget verification rejects signed binary..."
     $rejectedInZeroBudget = $false
     try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-            -Mode unsigned-zero-budget `
-            -Artifact $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedInZeroBudget = $true }
+        $exitCode = Invoke-RustAuthenticodeVerify -Mode "unsigned-zero-budget" -Artifact $targetExe
+        if ($exitCode -ne 0) { $rejectedInZeroBudget = $true }
     } catch {
         $rejectedInZeroBudget = $true
     }
@@ -192,11 +201,8 @@ try {
     $rejectedInProduction = $false
     $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = "0123456789ABCDEF0123456789ABCDEF01234567"
     try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-            -Mode production `
-            -Artifact $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedInProduction = $true }
+        $exitCode = Invoke-RustAuthenticodeVerify -Mode "production" -Artifact $targetExe
+        if ($exitCode -ne 0) { $rejectedInProduction = $true }
     } catch {
         $rejectedInProduction = $true
     }
@@ -210,11 +216,8 @@ try {
     $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = $testThumbprint
     $rejectedThumbprint = $false
     try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-            -Mode production `
-            -Artifact $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedThumbprint = $true }
+        $exitCode = Invoke-RustAuthenticodeVerify -Mode "production" -Artifact $targetExe
+        if ($exitCode -ne 0) { $rejectedThumbprint = $true }
     } catch {
         $rejectedThumbprint = $true
     }

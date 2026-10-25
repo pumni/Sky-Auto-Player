@@ -161,11 +161,14 @@ fn v4_release_pipeline_contract_source(
     }
 
     if pipeline
-        .matches("orchestrate_v4_production_release.ps1")
+        .matches("cargo xtask credential run-action")
         .count()
         != 1
+        || pipeline.contains("orchestrate_v4_production_release.ps1")
     {
-        return Err("production orchestrator must have exactly one pipeline call site".into());
+        return Err(
+            "production build must have exactly one Rust-owned credential action call site".into(),
+        );
     }
     for marker in [
         "Preflight",
@@ -249,7 +252,7 @@ fn v4_release_pipeline_contract_source(
         "Remove-Item Env:SKY_APP_DATA_ROOT",
         "if ($null -eq $previousFreshSelfTest)",
         "Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
-        "v4_updater_credential_broker.ps1",
+        "cargo xtask credential run-action",
         "v4_release_draft_lookup.ps1",
         "Select-V4ReleaseByTag",
         "--paginate",
@@ -476,6 +479,122 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
                 format!("v4 release pipeline is missing required helper: {script_name}").into(),
             );
         }
+    }
+    let broker = fs::read_to_string(root.join("scripts/v4_updater_credential_broker.ps1"))?;
+    for forbidden in [
+        "Add-Type",
+        "PSTypeName",
+        "DllImport",
+        "CREDENTIAL_WRITE",
+        "CredReadW",
+    ] {
+        if broker.contains(forbidden) {
+            return Err(format!(
+                "PowerShell credential adapter still owns native operation {forbidden}"
+            )
+            .into());
+        }
+    }
+    let credential_owner =
+        fs::read_to_string(root.join("rust/crates/sky_windows_security/src/credential.rs"))?;
+    let credential_native =
+        fs::read_to_string(root.join("rust/crates/sky_windows_security/src/win32.rs"))?;
+    for marker in [
+        "CANONICAL_UPDATER_CREDENTIAL_TARGET",
+        "test_target",
+        "MAX_CREDENTIAL_BLOB",
+        "write_session",
+        "run_one_shot",
+        "reject_ambient_password",
+        "CredentialBoundaryError",
+    ] {
+        if !credential_owner.contains(marker) {
+            return Err(format!(
+                "Rust credential owner is missing its required contract: {marker}"
+            )
+            .into());
+        }
+    }
+    for marker in [
+        "CredReadW",
+        "CredWriteW",
+        "CredDeleteW",
+        "CRED_TYPE_GENERIC",
+        "CRED_PERSIST_SESSION",
+        "CredFree",
+    ] {
+        if !credential_native.contains(marker) {
+            return Err(format!(
+                "Rust Windows credential adapter is missing its required operation: {marker}"
+            )
+            .into());
+        }
+    }
+    let provision = fs::read_to_string(root.join("scripts/set_v4_updater_session_credential.ps1"))?;
+    for marker in [
+        "Read-Host",
+        "-AsSecureString",
+        "RedirectStandardInput",
+        "StandardInput.Write($passwordValue)",
+        "ZeroFreeBSTR",
+    ] {
+        if !provision.contains(marker) {
+            return Err(format!(
+                "credential provisioning adapter is missing its hidden-input boundary: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "[string]$Password",
+        "-Password ",
+        "Write-Output $passwordValue",
+    ] {
+        if provision.contains(forbidden) {
+            return Err(format!(
+                "credential provisioning adapter exposes plaintext through {forbidden}"
+            )
+            .into());
+        }
+    }
+    let credential_cli = fs::read_to_string(root.join("rust/xtask/src/credential_cli.rs"))?;
+    if credential_cli
+        .matches("scripts/orchestrate_v4_production_release.ps1")
+        .count()
+        != 1
+    {
+        return Err(
+            "Rust credential action must allowlist exactly one production orchestrator".into(),
+        );
+    }
+    for marker in [
+        "run_one_shot",
+        "reject_ambient_password",
+        "redact_secret_bytes",
+        "credential action exited with code",
+    ] {
+        if !credential_cli.contains(marker) {
+            return Err(
+                format!("Rust credential CLI is missing its lifecycle contract: {marker}").into(),
+            );
+        }
+    }
+    for marker in [
+        "cargo xtask credential run-action",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    ] {
+        if !pipeline.contains(marker) {
+            return Err(format!(
+                "v4 release coordinator is missing Rust credential ownership: {marker}"
+            )
+            .into());
+        }
+    }
+    let key_verifier = fs::read_to_string(root.join("scripts/verify_v4_updater_private_key.ps1"))?;
+    if !key_verifier.contains("cargo xtask credential run-action")
+        || key_verifier.contains("Get-V4UpdaterProductionCredential")
+    {
+        return Err("broker-backed key verification must delegate to Rust without exposing the credential to PowerShell".into());
     }
     let upload_helper_path = root.join("scripts/v4_release_asset_upload.ps1");
     let upload_helper = fs::read_to_string(&upload_helper_path)?;

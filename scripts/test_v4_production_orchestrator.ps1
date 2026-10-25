@@ -4,6 +4,18 @@ $ErrorActionPreference = 'Stop'
 Write-Host "Starting V4 production release orchestrator contract tests..."
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+function Invoke-RustAuthenticodeVerification {
+    param([string]$Mode, [string]$Artifact)
+    Push-Location $repoRoot
+    try {
+        $output = (& cargo xtask authenticode verify --mode $Mode --artifact $Artifact 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+        return [pscustomobject]@{ Output = $output; ExitCode = $exitCode }
+    } finally {
+        Pop-Location
+    }
+}
 $temporaryRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     [IO.Path]::GetTempPath()
 } else {
@@ -423,11 +435,8 @@ try {
     [IO.File]::WriteAllBytes($peCopy, $bytes)
 
     # Verify tampering is detected
-    $out11 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
-        -Mode test `
-        -Artifact $peCopy 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0) { throw "FAILED: Authenticode verification accepted tampered binary" }
+    $out11 = Invoke-RustAuthenticodeVerification -Mode "test" -Artifact $peCopy
+    if ($out11.ExitCode -eq 0) { throw "FAILED: Authenticode verification accepted tampered binary" }
     Write-Host "Test 11: PASS"
 
     # Test 12: Verification rejects test credentials in production mode
@@ -440,14 +449,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Failed to sign unmutated PE" }
 
     $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = $testThumbprint
-    $out12 = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
-        -Mode production `
-        -Artifact $unmutatedPe 2>&1 | Out-String
+    $out12 = Invoke-RustAuthenticodeVerification -Mode "production" -Artifact $unmutatedPe
     Remove-Item Env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -eq 0) { throw "FAILED: Production verification accepted test certificate!" }
-    if ($out12 -notmatch "rejects ephemeral CI test signer thumbprint" -and $out12 -notmatch "rejects CI test certificate") {
-        throw "FAILED: Did not reject test certificate in production mode. Actual output:`n$out12"
+    if ($out12.ExitCode -eq 0) { throw "FAILED: Production verification accepted test certificate!" }
+    if ($out12.Output -notmatch "rejects the CI test signer identity" -and $out12.Output -notmatch "uses the CI test certificate") {
+        throw "FAILED: Did not reject test certificate in production mode. Actual output:`n$($out12.Output)"
     }
     Write-Host "Test 12: PASS"
 

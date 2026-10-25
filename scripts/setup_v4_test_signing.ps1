@@ -74,7 +74,9 @@ try {
         [string]::IsNullOrWhiteSpace($certificate.Thumbprint)) {
         throw 'Could not create the ephemeral V4 Authenticode test certificate with a private key'
     }
-    $password = [guid]::NewGuid().ToString('N')
+    # Passwordless ephemeral PFX: signtool accepts a PFX password only through
+    # argv, so the disposable synthetic test certificate must not have one.
+    $password = [string]::Empty
     [IO.File]::WriteAllBytes(
         $PfxPath,
         $certificate.Export(
@@ -82,7 +84,7 @@ try {
             $password))
     [IO.File]::WriteAllText(
         $OutputPath,
-        "$($certificate.Thumbprint)`n$password",
+        [string]$certificate.Thumbprint,
         [Text.UTF8Encoding]::new($false))
 } finally {
     if ($null -ne $rsa) {
@@ -122,19 +124,17 @@ try {
     Write-Host "Reading certificate worker result"
     $workerResult = @(Get-Content -LiteralPath $resultPath -ErrorAction Stop |
         ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($workerResult.Count -ne 2 -or $workerResult[0] -notmatch '^[0-9a-fA-F]{40}$' -or
-        $workerResult[1] -notmatch '^[0-9a-f]{32}$') {
+    if ($workerResult.Count -ne 1 -or $workerResult[0] -notmatch '^[0-9a-fA-F]{40}$') {
         throw "Ephemeral V4 Authenticode certificate worker returned an invalid PFX identity"
     }
     $thumbprint = $workerResult[0].Trim().ToUpperInvariant()
-    $pfxPassword = $workerResult[1].Trim()
     if (-not (Test-Path -LiteralPath $pfxPath -PathType Leaf)) {
         throw "Ephemeral V4 Authenticode certificate worker did not create its PFX output"
     }
     Write-Host "Certificate worker result read (thumbprint=$thumbprint)"
     $pfxCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
         $pfxPath,
-        $pfxPassword,
+        [string]::Empty,
         [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
     try {
         if (-not $pfxCertificate.HasPrivateKey) {
@@ -148,12 +148,11 @@ try {
         $pfxCertificate.Dispose()
     }
 
-    Write-Output "::add-mask::$pfxPassword"
     Write-Host "Writing certificate environment"
     "SKY_AUTHENTICODE_MODE=test" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
     "SKY_AUTHENTICODE_TEST_THUMBPRINT=$thumbprint" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
     "SKY_AUTHENTICODE_TEST_PFX_PATH=$pfxPath" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
-    "SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
+    "SKY_AUTHENTICODE_TEST_PFX_PASSWORD=" | Add-Content -LiteralPath $EnvFile -Encoding UTF8
     Write-CertificateSetupEvidence 'PASS' "thumbprint=$thumbprint"
 } catch {
     Write-CertificateSetupEvidence 'FAIL' $_.Exception.Message

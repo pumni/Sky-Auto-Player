@@ -381,6 +381,7 @@ const UNSAFE_AUDIT_SOURCE_ROOTS: &[&str] = &[
     "rust/crates/sky_app_core/src",
     "rust/crates/sky_player/src",
     "rust/crates/sky_native_adapters/src",
+    "rust/crates/sky_windows_security/src",
     "desktop/src-tauri/src",
 ];
 

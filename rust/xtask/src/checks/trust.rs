@@ -147,7 +147,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let ci = fs::read_to_string(&ci_path)?.replace("\r\n", "\n");
     for marker in [
         "scripts/setup_v4_test_signing.ps1",
-        "scripts/verify_v4_authenticode.ps1",
+        "cargo xtask authenticode verify",
+        "scripts/test_v4_authenticode_integrity.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
         "scripts/ci_tauri_update_e2e.ps1",
@@ -261,25 +262,39 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
 
     let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
     for marker in [
-        "unsigned-zero-budget",
-        "NotSigned",
-        "authenticode-unsigned-zero-budget",
-        "unsigned-zero-budget-policy",
-        "SKY_AUTHENTICODE_TEST_THUMBPRINT",
-        "SKY_AUTHENTICODE_TEST_PFX_PATH",
-        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
-        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
-        "expected_signer_thumbprint",
-        "Resolve-TestPfxPath",
+        "authenticode-windows-inspection",
+        "Get-AuthenticodeSignature",
+        "ExpectedThumbprint",
         "v4_authenticode_crypto.ps1",
         "Get-AuthenticodeIntegrityProof",
         "platform_status",
-        "UnknownError",
-        "signer thumbprint mismatch",
+        "signed_digest_algorithm",
+        "computed_digest",
     ] {
         if !verifier.contains(marker) {
             return Err(format!(
                 "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let rust_policy = fs::read_to_string(root.join("rust/xtask/src/authenticode.rs"))?;
+    for marker in [
+        "unsigned-zero-budget",
+        "validate_thumbprint",
+        "validate_test_pfx",
+        "validate_test_pfx_password",
+        "validate_production_provider",
+        "accepted_status",
+        "test Authenticode PFX passwords are forbidden because signtool exposes argv",
+        "authenticode-verification",
+        "unsigned-zero-budget accepts only a real NotSigned PE with no signer",
+        "Authenticode signed CMS digest does not match the computed PE image digest",
+        "write_evidence",
+    ] {
+        if !rust_policy.contains(marker) {
+            return Err(format!(
+                "Rust Authenticode policy is missing its required marker: {marker}"
             )
             .into());
         }
@@ -309,8 +324,9 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "CertificateRequest",
         "X509ContentType]::Pfx",
         "EphemeralKeySet",
+        "Passwordless ephemeral PFX",
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
-        "::add-mask::",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD=",
         "RUNNER_TEMP",
     ] {
         if !setup.contains(marker) {
@@ -320,16 +336,11 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let mask_position = setup
-        .find("::add-mask::")
-        .ok_or("v4 Authenticode test PFX setup must mask the generated password")?;
-    let password_environment_position = setup
-        .find("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
-        .ok_or("v4 Authenticode test PFX setup must publish the generated password")?;
-    if mask_position >= password_environment_position {
+    if setup.contains("::add-mask::")
+        || setup.contains("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
+    {
         return Err(
-            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV"
-                .into(),
+            "ephemeral Authenticode PFX passwords must not be generated or published".into(),
         );
     }
     for forbidden in [
@@ -381,7 +392,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
         "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
         "/f $pfxPath",
-        "/p $pfxPassword",
+        "test Authenticode signing rejects PFX passwords because signtool exposes argv",
+        "sign /fd SHA256 /f $pfxPath $Path",
         "EphemeralKeySet",
         "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
         "SKY_AUTHENTICODE_PROVIDER",
@@ -393,15 +405,18 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             );
         }
     }
+    if signer.contains(" /p ") {
+        return Err("signtool must never receive a PFX password on its command line".into());
+    }
     let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
     for marker in [
-        "v4_authenticode_crypto.ps1",
         "sign_v4_authenticode.ps1",
         "Get-AuthenticodeSignature",
         "clean signed PE PASS",
         "Tampered signed PE unexpectedly passed independent Authenticode verification",
         "Get-AuthenticodePeLayout",
         "WriteAllBytes",
+        "cargo xtask authenticode verify",
     ] {
         if !tamper.contains(marker) {
             return Err(format!(
@@ -418,6 +433,7 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "Production verification rejects CI test certificate",
         "unsigned-zero-budget verification rejects signed binary",
         "Production verification rejects test thumbprint",
+        "cargo xtask authenticode verify",
         "CI test certificate cannot satisfy production mode or zero-budget unsigned state",
     ] {
         if !contract_test.contains(marker) {
@@ -473,7 +489,7 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "V4_QUALIFICATION_EVIDENCE.json",
         "V4_PRODUCTION_RELEASE_EVIDENCE.json",
         "sign_v4_authenticode.ps1",
-        "verify_v4_authenticode.ps1",
+        "cargo xtask authenticode verify",
         "unsigned-zero-budget",
         "Invoke-PrePackagingStaleOutputPurge",
         "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",

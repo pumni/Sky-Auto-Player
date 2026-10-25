@@ -1378,18 +1378,15 @@ function Invoke-BuildCandidate {
 
     Import-V4ReleaseContext | Out-Null
 
-    . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
-
-    # Build candidate exactly once
-    Invoke-WithV4UpdaterSessionCredential -Action {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
-            -ExpectedSourceSha $SourceSha `
-            -Version $Version `
-            -Channel $Channel `
-            -UpdaterPrivateKeyPath $keyPath
-        if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
-    }
+    # Rust owns the one-shot Credential Manager read, child environment scope,
+    # output redaction, process-tree teardown, and unconditional credential deletion.
+    & cargo xtask credential run-action `
+        --action release `
+        --expected-source-sha $SourceSha `
+        --version $Version `
+        --channel $Channel `
+        --key-path $keyPath
+    if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
 
     $records = @(Get-QualificationCandidateRecords | ForEach-Object { Get-FileRecord $_ })
     $candidateAssets = @(Freeze-CandidateAssets $records)
@@ -1411,11 +1408,10 @@ function Invoke-BuildCandidate {
     $frozenQualificationEvidence = Join-Path $evidenceDir $qualificationEvidenceName
 
     # Local qualification against frozen candidate assets
-    Invoke-Checked "pwsh" @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1"),
-        "-Mode", "unsigned-zero-budget", "-Artifact", $frozenInstaller,
-        "-Evidence", (Join-Path $root "downloaded-authenticode-verification.json")
+    Invoke-Checked "cargo" @(
+        "xtask", "authenticode", "verify", "--mode", "unsigned-zero-budget",
+        "--artifact", $frozenInstaller,
+        "--evidence", (Join-Path $root "downloaded-authenticode-verification.json")
     ) "candidate Authenticode state is not unsigned-zero-budget"
 
     Invoke-Checked "cargo" @(

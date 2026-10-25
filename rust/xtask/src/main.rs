@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod audits;
+mod authenticode;
 mod branding;
 mod builtin_catalog;
 mod calibration;
@@ -10,6 +11,7 @@ mod ci_artifacts;
 mod ci_bridge;
 mod ci_candidate;
 mod ci_classifier;
+mod credential_cli;
 mod hash;
 mod process;
 mod release_metadata;
@@ -26,7 +28,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask ci classify [--full | --paths-file <path> | --base-sha <sha> --head-sha <sha>] [--github-output <path>]\n  cargo xtask ci candidate <create|validate> [options]\n  cargo xtask ci bridge <create|validate> [options]\n  cargo xtask ci source-identity --candidate-version <semver> [--source-sha <sha>] [--require-worktree-version] [--format <text|json>]\n  cargo xtask calibration build\n  cargo xtask calibration verify-installed --install-root <dir> --expected-size <bytes> --expected-sha256 <digest> [--evidence <path>]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
+    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask ci classify [--full | --paths-file <path> | --base-sha <sha> --head-sha <sha>] [--github-output <path>]\n  cargo xtask ci candidate <create|validate> [options]\n  cargo xtask ci bridge <create|validate> [options]\n  cargo xtask ci source-identity --candidate-version <semver> [--source-sha <sha>] [--require-worktree-version] [--format <text|json>]\n  cargo xtask calibration build\n  cargo xtask calibration verify-installed --install-root <dir> --expected-size <bytes> --expected-sha256 <digest> [--evidence <path>]\n  cargo xtask credential <status|read-check|write-stdin|delete|run-action> [options]\n  cargo xtask authenticode verify --mode <unsigned-zero-budget|test|production> --artifact <path> [--artifact <path>] [--evidence <path>]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -44,7 +46,9 @@ fn main() -> Result<()> {
     }
     match args[0].as_str() {
         "ci" => ci::run(&repo::root(), &args[1..]),
+        "authenticode" => authenticode::run(&repo::root(), &args[1..]),
         "calibration" => calibration::run(&repo::root(), &args[1..]),
+        "credential" => credential_cli::run(&repo::root(), &args[1..]),
         "check" => {
             let group = args.get(1).map(String::as_str).unwrap_or("all");
             let skip_supply_chain = args.iter().any(|a| a == "--skip-supply-chain");
