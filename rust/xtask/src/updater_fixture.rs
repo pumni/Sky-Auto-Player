@@ -2197,7 +2197,7 @@ fn build_bridge_internal(
             "--profile".to_owned(),
             "dist".to_owned(),
             "--features".to_owned(),
-            "tauri-update-fixture".to_owned(),
+            "desktop-runtime,packaged-assets,tauri-update-fixture".to_owned(),
         ];
         run_bun(
             &desktop,

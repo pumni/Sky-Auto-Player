@@ -17,9 +17,6 @@ fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
         .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
         .map(|(body, _)| body)
         .ok_or("Rust package qualification body is not bounded")?;
-    let staged_gate = qualification
-        .find("&staged_calibration_root")
-        .ok_or("Rust NSIS owner must verify the staged calibration resource")?;
     let install_position = qualification
         .find("run_installer(\n        installer,")
         .ok_or("Rust NSIS owner must install the exact candidate")?;
@@ -29,11 +26,16 @@ fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
     let launch_position = qualification
         .find("launch_smoke(scope, &app")
         .ok_or("Rust NSIS owner must launch the installed application")?;
-    if staged_gate >= install_position
+    if qualification
+        .matches("verify_calibration_artifact(")
+        .count()
+        != 1
+        || qualification.contains("staged_calibration_root")
+        || qualification.contains("desktop/src-tauri/resources")
         || install_position >= installed_gate
         || installed_gate >= launch_position
     {
-        return Err("calibration qualification must verify staged bytes, install, verify installed bytes, then launch".into());
+        return Err("calibration qualification must install first, verify frozen candidate bytes from the installed tree, then launch without producer staging".into());
     }
 
     let verifier = harness
@@ -668,11 +670,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
+    fn production_release_calibration_gate_requires_installed_bytes_without_producer_staging() {
         let source =
             super::super::normalize_source_line_endings(include_str!("../nsis_harness.rs"));
         v4_production_calibration_gate_contract(&source)
-            .expect("production release must verify staged and installed calibration");
+            .expect("consumer must verify installed bytes from the frozen candidate");
+
+        let staged_dependency = source.replace(
+            "    let install_root = scope.root.join(\"install\");",
+            "    let staged_calibration_root = repository_root.join(\"desktop/src-tauri/resources\");\n    let install_root = scope.root.join(\"install\");\n    verify_calibration_artifact(repository_root, &staged_calibration_root, candidate, None)?;",
+        );
+        assert_ne!(staged_dependency, source, "qualification insertion point");
+        assert!(
+            v4_production_calibration_gate_contract(&staged_dependency).is_err(),
+            "consumer must not depend on producer-local calibration staging"
+        );
 
         let install_start = source
             .find("run_installer(\n        installer,")

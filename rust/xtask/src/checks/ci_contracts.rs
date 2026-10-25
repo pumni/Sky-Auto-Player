@@ -603,6 +603,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         );
     }
     let updater_fixture = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))?;
+    updater_bridge_feature_contract(&updater_fixture)?;
     for marker in [
         "fn build_bridge_internal(",
         "git",
@@ -1081,9 +1082,52 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn updater_bridge_feature_contract(source: &str) -> Result<()> {
+    let build_args = source
+        .split_once("let build_args = vec![")
+        .and_then(|(_, remaining)| remaining.split_once("];"))
+        .map(|(args, _)| args)
+        .ok_or("Rust updater bridge build arguments are not bounded")?;
+    let feature_args = build_args.matches("\"--features\".to_owned()").count();
+    let product_features = "\"--features\".to_owned(),\n            \"desktop-runtime,packaged-assets,tauri-update-fixture\".to_owned(),";
+    if feature_args != 1
+        || !build_args.contains(product_features)
+        || build_args.contains("\"tauri-update-fixture\".to_owned()")
+    {
+        return Err("updater bridge build must explicitly enable the normal Tauri product features and its fixture feature".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_bridge_feature_contract_requires_candidate_feature_set() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))
+            .expect("updater fixture source must exist");
+        updater_bridge_feature_contract(&source)
+            .expect("fixture bridge must build with normal product features");
+
+        for feature in ["desktop-runtime,", ",packaged-assets"] {
+            let missing_feature = source.replace(feature, "");
+            assert_ne!(missing_feature, source, "{feature} must be present");
+            assert!(
+                updater_bridge_feature_contract(&missing_feature).is_err(),
+                "bridge contract must reject omission of {feature}"
+            );
+        }
+        let fixture_only = source.replace(
+            "desktop-runtime,packaged-assets,tauri-update-fixture",
+            "tauri-update-fixture",
+        );
+        assert!(
+            updater_bridge_feature_contract(&fixture_only).is_err(),
+            "bridge contract must reject fixture-only feature activation"
+        );
+    }
 
     #[test]
     fn process_tree_boundary_contract_normalizes_line_endings_and_keeps_negative_checks() {

@@ -307,8 +307,6 @@ fn qualify_package(
     let app = install_root.join("sky_desktop_shell.exe");
     let uninstaller = install_root.join("uninstall.exe");
     std::fs::create_dir_all(&app_data)?;
-    let staged_calibration_root = repository_root.join("desktop/src-tauri/resources");
-    verify_calibration_artifact(repository_root, &staged_calibration_root, candidate, None)?;
     run_installer(
         installer,
         &install_root,
@@ -1238,6 +1236,71 @@ mod tests {
         std::fs::create_dir_all(&runner_temp).expect("create synthetic runner temp");
         std::fs::create_dir_all(&workspace).expect("create synthetic workspace");
         (base, runner_temp, workspace)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_calibration_uses_candidate_bytes_without_producer_staging() {
+        let (base, runner_temp, workspace) = synthetic_roots();
+        let repository = workspace.join("consumer-checkout");
+        let install = runner_temp.join("consumer-install");
+        std::fs::create_dir(&repository).expect("create synthetic consumer checkout");
+        std::fs::create_dir(&install).expect("create synthetic install root");
+        let staged_resources = repository.join("desktop/src-tauri/resources");
+        assert!(!staged_resources.exists());
+
+        let expected_bytes = synthetic_x64_pe();
+        let expected_path = runner_temp.join("expected-native-calibration.exe");
+        std::fs::write(&expected_path, &expected_bytes).expect("write expected fixture bytes");
+        let expected_sha256 =
+            crate::ci_artifacts::sha256_file(&expected_path).expect("hash expected fixture bytes");
+        let candidate = crate::ci_candidate::CandidateContract {
+            manifest: crate::ci_candidate::CandidateManifest {
+                schema_version: 2,
+                source_sha: "a".repeat(40),
+                version: "4.2.0".to_owned(),
+                calibration_binary: "native_calibration.exe".to_owned(),
+                calibration_binary_size: expected_bytes.len() as u64,
+                calibration_binary_sha256: expected_sha256,
+                calibration_binary_architecture: "x86_64".to_owned(),
+                installer: "installer.exe".to_owned(),
+                installer_sha256: String::new(),
+                updater_signature: "installer.exe.sig".to_owned(),
+                updater_signature_sha256: String::new(),
+                updater_public_key: "updater-public-key.pub".to_owned(),
+                updater_public_key_sha256: String::new(),
+            },
+            installer_sha256: String::new(),
+            signature_sha256: String::new(),
+            public_key_sha256: String::new(),
+        };
+
+        let missing = verify_calibration_artifact(&repository, &install, &candidate, None)
+            .expect_err("missing installed calibration must fail closed")
+            .to_string();
+        assert!(missing.contains("installed native_calibration.exe is missing"));
+
+        let mut wrong_bytes = expected_bytes;
+        wrong_bytes[0x20] ^= 1;
+        std::fs::write(install.join("native_calibration.exe"), wrong_bytes)
+            .expect("write wrong installed fixture bytes");
+        let mismatch = verify_calibration_artifact(&repository, &install, &candidate, None)
+            .expect_err("installed calibration must match the frozen candidate digest")
+            .to_string();
+        assert!(mismatch.contains("installed calibration SHA-256 mismatch"));
+        assert!(!staged_resources.exists());
+
+        std::fs::remove_dir_all(base).expect("remove synthetic consumer fixture");
+    }
+
+    #[cfg(windows)]
+    fn synthetic_x64_pe() -> Vec<u8> {
+        let mut bytes = vec![0_u8; 0x86];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80_i32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x84..0x86].copy_from_slice(&0x8664_u16.to_le_bytes());
+        bytes
     }
 
     #[cfg(windows)]
