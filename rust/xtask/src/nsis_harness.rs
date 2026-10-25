@@ -1,11 +1,17 @@
 #![forbid(unsafe_code)]
+// Non-Windows production exposes only the fail-closed command stub; fixture
+// internals stay available to Windows builds and cross-platform unit tests.
+#![cfg_attr(all(not(windows), not(test)), allow(dead_code))]
 
 use crate::Result;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 const OWNER_SENTINEL: &str = ".sky-auto-player-wave-c-owner";
 const OWNER_SENTINEL_CONTENT: &[u8] = b"Sky Auto Player disposable installer harness v1\n";
+#[cfg(windows)]
 const PRIVATE_ENVIRONMENT_NAMES: &[&str] = &[
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
@@ -16,6 +22,7 @@ const PRIVATE_ENVIRONMENT_NAMES: &[&str] = &[
     "UPDATER_PASSWORD",
 ];
 
+#[cfg(windows)]
 fn private_environment_names() -> Vec<String> {
     PRIVATE_ENVIRONMENT_NAMES
         .iter()
@@ -94,6 +101,7 @@ fn parse_options(args: &[String]) -> Result<(BTreeMap<String, String>, RunnerAut
     Ok((values, authorization))
 }
 
+#[cfg(windows)]
 fn required<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str> {
     options
         .get(name)
@@ -783,10 +791,7 @@ impl WindowsSmokeScope {
     pub(crate) fn cleanup(&mut self) -> Result<()> {
         let mut errors = Vec::new();
         attempt_cleanup(&mut errors, "terminate owned process trees", || {
-            for child in &mut self.children {
-                child.terminate()?;
-            }
-            Ok(())
+            terminate_children(&mut self.children, |child| child.terminate())
         });
         attempt_cleanup(&mut errors, "restore monitored HKCU state", || {
             self.registry.restore().map_err(Into::into)
@@ -826,10 +831,26 @@ fn display_result<E: std::fmt::Display>(result: std::result::Result<(), E>) -> S
     result.map_or_else(|error| error.to_string(), |_| "ok".to_owned())
 }
 
-#[cfg(windows)]
 fn attempt_cleanup(errors: &mut Vec<String>, stage: &str, action: impl FnOnce() -> Result<()>) {
     if let Err(error) = action() {
         errors.push(format!("{stage}: {error}"));
+    }
+}
+
+fn terminate_children<T>(
+    children: &mut [T],
+    mut terminate: impl FnMut(&mut T) -> Result<()>,
+) -> Result<()> {
+    let mut errors = Vec::new();
+    for (index, child) in children.iter_mut().enumerate() {
+        if let Err(error) = terminate(child) {
+            errors.push(format!("child {}: {error}", index + 1));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("owned child teardown failures: {}", errors.join("; ")).into())
     }
 }
 
@@ -1168,6 +1189,25 @@ mod tests {
         );
         assert!(result.contains("injected original operation failure"));
         assert!(result.contains("injected filesystem failure"));
+    }
+
+    #[test]
+    fn child_cleanup_attempts_later_children_and_aggregates_failures() {
+        let mut children = ["first", "second", "third"];
+        let mut attempted = Vec::new();
+        let error = terminate_children(&mut children, |child| {
+            attempted.push(*child);
+            if *child == "first" {
+                Err("injected first-child teardown failure".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(attempted, ["first", "second", "third"]);
+        assert!(error.contains("child 1: injected first-child teardown failure"));
     }
 
     #[test]

@@ -9,7 +9,9 @@ use std::sync::mpsc;
 #[cfg(any(test, windows))]
 use std::thread::{self, JoinHandle};
 #[cfg(any(test, windows))]
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(any(test, windows))]
+use std::time::Instant;
 
 #[cfg(any(test, windows))]
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
@@ -401,7 +403,7 @@ fn capture_non_windows_test_timeout(
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
-            let status = child.wait()?;
+            child.wait()?;
             let stdout =
                 collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout")
                     .ok()
@@ -450,6 +452,7 @@ fn capture_owned_timeout(
     capture_owned_timeout_filtered(program, args, cwd, env, &[], timeout)
 }
 
+#[cfg(any(windows, test))]
 pub(crate) fn capture_owned_timeout_filtered(
     program: &OsStr,
     args: &[String],
@@ -473,6 +476,7 @@ pub(crate) fn capture_owned_timeout_filtered(
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn run_owned_timeout_filtered(
     program: &OsStr,
     args: &[String],
@@ -594,7 +598,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("timed out after"));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]

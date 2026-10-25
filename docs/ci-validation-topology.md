@@ -162,10 +162,13 @@ NSIS install and uninstall children have 300- and 60-second deadlines;
 updater children have 180-second deadlines. These operation deadlines do not
 control teardown. Owned Windows process trees are terminated with a 2-second
 teardown budget, and inherited output pipes have a 500-millisecond drain
-budget. Loopback requests have a 10-second total request deadline, with
-bounded socket reads and writes. Cleanup continues across all registered
-stages and returns aggregated failures. The outer job timeout remains the
-final bound if a runner or operating-system operation does not respond.
+budget. Loopback request headers have a 10-second total read deadline; each
+response's headers and body share a 120-second absolute write deadline. Each
+socket operation is capped at 2 seconds, and shutdown interrupts an active
+socket before joining the fixture server thread. Cleanup continues across all
+registered stages and returns aggregated failures. The outer job timeout
+remains the final bound if a runner or operating-system operation does not
+respond.
 
 The documented GitHub Actions job default is described in the
 [workflow syntax reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).

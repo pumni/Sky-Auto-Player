@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+// Non-Windows production exposes only the fail-closed command stub; fixture
+// internals stay available to Windows builds and cross-platform unit tests.
+#![cfg_attr(all(not(windows), not(test)), allow(dead_code))]
 
 use crate::Result;
 use serde::Serialize;
@@ -6,7 +9,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -16,9 +21,13 @@ const MAX_HTTP_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 512 * 1024 * 1024;
 const MAX_HTTP_REQUESTS: usize = 4096;
 const MAX_HTTP_REQUEST_DURATION: Duration = Duration::from_secs(10);
+const MAX_HTTP_RESPONSE_DURATION: Duration = Duration::from_secs(120);
+#[cfg(windows)]
 const BRIDGE_BUILD_OWNER_SENTINEL: &str = ".sky-bridge-fixture-owner";
+#[cfg(windows)]
 const BRIDGE_BUILD_OWNER_BYTES: &[u8] = b"Sky Auto Player bridge build fixture v1\n";
 const MAX_FIXTURE_SIGNATURE_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
 const FIXTURE_ENV_REMOVALS: &[&str] = &[
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
@@ -47,6 +56,7 @@ struct FixturePayloads {
 }
 
 #[derive(Default)]
+#[cfg(windows)]
 struct FixtureEvidenceData {
     manifest: serde_json::Value,
     candidate: serde_json::Value,
@@ -59,6 +69,7 @@ struct FixtureServer {
     payloads: Arc<Mutex<FixturePayloads>>,
     requests: Arc<Mutex<Vec<RequestEvidence>>>,
     stop: Arc<AtomicBool>,
+    active_stream: Arc<Mutex<Option<TcpStream>>>,
     thread: Option<JoinHandle<std::io::Result<()>>>,
 }
 
@@ -76,18 +87,46 @@ impl FixtureServer {
         }));
         let requests = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let active_stream = Arc::new(Mutex::new(None));
         let thread_payloads = Arc::clone(&payloads);
         let thread_requests = Arc::clone(&requests);
         let thread_stop = Arc::clone(&stop);
+        let thread_active_stream = Arc::clone(&active_stream);
         let server_thread = thread::Builder::new()
             .name("tauri-updater-loopback-fixture".to_owned())
             .spawn(move || {
                 while !thread_stop.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _peer)) => {
+                            stream.set_nonblocking(false)?;
                             stream.set_read_timeout(Some(Duration::from_secs(2)))?;
                             stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-                            handle_fixture_connection(stream, &thread_payloads, &thread_requests)?;
+                            let interrupt_stream = stream.try_clone()?;
+                            {
+                                let mut active = thread_active_stream.lock().map_err(|_| {
+                                    std::io::Error::other("active fixture stream lock was poisoned")
+                                })?;
+                                *active = Some(interrupt_stream);
+                                if thread_stop.load(Ordering::Acquire)
+                                    && let Some(active) = active.as_ref()
+                                {
+                                    let _ = active.shutdown(Shutdown::Both);
+                                }
+                            }
+                            let response = handle_fixture_connection(
+                                stream,
+                                &thread_payloads,
+                                &thread_requests,
+                            );
+                            {
+                                let mut active = thread_active_stream.lock().map_err(|_| {
+                                    std::io::Error::other("active fixture stream lock was poisoned")
+                                })?;
+                                active.take();
+                            }
+                            if response.is_err() && !thread_stop.load(Ordering::Acquire) {
+                                response?;
+                            }
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(10));
@@ -102,6 +141,7 @@ impl FixtureServer {
             payloads,
             requests,
             stop,
+            active_stream,
             thread: Some(server_thread),
         })
     }
@@ -110,6 +150,7 @@ impl FixtureServer {
         self.address.port()
     }
 
+    #[cfg(windows)]
     fn candidate_url(&self) -> String {
         format!("http://127.0.0.1:{}/candidate/update.exe", self.port())
     }
@@ -135,12 +176,34 @@ impl FixtureServer {
 
     fn stop(&mut self) -> Result<()> {
         self.stop.store(true, Ordering::Release);
-        if let Some(handle) = self.thread.take() {
-            handle
-                .join()
-                .map_err(|_| "updater fixture HTTP thread panicked")??;
+        let mut errors = Vec::new();
+        match self.active_stream.lock() {
+            Ok(active) => {
+                if let Some(stream) = active.as_ref()
+                    && let Err(error) = stream.shutdown(Shutdown::Both)
+                    && error.kind() != std::io::ErrorKind::NotConnected
+                {
+                    errors.push(format!("interrupt active fixture connection: {error}"));
+                }
+            }
+            Err(_) => errors.push("active fixture stream lock was poisoned".to_owned()),
         }
-        Ok(())
+        if let Some(handle) = self.thread.take() {
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(format!("fixture HTTP thread failed: {error}")),
+                Err(_) => errors.push("updater fixture HTTP thread panicked".to_owned()),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "updater fixture server shutdown failed: {}",
+                errors.join("; ")
+            )
+            .into())
+        }
     }
 }
 
@@ -245,14 +308,60 @@ fn handle_fixture_connection(
         }
         log.push(evidence);
     }
-    write!(
-        stream,
+    let response_header = format!(
         "HTTP/1.1 {status} {status_text}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n",
         body.len()
+    );
+    let response_deadline = Instant::now() + MAX_HTTP_RESPONSE_DURATION;
+    write_all_before_deadline(
+        &mut stream,
+        response_header.as_bytes(),
+        response_deadline,
+        |stream, timeout| stream.set_write_timeout(Some(timeout)),
     )?;
-    stream.write_all(&body)?;
-    stream.flush()?;
+    write_all_before_deadline(&mut stream, &body, response_deadline, |stream, timeout| {
+        stream.set_write_timeout(Some(timeout))
+    })?;
     let _ = stream.shutdown(Shutdown::Write);
+    Ok(())
+}
+
+fn write_all_before_deadline<W: Write>(
+    writer: &mut W,
+    bytes: &[u8],
+    deadline: Instant,
+    mut set_timeout: impl FnMut(&mut W, Duration) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "updater fixture response exceeded its absolute write deadline",
+            ));
+        }
+        set_timeout(writer, remaining.min(Duration::from_secs(2)))?;
+        match writer.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "updater fixture response writer accepted zero bytes",
+                ));
+            }
+            Ok(count) => {
+                written += count;
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "updater fixture response exceeded its absolute write deadline",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
     Ok(())
 }
 
@@ -376,6 +485,7 @@ fn parse_options(
     Ok((values, authorization))
 }
 
+#[cfg(windows)]
 fn required<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str> {
     options
         .get(name)
@@ -383,6 +493,7 @@ fn required<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a
         .ok_or_else(|| format!("updater fixture requires --{name}").into())
 }
 
+#[cfg(windows)]
 fn unique_suffix() -> String {
     let ticks = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1397,6 +1508,7 @@ fn sign_with_key(repository_root: &Path, key_path: &Path, artifact: &Path) -> Re
     require_file(&with_sig_extension(artifact), "detached updater signature")
 }
 
+#[cfg(windows)]
 fn removed_private_environment() -> Vec<String> {
     FIXTURE_ENV_REMOVALS
         .iter()
@@ -1404,18 +1516,21 @@ fn removed_private_environment() -> Vec<String> {
         .collect()
 }
 
+#[cfg(windows)]
 fn with_pub_extension(path: &Path) -> PathBuf {
     let mut output = path.as_os_str().to_owned();
     output.push(".pub");
     PathBuf::from(output)
 }
 
+#[cfg(windows)]
 fn with_sig_extension(path: &Path) -> PathBuf {
     let mut output = path.as_os_str().to_owned();
     output.push(".sig");
     PathBuf::from(output)
 }
 
+#[cfg(windows)]
 fn read_bounded_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file()
@@ -1432,6 +1547,7 @@ fn read_bounded_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(std::fs::read(path)?)
 }
 
+#[cfg(windows)]
 fn read_bounded_text(path: &Path, limit: usize) -> Result<String> {
     let bytes = read_bounded_file(path, limit as u64)?;
     String::from_utf8(bytes)
@@ -1448,6 +1564,7 @@ fn require_file(path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn sha256_file(path: &Path) -> Result<String> {
     crate::ci_artifacts::sha256_file(path)
 }
@@ -2492,8 +2609,72 @@ mod tests {
         let started = Instant::now();
         let stop = server.stop();
         assert!(started.elapsed() < Duration::from_secs(3));
-        assert!(stop.is_err(), "stalled partial headers must be reported");
+        assert!(
+            stop.is_ok(),
+            "stop must cancel the partial request cleanly: {stop:?}"
+        );
+        assert!(
+            server.thread.is_none(),
+            "stop must reap the listener thread"
+        );
         drop(stalled);
+    }
+
+    #[test]
+    fn fixture_response_writer_observes_an_absolute_deadline() {
+        struct SlowWriter {
+            writes: usize,
+        }
+        impl Write for SlowWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                thread::sleep(Duration::from_millis(20));
+                Ok(bytes.len().min(1))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = SlowWriter { writes: 0 };
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(55);
+        let error = write_all_before_deadline(&mut writer, b"response", deadline, |_, _| Ok(()))
+            .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(
+            writer.writes <= 4,
+            "writer must stop at the absolute deadline"
+        );
+    }
+
+    #[test]
+    fn fixture_server_shutdown_interrupts_a_slow_response_reader_and_reaps_thread() {
+        let body = vec![0x5a; 32 * 1024 * 1024];
+        let mut server = FixtureServer::start(b"manifest".to_vec(), body).unwrap();
+        let mut slow_reader = TcpStream::connect((Ipv4Addr::LOCALHOST, server.port())).unwrap();
+        slow_reader
+            .write_all(b"GET /candidate/update.exe HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .unwrap();
+
+        let request_deadline = Instant::now() + Duration::from_secs(3);
+        while server.requests().unwrap().is_empty() && Instant::now() < request_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(server.requests().unwrap().len(), 1);
+        thread::sleep(Duration::from_millis(75));
+
+        let started = Instant::now();
+        server.stop().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(
+            server.thread.is_none(),
+            "stop must positively reap the server thread"
+        );
+        drop(slow_reader);
     }
 
     #[test]
