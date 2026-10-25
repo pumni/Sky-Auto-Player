@@ -74,7 +74,7 @@ fn package_version(manifest_source: &str) -> Result<String> {
     Ok(version.to_owned())
 }
 
-fn capture_git_text(repository_root: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn capture_git_text(repository_root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repository_root)
@@ -170,10 +170,18 @@ pub(crate) fn run(repository_root: &Path, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("classify") => ci_classifier::run(&args[1..]),
         Some("candidate") => ci_candidate::run(repository_root, &args[1..]),
+        Some("bridge") if args.get(1).map(String::as_str) == Some("build-fixture") => {
+            crate::updater_fixture::build_bridge(repository_root, &args[1..])
+        }
         Some("bridge") => ci_bridge::run(&args[1..]),
+        Some("nsis") => crate::nsis_harness::run(repository_root, &args[1..]),
+        Some("updater-fixture") => crate::updater_fixture::run(repository_root, &args[1..]),
         Some("source-identity") => source_identity(repository_root, &args[1..]),
         Some(operation) => Err(format!("unknown CI operation: {operation}").into()),
-        None => Err("CI requires classify, candidate, bridge, or source-identity".into()),
+        None => Err(
+            "CI requires classify, candidate, bridge, nsis, updater-fixture, or source-identity"
+                .into(),
+        ),
     }
 }
 

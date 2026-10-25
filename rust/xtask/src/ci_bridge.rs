@@ -12,41 +12,41 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct BridgeManifest {
-    schema_version: u32,
-    source_sha: String,
-    version: String,
-    publisher: String,
-    identifier: String,
-    installer: String,
-    installer_sha256: String,
-    sentinel_id: String,
-    sentinel_content_sha256: String,
+pub(crate) struct BridgeManifest {
+    pub(crate) schema_version: u32,
+    pub(crate) source_sha: String,
+    pub(crate) version: String,
+    pub(crate) publisher: String,
+    pub(crate) identifier: String,
+    pub(crate) installer: String,
+    pub(crate) installer_sha256: String,
+    pub(crate) sentinel_id: String,
+    pub(crate) sentinel_content_sha256: String,
 }
 
 #[derive(Clone, Debug, Default)]
-struct BridgeBindings {
-    version: Option<String>,
-    publisher: Option<String>,
-    identifier: Option<String>,
-    sentinel_id: Option<String>,
-    sentinel_content_sha256: Option<String>,
+pub(crate) struct BridgeBindings {
+    pub(crate) version: Option<String>,
+    pub(crate) publisher: Option<String>,
+    pub(crate) identifier: Option<String>,
+    pub(crate) sentinel_id: Option<String>,
+    pub(crate) sentinel_content_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-struct BridgeProducer {
-    source_sha: String,
-    version: String,
-    publisher: String,
-    identifier: String,
-    sentinel_id: String,
-    sentinel_content_sha256: String,
+pub(crate) struct BridgeProducer {
+    pub(crate) source_sha: String,
+    pub(crate) version: String,
+    pub(crate) publisher: String,
+    pub(crate) identifier: String,
+    pub(crate) sentinel_id: String,
+    pub(crate) sentinel_content_sha256: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct BridgeContract {
-    manifest: BridgeManifest,
-    installer_sha256: String,
+pub(crate) struct BridgeContract {
+    pub(crate) manifest: BridgeManifest,
+    pub(crate) installer_sha256: String,
 }
 
 fn validate_publisher(value: &str) -> Result<()> {
@@ -105,7 +105,11 @@ fn read_manifest(path: &Path) -> Result<BridgeManifest> {
         .map_err(|error| format!("bridge.json is not valid locked JSON: {error}").into())
 }
 
-fn read_bridge(root: &Path, source_sha: &str, bindings: &BridgeBindings) -> Result<BridgeContract> {
+pub(crate) fn read_bridge(
+    root: &Path,
+    source_sha: &str,
+    bindings: &BridgeBindings,
+) -> Result<BridgeContract> {
     require_directory(root, "bridge artifact directory is missing")?;
     let root = fs::canonicalize(root)
         .map_err(|error| format!("bridge artifact directory is missing: {error}"))?;
@@ -231,7 +235,7 @@ fn read_bridge(root: &Path, source_sha: &str, bindings: &BridgeBindings) -> Resu
     })
 }
 
-fn create_bridge(
+pub(crate) fn create_bridge(
     bundle_dir: &Path,
     output_root: &Path,
     producer: &BridgeProducer,

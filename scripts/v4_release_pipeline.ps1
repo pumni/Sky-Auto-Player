@@ -55,7 +55,6 @@ $releaseContextName = "release-context.json"
 . (Join-Path $PSScriptRoot "v4_release_asset_upload.ps1")
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 . (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
-. (Join-Path $PSScriptRoot "v4_nsis_smoke_boundary.ps1")
 . (Join-Path $PSScriptRoot "v4_release_latest_policy.ps1")
 
 if (-not (Test-Path Variable:script:GitHubApiHandler)) {
@@ -1435,17 +1434,30 @@ function Invoke-BuildCandidate {
         "xtask", "updater-trust", "export-public-key", "--output", $canonicalPublicKey
     ) "canonical updater public-root export failed"
 
-    $fixtureTargetDir = Join-Path $root "previous-v4-fixture-target"
-    Invoke-Checked "pwsh" @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", (Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"),
-        "-FixtureTargetDir", $fixtureTargetDir,
-        "-CandidateInstallerPath", $frozenInstaller,
-        "-CandidateSignaturePath", $frozenSignature,
-        "-CandidateVersion", $Version,
-        "-CandidatePublicKeyPath", $canonicalPublicKey,
-        "-EvidencePath", (Join-Path $root "fixture-http-evidence.json")
-    ) "candidate updater qualification failed"
+    $candidateContractRoot = Join-Path $root "rust-updater-candidate-contract"
+    Invoke-Checked "cargo" @(
+        "xtask", "ci", "candidate", "create",
+        "--bundle-dir", $bundle,
+        "--public-key", $canonicalPublicKey,
+        "--calibration-binary", (Join-Path $repoRoot "desktop/src-tauri/resources/native_calibration.exe"),
+        "--output-root", $candidateContractRoot,
+        "--source-sha", $SourceSha
+    ) "Rust updater candidate contract creation failed"
+    $candidateContract = Read-JsonFile (Join-Path $candidateContractRoot "candidate.json")
+    $candidateInstallerPath = Join-Path $candidateContractRoot ([string]$candidateContract.installer)
+    if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { Fail "RUNNER_TEMP is unavailable for updater fixture isolation" }
+    $fixtureTargetDir = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-updater-fixture-" + [guid]::NewGuid().ToString("N"))
+    Invoke-Checked "cargo" @(
+        "xtask", "ci", "updater-fixture", "run",
+        "--candidate-root", $candidateContractRoot,
+        "--source-sha", $SourceSha,
+        "--fixture-root", $fixtureTargetDir,
+        "--evidence", (Join-Path $root "fixture-http-evidence.json"),
+        "--build-bridge",
+        "--bridge-version", "4.1.3",
+        "--bridge-publisher", "github",
+        "--allow-protected-release-runner"
+    ) "Rust candidate updater qualification failed"
 
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -1469,78 +1481,21 @@ function Invoke-BuildCandidate {
         Fail "Defender evidence did not bind a clean scan to the candidate installer"
     }
 
-    # Smoke & Catalog verification on installed candidate
-    $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
-    $app = Join-Path $installRoot "sky_desktop_shell.exe"
-    $uninstaller = Join-Path $installRoot "uninstall.exe"
-    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -RegistryStateMode FreshInstall
-    try {
-        New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-        $install = Start-Process -FilePath $frozenInstaller -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
-        if ($install.ExitCode -ne 0) { Fail "candidate current-user installer failed" }
-        $installedBuiltinRoot = Join-Path $installRoot "builtin-songs"
-        Invoke-Checked "cargo" @(
-            "xtask", "builtin-catalog", "verify-installed", "--root", $installedBuiltinRoot
-        ) "candidate installed built-in catalog verification failed"
-
-        $installedBuiltinFiles = @(Get-ChildItem -LiteralPath $installedBuiltinRoot -File -Recurse | Sort-Object FullName)
-        if ($installedBuiltinFiles.Count -eq 0) { Fail "candidate installed built-in catalog is empty" }
-        $installedBuiltinCatalogEvidence = [ordered]@{
-            verification = "cargo xtask builtin-catalog verify-installed"
-            root = "builtin-songs"
-            manifest_sha256 = (Get-FileHash -LiteralPath (Join-Path $installedBuiltinRoot "manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant()
-            file_count = $installedBuiltinFiles.Count
-            files = @($installedBuiltinFiles | ForEach-Object {
-                [ordered]@{
-                    path = [IO.Path]::GetRelativePath($installRoot, $_.FullName).Replace("\", "/")
-                    size = [int64]$_.Length
-                    sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-                }
-            })
-            manifest_validated = $true
-            file_set_exact = $true
-            sha256_verified = $true
-            songs_parseable = $true
-        }
-
-        $previousAppDataRoot = [Environment]::GetEnvironmentVariable("SKY_APP_DATA_ROOT", "Process")
-        $previousFreshSelfTest = [Environment]::GetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", "Process")
-        $freshAppData = Join-Path $root ("fresh-appdata-" + [guid]::NewGuid().ToString("N"))
-        try {
-            [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $freshAppData, "Process")
-            [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", "1", "Process")
-            $catalogSelftest = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
-            if ($catalogSelftest.ExitCode -ne 0) { Fail "fresh built-in catalog self-test failed" }
-            $freshSongsRoot = Join-Path $freshAppData "songs"
-            $freshUserSongs = @(
-                Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue
-            )
-            if ($freshUserSongs.Count -ne 0) { Fail "fresh built-in catalog self-test populated user songs" }
-        } finally {
-            if ($null -eq $previousAppDataRoot) { Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $previousAppDataRoot, "Process") }
-            if ($null -eq $previousFreshSelfTest) { Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", $previousFreshSelfTest, "Process") }
-            if (Test-Path -LiteralPath $freshAppData) { Remove-V4DirectoryWithRetry -Path $freshAppData }
-        }
-
-        # active-playback-install-rejected
-        $activity = Start-Process -FilePath $app -ArgumentList @("--selftest-update-active-playback") -WindowStyle Hidden -Wait -PassThru
-        if ($activity.ExitCode -ne 0) { Fail "playback-active update rejection self-test failed" }
-
-        $installedBuiltinCatalogProof = [ordered]@{
-            qualification = @(
-                "fresh-current-user-no-admin-install",
-                "previous-v4-to-exact-downloaded-candidate-update",
-                "active-playback-install-rejected",
-                "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
-                "fresh-appdata-built-in-user-composition"
-            )
-        }
-
-        $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
-        if ($uninstall.ExitCode -ne 0) { Fail "candidate uninstall failed" }
-    } finally {
-        Exit-V4NsisSmokeScope -Scope $smokeScope
-    }
+    # Rust owns fresh-install registry isolation, AppData routing, installed
+    # catalog/calibration/AuthentiCode checks, launch/self-tests, uninstall,
+    # and attempt-all cleanup on the protected release runner.
+    $smokeRoot = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-candidate-smoke-" + [guid]::NewGuid().ToString("N"))
+    Invoke-Checked "cargo" @(
+        "xtask", "ci", "nsis", "smoke",
+        "--installer", $candidateInstallerPath,
+        "--candidate-root", $candidateContractRoot,
+        "--source-sha", $SourceSha,
+        "--fixture-root", $smokeRoot,
+        "--registry-mode", "fresh-install",
+        "--evidence-root", $resolvedEvidenceDir,
+        "--authenticode-mode", "unsigned-zero-budget",
+        "--allow-protected-release-runner"
+    ) "Rust candidate NSIS install/launch/uninstall qualification failed"
 
     $candidateManifest = [ordered]@{
         schema_version = 1

@@ -264,6 +264,21 @@ fn classify_path(
         ]);
         return;
     }
+    if [
+        "rust/crates/sky_windows_security/src/process_tree.rs",
+        "rust/crates/sky_windows_security/src/registry.rs",
+        "rust/crates/sky_windows_security/src/win32.rs",
+    ]
+    .contains(&path)
+    {
+        classification.add_many(&[
+            "rust_required",
+            "desktop_native_required",
+            "package_required",
+            "release_required",
+        ]);
+        return;
+    }
     if path == "rust/rust-toolchain.toml" || path.starts_with(".cargo/") {
         classification.add_many(&[
             "rust_required",
@@ -306,6 +321,25 @@ fn classify_path(
             "desktop_native_required",
             "package_required",
             "updater_required",
+        ]);
+        return;
+    }
+    if path == "rust/xtask/src/nsis_harness.rs" || path == "rust/xtask/src/process.rs" {
+        classification.add_many(&[
+            "rust_required",
+            "desktop_native_required",
+            "package_required",
+            "release_required",
+        ]);
+        return;
+    }
+    if path == "rust/xtask/src/updater_fixture.rs" {
+        classification.add_many(&[
+            "rust_required",
+            "desktop_native_required",
+            "package_required",
+            "updater_required",
+            "release_required",
         ]);
         return;
     }
@@ -760,6 +794,39 @@ mod tests {
         assert_lanes(
             &classify_paths(["scripts/ci_build_updater_bridge.ps1".to_owned()]),
             &["updater_required"],
+        );
+
+        let nsis_owner = classify_paths(["rust/xtask/src/nsis_harness.rs".to_owned()]);
+        assert_lanes(
+            &nsis_owner,
+            &[
+                "rust_required",
+                "desktop_native_required",
+                "package_required",
+                "release_required",
+            ],
+        );
+        let updater_owner = classify_paths(["rust/xtask/src/updater_fixture.rs".to_owned()]);
+        assert_lanes(
+            &updater_owner,
+            &[
+                "rust_required",
+                "desktop_native_required",
+                "package_required",
+                "updater_required",
+                "release_required",
+            ],
+        );
+        let registry_owner =
+            classify_paths(["rust/crates/sky_windows_security/src/registry.rs".to_owned()]);
+        assert_lanes(
+            &registry_owner,
+            &[
+                "rust_required",
+                "desktop_native_required",
+                "package_required",
+                "release_required",
+            ],
         );
     }
 

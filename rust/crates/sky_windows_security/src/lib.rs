@@ -5,6 +5,8 @@ mod process_tree;
 mod win32;
 
 pub mod credential;
+#[cfg(windows)]
+pub mod registry;
 
 pub use process_tree::ProcessTree;
 

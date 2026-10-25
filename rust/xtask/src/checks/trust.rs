@@ -6,96 +6,54 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-fn v4_production_calibration_gate_contract(orchestrator: &str) -> Result<()> {
-    let smoke_start = orchestrator
-        .find("# 10. Install / Smoke Test")
-        .ok_or("v4 production release orchestrator is missing its install smoke section")?;
-    let evidence_start = orchestrator
-        .find("# 11. Emit Deterministic Machine-Readable Evidence")
-        .ok_or("v4 production release orchestrator is missing its evidence boundary")?;
-    if evidence_start <= smoke_start {
-        return Err("v4 production calibration gate must precede qualification evidence".into());
-    }
-    let smoke = &orchestrator[smoke_start..evidence_start];
-    let staged_gate_start = smoke
-        .find("# Production-only staged calibration gate.")
-        .ok_or("production release must verify the staged calibration resource")?;
-    let install_position = smoke
-        .find("Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot")
-        .ok_or("production release smoke must install the exact NSIS candidate")?;
-    let installed_gate_start = smoke
-        .find("# Production-only installed calibration gate")
-        .ok_or("production release must verify installed native calibration")?;
-    let launch_position = smoke
-        .find("Start-Process -FilePath $appPath")
-        .ok_or("production release smoke must launch the installed application")?;
-    if staged_gate_start >= install_position
-        || install_position >= installed_gate_start
-        || installed_gate_start >= launch_position
+fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
+    let qualification = harness
+        .split_once("fn qualify_package(")
+        .map(|(_, body)| body)
+        .ok_or("Rust NSIS owner is missing its package qualification function")?;
+    let qualification = qualification
+        .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
+        .map(|(body, _)| body)
+        .ok_or("Rust package qualification body is not bounded")?;
+    let staged_gate = qualification
+        .find("&staged_calibration_root")
+        .ok_or("Rust NSIS owner must verify the staged calibration resource")?;
+    let install_position = qualification
+        .find("run_installer(\n        installer,")
+        .ok_or("Rust NSIS owner must install the exact candidate")?;
+    let installed_gate = qualification
+        .find("verify_calibration_artifact(\n        repository_root,\n        &install_root")
+        .ok_or("Rust NSIS owner must verify installed native calibration")?;
+    let launch_position = qualification
+        .find("launch_smoke(scope, &app")
+        .ok_or("Rust NSIS owner must launch the installed application")?;
+    if staged_gate >= install_position
+        || install_position >= installed_gate
+        || installed_gate >= launch_position
     {
-        return Err(
-            "production calibration verification must validate the staged child, install, verify the installed child, then launch".into(),
-        );
+        return Err("calibration qualification must verify staged bytes, install, verify installed bytes, then launch".into());
     }
 
-    let staged_gate = &smoke[staged_gate_start..install_position];
-    for marker in [
-        "if (-not $InternalTestFixture) {",
-        r#"Join-Path $repoRoot "desktop\src-tauri\resources\native_calibration.exe""#,
-        "Test-Path -LiteralPath $calibrationResourcePath -PathType Leaf",
-        "$calibrationResource.Attributes -band [IO.FileAttributes]::ReparsePoint",
-        "$calibrationResourceSize = [long]$calibrationResource.Length",
-        "Get-FileHash -LiteralPath $calibrationResourcePath -Algorithm SHA256",
-        "$calibrationResourceRoot = Split-Path -Parent $calibrationResourcePath",
-        "Invoke-CalibrationPayloadVerification",
-        "-InstallRoot $calibrationResourceRoot",
-        "-ExpectedSize $calibrationResourceSize",
-        "-ExpectedSha256 $calibrationResourceSha256",
-    ] {
-        if !staged_gate.contains(marker) {
-            return Err(format!(
-                "production staged calibration verification is missing required marker: {marker}"
-            )
-            .into());
-        }
-    }
-
-    let installed_gate = &smoke[installed_gate_start..launch_position];
-    for marker in [
-        "if (-not $InternalTestFixture) {",
-        "Invoke-CalibrationPayloadVerification",
-        "-InstallRoot $installRoot",
-        "-ExpectedSize $calibrationResourceSize",
-        "-ExpectedSha256 $calibrationResourceSha256",
-        "-Context \"Installed calibration verification\"",
-    ] {
-        if !installed_gate.contains(marker) {
-            return Err(format!(
-                "production installed calibration verification is missing required marker: {marker}"
-            )
-            .into());
-        }
-    }
-
-    let verifier = orchestrator
-        .split_once("function Invoke-CalibrationPayloadVerification")
+    let verifier = harness
+        .split_once("fn verify_calibration_artifact(")
         .map(|(_, remainder)| remainder)
-        .ok_or("production release is missing the installed calibration verifier adapter")?;
+        .ok_or("Rust NSIS owner is missing its typed calibration verifier")?;
     let verifier = verifier
-        .split_once("\nfunction ")
+        .split_once("\n#[cfg(windows)]")
         .map(|(function, _)| function)
-        .ok_or("installed calibration verifier adapter must be a bounded function")?;
+        .ok_or("Rust calibration verifier must be a bounded Windows owner function")?;
     for marker in [
-        "cargo xtask calibration verify-installed",
-        "--install-root $InstallRoot",
-        "--expected-size $ExpectedSize",
-        "--expected-sha256 $ExpectedSha256",
-        "$verificationExitCode = $LASTEXITCODE",
-        "if ($verificationExitCode -ne 0)",
+        "verify-installed",
+        "--install-root",
+        "--expected-size",
+        "candidate.manifest.calibration_binary_size",
+        "--expected-sha256",
+        "candidate.manifest.calibration_binary_sha256",
+        "crate::calibration::run(repository_root, &args)",
     ] {
         if !verifier.contains(marker) {
             return Err(format!(
-                "production installed calibration verifier adapter is missing required marker: {marker}"
+                "Rust installed calibration verifier is missing required marker: {marker}"
             )
             .into());
         }
@@ -151,16 +109,19 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "scripts/test_v4_authenticode_integrity.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
-        "scripts/ci_tauri_update_e2e.ps1",
+        "cargo xtask ci updater-fixture run",
+        "cargo xtask ci nsis smoke",
+        "--allow-hosted-disposable-runner",
         "cargo xtask ci bridge validate",
         "scripts/ci_require_windows_tools.ps1",
         "TimeoutSeconds 30",
         "qualify packaged Tauri updater rotation",
         "cargo xtask ci candidate validate",
-        "CandidateInstallerPath",
-        "CandidateSignaturePath",
-        "CandidateVersion",
-        "CandidatePublicKeyPath",
+        "--candidate-root",
+        "--bridge-root",
+        "--source-sha",
+        "--fixture-root",
+        "--allow-hosted-disposable-runner",
         "cargo xtask sbom generate",
         "cargo xtask sbom verify",
         "workflow_dispatch:",
@@ -196,40 +157,40 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
+    let updater_fixture = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))?;
     for marker in [
-        "Updater N-to-N+1 preservation",
-        "Updater N-to-N+1 resource replacement",
-        "catalog-sentinel",
-        "SKY_APP_DATA_ROOT",
+        "127.0.0.1",
+        "loopback fixture returned",
+        "validate_manifest_bytes",
+        "response_bytes_are_exact_source_bytes",
+        "body_sha256",
+        "content_length",
+        "application/octet-stream",
         "updater-preserved-user.json",
-        "user_song_sha256_before",
+        "user_song_sha256_unchanged",
         "built_in_manifest_sha256_before",
         "built_in_manifest_sha256_after",
         "selected_builtin_id_before",
         "selected_builtin_id_after",
         "selected_builtin_content_sha256_before",
         "selected_builtin_content_sha256_after",
-        "Restore-CanonicalBuiltinCatalog",
-        "Clear-FixtureResourceStaging",
         "source_tree_restore",
-        "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
-        "candidateInstallerSha256",
-        "oldSigningInstallerSha256",
-        "Get-HigherSemVer",
-        "preservedBridgeRoot",
-        "--selftest-update-fixture-new-only",
-        "selftest-update-fixture-port",
-        "selftest-update-fixture-public-key",
-        "negativeRequestStart",
-        "negativeManifestRequests",
-        "negativeCandidateRequests",
+        "crate::builtin_catalog::run",
+        "candidate.installer_sha256",
+        "old-root detached-signature operation changed candidate installer bytes",
+        "git",
+        "worktree",
+        "--detach",
+        "preserved_bridge_root",
         "n_to_n_plus_1_installer_sha256",
-        "old-root",
-        "old_root_rejection_copy_matches",
-        "BridgeRootPath",
-        "BridgeInstallerPath",
-        "cargo xtask ci bridge validate",
+        "old_root_rejection",
+        "assert_migration_registry_roots_absent",
+        "--selftest-update-fixture-new-only",
+        "--selftest-update-fixture-port",
+        "--selftest-update-fixture-public-key",
+        "write_http_evidence",
+        "MAX_HTTP_REQUESTS",
+        "source SHA must match the checked-out Git HEAD",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -509,6 +470,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "unsigned-zero-budget",
         "Invoke-PrePackagingStaleOutputPurge",
         "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
+        "cargo xtask ci nsis smoke",
+        "--allow-protected-release-runner",
     ] {
         if !orchestrator.contains(marker) {
             return Err(format!(
@@ -517,7 +480,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    v4_production_calibration_gate_contract(&orchestrator)?;
+    let nsis_harness = fs::read_to_string(root.join("rust/xtask/src/nsis_harness.rs"))?;
+    v4_production_calibration_gate_contract(&nsis_harness)?;
     let installed_calibration_verifier =
         fs::read_to_string(root.join("rust/xtask/src/calibration.rs"))?;
     for marker in [
@@ -726,15 +690,19 @@ mod tests {
 
     #[test]
     fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
-        let source = include_str!("../../../../scripts/orchestrate_v4_production_release.ps1");
+        let source = include_str!("../nsis_harness.rs");
         v4_production_calibration_gate_contract(source)
             .expect("production release must verify staged and installed calibration");
 
-        let gate_start = source
-            .find("# Production-only installed calibration gate")
+        let install_start = source
+            .find("run_installer(\n        installer,")
+            .expect("installer invocation marker");
+        let gate_start = source[install_start..]
+            .find("verify_calibration_artifact(\n        repository_root,\n        &install_root")
+            .map(|offset| install_start + offset)
             .expect("installed calibration gate marker");
         let launch_start = source[gate_start..]
-            .find("Start-Process -FilePath $appPath")
+            .find("launch_smoke(scope, &app")
             .map(|offset| gate_start + offset)
             .expect("application launch marker");
         let installed_gate = source[gate_start..launch_start].to_owned();
@@ -748,7 +716,7 @@ mod tests {
 
         let mut moved_gate = removed_gate;
         let evidence_start = moved_gate
-            .find("# 11. Emit Deterministic Machine-Readable Evidence")
+            .find("pub(crate) fn assert_uninstall_registration_absent")
             .expect("qualification evidence boundary");
         let evidence_line_end = moved_gate[evidence_start..]
             .find('\n')

@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pipelinePath = Join-Path $PSScriptRoot "v4_release_pipeline.ps1"
+$orchestratorPath = Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1"
 
 # CI pull_request jobs expose a merge SHA through GITHUB_SHA, while these mocked
 # states must model production's exact checked-out source SHA. Keep the test
@@ -17,15 +18,16 @@ if ($fixtureGithubSha -notmatch '^[0-9a-fA-F]{40}$') {
 }
 $env:GITHUB_SHA = $fixtureGithubSha
 
-$fixtureWrapperPath = Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"
-$fixtureCorePath = Join-Path $PSScriptRoot "ci_tauri_update_e2e_core.ps1"
+$updaterFixturePath = Join-Path $repoRoot "rust/xtask/src/updater_fixture.rs"
+$nsisHarnessPath = Join-Path $repoRoot "rust/xtask/src/nsis_harness.rs"
 $uploadHelperPath = Join-Path $PSScriptRoot "v4_release_asset_upload.ps1"
 $workflowPath = Join-Path $repoRoot ".github/workflows/release-v4.yml"
 $draftWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4.yml"
 $draftLookupPath = Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1"
 $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
-$fixtureWrapper = Get-Content -LiteralPath $fixtureWrapperPath -Raw
-$fixtureCore = Get-Content -LiteralPath $fixtureCorePath -Raw
+$orchestrator = Get-Content -LiteralPath $orchestratorPath -Raw
+$updaterFixture = Get-Content -LiteralPath $updaterFixturePath -Raw
+$nsisHarness = Get-Content -LiteralPath $nsisHarnessPath -Raw
 $uploadHelper = Get-Content -LiteralPath $uploadHelperPath -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $draftWorkflow = Get-Content -LiteralPath $draftWorkflowPath -Raw
@@ -36,162 +38,25 @@ $latestGuard = (Get-Content -LiteralPath $latestGuardPath -Raw) + (Get-Content -
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
 
-. (Join-Path $PSScriptRoot 'updater_candidate_source_identity.ps1')
-
-function Get-UpdaterRegressionState {
-    $cargoPath = Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml'
-    $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
-    $status = @(& git status --porcelain --untracked-files=all 2>$null)
-    if ($LASTEXITCODE -ne 0) { Fail 'could not capture Git worktree state for updater source identity regression' }
-    [pscustomobject]@{
-        CargoSha = Get-UpdaterFileSha256 -Bytes ([IO.File]::ReadAllBytes($cargoPath))
-        LockSha = Get-UpdaterFileSha256 -Bytes ([IO.File]::ReadAllBytes($lockPath))
-        GitStatus = $status -join "`n"
-    }
-}
-
-function Assert-UpdaterRegressionState($Before, [string]$Scenario) {
-    $after = Get-UpdaterRegressionState
-    if ($after.CargoSha -cne $Before.CargoSha -or
-        $after.LockSha -cne $Before.LockSha -or
-        $after.GitStatus -cne $Before.GitStatus) {
-        Fail "$Scenario changed tracked Cargo manifest bytes or Git worktree state"
-    }
-}
-
 $versionOutput = @(& cargo --quiet xtask version check 2>&1)
 if ($LASTEXITCODE -ne 0) { Fail "Rust version authority failed before source-identity tests: $($versionOutput -join ' ')" }
 $versionMatch = [regex]::Match(($versionOutput -join [Environment]::NewLine), '(?m)^version=(.+)$')
 if (-not $versionMatch.Success) { Fail 'Rust version authority did not return the current package version' }
 $candidateSourceVersion = $versionMatch.Groups[1].Value.Trim()
-$candidateSourceIdentity = Get-CandidateSourceIdentity `
-    -RepoRoot $repoRoot `
-    -CandidateVersion $candidateSourceVersion
-$sourceIdentityTempRoot = Join-Path ([IO.Path]::GetTempPath()) ('sky-updater-source-identity-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $sourceIdentityTempRoot -Force | Out-Null
-try {
-    $candidateInstallerName = "Sky Auto Player_$candidateSourceVersion`_x64-setup.exe"
-    $candidateInstallerPath = Join-Path $sourceIdentityTempRoot $candidateInstallerName
-    $candidateSignaturePath = "$candidateInstallerPath.sig"
-    $candidatePublicKeyPath = Join-Path $sourceIdentityTempRoot 'candidate-public-key.txt'
-    $fixtureTargetPath = Join-Path $sourceIdentityTempRoot 'fixture-target'
-    [IO.File]::WriteAllBytes($candidateInstallerPath, [byte[]](0x53, 0x4B, 0x59, 0x34))
-    [IO.File]::WriteAllText($candidateSignaturePath, 'frozen test signature')
-    [IO.File]::WriteAllText($candidatePublicKeyPath, 'frozen test public key')
-    $candidateCoreArguments = @{
-        FixtureTargetDir = $fixtureTargetPath
-        CandidateInstallerPath = $candidateInstallerPath
-        CandidateSignaturePath = $candidateSignaturePath
-        CandidateVersion = $candidateSourceVersion
-        CandidatePublicKeyPath = $candidatePublicKeyPath
-    }
-    $sourceStateBeforePass = Get-UpdaterRegressionState
-    $passCallbackState = @{ Invoked = $false }
-    $passResult = Invoke-CandidateUpdaterFixture `
-        -RepoRoot $repoRoot `
-        -CoreArguments $candidateCoreArguments `
-        -ProvidedBridge $false `
-        -HistoricalBridgeVersion '4.1.3' `
-        -InvokeCore {
-            param([hashtable]$CoreArguments)
-            $passCallbackState.Invoked = $true
-            if ($CoreArguments.CandidateVersion -cne $candidateSourceVersion -or
-                $CoreArguments.CandidateSourceSha -cne $candidateSourceIdentity.SourceSha -or
-                $CoreArguments.ContainsKey('BridgeRootPath') -or
-                -not (Test-Path -LiteralPath $CoreArguments.CandidateInstallerPath -PathType Leaf) -or
-                -not (Test-Path -LiteralPath $CoreArguments.CandidateSignaturePath -PathType Leaf)) {
-                Fail 'production fallback did not pass the frozen candidate identity without bridge inputs'
-            }
-            $headIdentity = Assert-CandidateSourceIdentity `
-                -RepoRoot $repoRoot `
-                -CandidateVersion $CoreArguments.CandidateVersion `
-                -SourceSha $CoreArguments.CandidateSourceSha
-            if ($headIdentity.Version -cne $candidateSourceVersion) {
-                Fail 'candidate identity did not resolve from the checked-out Git HEAD'
-            }
-            $bridgeVersionOutput = @(& cargo --quiet xtask version check --version '4.1.3' 2>&1)
-            if ($LASTEXITCODE -ne 0) { Fail 'temporary bridge Cargo manifest did not retain the requested historical version' }
-            $bridgeCargoVersionMatch = [regex]::Match(($bridgeVersionOutput -join [Environment]::NewLine), '(?m)^version=(.+)$')
-            if (-not $bridgeCargoVersionMatch.Success) { Fail 'Rust version authority did not read the historical bridge manifest version' }
-            $bridgeCargoVersion = $bridgeCargoVersionMatch.Groups[1].Value.Trim()
-            $bridgeLock = [IO.File]::ReadAllText((Join-Path $repoRoot 'rust/Cargo.lock'))
-            $bridgeLockMatch = [regex]::Match($bridgeLock, '(?s)\[\[package\]\]\r?\nname = "sky_desktop_shell"\r?\nversion = "([^"]+)"')
-            if ($bridgeCargoVersion -cne '4.1.3' -or -not $bridgeLockMatch.Success -or $bridgeLockMatch.Groups[1].Value -cne '4.1.3') {
-                Fail 'historical bridge source did not remain pinned to its explicit 4.1.3 identity'
-            }
-            return 'fallback-candidate-pass'
-        }.GetNewClosure()
-    if (-not $passCallbackState.Invoked -or @($passResult) -notcontains 'fallback-candidate-pass') {
-        Fail 'production no-bridge candidate fallback did not complete its executable regression'
-    }
-    Assert-UpdaterRegressionState $sourceStateBeforePass 'successful updater fallback'
-
-    $failureCallbackState = @{ Invoked = $false }
-    $sourceStateBeforeFailure = Get-UpdaterRegressionState
-    try {
-        Invoke-CandidateUpdaterFixture `
-            -RepoRoot $repoRoot `
-            -CoreArguments $candidateCoreArguments `
-            -ProvidedBridge $false `
-            -HistoricalBridgeVersion '4.1.3' `
-            -InvokeCore {
-                param([hashtable]$CoreArguments)
-                $failureCallbackState.Invoked = $true
-                [void](Assert-CandidateSourceIdentity `
-                    -RepoRoot $repoRoot `
-                    -CandidateVersion $CoreArguments.CandidateVersion `
-                    -SourceSha $CoreArguments.CandidateSourceSha)
-                throw 'expected updater fixture failure regression'
-            }.GetNewClosure()
-        Fail 'updater fallback failure regression unexpectedly succeeded'
-    } catch {
-        if ($_.Exception.Message -notmatch 'expected updater fixture failure regression') { throw }
-    }
-    if (-not $failureCallbackState.Invoked) { Fail 'updater fallback failure regression did not reach the core invocation' }
-    Assert-UpdaterRegressionState $sourceStateBeforeFailure 'failed updater fallback'
-
-    $versionMatch = [regex]::Match($candidateSourceVersion, '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$')
-    if (-not $versionMatch.Success -or [int64]$versionMatch.Groups[3].Value -eq [int64]::MaxValue) {
-        Fail 'candidate source version cannot produce a deterministic mismatch regression'
-    }
-    $mismatchedCandidateVersion = '{0}.{1}.{2}' -f $versionMatch.Groups[1].Value, $versionMatch.Groups[2].Value, ([int64]$versionMatch.Groups[3].Value + 1)
-    $mismatchedCoreArguments = @{}
-    foreach ($name in $candidateCoreArguments.Keys) { $mismatchedCoreArguments[$name] = $candidateCoreArguments[$name] }
-    $mismatchedCoreArguments.CandidateVersion = $mismatchedCandidateVersion
-    $sourceStateBeforeMismatch = Get-UpdaterRegressionState
-    $mismatchCallbackState = @{ Invoked = $false }
-    try {
-        Invoke-CandidateUpdaterFixture `
-            -RepoRoot $repoRoot `
-            -CoreArguments $mismatchedCoreArguments `
-            -ProvidedBridge $false `
-            -HistoricalBridgeVersion '4.1.3' `
-            -InvokeCore {
-                param([hashtable]$CoreArguments)
-                $mismatchCallbackState.Invoked = $true
-            }.GetNewClosure()
-        Fail 'mismatched candidate version was accepted by updater fallback'
-    } catch {
-        if ($_.Exception.Message -notmatch 'does not match the release manifest at Git HEAD') { throw }
-    }
-    if ($mismatchCallbackState.Invoked) { Fail 'mismatched candidate reached the updater core callback' }
-    Assert-UpdaterRegressionState $sourceStateBeforeMismatch 'rejected updater candidate mismatch'
-
-    $sourceStateBeforeDirectCoreMismatch = Get-UpdaterRegressionState
-    $directCoreArguments = @{}
-    foreach ($name in $candidateCoreArguments.Keys) { $directCoreArguments[$name] = $candidateCoreArguments[$name] }
-    $directCoreArguments.CandidateVersion = $mismatchedCandidateVersion
-    try {
-        & $fixtureCorePath @directCoreArguments
-        Fail 'direct updater core invocation accepted a source-mismatched candidate'
-    } catch {
-        if ($_.Exception.Message -notmatch 'source-mismatched SemVer') { throw }
-    }
-    Assert-UpdaterRegressionState $sourceStateBeforeDirectCoreMismatch 'direct updater core mismatch rejection'
-    Write-Host "Updater candidate source identity regression: PASS (candidate=$candidateSourceVersion; historical bridge 4.1.3; pass/fail restoration; direct mismatch rejection)"
-} finally {
-    Remove-Item -LiteralPath $sourceIdentityTempRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
+$sourceIdentityOutput = @(& cargo --quiet xtask ci source-identity `
+    --candidate-version $candidateSourceVersion `
+    --source-sha $fixtureGithubSha `
+    --require-worktree-version 2>&1)
+if ($LASTEXITCODE -ne 0) { Fail "Rust candidate source identity rejected exact HEAD: $($sourceIdentityOutput -join ' ')" }
+$versionParts = [regex]::Match($candidateSourceVersion, '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$')
+if (-not $versionParts.Success) { Fail 'current package version cannot produce a mismatch fixture' }
+$mismatchedCandidateVersion = '{0}.{1}.{2}' -f $versionParts.Groups[1].Value, $versionParts.Groups[2].Value, ([int64]$versionParts.Groups[3].Value + 1)
+$mismatchOutput = @(& cargo --quiet xtask ci source-identity `
+    --candidate-version $mismatchedCandidateVersion `
+    --source-sha $fixtureGithubSha `
+    --require-worktree-version 2>&1)
+if ($LASTEXITCODE -eq 0) { Fail 'Rust candidate source identity accepted a version mismatch' }
+Write-Host "Rust candidate source identity regression: PASS (exact HEAD/version accepted; mismatched version rejected)"
 
 foreach ($source in @(
     [pscustomobject]@{ Name = "release workflow"; Text = $workflow },
@@ -313,27 +178,6 @@ function Test-DraftLookupFallback {
 
 Test-DraftLookupFallback
 
-function Test-StrictModeEmptyFreshUserSongs {
-    Set-StrictMode -Version Latest
-    $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-empty-fresh-songs-test-" + [guid]::NewGuid().ToString("N"))
-    $freshSongsRoot = Join-Path $testRoot "songs"
-    try {
-        New-Item -ItemType Directory -Path $freshSongsRoot -Force | Out-Null
-        $freshUserSongs = @(
-            Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue
-        )
-        if ($freshUserSongs.Count -ne 0) {
-            Fail "empty fresh songs directory unexpectedly contained user songs"
-        }
-    } finally {
-        if (Test-Path -LiteralPath $testRoot) {
-            Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-Test-StrictModeEmptyFreshUserSongs
-
 function Get-SanitizedReleaseProbeOutput {
     param(
         [AllowEmptyString()]
@@ -365,29 +209,42 @@ function Get-SanitizedReleaseProbeOutput {
     return $sanitized.Trim()
 }
 
-if ($fixtureWrapper.Contains("BundleDir") -or $fixtureCore.Contains("BundleDir")) {
-    Fail "updater fixture must not use the ambiguous BundleDir contract"
-}
 foreach ($marker in @(
-    "FixtureTargetDir",
-    "CARGO_TARGET_DIR",
-    "dist/bundle/nsis",
-    "Downloaded candidate and bridge paths must remain outside the throwaway fixture target directory",
-    "Get-DisposableLoopbackPort",
+    "build_bridge_internal",
+    "git",
+    "worktree",
+    "--detach",
+    "tauri-update-fixture",
+    "FixtureServer",
+    "127.0.0.1",
     "selftest-update-fixture-port",
     "selftest-update-fixture-public-key",
-    "Assert-ExactHttpResponse",
-    "fixture-http-evidence.json",
+    "assert_migration_registry_roots_absent",
+    "n_to_n_plus_1_installer_sha256",
+    "old_root_rejection",
     "body_sha256",
     "windows-x86_64",
     "/candidate/update.exe"
 )) {
-    if (-not $fixtureCore.Contains($marker)) {
-        Fail "updater fixture topology marker is missing: $marker"
+    if (-not $updaterFixture.Contains($marker)) {
+        Fail "Rust updater fixture topology marker is missing: $marker"
     }
 }
-if (-not $pipeline.Contains("FixtureTargetDir")) {
-    Fail "production qualification must pass an explicit fixture target directory"
+foreach ($marker in @('"xtask", "ci", "updater-fixture", "run"', "--build-bridge", "--allow-protected-release-runner")) {
+    if (-not $pipeline.Contains($marker)) {
+        Fail "release pipeline must delegate NSIS/updater fixture ownership to Rust: $marker"
+    }
+}
+foreach ($marker in @(
+    'cargo xtask ci candidate create',
+    'cargo xtask ci nsis smoke',
+    '--registry-mode',
+    'fresh-install',
+    '--allow-protected-release-runner'
+)) {
+    if (-not $orchestrator.Contains($marker)) {
+        Fail "production orchestrator must call the guarded Rust NSIS owner: $marker"
+    }
 }
 foreach ($marker in @(
     'Verify isolated production runner boundary',
@@ -553,7 +410,9 @@ foreach ($marker in @(
     'published tags are immutable', 'git/refs/tags/$Tag',
     'GitHub''s successful DELETE endpoints return an empty body',
     'Get-FileHash', 'verify-signature', 'sbom', 'verify-tauri-bundle',
-    'current-user', 'active-playback-install-rejected', 'upload_url',
+    '"xtask", "ci", "candidate", "create"', '"xtask", "ci", "updater-fixture", "run"',
+    '--build-bridge', '--allow-protected-release-runner',
+    'fixture-http-evidence.json', 'upload_url',
     'Assert-ImmutableRelease $published', 'repository release is not marked immutable',
     'V4 immutable publication guard self-test', 'immutable=false rejected',
     'V4 exact public asset-set self-test', 'missing and extra assets rejected',
@@ -563,19 +422,7 @@ foreach ($marker in @(
     'V4 GitHub release payload self-test',
     'draft false; stable publish true; beta publish false',
     'Start-MpScan',
-    'previous-v4-to-exact-downloaded-candidate-update',
-    'selftest-update-active-playback', 'scan_performed',
-    'cargo xtask builtin-catalog verify-installed',
-    'installed-built-in-catalog-exact-manifest-file-set-sha-parseability',
-    'manifest_validated', 'file_set_exact', 'sha256_verified', 'songs_parseable',
-    'fresh-appdata-built-in-user-composition',
-    'SKY_BUILTIN_CATALOG_FRESH_SELFTEST',
-    'fresh built-in catalog self-test',
-    'previousFreshSelfTest',
-    'if ($null -eq $previousAppDataRoot)',
-    'Remove-Item Env:SKY_APP_DATA_ROOT',
-    'if ($null -eq $previousFreshSelfTest)',
-    'Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST',
+    'scan_performed',
     'v4_updater_credential_broker.ps1',
     'docs/releases/v$Version.md',
     'release notes path must match the requested version',
@@ -583,6 +430,20 @@ foreach ($marker in @(
     '(?m)^# [^\r\n]+(?=\r?$)'
 )) {
     if (-not $pipeline.Contains($marker)) { Fail "pipeline marker is missing: $marker" }
+}
+foreach ($marker in @(
+    'RegistryMode::FreshInstall',
+    'SKY_BUILTIN_CATALOG_FRESH_SELFTEST',
+    'assert_user_songs_empty',
+    '--selftest-update-active-playback',
+    'run_owned_app',
+    'launch_smoke',
+    'run_uninstaller',
+    'assert_uninstall_registration_absent',
+    'scope.cleanup()',
+    'PRIVATE_ENVIRONMENT_NAMES'
+)) {
+    if (-not $nsisHarness.Contains($marker)) { Fail "Rust NSIS owner marker is missing: $marker" }
 }
 if ($pipeline.Contains('repos/$repository/immutable-releases')) {
     Fail "repository policy validation must not call the administration-only immutable-releases endpoint"

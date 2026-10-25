@@ -15,28 +15,28 @@ const PUBLIC_KEY_FILE: &str = "updater-public-key.pub";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CandidateManifest {
-    schema_version: u32,
-    source_sha: String,
-    version: String,
-    calibration_binary: String,
-    calibration_binary_size: u64,
-    calibration_binary_sha256: String,
-    calibration_binary_architecture: String,
-    installer: String,
-    installer_sha256: String,
-    updater_signature: String,
-    updater_signature_sha256: String,
-    updater_public_key: String,
-    updater_public_key_sha256: String,
+pub(crate) struct CandidateManifest {
+    pub(crate) schema_version: u32,
+    pub(crate) source_sha: String,
+    pub(crate) version: String,
+    pub(crate) calibration_binary: String,
+    pub(crate) calibration_binary_size: u64,
+    pub(crate) calibration_binary_sha256: String,
+    pub(crate) calibration_binary_architecture: String,
+    pub(crate) installer: String,
+    pub(crate) installer_sha256: String,
+    pub(crate) updater_signature: String,
+    pub(crate) updater_signature_sha256: String,
+    pub(crate) updater_public_key: String,
+    pub(crate) updater_public_key_sha256: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct CandidateContract {
-    manifest: CandidateManifest,
-    installer_sha256: String,
-    signature_sha256: String,
-    public_key_sha256: String,
+pub(crate) struct CandidateContract {
+    pub(crate) manifest: CandidateManifest,
+    pub(crate) installer_sha256: String,
+    pub(crate) signature_sha256: String,
+    pub(crate) public_key_sha256: String,
 }
 
 fn project_version(root: &Path) -> Result<String> {
@@ -66,7 +66,7 @@ fn read_manifest(path: &Path) -> Result<CandidateManifest> {
         .map_err(|error| format!("candidate.json is not the locked contract: {error}").into())
 }
 
-fn read_candidate(
+pub(crate) fn read_candidate(
     root: &Path,
     expected_source: &str,
     expected_version: &str,

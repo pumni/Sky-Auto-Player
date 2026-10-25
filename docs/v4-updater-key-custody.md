@@ -263,10 +263,18 @@ the two-phase Bridge/Cutover model:
 
 ### Rehearsal and Evidence
 
-Rotation procedures are validated automatically using:
+Rotation procedures are validated by the disposable Windows updater job in
+`.github/workflows/ci.yml`. The Rust harness consumes the exact current
+candidate and bridge artifacts; local development uses synthetic tests and
+does not install packages into the workstation profile. The former PowerShell
+entrypoint was retired after its CI/release callers moved to Rust.
 
 ```powershell
-pwsh scripts/test_v4_updater_key_rotation.ps1
-$fixtureTarget = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-updater-fixture-target"
-pwsh scripts/ci_tauri_update_e2e.ps1 -FixtureTargetDir $fixtureTarget
+cargo xtask ci candidate validate --candidate-root $env:SKY_CANDIDATE_ROOT --source-sha $env:GITHUB_SHA
+cargo xtask ci bridge validate --bridge-root $env:SKY_BRIDGE_ROOT --source-sha $env:GITHUB_SHA
+cargo xtask ci updater-fixture run --candidate-root $env:SKY_CANDIDATE_ROOT --bridge-root $env:SKY_BRIDGE_ROOT --source-sha $env:GITHUB_SHA --fixture-root (Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))) --allow-hosted-disposable-runner
 ```
+
+These commands perform real install/update operations and must run only in the
+guarded disposable CI job or the exact protected release workflow. They are
+not workstation acceptance commands.

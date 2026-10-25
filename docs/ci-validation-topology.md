@@ -117,23 +117,55 @@ for representative multi-path and unknown-path inputs.
 ## Rust-owned CI, artifact, and calibration tools
 
 Rust owns deterministic CI classification, candidate and bridge schemas,
-artifact inventory and digest checks, PE inspection, and native calibration
-build/stage/installed verification. The workflow still uses PowerShell where
-it operates Windows tooling, runs a Tauri fixture, installs/uninstalls NSIS,
-or restores fixture source bytes.
+artifact inventory and digest checks, PE inspection, native calibration, and
+the isolated NSIS/updater fixture lifecycle. PowerShell remains for Windows
+tool installation, Authenticode provider/tool invocation, and release
+transaction orchestration where those are still active adapters.
 
 | PowerShell responsibility before Wave A | Rust owner after Wave A | Remaining consumer or adapter |
 | --- | --- | --- |
 | `ci_classify.ps1` and `test_ci_classify.ps1` | `rust/xtask/src/ci_classifier.rs` plus unit tests | `changes` job calls `cargo xtask ci classify`; event base/head SHAs and manual full dispatch are explicit. |
 | `ci_validate_candidate.ps1` and its self-test | `ci_candidate.rs` and shared `ci_artifacts.rs`; schema v2 and its exact four-file inventory are preserved | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
-| `ci_validate_bridge.ps1` and its self-test | `ci_bridge.rs` and `ci_artifacts.rs`; bridge schema v1 and its exact two-file inventory are preserved | `ci_build_updater_bridge.ps1` retains the Windows fixture build and source restore, then calls Rust create; updater consumers call Rust validate. |
+| `ci_validate_bridge.ps1` and its self-test | `ci_bridge.rs` and `ci_artifacts.rs`; bridge schema v1 and its exact two-file inventory are preserved | `cargo xtask ci bridge build-fixture` builds a detached source worktree, then creates and validates the bridge contract; updater consumers call Rust validate. |
 | `build_native_calibration.ps1` | `calibration.rs` builds the locked x86_64 MSVC `dist` binary and stages it with rollback | Tauri `beforeBuildCommand` and Windows CI call `cargo xtask calibration build`. |
 | `verify_installed_calibration.ps1` and its self-test | `calibration.rs` checks size, SHA-256, x64 PE machine, and bounded `--help`; evidence schema v1 is preserved | Packaged CI and production release orchestration call `cargo xtask calibration verify-installed`. |
-| Candidate source identity parsing in `updater_candidate_source_identity.ps1` | `ci.rs` reads the manifest at the exact Git commit and validates SemVer and source identity | The PowerShell file remains a thin caller and keeps the updater fixture's byte-exact restore boundary. |
+| Candidate source identity and fixture-source preparation in the updater scripts | `ci.rs` owns exact-commit source identity; `updater_fixture.rs` owns detached historical bridge construction and source isolation | The canonical repository's Cargo manifest, lockfile, Tauri config, and catalog are never temporarily rewritten. |
 
-The migrated PowerShell implementations and their script self-tests are removed
-after checking workflow, Tauri, release, updater fixture, and manual callers.
-`scripts/capture_defender_evidence.ps1` remains as separate Windows evidence
-tooling, and `scripts/scan_v4_defender_exact.ps1` keeps the release's exact
-artifact scan. No Wave A command changes gameplay input behavior;
-the calibration executable runs only for its bounded `--help` probe.
+Wave C adds `sky_windows_security::registry` and the `xtask` NSIS/updater
+owners. `nsis_harness.rs` scopes product HKCU keys, install/AppData roots,
+shortcuts, child processes, and cleanup to a unique runner-temp root;
+`updater_fixture.rs` verifies exact candidate/bridge bytes, loopback HTTP,
+rollback, N-to-N+1 migration, old-root rejection, and user-song preservation.
+The Windows workflow jobs call these Rust commands directly. The migrated
+PowerShell scripts and current remaining entrypoints are tracked in
+[`powershell-dependency-ledger.md`](powershell-dependency-ledger.md).
+
+The migrated CI and Wave C fixture scripts and their script self-tests are
+retired after the workflow, release, documentation, and test consumers were
+migrated. `scripts/capture_defender_evidence.ps1` remains as separate Windows
+evidence tooling, and `scripts/scan_v4_defender_exact.ps1` keeps the release's
+exact artifact scan. No migrated command changes gameplay input behavior;
+calibration verification runs only its bounded `--help` probe.
+
+## Wave C execution and teardown bounds
+
+The `updater_bridge`, `updater_e2e`, and `packaged` jobs in
+`.github/workflows/ci.yml` each have a 90-minute job timeout. The protected
+`release-v4.yml` and `rehearse-v4.yml` Windows jobs do not set
+`timeout-minutes`; GitHub Actions currently applies its documented 360-minute
+job default. This records the existing outer limits without adding a shorter
+deadline to release qualification.
+
+The fixture owners also bound individual work: bridge dependency installation
+has a 45-minute deadline and bridge compilation has a 75-minute deadline;
+NSIS install and uninstall children have 300- and 60-second deadlines;
+updater children have 180-second deadlines. These operation deadlines do not
+control teardown. Owned Windows process trees are terminated with a 2-second
+teardown budget, and inherited output pipes have a 500-millisecond drain
+budget. Loopback requests have a 10-second total request deadline, with
+bounded socket reads and writes. Cleanup continues across all registered
+stages and returns aggregated failures. The outer job timeout remains the
+final bound if a runner or operating-system operation does not respond.
+
+The documented GitHub Actions job default is described in the
+[workflow syntax reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).

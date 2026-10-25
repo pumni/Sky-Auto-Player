@@ -249,15 +249,17 @@ the bridge/cutover sequence, rotating the Authenticode provider if applicable,
 and publishing a new version; existing artifact bytes are never repaired in
 place.
 
-The isolated CI updater qualification runs
-`scripts/ci_tauri_update_e2e.ps1 -FixtureTargetDir <runner-temp-target>`. The
-script owns the fixture `CARGO_TARGET_DIR` for each throwaway build and serves
-the signed candidate from a loopback fixture, installs the previous v4 package, and verifies the official
-Tauri updater reaches the candidate version after restart. It also verifies
-the reviewed overlap `[old,new]` to cutover `[new]` updater-trust transition against real
-packaged clients. This is a signing-key rotation fixture, not a compatibility path for
-pre-release v4 builds. The same evidence records the ordered native quiesce,
-key-release, state-persistence, and resource-close phases.
+The isolated CI updater qualification invokes
+`cargo xtask ci updater-fixture run` on a disposable Windows runner with the
+exact validated candidate and bridge contracts. Rust builds the historical
+bridge in a detached worktree with an isolated target directory, serves
+byte-exact candidate data from loopback, and verifies the official Tauri
+updater's rollback and N-to-N+1 transition against packaged clients. It also
+checks old-root rejection after cutover, installed publisher/uninstall
+identity, and the reviewed trust-root behavior. This is a signing-key rotation
+fixture, not a compatibility path for pre-release v4 builds. The evidence
+records HTTP status/length/hash and ordered native quiesce, key-release,
+state-persistence, and resource-close phases.
 It additionally creates a user-owned song before update N, records its exact
 SHA-256, verifies that the SHA is unchanged after N+1, and runs the installed
 built-in catalog verifier against the N+1 resource tree. This proves that the
@@ -270,13 +272,11 @@ content hashes with the same selected stable ID.
 
 ## Acceptance boundary
 
-The local NSIS installer and updater signature require Windows packaging tools
-and a test signing key. Fresh current-user install, launch, GUI smoke, and
-uninstall remain Windows-manual acceptance evidence; the packaged update
-qualification is the deterministic previous-v4 -> candidate-v4 acceptance
-path. A full non-PR run must be dispatched from the branch so provenance and
-SPDX attestations are generated and verified before acceptance. The production
-release and `release-metadata` channel contract is documented in
-`v4-release-authority.md`. The v4 updater public trust
+The NSIS and updater E2E commands are restricted to disposable hosted Windows
+CI or the exact protected release runner. Local Windows work is limited to
+Rust tests, synthetic isolated HKCU test keys, fake files, and build-only
+fixture validation; do not run an installer or updater on an operator profile.
+The production release and `release-metadata` channel contract is documented
+in `v4-release-authority.md`. The v4 updater public trust
 root and rotation policy are implemented here; an approved Authenticode
 provider is optional future work and is not a release prerequisite.

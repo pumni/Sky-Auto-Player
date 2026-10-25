@@ -191,8 +191,6 @@ fn v4_release_pipeline_contract_source(
         "Get-FileHash",
         "verify-signature",
         "verify-tauri-bundle",
-        "current-user",
-        "active-playback-install-rejected",
         "v4_release_latest_policy.ps1",
         "Get-RemoteLatestRelease",
         "Assert-V4GitHubLatestPolicy",
@@ -228,30 +226,15 @@ fn v4_release_pipeline_contract_source(
         "Assert-ImmutableRelease",
         "Assert-ImmutableRelease $published",
         "repository release is not marked immutable",
-        "ci_tauri_update_e2e.ps1",
-        "CandidateInstallerPath",
-        "CandidateSignaturePath",
-        "CandidatePublicKeyPath",
+        "\"xtask\", \"ci\", \"updater-fixture\", \"run\"",
+        "\"xtask\", \"ci\", \"candidate\", \"create\"",
+        "--build-bridge",
+        "--bridge-version",
         "export-public-key",
         "Start-MpScan",
         "scan_performed",
-        "selftest-update-active-playback",
         "scan_v4_defender_exact.ps1",
-        "cargo xtask builtin-catalog verify-installed",
-        "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
-        "manifest_validated",
-        "file_set_exact",
-        "sha256_verified",
-        "songs_parseable",
-        "fresh-appdata-built-in-user-composition",
-        "freshUserSongs = @(",
-        "Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue",
-        "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
-        "previousFreshSelfTest",
-        "if ($null -eq $previousAppDataRoot)",
-        "Remove-Item Env:SKY_APP_DATA_ROOT",
-        "if ($null -eq $previousFreshSelfTest)",
-        "Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
+        "fixture-http-evidence.json",
         "cargo xtask credential run-action",
         "v4_release_draft_lookup.ps1",
         "Select-V4ReleaseByTag",
@@ -365,14 +348,44 @@ fn v4_release_pipeline_contract_source(
                 .into(),
         );
     }
-    if !regression.contains("Test-StrictModeEmptyFreshUserSongs")
-        || !regression.contains("freshUserSongs = @(")
-        || !regression.contains("$freshUserSongs.Count -ne 0")
-    {
-        return Err(
-            "v4 release coordinator regression test is missing the StrictMode empty-directory guard"
-            .into(),
-        );
+    let xtask_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let nsis_harness = fs::read_to_string(xtask_source.join("nsis_harness.rs"))?;
+    for marker in [
+        "fn assert_user_songs_empty",
+        "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
+        "fn launch_smoke",
+        "--selftest-update-active-playback",
+        "assert_uninstall_registration_absent()",
+        "owned_root_cleanup_requires_exact_sentinel_and_direct_runner_temp_scope",
+        "incomplete_root_rollback_accepts_only_a_prefix_of_the_created_sentinel",
+        "install_root_absence_polling_has_a_deadline",
+        "cleanup_attempts_every_stage_and_preserves_original_failure",
+    ] {
+        if !nsis_harness.contains(marker) {
+            return Err(format!(
+                "Rust NSIS owner regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let updater_fixture = fs::read_to_string(xtask_source.join("updater_fixture.rs"))?;
+    for marker in [
+        "failure_rollback",
+        "n_to_n_plus_1_installer_sha256",
+        "old_root_rejection",
+        "assert_migration_registry_roots_absent",
+        "user_song_sha256_after_uninstall",
+        "loopback_client_rejects_truncated_response_bodies",
+        "fixture_server_teardown_is_bounded_for_a_stalled_partial_request",
+        "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
+        "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
+    ] {
+        if !updater_fixture.contains(marker) {
+            return Err(format!(
+                "Rust updater fixture regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
     }
     if !regression.contains("Test-DraftLookupFallback") {
         return Err(
@@ -380,6 +393,7 @@ fn v4_release_pipeline_contract_source(
                 .into(),
         );
     }
+    nsis_installed_catalog_contract(include_str!("../nsis_harness.rs"))?;
     Ok(())
 }
 
@@ -447,6 +461,40 @@ fn v4_production_qualification_contract_source(workflow: &str, pipeline: &str) -
     Ok(())
 }
 
+fn nsis_installed_catalog_contract(harness: &str) -> Result<()> {
+    let qualification = harness
+        .split_once("fn qualify_package(")
+        .map(|(_, body)| body)
+        .ok_or("Rust NSIS owner is missing its package qualification function")?;
+    let qualification = qualification
+        .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
+        .map(|(body, _)| body)
+        .ok_or("Rust NSIS package qualification body is not bounded")?;
+    let install = qualification
+        .find("run_installer(\n        installer,")
+        .ok_or("Rust NSIS package qualification does not install the validated candidate")?;
+    let catalog = qualification
+        .find("crate::builtin_catalog::run(")
+        .ok_or("Rust NSIS package qualification does not verify the installed built-in catalog")?;
+    let songs_guard = qualification
+        .find("assert_user_songs_empty(&app_data.join(\"songs\"))")
+        .ok_or("Rust NSIS fresh-install qualification does not assert empty user songs")?;
+    let launch = qualification
+        .find("launch_smoke(scope, &app")
+        .ok_or("Rust NSIS package qualification does not launch the installed application")?;
+    if install >= catalog
+        || catalog >= launch
+        || songs_guard >= launch
+        || !qualification[catalog..launch].contains("verify-installed")
+    {
+        return Err(
+            "installed catalog and empty user-song checks must follow install and precede app launch"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let workflow_path = root.join(".github/workflows/release-v4.yml");
     let draft_workflow_path = root.join(".github/workflows/rehearse-v4.yml");
@@ -454,7 +502,39 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
     let pipeline = fs::read_to_string(&pipeline_path)?;
     let regression = fs::read_to_string(&regression_path)?;
+    let orchestrator =
+        fs::read_to_string(root.join("scripts/orchestrate_v4_production_release.ps1"))?;
     let draft_workflow = fs::read_to_string(&draft_workflow_path)?;
+    for script_name in [
+        "scripts/v4_nsis_smoke_boundary.ps1",
+        "scripts/test_v4_nsis_smoke_boundary.ps1",
+        "scripts/ci_tauri_update_e2e.ps1",
+        "scripts/ci_tauri_update_e2e_core.ps1",
+        "scripts/test_v4_updater_fixture_server.ps1",
+        "scripts/ci_build_updater_bridge.ps1",
+        "scripts/updater_candidate_source_identity.ps1",
+    ] {
+        if root.join(script_name).exists() {
+            return Err(format!(
+                "Wave C Rust-owned fixture migration left its retired PowerShell entrypoint present: {script_name}"
+            )
+            .into());
+        }
+    }
+    for marker in [
+        "cargo xtask ci candidate create",
+        "cargo xtask ci nsis smoke",
+        "--allow-protected-release-runner",
+        "--registry-mode",
+        "fresh-install",
+    ] {
+        if !orchestrator.contains(marker) {
+            return Err(format!(
+                "protected release NSIS caller is missing its Rust owner marker: {marker}"
+            )
+            .into());
+        }
+    }
     v4_release_pipeline_contract_source(
         &fs::read_to_string(&workflow_path)?,
         &pipeline,
@@ -771,29 +851,20 @@ mod tests {
             v4_release_pipeline_contract_source(&workflow, &duplicated_build, &regression).is_err()
         );
 
+        let nsis_harness = include_str!("../nsis_harness.rs");
+        nsis_installed_catalog_contract(nsis_harness)
+            .expect("Rust NSIS qualification must retain built-in catalog verification");
         let missing_builtin_qualification =
-            pipeline.replace("cargo xtask builtin-catalog verify-installed", "");
+            nsis_harness.replace("crate::builtin_catalog::run(", "");
         assert!(
-            v4_release_pipeline_contract_source(
-                &workflow,
-                &missing_builtin_qualification,
-                &regression,
-            )
-            .is_err(),
+            nsis_installed_catalog_contract(&missing_builtin_qualification).is_err(),
             "production qualification must retain installed built-in catalog verification"
         );
 
-        let missing_empty_directory_regression = regression.replace(
-            "Test-StrictModeEmptyFreshUserSongs",
-            "Test-MissingRegression",
-        );
+        let missing_empty_directory_regression =
+            nsis_harness.replace("assert_user_songs_empty(&app_data.join(\"songs\"))?;", "");
         assert!(
-            v4_release_pipeline_contract_source(
-                &workflow,
-                &pipeline,
-                &missing_empty_directory_regression,
-            )
-            .is_err(),
+            nsis_installed_catalog_contract(&missing_empty_directory_regression).is_err(),
             "production qualification must retain the executable StrictMode empty-directory regression"
         );
     }

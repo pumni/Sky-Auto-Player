@@ -1,24 +1,24 @@
 use crate::Result;
 use std::ffi::OsStr;
-#[cfg(test)]
+#[cfg(any(test, windows))]
 use std::io::Read;
 use std::path::Path;
-#[cfg(test)]
-use std::process::Child;
 use std::process::{Command, Output, Stdio};
-#[cfg(test)]
-use std::sync::{Arc, Mutex, mpsc};
-#[cfg(test)]
+#[cfg(any(test, windows))]
+use std::sync::mpsc;
+#[cfg(any(test, windows))]
 use std::thread::{self, JoinHandle};
-#[cfg(test)]
+#[cfg(any(test, windows))]
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
+#[cfg(any(test, windows))]
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
-#[cfg(test)]
+#[cfg(any(test, windows))]
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
-#[cfg(test)]
+#[cfg(any(test, windows))]
 const READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(any(test, windows))]
+const PROCESS_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn run(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Result<()> {
     let output = capture(program, args, cwd, env)?;
@@ -108,87 +108,276 @@ pub fn capture_owned(
         .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()).into())
 }
 
-#[cfg(test)]
+#[cfg(any(test, windows))]
 struct BoundedReader {
-    bytes: Arc<Mutex<Vec<u8>>>,
-    finished: mpsc::Receiver<()>,
+    finished: mpsc::Receiver<Vec<u8>>,
     handle: JoinHandle<()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, windows))]
 fn spawn_bounded_reader<R>(mut reader: R) -> BoundedReader
 where
     R: Read + Send + 'static,
 {
-    let bytes = Arc::new(Mutex::new(Vec::with_capacity(MAX_CAPTURE_BYTES.min(8192))));
-    let captured = Arc::clone(&bytes);
     let (finished_sender, finished) = mpsc::channel();
     let handle = thread::spawn(move || {
+        let mut captured = Vec::with_capacity(MAX_CAPTURE_BYTES.min(8192));
         let mut buffer = [0u8; 8192];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(count) => {
-                    if let Ok(mut captured) = captured.lock() {
-                        let remaining = MAX_CAPTURE_BYTES.saturating_sub(captured.len());
-                        if remaining > 0 {
-                            captured.extend_from_slice(&buffer[..count.min(remaining)]);
-                        }
+                    let remaining = MAX_CAPTURE_BYTES.saturating_sub(captured.len());
+                    if remaining > 0 {
+                        captured.extend_from_slice(&buffer[..count.min(remaining)]);
                     }
                 }
             }
         }
-        let _ = finished_sender.send(());
+        let _ = finished_sender.send(captured);
     });
-    BoundedReader {
-        bytes,
-        finished,
-        handle,
+    BoundedReader { finished, handle }
+}
+
+#[cfg(any(test, windows))]
+fn collect_bounded_reader(
+    reader: &mut Option<BoundedReader>,
+    timeout: Duration,
+    stream: &str,
+) -> Result<Option<Vec<u8>>> {
+    let Some(active) = reader.as_ref() else {
+        return Ok(None);
+    };
+    match active.finished.recv_timeout(timeout) {
+        Ok(bytes) => {
+            let active = reader.take().expect("reader was observed above");
+            if active.handle.join().is_err() {
+                return Err(format!("{stream} reader thread panicked").into());
+            }
+            Ok(Some(bytes))
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(format!("{stream} pipe reader ended without a result").into())
+        }
     }
 }
 
-#[cfg(test)]
-fn collect_bounded_reader(reader: BoundedReader, stream: &str) -> Result<Vec<u8>> {
-    if reader.finished.recv_timeout(READER_DRAIN_TIMEOUT).is_err() {
-        return Ok(reader
-            .bytes
-            .lock()
-            .map(|bytes| bytes.clone())
-            .unwrap_or_default());
-    }
-    if reader.handle.join().is_err() {
-        return Err(format!("{stream} reader thread panicked").into());
-    }
-    reader
-        .bytes
-        .lock()
-        .map(|bytes| bytes.clone())
-        .map_err(|_| format!("{stream} reader lock poisoned").into())
+#[cfg(windows)]
+pub(crate) struct OwnedChild {
+    child: std::process::Child,
+    tree: sky_windows_security::ProcessTree,
 }
 
-#[cfg(test)]
-fn terminate_and_reap(child: &mut Child) -> Result<std::process::ExitStatus> {
-    let _ = child.kill();
-    child
-        .wait()
-        .map_err(|error| format!("failed to reap timed-out child: {error}").into())
+#[cfg(windows)]
+impl OwnedChild {
+    fn attach(mut child: std::process::Child) -> Result<Self> {
+        match sky_windows_security::ProcessTree::attach(&child) {
+            Ok(tree) => Ok(Self { child, tree }),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err(format!("could not own spawned Windows process tree: {error}").into())
+            }
+        }
+    }
+
+    pub(crate) fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        self.child
+            .try_wait()
+            .map_err(|error| format!("failed to inspect child process: {error}").into())
+    }
+
+    pub(crate) fn wait_timeout(&mut self, timeout: Duration) -> Result<std::process::ExitStatus> {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return Ok(status);
+            }
+            if started.elapsed() >= timeout {
+                let teardown = self.terminate();
+                return Err(format!(
+                    "process {} timed out after {}ms{}",
+                    self.child.id(),
+                    timeout.as_millis(),
+                    teardown
+                        .err()
+                        .map(|error| format!("; teardown error: {error}"))
+                        .unwrap_or_default()
+                )
+                .into());
+            }
+            thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
+        }
+    }
+
+    pub(crate) fn terminate(&mut self) -> Result<()> {
+        let tree_result = self.tree.terminate();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+        }
+        let deadline = Instant::now() + PROCESS_TEARDOWN_TIMEOUT;
+        while Instant::now() < deadline {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return tree_result.map_err(|error| {
+                    format!("Windows process-tree termination request failed: {error}").into()
+                });
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        Err("Windows child process did not exit within the teardown deadline".into())
+    }
 }
 
-#[cfg(test)]
-pub fn capture_owned_timeout(
+#[cfg(windows)]
+fn spawn_owned(
     program: &OsStr,
     args: &[String],
     cwd: &Path,
     env: &[(String, String)],
+    remove_env: &[String],
+    stdout: Stdio,
+    stderr: Stdio,
+) -> Result<OwnedChild> {
+    let mut command = Command::new(program);
+    for name in remove_env {
+        command.env_remove(name);
+    }
+    command
+        .args(args)
+        .current_dir(cwd)
+        .envs(env.iter().map(|(key, value)| (key, value)))
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    let child = command
+        .spawn()
+        .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()))?;
+    OwnedChild::attach(child)
+}
+
+#[cfg(windows)]
+pub(crate) fn spawn_owned_silent_filtered(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    remove_env: &[String],
+) -> Result<OwnedChild> {
+    eprintln!("[xtask] {} {}", program.to_string_lossy(), args.join(" "));
+    spawn_owned(
+        program,
+        args,
+        cwd,
+        env,
+        remove_env,
+        Stdio::null(),
+        Stdio::null(),
+    )
+}
+
+#[cfg(windows)]
+fn capture_windows_timeout(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    remove_env: &[String],
     timeout: Duration,
 ) -> Result<Output> {
-    let rendered = args.join(" ");
     eprintln!(
-        "[xtask] {} {rendered} (timeout={}ms)",
+        "[xtask] {} {} (timeout={}ms)",
         program.to_string_lossy(),
+        args.join(" "),
         timeout.as_millis()
     );
+    let mut child = spawn_owned(
+        program,
+        args,
+        cwd,
+        env,
+        remove_env,
+        Stdio::piped(),
+        Stdio::piped(),
+    )?;
+    let mut stdout_reader = Some(spawn_bounded_reader(
+        child
+            .child
+            .stdout
+            .take()
+            .ok_or("timed child has no stdout pipe")?,
+    ));
+    let mut stderr_reader = Some(spawn_bounded_reader(
+        child
+            .child
+            .stderr
+            .take()
+            .ok_or("timed child has no stderr pipe")?,
+    ));
+    let status = match child.wait_timeout(timeout) {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = child.terminate();
+            let stdout =
+                collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+            let stderr =
+                collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+            return Err(format!(
+                "{error}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            )
+            .into());
+        }
+    };
+
+    let stdout = collect_bounded_reader(&mut stdout_reader, READER_DRAIN_TIMEOUT, "stdout")?;
+    let stderr = collect_bounded_reader(&mut stderr_reader, READER_DRAIN_TIMEOUT, "stderr")?;
+    if stdout.is_none() || stderr.is_none() {
+        // The parent exited but a descendant may still own an inherited pipe.
+        // Terminate the entire job before waiting again, keeping both reader
+        // threads bounded even on the successful-parent/stranded-pipe path.
+        let teardown = child.terminate();
+        let _stdout =
+            collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout")?;
+        let _stderr =
+            collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr")?;
+        return Err(format!(
+            "process {} exited while a descendant kept a captured pipe open{}",
+            program.to_string_lossy(),
+            teardown
+                .err()
+                .map(|error| format!("; process-tree teardown failed: {error}"))
+                .unwrap_or_default()
+        )
+        .into());
+    }
+    Ok(Output {
+        status,
+        stdout: stdout.expect("stdout checked above"),
+        stderr: stderr.expect("stderr checked above"),
+    })
+}
+
+#[cfg(all(test, not(windows)))]
+fn capture_non_windows_test_timeout(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    remove_env: &[String],
+    timeout: Duration,
+) -> Result<Output> {
     let mut command = Command::new(program);
+    for name in remove_env {
+        command.env_remove(name);
+    }
     command
         .args(args)
         .current_dir(cwd)
@@ -199,51 +388,124 @@ pub fn capture_owned_timeout(
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()))?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = terminate_and_reap(&mut child);
-            return Err("timed child has no stdout pipe".into());
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            let _ = terminate_and_reap(&mut child);
-            return Err("timed child has no stderr pipe".into());
-        }
-    };
-    let stdout_reader = spawn_bounded_reader(stdout);
-    let stderr_reader = spawn_bounded_reader(stderr);
+    let mut stdout_reader = Some(spawn_bounded_reader(
+        child.stdout.take().ok_or("missing stdout pipe")?,
+    ));
+    let mut stderr_reader = Some(spawn_bounded_reader(
+        child.stderr.take().ok_or("missing stderr pipe")?,
+    ));
     let started = Instant::now();
-    let mut timed_out = false;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
         if started.elapsed() >= timeout {
-            timed_out = true;
-            break terminate_and_reap(&mut child)?;
+            let _ = child.kill();
+            let status = child.wait()?;
+            let stdout =
+                collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+            let stderr =
+                collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+            return Err(format!(
+                "process {} timed out after {}ms\nstdout: {}\nstderr: {}",
+                program.to_string_lossy(),
+                timeout.as_millis(),
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            )
+            .into());
         }
-        thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
+        thread::sleep(POLL_INTERVAL);
     };
-    let stdout = collect_bounded_reader(stdout_reader, "stdout")?;
-    let stderr = collect_bounded_reader(stderr_reader, "stderr")?;
-    if timed_out {
-        return Err(format!(
-            "process {} timed out after {}ms\nstdout: {}\nstderr: {}",
-            program.to_string_lossy(),
-            timeout.as_millis(),
-            String::from_utf8_lossy(&stdout),
-            String::from_utf8_lossy(&stderr)
-        )
-        .into());
+    let stdout = collect_bounded_reader(&mut stdout_reader, READER_DRAIN_TIMEOUT, "stdout")?;
+    let stderr = collect_bounded_reader(&mut stderr_reader, READER_DRAIN_TIMEOUT, "stderr")?;
+    if stdout.is_none() || stderr.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout");
+        let _ = collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr");
+        return Err("process exited while a descendant kept a captured pipe open".into());
     }
     Ok(Output {
         status,
-        stdout,
-        stderr,
+        stdout: stdout.expect("stdout checked above"),
+        stderr: stderr.expect("stderr checked above"),
     })
+}
+
+#[cfg(test)]
+fn capture_owned_timeout(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<Output> {
+    capture_owned_timeout_filtered(program, args, cwd, env, &[], timeout)
+}
+
+pub(crate) fn capture_owned_timeout_filtered(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    remove_env: &[String],
+    timeout: Duration,
+) -> Result<Output> {
+    #[cfg(windows)]
+    {
+        capture_windows_timeout(program, args, cwd, env, remove_env, timeout)
+    }
+    #[cfg(all(test, not(windows)))]
+    {
+        capture_non_windows_test_timeout(program, args, cwd, env, remove_env, timeout)
+    }
+    #[cfg(all(not(windows), not(test)))]
+    {
+        let _ = (program, args, cwd, env, remove_env, timeout);
+        Err("bounded Windows process-tree execution is unavailable on this platform".into())
+    }
+}
+
+pub(crate) fn run_owned_timeout_filtered(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    remove_env: &[String],
+    timeout: Duration,
+) -> Result<()> {
+    let output = capture_owned_timeout_filtered(program, args, cwd, env, remove_env, timeout)?;
+    let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    for (name, secret) in env {
+        if name.contains("PRIVATE_KEY") && !secret.is_empty() {
+            stdout = stdout.replace(secret, "[REDACTED]");
+            stderr = stderr.replace(secret, "[REDACTED]");
+        }
+    }
+    if !stdout.is_empty() {
+        print!("{stdout}");
+    }
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+    }
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} exited with {}",
+            program.to_string_lossy(),
+            output.status
+        )
+        .into())
+    }
 }
 
 #[cfg(test)]
@@ -351,5 +613,65 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("before-timeout"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parent_exit_with_descendant_holding_pipes_is_bounded_and_terminates_job() {
+        let program = std::env::current_exe().expect("test executable path");
+        let args = vec![
+            "--exact".to_owned(),
+            "process::tests::descendant_pipe_helper".to_owned(),
+            "--nocapture".to_owned(),
+        ];
+        let started = Instant::now();
+        let error = capture_owned_timeout(
+            program.as_os_str(),
+            &args,
+            Path::new("."),
+            &[(
+                "SKY_XTASK_DESCENDANT_PIPE_HELPER".to_owned(),
+                "spawn".to_owned(),
+            )],
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("descendant kept a captured pipe open")
+        );
+        assert!(started.elapsed() < Duration::from_secs(8));
+    }
+
+    #[test]
+    // This helper intentionally exits without waiting so the child keeps the
+    // captured pipe handles open; the outer test owns and terminates the job.
+    #[allow(clippy::zombie_processes)]
+    fn descendant_pipe_helper() {
+        if std::env::var_os("SKY_XTASK_DESCENDANT_PIPE_HELPER").is_none() {
+            return;
+        }
+        let executable = std::env::current_exe().expect("test executable path");
+        Command::new(executable)
+            .args([
+                "--exact",
+                "process::tests::pipe_holding_descendant",
+                "--nocapture",
+            ])
+            .env("SKY_XTASK_DESCENDANT_PIPE_HELPER", "hold")
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("spawn descendant inheriting both pipe handles");
+    }
+
+    #[test]
+    fn pipe_holding_descendant() {
+        if std::env::var_os("SKY_XTASK_DESCENDANT_PIPE_HELPER").as_deref()
+            == Some(OsStr::new("hold"))
+        {
+            thread::sleep(Duration::from_secs(30));
+        }
     }
 }

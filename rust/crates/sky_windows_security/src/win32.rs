@@ -9,6 +9,7 @@
 
 use crate::NativeBoundaryError;
 use crate::credential::MAX_CREDENTIAL_BLOB;
+use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::io::AsRawHandle;
@@ -26,9 +27,424 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WOW64_64KEY, KEY_WRITE, REG_OPTION_NON_VOLATILE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW,
+    RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegSetValueExW,
+};
 use zeroize::Zeroizing;
 
 const ERROR_NOT_FOUND: u32 = 1168;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_PATH_NOT_FOUND: u32 = 3;
+const ERROR_MORE_DATA: u32 = 234;
+const MAX_REGISTRY_NAME: u32 = 32_767;
+const MAX_REGISTRY_VALUE_BYTES: u32 = 16 * 1024 * 1024;
+
+struct RegistryHandle(HKEY);
+
+impl Drop for RegistryHandle {
+    fn drop(&mut self) {
+        // SAFETY: this handle is uniquely owned by RegistryHandle and was
+        // returned by RegOpenKeyExW or RegCreateKeyExW.
+        unsafe { RegCloseKey(self.0) };
+    }
+}
+
+fn registry_path_wide(path: &str) -> Vec<u16> {
+    path.encode_utf16().chain(Some(0)).collect()
+}
+
+fn registry_error(operation: &str, code: u32) -> NativeBoundaryError {
+    NativeBoundaryError::new(format!("{operation} failed with Windows error {code}"))
+}
+
+fn open_registry_key(
+    path: &str,
+    access: u32,
+) -> Result<Option<RegistryHandle>, NativeBoundaryError> {
+    let wide = registry_path_wide(path);
+    let mut handle = null_mut();
+    // SAFETY: `wide` is NUL-terminated and the output slot is valid. The
+    // predefined HKCU handle is borrowed and the returned handle is owned.
+    let result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            wide.as_ptr(),
+            0,
+            access | KEY_WOW64_64KEY,
+            &mut handle,
+        )
+    };
+    if result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND {
+        return Ok(None);
+    }
+    if result != 0 {
+        return Err(registry_error("RegOpenKeyExW", result));
+    }
+    if handle.is_null() {
+        return Err(NativeBoundaryError::new(
+            "RegOpenKeyExW returned a null registry handle",
+        ));
+    }
+    Ok(Some(RegistryHandle(handle)))
+}
+
+fn create_registry_key(path: &str) -> Result<RegistryHandle, NativeBoundaryError> {
+    let wide = registry_path_wide(path);
+    let mut handle = null_mut();
+    let mut disposition = 0;
+    // SAFETY: path and output buffers remain live for the synchronous call;
+    // security attributes and class are intentionally absent.
+    let result = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            wide.as_ptr(),
+            0,
+            null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_READ | KEY_WRITE | KEY_WOW64_64KEY,
+            null(),
+            &mut handle,
+            &mut disposition,
+        )
+    };
+    if result != 0 {
+        return Err(registry_error("RegCreateKeyExW", result));
+    }
+    if handle.is_null() {
+        return Err(NativeBoundaryError::new(
+            "RegCreateKeyExW returned a null registry handle",
+        ));
+    }
+    Ok(RegistryHandle(handle))
+}
+
+fn registry_info(handle: HKEY) -> Result<(u32, u32, u32, u32, u32), NativeBoundaryError> {
+    let mut subkey_count = 0;
+    let mut max_subkey_name = 0;
+    let mut value_count = 0;
+    let mut max_value_name = 0;
+    let mut max_value_data = 0;
+    // SAFETY: optional outputs are null; each supplied output points to a
+    // live u32 for the duration of the call.
+    let result = unsafe {
+        RegQueryInfoKeyW(
+            handle,
+            null_mut(),
+            null_mut(),
+            null(),
+            &mut subkey_count,
+            &mut max_subkey_name,
+            null_mut(),
+            &mut value_count,
+            &mut max_value_name,
+            &mut max_value_data,
+            null_mut(),
+            null_mut(),
+        )
+    };
+    if result != 0 {
+        return Err(registry_error("RegQueryInfoKeyW", result));
+    }
+    if max_subkey_name > MAX_REGISTRY_NAME
+        || max_value_name > MAX_REGISTRY_NAME
+        || max_value_data > MAX_REGISTRY_VALUE_BYTES
+    {
+        return Err(NativeBoundaryError::new(
+            "registry key contains an unbounded name or value",
+        ));
+    }
+    Ok((
+        subkey_count,
+        max_subkey_name,
+        value_count,
+        max_value_name,
+        max_value_data,
+    ))
+}
+
+pub(crate) fn registry_key_exists(path: &str) -> Result<bool, NativeBoundaryError> {
+    Ok(open_registry_key(path, KEY_READ)?.is_some())
+}
+
+#[cfg(test)]
+pub(crate) fn registry_ensure_key(path: &str) -> Result<(), NativeBoundaryError> {
+    drop(create_registry_key(path)?);
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn registry_write_value(
+    path: &str,
+    name: &str,
+    value: &crate::registry::RegistryValue,
+) -> Result<(), NativeBoundaryError> {
+    if value.bytes.len() > MAX_REGISTRY_VALUE_BYTES as usize {
+        return Err(NativeBoundaryError::new(
+            "registry value exceeds the bounded snapshot limit",
+        ));
+    }
+    let handle = create_registry_key(path)?;
+    let wide_name = registry_path_wide(name);
+    // SAFETY: the value buffer and NUL-terminated name remain live for the
+    // synchronous write; the handle is an owned writable HKCU key.
+    let result = unsafe {
+        RegSetValueExW(
+            handle.0,
+            wide_name.as_ptr(),
+            0,
+            value.kind,
+            if value.bytes.is_empty() {
+                null()
+            } else {
+                value.bytes.as_ptr()
+            },
+            value.bytes.len() as u32,
+        )
+    };
+    if result != 0 {
+        return Err(registry_error("RegSetValueExW", result));
+    }
+    Ok(())
+}
+
+pub(crate) fn registry_read_tree(
+    path: &str,
+    budget: &mut crate::registry::SnapshotBudget,
+) -> Result<Option<crate::registry::RegistryNode>, NativeBoundaryError> {
+    let Some(handle) = open_registry_key(path, KEY_READ)? else {
+        return Ok(None);
+    };
+    budget.add_key()?;
+    let (subkey_count, max_subkey_name, value_count, max_value_name, max_value_data) =
+        registry_info(handle.0)?;
+    let mut node = crate::registry::RegistryNode::default();
+
+    for index in 0..value_count {
+        let mut name = vec![0_u16; (max_value_name.max(1) + 2) as usize];
+        let mut name_length = name.len() as u32;
+        let mut kind = 0;
+        let mut data = vec![0_u8; max_value_data as usize];
+        let mut data_length = data.len() as u32;
+        // SAFETY: all buffers and output lengths are live for this call. The
+        // key handle was opened with KEY_QUERY_VALUE by KEY_READ.
+        let result = unsafe {
+            RegEnumValueW(
+                handle.0,
+                index,
+                name.as_mut_ptr(),
+                &mut name_length,
+                null(),
+                &mut kind,
+                if data.is_empty() {
+                    null_mut()
+                } else {
+                    data.as_mut_ptr()
+                },
+                &mut data_length,
+            )
+        };
+        if result == ERROR_MORE_DATA || data_length > MAX_REGISTRY_VALUE_BYTES {
+            return Err(NativeBoundaryError::new(
+                "registry value changed or exceeded the snapshot limit during capture",
+            ));
+        }
+        if result != 0 {
+            return Err(registry_error("RegEnumValueW", result));
+        }
+        let value_name = String::from_utf16(&name[..name_length as usize])
+            .map_err(|_| NativeBoundaryError::new("registry value name is not valid UTF-16"))?;
+        data.truncate(data_length as usize);
+        budget.add_value(data.len())?;
+        if node
+            .values
+            .insert(
+                value_name,
+                crate::registry::RegistryValue { kind, bytes: data },
+            )
+            .is_some()
+        {
+            return Err(NativeBoundaryError::new(
+                "registry returned duplicate value names during capture",
+            ));
+        }
+    }
+
+    for index in 0..subkey_count {
+        let mut name = vec![0_u16; (max_subkey_name + 2) as usize];
+        let mut name_length = name.len() as u32;
+        // SAFETY: the name buffer and length output remain live. Other
+        // optional metadata outputs are not requested.
+        let result = unsafe {
+            RegEnumKeyExW(
+                handle.0,
+                index,
+                name.as_mut_ptr(),
+                &mut name_length,
+                null(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        if result != 0 {
+            return Err(registry_error("RegEnumKeyExW", result));
+        }
+        let subkey = String::from_utf16(&name[..name_length as usize])
+            .map_err(|_| NativeBoundaryError::new("registry subkey name is not valid UTF-16"))?;
+        let child_path = format!("{path}\\{subkey}");
+        let child = registry_read_tree(&child_path, budget)?.ok_or_else(|| {
+            NativeBoundaryError::new("registry subkey disappeared during snapshot capture")
+        })?;
+        if node.subkeys.insert(subkey, child).is_some() {
+            return Err(NativeBoundaryError::new(
+                "registry returned duplicate subkey names during capture",
+            ));
+        }
+    }
+    Ok(Some(node))
+}
+
+pub(crate) fn registry_delete_tree(path: &str) -> Result<(), NativeBoundaryError> {
+    if open_registry_key(path, KEY_READ)?.is_none() {
+        return Ok(());
+    }
+    let wide = registry_path_wide(path);
+    // SAFETY: `wide` is NUL-terminated and HKCU is the predefined root handle.
+    let tree_result = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, wide.as_ptr()) };
+    if tree_result != 0 {
+        return Err(registry_error("RegDeleteTreeW", tree_result));
+    }
+    // SAFETY: the target is a validated, explicitly scoped key and is now empty.
+    let key_result = unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, wide.as_ptr()) };
+    if key_result != 0 && key_result != ERROR_FILE_NOT_FOUND && key_result != ERROR_PATH_NOT_FOUND {
+        return Err(registry_error("RegDeleteKeyW", key_result));
+    }
+    Ok(())
+}
+
+pub(crate) fn registry_remove_empty_key(path: &str) -> Result<(), NativeBoundaryError> {
+    let Some(handle) = open_registry_key(path, KEY_READ)? else {
+        return Ok(());
+    };
+    let (subkey_count, _, value_count, _, _) = registry_info(handle.0)?;
+    drop(handle);
+    if subkey_count != 0 || value_count != 0 || path.eq_ignore_ascii_case("Software") {
+        return Ok(());
+    }
+    let wide = registry_path_wide(path);
+    // SAFETY: only a previously absent direct parent in the monitored scope is
+    // offered here, and the key was verified empty before deletion.
+    let result = unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, wide.as_ptr()) };
+    if result == 0 || result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND {
+        Ok(())
+    } else {
+        Err(registry_error("RegDeleteKeyW for empty parent", result))
+    }
+}
+
+pub(crate) fn registry_restore_tree(
+    path: &str,
+    expected: &crate::registry::RegistryNode,
+) -> Result<(), NativeBoundaryError> {
+    let handle = create_registry_key(path)?;
+    let (subkey_count, max_subkey_name, value_count, max_value_name, _) = registry_info(handle.0)?;
+    let mut current_values = BTreeSet::new();
+    for index in 0..value_count {
+        let mut name = vec![0_u16; (max_value_name.max(1) + 2) as usize];
+        let mut name_length = name.len() as u32;
+        let mut kind = 0;
+        let mut data_length = 0;
+        // SAFETY: the value-name buffer and type/length outputs remain live;
+        // null data is a supported size-query form of RegEnumValueW.
+        let result = unsafe {
+            RegEnumValueW(
+                handle.0,
+                index,
+                name.as_mut_ptr(),
+                &mut name_length,
+                null(),
+                &mut kind,
+                null_mut(),
+                &mut data_length,
+            )
+        };
+        if result != 0 {
+            return Err(registry_error("RegEnumValueW during restore", result));
+        }
+        current_values.insert(
+            String::from_utf16(&name[..name_length as usize])
+                .map_err(|_| NativeBoundaryError::new("registry value name is not valid UTF-16"))?,
+        );
+    }
+    for name in current_values.difference(&expected.values.keys().cloned().collect()) {
+        let wide = registry_path_wide(name);
+        // SAFETY: name is an enumerated value name on the opened key.
+        let result = unsafe { RegDeleteValueW(handle.0, wide.as_ptr()) };
+        if result != 0 {
+            return Err(registry_error("RegDeleteValueW", result));
+        }
+    }
+    for (name, value) in &expected.values {
+        let wide = registry_path_wide(name);
+        // SAFETY: value bytes are stable during the call; empty values pass a
+        // null data pointer and a zero byte count as documented by Win32.
+        let result = unsafe {
+            RegSetValueExW(
+                handle.0,
+                wide.as_ptr(),
+                0,
+                value.kind,
+                if value.bytes.is_empty() {
+                    null()
+                } else {
+                    value.bytes.as_ptr()
+                },
+                value.bytes.len() as u32,
+            )
+        };
+        if result != 0 {
+            return Err(registry_error("RegSetValueExW", result));
+        }
+    }
+
+    let mut current_subkeys = BTreeSet::new();
+    for index in 0..subkey_count {
+        let mut name = vec![0_u16; (max_subkey_name + 2) as usize];
+        let mut name_length = name.len() as u32;
+        // SAFETY: the name buffer and length output remain live.
+        let result = unsafe {
+            RegEnumKeyExW(
+                handle.0,
+                index,
+                name.as_mut_ptr(),
+                &mut name_length,
+                null(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        if result != 0 {
+            return Err(registry_error("RegEnumKeyExW during restore", result));
+        }
+        current_subkeys.insert(
+            String::from_utf16(&name[..name_length as usize]).map_err(|_| {
+                NativeBoundaryError::new("registry subkey name is not valid UTF-16")
+            })?,
+        );
+    }
+    for name in current_subkeys.difference(&expected.subkeys.keys().cloned().collect()) {
+        let child = format!("{path}\\{name}");
+        registry_delete_tree(&child)?;
+    }
+    drop(handle);
+    for (name, child) in &expected.subkeys {
+        registry_restore_tree(&format!("{path}\\{name}"), child)?;
+    }
+    Ok(())
+}
 pub(crate) struct JobHandle(HANDLE);
 
 impl JobHandle {
