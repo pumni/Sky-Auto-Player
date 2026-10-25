@@ -98,12 +98,16 @@ function Invoke-CalibrationPayloadVerification {
         [string]$Context
     )
 
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot "verify_installed_calibration.ps1") `
-        -InstallRoot $InstallRoot `
-        -ExpectedSize $ExpectedSize `
-        -ExpectedSha256 $ExpectedSha256
-    $verificationExitCode = $LASTEXITCODE
+    Push-Location $repoRoot
+    try {
+        & cargo xtask calibration verify-installed `
+            --install-root $InstallRoot `
+            --expected-size $ExpectedSize `
+            --expected-sha256 $ExpectedSha256
+        $verificationExitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
     if ($verificationExitCode -ne 0) {
         throw "$Context failed with exit code $verificationExitCode"
     }

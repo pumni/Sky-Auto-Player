@@ -1,8 +1,11 @@
 # CI validation topology
 
-This document records the accepted validation topology. The classifier is the
-source of lane selection; unknown or malformed classification is always
-fail-closed to full validation.
+This document records the accepted validation topology. The Rust-native
+`cargo xtask ci classify` command is the source of lane selection; unknown or
+malformed classification is always fail-closed to full validation. It writes
+the nine lane values and `classification_reason` to stdout and appends them to
+`GITHUB_OUTPUT` using a delimiter-safe multiline record for the human-readable
+reason.
 
 ## Triggers
 
@@ -32,6 +35,14 @@ The `changes` job projects these classifier outputs:
 - `site_required`: website validation and Pages artifact packaging are
   required.
 - `classification_reason`: the human-readable classifier explanation.
+
+The `changes` job installs the pinned Rust toolchain, caches the xtask build,
+and has a 15-minute budget for the first cold build. Pull request and push
+classification use the event's explicit base/head commit identities, fetch
+missing commits at shallow depth, and never depend on the checkout's current
+branch or attached-HEAD state. `workflow_dispatch` requests full validation.
+Edits to the Rust classifier and its CLI dispatcher also select full
+validation, matching the previous classifier's self-change policy.
 
 `static_required` is a derived CI projection, not a classifier output. It is
 true for Rust, Desktop, package, updater, or release work, and for the
@@ -102,3 +113,27 @@ Future classifier changes must:
 
 The fixture must demonstrate both the intended lane and the unchanged lanes
 for representative multi-path and unknown-path inputs.
+
+## Rust-owned CI, artifact, and calibration tools
+
+Rust owns deterministic CI classification, candidate and bridge schemas,
+artifact inventory and digest checks, PE inspection, and native calibration
+build/stage/installed verification. The workflow still uses PowerShell where
+it operates Windows tooling, runs a Tauri fixture, installs/uninstalls NSIS,
+or restores fixture source bytes.
+
+| PowerShell responsibility before Wave A | Rust owner after Wave A | Remaining consumer or adapter |
+| --- | --- | --- |
+| `ci_classify.ps1` and `test_ci_classify.ps1` | `rust/xtask/src/ci_classifier.rs` plus unit tests | `changes` job calls `cargo xtask ci classify`; event base/head SHAs and manual full dispatch are explicit. |
+| `ci_validate_candidate.ps1` and its self-test | `ci_candidate.rs` and shared `ci_artifacts.rs`; schema v2 and its exact four-file inventory are preserved | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
+| `ci_validate_bridge.ps1` and its self-test | `ci_bridge.rs` and `ci_artifacts.rs`; bridge schema v1 and its exact two-file inventory are preserved | `ci_build_updater_bridge.ps1` retains the Windows fixture build and source restore, then calls Rust create; updater consumers call Rust validate. |
+| `build_native_calibration.ps1` | `calibration.rs` builds the locked x86_64 MSVC `dist` binary and stages it with rollback | Tauri `beforeBuildCommand` and Windows CI call `cargo xtask calibration build`. |
+| `verify_installed_calibration.ps1` and its self-test | `calibration.rs` checks size, SHA-256, x64 PE machine, and bounded `--help`; evidence schema v1 is preserved | Packaged CI and production release orchestration call `cargo xtask calibration verify-installed`. |
+| Candidate source identity parsing in `updater_candidate_source_identity.ps1` | `ci.rs` reads the manifest at the exact Git commit and validates SemVer and source identity | The PowerShell file remains a thin caller and keeps the updater fixture's byte-exact restore boundary. |
+
+The migrated PowerShell implementations and their script self-tests are removed
+after checking workflow, Tauri, release, updater fixture, and manual callers.
+`scripts/capture_defender_evidence.ps1` remains as separate Windows evidence
+tooling, and `scripts/scan_v4_defender_exact.ps1` keeps the release's exact
+artifact scan. No Wave A command changes gameplay input behavior;
+the calibration executable runs only for its bounded `--help` probe.

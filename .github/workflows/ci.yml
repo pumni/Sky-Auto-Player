@@ -24,7 +24,7 @@ jobs:
   changes:
     name: Classify validation layers
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
@@ -55,20 +55,34 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Install pinned Rust toolchain for path classification
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Rust cache for path classifier
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: "rust -> target"
+          cache-targets: true
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+
       - name: Classify changed paths
         id: classify
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           set -euo pipefail
           classifier_args=()
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            classifier_args+=(-Full)
+            classifier_args+=(--full)
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            classifier_args+=(-BaseSha "${{ github.event.pull_request.base.sha }}" -HeadSha "${{ github.event.pull_request.head.sha }}")
+            classifier_args+=(--base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}")
           else
-            classifier_args+=(-BaseSha "${{ github.event.before }}" -HeadSha "${{ github.sha }}")
+            classifier_args+=(--base-sha "${{ github.event.before }}" --head-sha "${{ github.sha }}")
           fi
-          classification="$(pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_classify.ps1 "${classifier_args[@]}")"
-          printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
+          classification="$(cargo xtask ci classify "${classifier_args[@]}" --github-output "$GITHUB_OUTPUT")"
           printf '%s\n' "$classification"
           {
             echo '## Validation classification'
@@ -99,6 +113,7 @@ jobs:
     permissions:
       contents: read
     env:
+      RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
@@ -171,15 +186,15 @@ jobs:
       - name: Confirm exact updater bridge artifact contents
         run: |
           $bridgeRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-updater-bridge"
-          pwsh scripts/ci_validate_bridge.ps1 `
-            -Mode Validate `
-            -BridgeRoot $bridgeRoot `
-            -SourceSha $env:SKY_CI_SOURCE_SHA `
-            -Version $env:SKY_BRIDGE_VERSION `
-            -Publisher $env:SKY_BRIDGE_PUBLISHER `
-            -Identifier $env:SKY_BRIDGE_IDENTIFIER `
-            -SentinelId $env:SKY_BRIDGE_SENTINEL_ID `
-            -SentinelContentSha256 $env:SKY_BRIDGE_SENTINEL_SHA256
+          cargo xtask ci bridge validate `
+            --bridge-root $bridgeRoot `
+            --source-sha $env:SKY_CI_SOURCE_SHA `
+            --version $env:SKY_BRIDGE_VERSION `
+            --publisher $env:SKY_BRIDGE_PUBLISHER `
+            --identifier $env:SKY_BRIDGE_IDENTIFIER `
+            --sentinel-id $env:SKY_BRIDGE_SENTINEL_ID `
+            --sentinel-content-sha256 $env:SKY_BRIDGE_SENTINEL_SHA256
+          if ($LASTEXITCODE -ne 0) { throw "Updater bridge contract validation failed with exit code $LASTEXITCODE" }
 
       - name: Upload exact updater bridge contract
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -244,7 +259,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.static_required == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -261,23 +276,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Run CI classifier self-tests
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_classify.ps1
-
-      - name: Run current-candidate contract self-tests
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_validate_candidate.ps1
-
-      - name: Run installed calibration missing-binary self-test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_installed_calibration.ps1
-
-      - name: Run updater-bridge contract self-tests
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_validate_bridge.ps1
-
       - name: Run startup calibration export hash self-test
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_startup_calibration_evidence_export.ps1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Run Rust-native CI, candidate, bridge, and calibration self-tests
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
 
       - name: Repository verification — static
         env:
@@ -598,7 +606,7 @@ jobs:
       - name: Stage calibration resource for Tauri validation
         env:
           RUSTUP_TOOLCHAIN: 1.99.1
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build_native_calibration.ps1
+        run: cargo xtask calibration build
 
       - name: Repository verification — Rust
         if: needs.changes.outputs.rust_required == 'true'
@@ -813,13 +821,12 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
-          pwsh scripts/ci_validate_candidate.ps1 `
-            -Mode Create `
-            -BundleDir $env:SKY_CANDIDATE_BUNDLE `
-            -PublicKeyPath $env:SKY_CANDIDATE_PUBLIC_KEY `
-            -CalibrationBinaryPath desktop/src-tauri/resources/native_calibration.exe `
-            -OutputRoot $candidateRoot `
-            -SourceSha $env:SKY_CI_SOURCE_SHA
+          cargo xtask ci candidate create `
+            --bundle-dir $env:SKY_CANDIDATE_BUNDLE `
+            --public-key $env:SKY_CANDIDATE_PUBLIC_KEY `
+            --calibration-binary desktop/src-tauri/resources/native_calibration.exe `
+            --output-root $candidateRoot `
+            --source-sha $env:SKY_CI_SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw "Current-candidate contract creation failed with exit code $LASTEXITCODE" }
           $files = @(Get-ChildItem -LiteralPath $candidateRoot -File)
           if ($files.Count -ne 4 -or $files.Name -contains "sky-auto-player-current-candidate.key") {
@@ -846,6 +853,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     env:
+      RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
@@ -864,6 +872,20 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Rust — install pinned stable toolchain for updater fixture
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
+
+      - name: Rust — verify updater-fixture compiler
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: |
+          $version = (rustc --version)
+          if ($version -notmatch '^rustc 1\.99\.1\s') {
+            throw "Expected stable Rust 1.99.1 for updater fixture, got: $version"
+          }
+
       - name: Download current candidate from this workflow run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -879,10 +901,9 @@ jobs:
       - name: Validate and bind exact current candidate
         run: |
           $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
-          pwsh scripts/ci_validate_candidate.ps1 `
-            -Mode Validate `
-            -CandidateRoot $candidateRoot `
-            -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}"
+          cargo xtask ci candidate validate `
+            --candidate-root $candidateRoot `
+            --source-sha "${{ github.event.pull_request.head.sha || github.sha }}"
           if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
           $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
           "SKY_CANDIDATE_INSTALLER=$(Join-Path $candidateRoot $metadata.installer)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
@@ -894,15 +915,14 @@ jobs:
         run: |
           $bridgeRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-updater-bridge"
           $metadata = Get-Content -LiteralPath (Join-Path $bridgeRoot "bridge.json") -Raw | ConvertFrom-Json
-          pwsh scripts/ci_validate_bridge.ps1 `
-            -Mode Validate `
-            -BridgeRoot $bridgeRoot `
-            -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}" `
-            -Version $metadata.version `
-            -Publisher $metadata.publisher `
-            -Identifier $metadata.identifier `
-            -SentinelId $metadata.sentinel_id `
-            -SentinelContentSha256 $metadata.sentinel_content_sha256
+          cargo xtask ci bridge validate `
+            --bridge-root $bridgeRoot `
+            --source-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
+            --version $metadata.version `
+            --publisher $metadata.publisher `
+            --identifier $metadata.identifier `
+            --sentinel-id $metadata.sentinel_id `
+            --sentinel-content-sha256 $metadata.sentinel_content_sha256
           if ($LASTEXITCODE -ne 0) { throw "Downloaded updater-bridge contract validation failed with exit code $LASTEXITCODE" }
           $installer = Join-Path $bridgeRoot $metadata.installer
           "SKY_BRIDGE_ROOT=$bridgeRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
@@ -914,20 +934,6 @@ jobs:
           "SKY_BRIDGE_SENTINEL_ID=$($metadata.sentinel_id)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SENTINEL_SHA256=$($metadata.sentinel_content_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-
-      - name: Rust — install pinned stable toolchain for updater fixture
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
-
-      - name: Rust — verify updater-fixture compiler
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: |
-          $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.99\.1\s') {
-            throw "Expected stable Rust 1.99.1 for updater fixture, got: $version"
-          }
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -1002,6 +1008,7 @@ jobs:
     permissions:
       contents: read
     env:
+      RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
@@ -1020,31 +1027,6 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Download current candidate from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/sky-auto-player-current-candidate
-
-      - name: Validate exact current candidate contract
-        run: |
-          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
-          pwsh scripts/ci_validate_candidate.ps1 `
-            -Mode Validate `
-            -CandidateRoot $candidateRoot `
-            -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}"
-          if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
-          $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
-          $installer = Join-Path $candidateRoot $metadata.installer
-          $signature = Join-Path $candidateRoot $metadata.updater_signature
-          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-          "SKY_CANDIDATE_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-          "SKY_CANDIDATE_SIGNATURE=$signature" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-          "SKY_CANDIDATE_PUBLIC_KEY=$(Join-Path $candidateRoot $metadata.updater_public_key)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-          "SKY_CANDIDATE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-          "SKY_CANDIDATE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-          "SKY_CANDIDATE_SIGNATURE_SHA256=$($metadata.updater_signature_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-
       - name: Rust — install pinned stable toolchain for packaged build
         env:
           RUSTUP_TOOLCHAIN: 1.99.1
@@ -1058,6 +1040,30 @@ jobs:
           if ($version -notmatch '^rustc 1\.99\.1\s') {
             throw "Expected stable Rust 1.99.1 for packaged build, got: $version"
           }
+
+      - name: Download current candidate from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/sky-auto-player-current-candidate
+
+      - name: Validate exact current candidate contract
+        run: |
+          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
+          cargo xtask ci candidate validate `
+            --candidate-root $candidateRoot `
+            --source-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
+          $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
+          $installer = Join-Path $candidateRoot $metadata.installer
+          $signature = Join-Path $candidateRoot $metadata.updater_signature
+          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_SIGNATURE=$signature" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_PUBLIC_KEY=$(Join-Path $candidateRoot $metadata.updater_public_key)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_SIGNATURE_SHA256=$($metadata.updater_signature_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -1175,7 +1181,7 @@ jobs:
             if ($installerRun.ExitCode -ne 0) { throw "Tauri NSIS installer exited with $($installerRun.ExitCode)" }
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
-            pwsh scripts/verify_installed_calibration.ps1 -InstallRoot $installRoot -ExpectedSize ([long]$candidate.calibration_binary_size) -ExpectedSha256 ([string]$candidate.calibration_binary_sha256) -Evidence rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
+            cargo xtask calibration verify-installed --install-root $installRoot --expected-size ([long]$candidate.calibration_binary_size) --expected-sha256 ([string]$candidate.calibration_binary_sha256) --evidence rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
             if ($LASTEXITCODE -ne 0) { throw "Installed native calibration verification failed with exit code $LASTEXITCODE" }
             cargo xtask builtin-catalog verify-installed --root (Join-Path $installRoot "builtin-songs")
             if ($LASTEXITCODE -ne 0) { throw "Installed built-in catalog verification failed with exit code $LASTEXITCODE" }

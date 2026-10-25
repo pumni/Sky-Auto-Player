@@ -1,43 +1,40 @@
-function Get-CargoPackageVersion {
-  param([Parameter(Mandatory = $true)] [string]$ManifestSource)
-
-  $packageSection = [regex]::Match(
-    $ManifestSource,
-    '(?ms)^\[package\]\r?\n(?<section>.*?)(?=^\[|\z)'
-  )
-  if (-not $packageSection.Success) {
-    throw 'Candidate source manifest has no package section'
-  }
-  $versions = [regex]::Matches(
-    $packageSection.Groups['section'].Value,
-    '(?m)^version\s*=\s*"([^"]+)"\s*$'
-  )
-  if ($versions.Count -ne 1) {
-    throw 'Candidate source manifest does not declare one literal package version'
-  }
-  return $versions[0].Groups[1].Value
-}
-
-function Get-HeadSourceManifest {
+function Invoke-CandidateSourceIdentityTool {
   param(
     [Parameter(Mandatory = $true)] [string]$RepoRoot,
-    [Parameter(Mandatory = $true)] [string]$SourceSha
+    [Parameter(Mandatory = $true)] [string]$CandidateVersion,
+    [string]$SourceSha,
+    [switch]$RequireWorktreeVersion
   )
 
-  if ($SourceSha -notmatch '^[0-9a-fA-F]{40}$' -or $SourceSha -match '^0{40}$') {
-    throw 'Candidate source identity received an invalid Git HEAD SHA'
+  $arguments = @(
+    '--quiet', 'xtask', 'ci', 'source-identity',
+    '--repository-root', $RepoRoot,
+    '--candidate-version', $CandidateVersion,
+    '--format', 'json'
+  )
+  if (-not [string]::IsNullOrWhiteSpace($SourceSha)) {
+    $arguments += @('--source-sha', $SourceSha)
   }
+  if ($RequireWorktreeVersion) {
+    $arguments += '--require-worktree-version'
+  }
+
   Push-Location $RepoRoot
   try {
-    $headSha = (& git rev-parse --verify HEAD 2>$null).Trim()
-    if ($LASTEXITCODE -ne 0 -or $headSha -cne $SourceSha) {
-      throw 'Candidate source identity SHA does not match the checked-out Git HEAD'
+    $output = @(& cargo @arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      $diagnostic = ($output -join [Environment]::NewLine).Trim()
+      if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+        throw "Rust candidate source identity failed with exit code $exitCode"
+      }
+      throw $diagnostic
     }
-    $manifestLines = & git show ($SourceSha + ':desktop/src-tauri/Cargo.toml') 2>$null
-    if ($LASTEXITCODE -ne 0) {
-      throw 'Candidate source identity could not read the desktop manifest from Git HEAD'
+    try {
+      return (($output -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+      throw 'Rust candidate source identity returned invalid JSON'
     }
-    return ($manifestLines -join [Environment]::NewLine)
   } finally {
     Pop-Location
   }
@@ -53,18 +50,10 @@ function Assert-CandidateSourceIdentity {
   if ([string]::IsNullOrWhiteSpace($CandidateVersion)) {
     throw 'Candidate source identity requires a version'
   }
-  $manifestSource = Get-HeadSourceManifest -RepoRoot $RepoRoot -SourceSha $SourceSha
-  $sourceVersion = Get-CargoPackageVersion -ManifestSource $manifestSource
-  Push-Location $RepoRoot
-  try {
-    & cargo xtask version check --version $CandidateVersion --no-repo-match *> $null
-    if ($LASTEXITCODE -ne 0 -or $CandidateVersion -cne $sourceVersion) {
-      throw "Candidate version $CandidateVersion does not match the release manifest at Git HEAD ($sourceVersion)"
-    }
-  } finally {
-    Pop-Location
-  }
-  return [pscustomobject]@{ Version = $sourceVersion; SourceSha = $SourceSha }
+  return Invoke-CandidateSourceIdentityTool `
+    -RepoRoot $RepoRoot `
+    -CandidateVersion $CandidateVersion `
+    -SourceSha $SourceSha
 }
 
 function Get-CandidateSourceIdentity {
@@ -73,24 +62,10 @@ function Get-CandidateSourceIdentity {
     [Parameter(Mandatory = $true)] [string]$CandidateVersion
   )
 
-  Push-Location $RepoRoot
-  try {
-    $sourceSha = (& git rev-parse --verify HEAD 2>$null).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sourceSha -notmatch '^[0-9a-fA-F]{40}$') {
-      throw 'Candidate source identity could not resolve the checked-out Git HEAD SHA'
-    }
-    $identity = Assert-CandidateSourceIdentity `
-      -RepoRoot $RepoRoot `
-      -CandidateVersion $CandidateVersion `
-      -SourceSha $sourceSha
-    & cargo xtask version check --version $CandidateVersion *> $null
-    if ($LASTEXITCODE -ne 0) {
-      throw "Candidate version $CandidateVersion does not match the checked-out release source and lockfile"
-    }
-    return $identity
-  } finally {
-    Pop-Location
-  }
+  return Invoke-CandidateSourceIdentityTool `
+    -RepoRoot $RepoRoot `
+    -CandidateVersion $CandidateVersion `
+    -RequireWorktreeVersion
 }
 
 function Convert-FixtureCargoVersion {

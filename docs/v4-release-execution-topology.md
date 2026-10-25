@@ -282,6 +282,9 @@ Step 2: Build & Sign Candidate (Single Build)
   - Run `bun install --frozen-lockfile` and `bun run build` in desktop/.
   - Set `TAURI_SIGNING_PRIVATE_KEY` to the validated private key file path (never raw key bytes).
   - Run `bun run tauri build --ci -- --profile dist`.
+  - The Tauri pre-build hook calls `cargo xtask calibration build` to compile
+    and stage the locked x86_64 MSVC calibration executable before Tauri starts
+    its application Cargo build.
   - Tauri NSIS bundler invokes `scripts/sign_v4_authenticode.ps1` via signCommand seam.
   - Before provider onboarding, the seam deliberately performs no Authenticode signing; Tauri signs the updater artifact with
     the updater key, generating `.exe.sig`.
@@ -306,6 +309,9 @@ Step 6: SPDX SBOM and Bundle Verification
 
 Step 7: Install Smoke Test
   - Install silently (`/S`) under `%TEMP%` test profile.
+  - Run `cargo xtask calibration verify-installed` on the staged resource and
+    installed copy, binding both checks to the staged size and SHA-256 before
+    application launch; preserve the installed-calibration evidence schema.
   - Verify launcher executable exists and verify every installed project PE is Authenticode-unsigned.
   - Launch application process, monitor execution, and stop.
   - Run uninstaller (`/S`) and verify clean removal.

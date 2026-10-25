@@ -10,7 +10,7 @@ const V4_BUNDLE_PUBLISHER: &str = "pumni";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
-const CALIBRATION_BUILD_COMMAND: &str = "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1";
+const CALIBRATION_BUILD_COMMAND: &str = "bun run build && cd .. && cargo xtask calibration build";
 const WINDOWS_ARCH: &str = "x64";
 const UNSIGNED_ZERO_BUDGET_MODE: &str = "unsigned-zero-budget";
 // Public Tauri updater trust material. The matching private key is generated

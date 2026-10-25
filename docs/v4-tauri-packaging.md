@@ -69,25 +69,27 @@ secret output. Test authority is compiled only by the explicit
 
 ## Packaged calibration executable
 
-The Tauri beforeBuildCommand runs
-scripts/build_native_calibration.ps1 after the frontend build. That helper
-builds sky_dispatch_win32's native_calibration binary with the locked Rust
-workspace, the x86_64-pc-windows-msvc target, and the dist profile. It
-discovers Cargo's active target directory, validates the output as an x86_64
-PE executable, and stages it at
-desktop/src-tauri/resources/native_calibration.exe. Tauri bundles that
-resource at the install root, where AppPaths::calibration_binary_path()
-looks for it.
+The Tauri beforeBuildCommand runs `cargo xtask calibration build` after the
+frontend build. The Rust command builds `sky_dispatch_win32`'s
+`native_calibration` binary with the locked workspace, the
+`x86_64-pc-windows-msvc` target, and the `dist` profile. It discovers Cargo's
+active target directory, validates the output as an x86_64 PE executable, and
+stages the exact bytes at `desktop/src-tauri/resources/native_calibration.exe`
+with rollback if replacement fails. Tauri bundles that resource at the install
+root, where `AppPaths::calibration_binary_path()` looks for it. Tauri runs this
+hook before starting its application Cargo build; the Rust builder owns its
+separate, completed Cargo build and does not run from `build.rs` or the signing
+hook.
 
-The current-candidate contract records the staged executable's filename, size,
-SHA-256, and architecture. Packaged CI installs that exact candidate under
+`cargo xtask ci candidate` records the staged executable's filename, size,
+SHA-256, and architecture in the existing candidate schema. Packaged CI installs that exact candidate under
 the hermetic current-user NSIS fixture and independently verifies the
 installed file against those values, checks its x86_64 PE machine type, and
 runs only native_calibration.exe --help with a five-second bound. The
-installed evidence is retained as INSTALLED_CALIBRATION_EVIDENCE.json.
-CI also runs a negative self-test that requires verification to fail when the
-installed executable is absent. Neither check runs calibration or sends
-gameplay input.
+installed evidence is retained as `INSTALLED_CALIBRATION_EVIDENCE.json`.
+Rust-native tests cover missing files, wrong PE machine, corrupt digest, and
+restore-on-error behavior. Neither check runs calibration or sends gameplay
+input.
 
 ## Local Windows package qualification
 

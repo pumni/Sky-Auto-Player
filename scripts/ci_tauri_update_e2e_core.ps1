@@ -583,16 +583,20 @@ try {
     }
   }
   if ($providedBridge) {
-    & (Join-Path $repoRoot 'scripts/ci_validate_bridge.ps1') `
-      -Mode Validate `
-      -BridgeRoot $BridgeRootPath `
-      -SourceSha $BridgeSourceSha `
-      -Version $BridgeVersion `
-      -Publisher $BridgePublisher `
-      -Identifier $BridgeIdentifier `
-      -SentinelId $BridgeSentinelId `
-      -SentinelContentSha256 $BridgeSentinelSha256 `
-      -RepositoryRoot $repoRoot
+    Push-Location $repoRoot
+    try {
+      & cargo xtask ci bridge validate `
+        --bridge-root $BridgeRootPath `
+        --source-sha $BridgeSourceSha `
+        --version $BridgeVersion `
+        --publisher $BridgePublisher `
+        --identifier $BridgeIdentifier `
+        --sentinel-id $BridgeSentinelId `
+        --sentinel-content-sha256 $BridgeSentinelSha256
+      if ($LASTEXITCODE -ne 0) { throw "Provided updater bridge validation failed with exit code $LASTEXITCODE" }
+    } finally {
+      Pop-Location
+    }
     $bridgeMetadata = Get-Content -LiteralPath (Join-Path $BridgeRootPath 'bridge.json') -Raw | ConvertFrom-Json
     $expectedBridgeInstaller = [IO.Path]::GetFullPath((Join-Path $BridgeRootPath ([string]$bridgeMetadata.installer)))
     if ([IO.Path]::GetFullPath($BridgeInstallerPath) -cne $expectedBridgeInstaller) {

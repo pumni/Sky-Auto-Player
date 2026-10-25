@@ -171,12 +171,11 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
         .and_then(Value::as_object)
         .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
     let before_build = build.get("beforeBuildCommand").and_then(Value::as_str);
-    if !before_build.is_some_and(|command| {
-        command.starts_with("bun run build && pwsh ")
-            && command.contains("../scripts/build_native_calibration.ps1")
-    }) {
+    if !before_build
+        .is_some_and(|command| command == "bun run build && cd .. && cargo xtask calibration build")
+    {
         return Err(
-            "Tauri packaging must build and stage native calibration in beforeBuildCommand"
+            "Tauri packaging must run the Rust calibration builder after the frontend build"
                 .to_owned(),
         );
     }
@@ -707,7 +706,7 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_accepts_scoped_watchers_and_build_hook() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
+                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build",
                 "additionalWatchFolders": [
                     "../../rust/crates",
                     "../../rust/Cargo.toml",
@@ -719,10 +718,29 @@ tauri-test = ["tauri/test"]
     }
 
     #[test]
+    fn tauri_calibration_hook_rejects_powershell_wrappers_and_nested_build_commands() {
+        let source = r#"{
+            "build": {
+                "beforeBuildCommand": "bun run build && cd .. && pwsh scripts/build_native_calibration.ps1",
+                "additionalWatchFolders": ["../../rust/crates", "../../rust/Cargo.toml", "../../rust/Cargo.lock"]
+            }
+        }"#;
+        assert!(tauri_build_freshness_contract_manifest(source).is_err());
+
+        let source = r#"{
+            "build": {
+                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build && cargo tauri build",
+                "additionalWatchFolders": ["../../rust/crates", "../../rust/Cargo.toml", "../../rust/Cargo.lock"]
+            }
+        }"#;
+        assert!(tauri_build_freshness_contract_manifest(source).is_err());
+    }
+
+    #[test]
     fn tauri_build_freshness_contract_rejects_the_workspace_root_watch() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
+                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build",
                 "additionalWatchFolders": [
                     "../../rust",
                     "../../rust/crates",

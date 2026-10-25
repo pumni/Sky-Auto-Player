@@ -22,6 +22,8 @@ revision-scoped; their presence here or in the repository does not make them cur
   [v4-updater-key-custody.md](v4-updater-key-custody.md),
   [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md), and
   [v4-release-execution-topology.md](v4-release-execution-topology.md).
+- **CI lanes and artifact tooling:** [ci-validation-topology.md](ci-validation-topology.md)
+  covers Rust-owned classification, candidate/bridge artifacts, and calibration packaging.
 - **Toolchain and development:** [rust-toolchain-policy.md](rust-toolchain-policy.md) and
   [../CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Performance or test-pipeline work:** [desktop-startup-benchmark.md](desktop-startup-benchmark.md)

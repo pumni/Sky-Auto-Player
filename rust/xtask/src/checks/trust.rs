@@ -86,10 +86,10 @@ fn v4_production_calibration_gate_contract(orchestrator: &str) -> Result<()> {
         .map(|(function, _)| function)
         .ok_or("installed calibration verifier adapter must be a bounded function")?;
     for marker in [
-        "verify_installed_calibration.ps1",
-        "-InstallRoot $InstallRoot",
-        "-ExpectedSize $ExpectedSize",
-        "-ExpectedSha256 $ExpectedSha256",
+        "cargo xtask calibration verify-installed",
+        "--install-root $InstallRoot",
+        "--expected-size $ExpectedSize",
+        "--expected-sha256 $ExpectedSha256",
         "$verificationExitCode = $LASTEXITCODE",
         "if ($verificationExitCode -ne 0)",
     ] {
@@ -151,11 +151,11 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "scripts/cleanup_v4_test_signing.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
         "scripts/ci_tauri_update_e2e.ps1",
-        "scripts/ci_validate_bridge.ps1",
+        "cargo xtask ci bridge validate",
         "scripts/ci_require_windows_tools.ps1",
         "TimeoutSeconds 30",
         "qualify packaged Tauri updater rotation",
-        "scripts/ci_validate_candidate.ps1",
+        "cargo xtask ci candidate validate",
         "CandidateInstallerPath",
         "CandidateSignaturePath",
         "CandidateVersion",
@@ -228,7 +228,7 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "old_root_rejection_copy_matches",
         "BridgeRootPath",
         "BridgeInstallerPath",
-        "ci_validate_bridge.ps1",
+        "cargo xtask ci bridge validate",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -487,17 +487,20 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     }
     v4_production_calibration_gate_contract(&orchestrator)?;
     let installed_calibration_verifier =
-        fs::read_to_string(root.join("scripts/verify_installed_calibration.ps1"))?;
+        fs::read_to_string(root.join("rust/xtask/src/calibration.rs"))?;
     for marker in [
-        "ExpectedSize -le 0",
-        "$sha256 -cne $ExpectedSha256.ToLowerInvariant()",
-        "$machine -ne 0x8664",
-        "WaitForExit(5000)",
+        "expected calibration binary size must be positive",
+        "installed calibration SHA-256 mismatch",
+        "installed calibration executable is not x86_64",
+        "Duration::from_secs(5)",
         "installed calibration --help exited with",
+        "InstalledCalibrationEvidence",
+        "successful_evidence_keeps_the_installed_calibration_schema",
+        "installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe",
     ] {
         if !installed_calibration_verifier.contains(marker) {
             return Err(format!(
-                "production calibration verifier is missing its fail-closed check: {marker}"
+                "Rust production calibration verifier is missing its fail-closed check: {marker}"
             )
             .into());
         }

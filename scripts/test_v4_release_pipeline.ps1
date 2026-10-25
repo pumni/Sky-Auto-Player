@@ -59,8 +59,11 @@ function Assert-UpdaterRegressionState($Before, [string]$Scenario) {
     }
 }
 
-$candidateSourceCargo = [IO.File]::ReadAllText((Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml'))
-$candidateSourceVersion = Get-CargoPackageVersion -ManifestSource $candidateSourceCargo
+$versionOutput = @(& cargo --quiet xtask version check 2>&1)
+if ($LASTEXITCODE -ne 0) { Fail "Rust version authority failed before source-identity tests: $($versionOutput -join ' ')" }
+$versionMatch = [regex]::Match(($versionOutput -join [Environment]::NewLine), '(?m)^version=(.+)$')
+if (-not $versionMatch.Success) { Fail 'Rust version authority did not return the current package version' }
+$candidateSourceVersion = $versionMatch.Groups[1].Value.Trim()
 $candidateSourceIdentity = Get-CandidateSourceIdentity `
     -RepoRoot $repoRoot `
     -CandidateVersion $candidateSourceVersion
@@ -106,7 +109,11 @@ try {
             if ($headIdentity.Version -cne $candidateSourceVersion) {
                 Fail 'candidate identity did not resolve from the checked-out Git HEAD'
             }
-            $bridgeCargoVersion = Get-CargoPackageVersion -ManifestSource ([IO.File]::ReadAllText((Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml')))
+            $bridgeVersionOutput = @(& cargo --quiet xtask version check --version '4.1.3' 2>&1)
+            if ($LASTEXITCODE -ne 0) { Fail 'temporary bridge Cargo manifest did not retain the requested historical version' }
+            $bridgeCargoVersionMatch = [regex]::Match(($bridgeVersionOutput -join [Environment]::NewLine), '(?m)^version=(.+)$')
+            if (-not $bridgeCargoVersionMatch.Success) { Fail 'Rust version authority did not read the historical bridge manifest version' }
+            $bridgeCargoVersion = $bridgeCargoVersionMatch.Groups[1].Value.Trim()
             $bridgeLock = [IO.File]::ReadAllText((Join-Path $repoRoot 'rust/Cargo.lock'))
             $bridgeLockMatch = [regex]::Match($bridgeLock, '(?s)\[\[package\]\]\r?\nname = "sky_desktop_shell"\r?\nversion = "([^"]+)"')
             if ($bridgeCargoVersion -cne '4.1.3' -or -not $bridgeLockMatch.Success -or $bridgeLockMatch.Groups[1].Value -cne '4.1.3') {

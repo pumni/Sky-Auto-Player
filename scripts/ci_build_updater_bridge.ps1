@@ -192,17 +192,21 @@ try {
     }
     Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $outputPath $installers[0].Name)
     $contractPath = Join-Path $runnerTemp ("sky-auto-player-updater-bridge-contract-" + [guid]::NewGuid().ToString("N"))
-    & (Join-Path $PSScriptRoot "ci_validate_bridge.ps1") `
-        -Mode Create `
-        -BundleDir $outputPath `
-        -OutputRoot $contractPath `
-        -SourceSha $sourceSha `
-        -Version $bridgeVersion `
-        -Publisher $bridgePublisher `
-        -Identifier $bridgeIdentifier `
-        -SentinelId $sentinelId `
-        -SentinelContentSha256 $sentinelSha256 `
-        -RepositoryRoot $repoRoot
+    Push-Location $repoRoot
+    try {
+        & cargo xtask ci bridge create `
+            --bundle-dir $outputPath `
+            --output-root $contractPath `
+            --source-sha $sourceSha `
+            --version $bridgeVersion `
+            --publisher $bridgePublisher `
+            --identifier $bridgeIdentifier `
+            --sentinel-id $sentinelId `
+            --sentinel-content-sha256 $sentinelSha256
+        if ($LASTEXITCODE -ne 0) { throw "Bridge artifact contract creation failed with exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
     if (-not (Test-Path -LiteralPath $contractPath -PathType Container)) {
         throw "Bridge contract validator did not produce its validation root"
     }
