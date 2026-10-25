@@ -724,8 +724,8 @@ mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted
 
     #[test]
     fn installed_nsis_catalog_contract_keeps_safe_order_across_line_endings() {
-        let harness = include_str!("../nsis_harness.rs");
-        assert!(nsis_installed_catalog_contract(harness).is_ok());
+        let harness = source(include_str!("../nsis_harness.rs"));
+        assert!(nsis_installed_catalog_contract(&harness).is_ok());
         let crlf = harness.replace('\n', "\r\n");
         assert!(nsis_installed_catalog_contract(&crlf).is_ok());
 
