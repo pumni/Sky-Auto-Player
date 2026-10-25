@@ -37,6 +37,127 @@ fn packaged_sccache_precedes_cargo_contract(packaged: &str) -> Result<()> {
     Ok(())
 }
 
+fn updater_sccache_precedes_cargo_contract(updater: &str) -> Result<()> {
+    let setup_count = updater.matches("name: Set up sccache").count();
+    let setup_position = updater
+        .find("name: Set up sccache")
+        .ok_or("updater consumer must install sccache before invoking Cargo")?;
+    let dependency_check_position = updater
+        .find("name: Fail fast on updater fixture dependencies")
+        .ok_or("updater consumer must verify sccache before invoking Cargo")?;
+    let setup_step = workflow_named_step(updater, "Set up sccache")?;
+    let dependency_check =
+        workflow_named_step(updater, "Fail fast on updater fixture dependencies")?;
+    let first_cargo_position = updater
+        .find("cargo ")
+        .ok_or("updater consumer must run Cargo to validate frozen artifacts")?;
+    if setup_count != 1
+        || setup_position >= dependency_check_position
+        || dependency_check_position >= first_cargo_position
+        || !updater.contains("version: \"v0.17.0\"")
+        || !setup_step.contains(
+            "uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
+        )
+        || !dependency_check.contains(
+            "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe",
+        )
+        || !updater
+            .lines()
+            .any(|line| line == "      RUSTC_WRAPPER: sccache")
+    {
+        return Err(
+            "updater consumer must install and verify pinned sccache before its first Cargo command"
+                .into(),
+        );
+    }
+    if updater[..setup_position].contains("cargo ") {
+        return Err("updater consumer invoked Cargo before setting up sccache".into());
+    }
+    Ok(())
+}
+
+fn workflow_named_step<'a>(workflow: &'a str, name: &str) -> Result<&'a str> {
+    let marker = format!("      - name: {name}");
+    let start = workflow
+        .find(&marker)
+        .ok_or_else(|| format!("workflow is missing step `{name}`"))?;
+    let tail = &workflow[start..];
+    let end = tail[marker.len()..]
+        .find("\n      - name:")
+        .map_or(tail.len(), |offset| marker.len() + offset);
+    Ok(&tail[..end])
+}
+
+fn updater_e2e_bindings_contract(updater: &str) -> Result<()> {
+    let normalized = updater.replace("\r\n", "\n").replace('\r', "\n");
+    let source_sha =
+        "      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}";
+    if normalized.matches(source_sha).count() != 1 {
+        return Err(
+            "updater consumer must bind its own exact workflow source SHA at job scope".into(),
+        );
+    }
+
+    let candidate = workflow_named_step(&normalized, "Validate and bind exact current candidate")?;
+    if !candidate.contains(
+        "$candidateRoot = Join-Path $env:RUNNER_TEMP \"sky-auto-player-current-candidate\"",
+    ) {
+        return Err(
+            "candidate validation must use its downloaded runner-local artifact root".into(),
+        );
+    }
+    let candidate_validation = candidate
+        .find("cargo xtask ci candidate validate")
+        .ok_or("updater consumer must validate the downloaded candidate before binding its root")?;
+    let candidate_source = candidate
+        .find("--source-sha $env:SKY_CI_SOURCE_SHA")
+        .ok_or("candidate validation must bind the exact updater consumer source SHA")?;
+    let candidate_success = candidate
+        .find("if ($LASTEXITCODE -ne 0)")
+        .ok_or("candidate validation must fail before exporting its root")?;
+    let candidate_root = candidate
+        .find("\"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV")
+        .ok_or("validated candidate root must be exported to the later updater step")?;
+    if candidate
+        .matches("SKY_CANDIDATE_ROOT=$candidateRoot")
+        .count()
+        != 1
+        || candidate_validation >= candidate_source
+        || candidate_source >= candidate_success
+        || candidate_success >= candidate_root
+    {
+        return Err(
+            "candidate root may be exported only after exact source validation succeeds".into(),
+        );
+    }
+
+    let bridge = workflow_named_step(&normalized, "Validate and bind exact updater bridge")?;
+    if !bridge.contains("cargo xtask ci bridge validate")
+        || !bridge.contains("--source-sha $env:SKY_CI_SOURCE_SHA")
+    {
+        return Err("bridge validation must bind the updater consumer's exact source SHA".into());
+    }
+
+    let runtime = workflow_named_step(
+        &normalized,
+        "Install provided bridge and qualify packaged Tauri updater rotation",
+    )?;
+    for marker in [
+        "cargo xtask ci updater-fixture run",
+        "--candidate-root $env:SKY_CANDIDATE_ROOT",
+        "--bridge-root $env:SKY_BRIDGE_ROOT",
+        "--source-sha $env:SKY_CI_SOURCE_SHA",
+    ] {
+        if !runtime.contains(marker) {
+            return Err(format!(
+                "updater runtime qualification is missing its validated job-local binding: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn isolated_xtask_rust_runner_step_contract(step: &str) -> Result<()> {
     let copy_position = step
         .find("Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\"")
@@ -120,6 +241,8 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         .map(|offset| updater_start + offset)
         .ok_or("CI workflow updater consumer must precede the packaged consumer")?;
     let updater = &normalized[updater_start..updater_end];
+    updater_sccache_precedes_cargo_contract(updater)?;
+    updater_e2e_bindings_contract(updater)?;
     for marker in [
         "name: Updater fixture qualification",
         "needs: [changes, static, candidate, updater_bridge]",
@@ -1334,6 +1457,158 @@ mod tests {
         assert!(
             packaged_sccache_precedes_cargo_contract(&early_cargo).is_err(),
             "packaged contract must reject any Cargo command before sccache"
+        );
+    }
+
+    #[test]
+    fn updater_consumer_requires_verified_sccache_before_cargo() {
+        let valid = r#"
+      RUSTC_WRAPPER: sccache
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: "v0.17.0"
+      - name: Set up Bun for updater fixture frontend
+      - name: Fail fast on updater fixture dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
+      - name: Rust cache
+      - name: Validate and bind exact current candidate
+        run: cargo xtask ci candidate validate
+"#;
+        updater_sccache_precedes_cargo_contract(valid)
+            .expect("pinned sccache setup and tool verification must precede Cargo");
+
+        let missing_setup = valid.replace("name: Set up sccache", "name: missing sccache");
+        assert!(
+            updater_sccache_precedes_cargo_contract(&missing_setup).is_err(),
+            "updater contract must reject a missing sccache setup"
+        );
+
+        let missing_verification = valid.replace(
+            "name: Fail fast on updater fixture dependencies",
+            "name: missing updater dependency verification",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&missing_verification).is_err(),
+            "updater contract must reject missing pre-Cargo tool verification"
+        );
+
+        let late_setup = valid.replace(
+            "      - name: Set up sccache",
+            "      - name: Earlier Cargo validation\n        run: cargo metadata\n      - name: Set up sccache",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&late_setup).is_err(),
+            "updater contract must reject Cargo before sccache setup"
+        );
+
+        let wrong_pin = valid.replace("version: \"v0.17.0\"", "version: \"v0.18.0\"");
+        assert!(
+            updater_sccache_precedes_cargo_contract(&wrong_pin).is_err(),
+            "updater contract must retain the pinned sccache version"
+        );
+
+        let wrong_action = valid.replace(
+            "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
+            "mozilla-actions/sccache-action@unreviewed",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&wrong_action).is_err(),
+            "updater contract must retain the pinned sccache action"
+        );
+
+        let missing_tool_check = valid.replace(
+            "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe",
+            "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&missing_tool_check).is_err(),
+            "updater contract must require sccache in the pre-Cargo tool verification"
+        );
+    }
+
+    #[test]
+    fn updater_consumer_binds_exact_source_and_validated_candidate_root() {
+        let valid = r#"
+      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate and bind exact current candidate
+        run: |
+          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
+          cargo xtask ci candidate validate `
+            --candidate-root $candidateRoot `
+            --source-sha $env:SKY_CI_SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "candidate validation failed" }
+          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+      - name: Validate and bind exact updater bridge
+        run: |
+          cargo xtask ci bridge validate `
+            --source-sha $env:SKY_CI_SOURCE_SHA `
+            --version $metadata.version
+      - name: Install provided bridge and qualify packaged Tauri updater rotation
+        run: |
+          cargo xtask ci updater-fixture run `
+            --candidate-root $env:SKY_CANDIDATE_ROOT `
+            --bridge-root $env:SKY_BRIDGE_ROOT `
+            --source-sha $env:SKY_CI_SOURCE_SHA
+"#;
+        updater_e2e_bindings_contract(valid)
+            .expect("updater consumer must bind validated job-local inputs");
+        let crlf = valid.replace('\n', "\r\n");
+        updater_e2e_bindings_contract(&crlf)
+            .expect("updater input contract must accept LF and CRLF source");
+
+        let missing_source = valid.replace(
+            "      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n",
+            "",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&missing_source).is_err(),
+            "updater contract must reject a missing job-local source SHA"
+        );
+
+        let changed_source = valid.replace(
+            "      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            "      SKY_CI_SOURCE_SHA: ${{ github.sha }}",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&changed_source).is_err(),
+            "updater contract must bind the PR head SHA for pull requests"
+        );
+
+        let missing_candidate_root = valid.replace(
+            "          \"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV -Encoding UTF8\n",
+            "",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&missing_candidate_root).is_err(),
+            "updater contract must reject a missing validated candidate-root export"
+        );
+
+        let wrong_candidate_path = valid.replace(
+            "$candidateRoot = Join-Path $env:RUNNER_TEMP \"sky-auto-player-current-candidate\"",
+            "$candidateRoot = Join-Path $env:GITHUB_WORKSPACE \"candidate\"",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&wrong_candidate_path).is_err(),
+            "updater contract must retain the exact runner-local downloaded candidate root"
+        );
+
+        let candidate_root_before_validation = valid.replace(
+            "          if ($LASTEXITCODE -ne 0) { throw \"candidate validation failed\" }\n          \"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV -Encoding UTF8",
+            "          \"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV -Encoding UTF8\n          if ($LASTEXITCODE -ne 0) { throw \"candidate validation failed\" }",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&candidate_root_before_validation).is_err(),
+            "updater contract must reject exporting a candidate root before validation succeeds"
+        );
+
+        let changed_runtime_source = valid.replace(
+            "            --bridge-root $env:SKY_BRIDGE_ROOT `\n            --source-sha $env:SKY_CI_SOURCE_SHA",
+            "            --bridge-root $env:SKY_BRIDGE_ROOT `\n            --source-sha ${{ github.sha }}",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&changed_runtime_source).is_err(),
+            "updater runtime must use the validated source binding"
         );
     }
 

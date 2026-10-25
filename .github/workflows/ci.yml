@@ -865,6 +865,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
+      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
       SCCACHE_GHA_VERSION: sky-ci-v1
@@ -896,6 +897,27 @@ jobs:
             throw "Expected stable Rust 1.99.1 for updater fixture, got: $version"
           }
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.17.0"
+
+      - name: Set up Bun for updater fixture frontend
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Fail fast on updater fixture dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
+
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: "rust -> target"
+          cache-targets: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+
       - name: Download current candidate from this workflow run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -913,8 +935,9 @@ jobs:
           $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
           cargo xtask ci candidate validate `
             --candidate-root $candidateRoot `
-            --source-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+            --source-sha $env:SKY_CI_SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
+          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
           "SKY_CANDIDATE_INSTALLER=$(Join-Path $candidateRoot $metadata.installer)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_SIGNATURE=$(Join-Path $candidateRoot $metadata.updater_signature)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
@@ -927,7 +950,7 @@ jobs:
           $metadata = Get-Content -LiteralPath (Join-Path $bridgeRoot "bridge.json") -Raw | ConvertFrom-Json
           cargo xtask ci bridge validate `
             --bridge-root $bridgeRoot `
-            --source-sha "${{ github.event.pull_request.head.sha || github.sha }}" `
+            --source-sha $env:SKY_CI_SOURCE_SHA `
             --version $metadata.version `
             --publisher $metadata.publisher `
             --identifier $metadata.identifier `
@@ -944,27 +967,6 @@ jobs:
           "SKY_BRIDGE_SENTINEL_ID=$($metadata.sentinel_id)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SENTINEL_SHA256=$($metadata.sentinel_content_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: "v0.17.0"
-
-      - name: Rust cache
-        id: rust-cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: "rust -> target"
-          cache-targets: false
-          save-if: ${{ github.event_name != 'pull_request' }}
-
-      - name: Set up Bun for updater fixture frontend
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.3
-
-      - name: Fail fast on updater fixture dependencies
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
 
       - name: Install pinned desktop dependencies
         working-directory: desktop
