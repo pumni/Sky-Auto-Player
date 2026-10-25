@@ -48,6 +48,35 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
     {
         return Err("release_contract must remain parallel with static".to_owned());
     }
+    let windows_owner_tests = workflow_step_blocks(release)
+        .into_iter()
+        .find(|(name, _)| name == "Run Rust NSIS and registry owner regression tests")
+        .map(|(_, block)| block)
+        .ok_or_else(|| {
+            "release_contract is missing Rust NSIS and registry owner regression tests".to_owned()
+        })?;
+    for marker in [
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml || {",
+        "cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {",
+        "Rust NSIS/updater harness tests failed with exit code ${exit_code}",
+        "Rust Windows registry/process ownership tests failed with exit code ${exit_code}",
+    ] {
+        if !windows_owner_tests.contains(marker) {
+            return Err(format!(
+                "Windows Rust owner test step is missing Bash failure handling `{marker}`"
+            ));
+        }
+    }
+    if windows_owner_tests.matches("exit_code=$?").count() != 2
+        || windows_owner_tests.matches("exit \"$exit_code\"").count() != 2
+        || windows_owner_tests.contains("$LASTEXITCODE")
+        || !release.lines().any(|line| line.trim() == "shell: bash")
+    {
+        return Err(
+            "Windows Rust owner test step must use the release job's Bash shell and status semantics"
+                .to_owned(),
+        );
+    }
     let static_result_marker = ["STATIC_RESULT: $", "{{ needs.static.result }}"].concat();
     let release_result_marker = [
         "RELEASE_CONTRACT_RESULT: $",
@@ -602,10 +631,25 @@ jobs:
   release_contract:
     name: V4 release contract acceptance
     needs: changes
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Rust v4 release transaction mock tests
         run: cargo xtask release-v4 self-test
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests
+      - name: Run Rust NSIS and registry owner regression tests
+        run: |
+          cargo test --locked --manifest-path rust/xtask/Cargo.toml || {{
+            exit_code=$?
+            echo "Rust NSIS/updater harness tests failed with exit code ${{exit_code}}" >&2
+            exit "$exit_code"
+          }}
+          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {{
+            exit_code=$?
+            echo "Rust Windows registry/process ownership tests failed with exit code ${{exit_code}}" >&2
+            exit "$exit_code"
+          }}
   status:
     needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
     env:
@@ -629,9 +673,17 @@ jobs:
             let without = source.replace(marker, "removed");
             assert!(v4_release_contract_ci_wiring(&without).is_err());
         }
+        let powershell_status = source.replace(
+            "exit_code=$?",
+            "if ($LASTEXITCODE -ne 0) { throw \"test failed\" }",
+        );
+        assert!(v4_release_contract_ci_wiring(&powershell_status).is_err());
+        let swallowed_failure =
+            source.replace("exit \"$exit_code\"", "echo \"failure was ignored\"");
+        assert!(v4_release_contract_ci_wiring(&swallowed_failure).is_err());
         let serialized = source.replace(
-            "    needs: changes\n    steps:\n      - name: Rust v4 release transaction mock tests",
-            "    needs: static\n    steps:\n      - name: Rust v4 release transaction mock tests",
+            "  release_contract:\n    name: V4 release contract acceptance\n    needs: changes",
+            "  release_contract:\n    name: V4 release contract acceptance\n    needs: static",
         );
         assert!(v4_release_contract_ci_wiring(&serialized).is_err());
         let no_static = source.replace(

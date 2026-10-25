@@ -357,10 +357,16 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.99.1
         run: |
-          cargo test --locked --manifest-path rust/xtask/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { throw "Rust NSIS/updater harness tests failed with exit code $LASTEXITCODE" }
-          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security
-          if ($LASTEXITCODE -ne 0) { throw "Rust Windows registry/process ownership tests failed with exit code $LASTEXITCODE" }
+          cargo test --locked --manifest-path rust/xtask/Cargo.toml || {
+            exit_code=$?
+            echo "Rust NSIS/updater harness tests failed with exit code ${exit_code}" >&2
+            exit "$exit_code"
+          }
+          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {
+            exit_code=$?
+            echo "Rust Windows registry/process ownership tests failed with exit code ${exit_code}" >&2
+            exit "$exit_code"
+          }
 
       - name: Prepare bounded ephemeral Authenticode test certificate
         timeout-minutes: 2
