@@ -379,8 +379,8 @@ fn qualify_package(
         &shell_env,
         std::time::Duration::from_secs(120),
     )?;
-    run_uninstaller(&uninstaller, &shell_env)?;
-    wait_path_absent(&install_root, std::time::Duration::from_secs(30))?;
+    let mut uninstaller = run_uninstaller(&uninstaller, &install_root, &shell_env)?;
+    finish_uninstall(&install_root, &mut uninstaller)?;
     assert_uninstall_registration_absent()?;
     scope.assert_shortcuts_unchanged()?;
     Ok(())
@@ -554,22 +554,120 @@ pub(crate) fn run_installer(
 }
 
 #[cfg(windows)]
-pub(crate) fn run_uninstaller(uninstaller: &Path, env: &[(String, String)]) -> Result<()> {
+pub(crate) fn run_uninstaller(
+    uninstaller: &Path,
+    install_root: &Path,
+    env: &[(String, String)],
+) -> Result<crate::process::OwnedChild> {
+    let cwd = uninstaller_working_directory(uninstaller, install_root)?;
     let args = vec!["/S".to_owned()];
-    let output = crate::process::capture_owned_timeout_filtered(
+    let mut child = crate::process::spawn_owned_silent_filtered(
         uninstaller.as_os_str(),
         &args,
-        uninstaller
-            .parent()
-            .ok_or("uninstaller has no parent directory")?,
+        &cwd,
         env,
         &private_environment_names(),
-        std::time::Duration::from_secs(60),
     )?;
-    if !output.status.success() {
-        return Err(format!("NSIS uninstaller exited with {}", output.status).into());
+    let status = child.wait_timeout(std::time::Duration::from_secs(60))?;
+    if !status.success() {
+        return Err(format!("NSIS uninstaller exited with {status}").into());
+    }
+    Ok(child)
+}
+
+#[cfg(windows)]
+fn uninstaller_working_directory(uninstaller: &Path, install_root: &Path) -> Result<PathBuf> {
+    let install_root = std::fs::canonicalize(install_root)?;
+    let uninstaller = std::fs::canonicalize(uninstaller)?;
+    if uninstaller.parent() != Some(install_root.as_path()) {
+        return Err("NSIS uninstaller must be a direct regular child of the install root".into());
+    }
+    let cwd = install_root
+        .parent()
+        .ok_or("NSIS install root has no parent working directory")?;
+    if cwd.starts_with(&install_root) {
+        return Err("NSIS uninstaller working directory is inside the install root".into());
+    }
+    Ok(cwd.to_owned())
+}
+
+#[cfg(windows)]
+pub(crate) fn finish_uninstall(
+    install_root: &Path,
+    uninstaller: &mut crate::process::OwnedChild,
+) -> Result<()> {
+    if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {
+        let inventory = bounded_install_root_inventory(install_root);
+        let registry = uninstall_registration_diagnostic();
+        return Err(format!(
+            "{error}; install-root inventory: {inventory}; uninstall registration: {registry}"
+        )
+        .into());
+    }
+    if let Err(error) = wait_path_absent(install_root, std::time::Duration::from_secs(30)) {
+        let status = uninstaller
+            .try_wait()
+            .map(|status| status.map_or_else(|| "still running".to_owned(), |s| s.to_string()))
+            .unwrap_or_else(|error| format!("unavailable ({error})"));
+        let process_count = uninstaller
+            .active_processes()
+            .map(|count| count.to_string())
+            .unwrap_or_else(|error| format!("unavailable ({error})"));
+        let registry = uninstall_registration_diagnostic();
+        return Err(format!(
+            "{error}; uninstaller exit status: {status}; owned process count: {process_count}; uninstall registration: {registry}"
+        )
+        .into());
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn uninstall_registration_diagnostic() -> String {
+    match assert_uninstall_registration_absent() {
+        Ok(()) => "absent".to_owned(),
+        Err(error) => format!("present or unreadable ({error})"),
+    }
+}
+
+#[cfg(windows)]
+fn bounded_install_root_inventory(path: &Path) -> String {
+    const ENTRY_LIMIT: usize = 16;
+    match std::fs::read_dir(path) {
+        Ok(entries) => {
+            let mut names = Vec::new();
+            let mut truncated = false;
+            for (index, entry) in entries.take(ENTRY_LIMIT + 1).enumerate() {
+                if index == ENTRY_LIMIT {
+                    truncated = true;
+                    break;
+                }
+                match entry {
+                    Ok(entry) => {
+                        let name = format!("{:?}", entry.file_name().to_string_lossy());
+                        let kind = match std::fs::symlink_metadata(entry.path()) {
+                            Ok(metadata) if metadata.file_type().is_symlink() => "reparse-point",
+                            Ok(metadata) if metadata.is_dir() => "directory",
+                            Ok(metadata) if metadata.is_file() => "file",
+                            Ok(_) => "other",
+                            Err(error) => {
+                                names.push(format!("{name} (metadata unavailable: {error})"));
+                                continue;
+                            }
+                        };
+                        names.push(format!("{name} ({kind})"));
+                    }
+                    Err(error) => names.push(format!("entry unavailable: {error}")),
+                }
+            }
+            if truncated {
+                names.push("additional entries omitted at the diagnostic bound".to_owned());
+            }
+            format!("{} direct entries [{}]", names.len(), names.join(", "))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "root absent".to_owned(),
+        Err(error) => format!("entries unavailable ({error})"),
+    }
 }
 
 #[cfg(windows)]
@@ -632,17 +730,28 @@ fn launch_smoke(
 #[cfg(windows)]
 pub(crate) fn wait_path_absent(path: &Path, timeout: std::time::Duration) -> Result<()> {
     let started = std::time::Instant::now();
-    while path.exists() {
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "could not inspect NSIS install root {}: {error}",
+                    path.display()
+                )
+                .into());
+            }
+            Ok(_) => {}
+        }
         if started.elapsed() >= timeout {
             return Err(format!(
-                "NSIS uninstaller left the install root in place: {}",
-                path.display()
+                "NSIS uninstaller left the install root in place: {}; remaining entries: {}",
+                path.display(),
+                bounded_install_root_inventory(path)
             )
             .into());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -1385,14 +1494,50 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir(&root).expect("create synthetic install root");
+        for index in 0..20 {
+            std::fs::write(root.join(format!("item-{index:02}.bin")), b"synthetic")
+                .expect("write synthetic leftover entry");
+        }
         let started = std::time::Instant::now();
         let result = wait_path_absent(&root, std::time::Duration::from_millis(30));
+        let error = result.expect_err("present synthetic root must hit its deadline");
+        assert!(error.to_string().contains("remaining entries"));
+        assert!(error.to_string().contains("item-00.bin"));
+        assert!(error.to_string().contains("additional entries omitted"));
         assert!(
-            result.is_err(),
-            "present synthetic root must hit its deadline"
+            error.to_string().len() < 3000,
+            "inventory must remain bounded"
         );
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
-        std::fs::remove_dir(&root).expect("remove synthetic install root");
+        std::fs::remove_dir_all(&root).expect("remove synthetic install root");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstaller_working_directory_is_outside_the_exact_install_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-nsis-uninstaller-cwd-test-{}-{unique:x}",
+            std::process::id()
+        ));
+        let install_root = root.join("install");
+        std::fs::create_dir_all(&install_root).expect("create synthetic install root");
+        let uninstaller = install_root.join("uninstall.exe");
+        std::fs::write(&uninstaller, b"synthetic test file").expect("write fake uninstaller");
+
+        let cwd = uninstaller_working_directory(&uninstaller, &install_root)
+            .expect("direct uninstaller must run from the owned root's parent");
+        let canonical_install = std::fs::canonicalize(&install_root).unwrap();
+        assert!(!cwd.starts_with(&canonical_install));
+        assert_eq!(cwd, std::fs::canonicalize(&root).unwrap());
+
+        let foreign = root.join("foreign-uninstaller.exe");
+        std::fs::write(&foreign, b"synthetic foreign file").expect("write foreign file");
+        assert!(uninstaller_working_directory(&foreign, &install_root).is_err());
+        std::fs::remove_dir_all(root).expect("remove synthetic uninstaller tree");
     }
 
     #[cfg(windows)]

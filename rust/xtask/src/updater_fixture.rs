@@ -1276,8 +1276,8 @@ fn prepare_and_run(
         return Err("old-root rejection changed the user-song sentinel".into());
     }
 
-    crate::nsis_harness::run_uninstaller(&uninstaller, &env)?;
-    crate::nsis_harness::wait_path_absent(&install_root, Duration::from_secs(30))?;
+    let mut uninstaller = crate::nsis_harness::run_uninstaller(&uninstaller, &install_root, &env)?;
+    crate::nsis_harness::finish_uninstall(&install_root, &mut uninstaller)?;
     assert_migration_registry_roots_absent()?;
     if sha256_file(&user_song_path)? != user_song_sha {
         return Err("uninstaller changed the user-song sentinel".into());
@@ -1952,7 +1952,7 @@ fn build_bridge_internal(
         .into());
     }
     let fixture_root = canonical_fixture_root;
-    let git_fixture_root = match git_cli_compatible_windows_path(&fixture_root) {
+    let ordinary_fixture_root = match verified_ordinary_windows_path(&fixture_root) {
         Ok(path) => path,
         Err(error) => {
             let rollback = std::fs::remove_dir(&fixture_root);
@@ -1963,7 +1963,7 @@ fn build_bridge_internal(
             .into());
         }
     };
-    let worktree_cli_path = match git_fixture_root
+    let worktree_cli_path = match ordinary_fixture_root
         .join("source")
         .into_os_string()
         .into_string()
@@ -2003,7 +2003,10 @@ fn build_bridge_internal(
         .into());
     }
     let worktree = fixture_root.join("source");
-    let target = fixture_root.join("target");
+    // Tauri's ACL manifest discovery rejects the extended-length Windows
+    // prefix produced by `canonicalize`; use the already verified ordinary
+    // spelling of the same owned fixture root for Cargo's target directory.
+    let target = ordinary_fixture_root.join("target");
     let desktop = worktree.join("desktop");
     let key_path = fixture_root.join("bridge.key");
     let config_path = fixture_root.join("bridge-updater.json");
@@ -2338,7 +2341,7 @@ fn build_bridge_internal(
 }
 
 #[cfg(windows)]
-fn git_cli_compatible_windows_path(canonical_path: &Path) -> Result<PathBuf> {
+fn verified_ordinary_windows_path(canonical_path: &Path) -> Result<PathBuf> {
     let canonical_text = canonical_path
         .to_str()
         .ok_or("canonical bridge path is not valid Unicode")?;
@@ -2641,7 +2644,7 @@ mod tests {
         let repository = workspace.join("source repository");
         std::fs::create_dir(&repository).expect("create isolated synthetic Git repository");
         let repository = std::fs::canonicalize(&repository).expect("canonicalize source repo");
-        let repository_cli = git_cli_compatible_windows_path(&repository)
+        let repository_cli = verified_ordinary_windows_path(&repository)
             .expect("source repository must have an ordinary Git-compatible path");
 
         let init = std::process::Command::new("git")
@@ -2701,9 +2704,22 @@ mod tests {
         std::fs::create_dir(&fixture_root).expect("create synthetic bridge root");
         let canonical_fixture_root =
             std::fs::canonicalize(&fixture_root).expect("canonicalize synthetic bridge root");
-        let git_fixture_root = git_cli_compatible_windows_path(&canonical_fixture_root)
+        let ordinary_fixture_root = verified_ordinary_windows_path(&canonical_fixture_root)
             .expect("bridge root must normalize to a verified ordinary Git path");
-        let worktree = git_fixture_root.join("source worktree");
+        let cargo_target = ordinary_fixture_root.join("target");
+        let cargo_target_text = cargo_target
+            .to_str()
+            .expect("synthetic Cargo target path is UTF-8");
+        assert!(
+            !cargo_target_text.starts_with(r"\\?\"),
+            "Cargo target paths must not retain the Windows extended-length prefix"
+        );
+        assert_eq!(
+            std::fs::canonicalize(cargo_target.parent().unwrap())
+                .expect("normalize Cargo target parent"),
+            canonical_fixture_root
+        );
+        let worktree = ordinary_fixture_root.join("source worktree");
         let worktree_text = worktree
             .to_str()
             .expect("synthetic Git worktree path is UTF-8")

@@ -32,6 +32,19 @@ impl ProcessTree {
         self.job.terminate()
     }
 
+    /// Returns the number of processes that are still members of this job.
+    #[cfg(windows)]
+    pub fn active_processes(&self) -> Result<u32, NativeBoundaryError> {
+        self.job.active_processes()
+    }
+
+    #[cfg(not(windows))]
+    pub fn active_processes(&self) -> Result<u32, NativeBoundaryError> {
+        Err(NativeBoundaryError::new(
+            "Windows process-tree counts are unavailable on this platform",
+        ))
+    }
+
     /// Keeps cross-platform callers explicit while refusing to claim that a
     /// Windows process-tree teardown occurred on other operating systems.
     #[cfg(not(windows))]

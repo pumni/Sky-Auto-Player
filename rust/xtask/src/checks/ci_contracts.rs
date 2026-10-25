@@ -242,6 +242,10 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "installed Tauri tree contains no project PE files",
         "--selftest-update-active-playback",
         "assert_uninstall_registration_absent()",
+        "fn uninstaller_working_directory(",
+        "fn finish_uninstall(",
+        "wait_tree_timeout(std::time::Duration::from_secs(30))",
+        "bounded_install_root_inventory(",
     ] {
         if !nsis_harness.contains(marker) {
             return Err(format!(
@@ -249,6 +253,11 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+    if nsis_harness.contains("uninstaller.parent().ok_or(\"uninstaller has no parent directory\")")
+        || !nsis_harness.contains("cwd.starts_with(&install_root)")
+    {
+        return Err("NSIS uninstaller must run outside the exact install root".into());
     }
     let install_position = packaged
         .find("cargo xtask ci nsis smoke")
@@ -1083,6 +1092,16 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
 }
 
 fn updater_bridge_feature_contract(source: &str) -> Result<()> {
+    let normalized_source = super::normalize_source_line_endings(source);
+    let source = normalized_source.as_str();
+    if !source.contains("let target = ordinary_fixture_root.join(\"target\");")
+        || source.contains("let target = fixture_root.join(\"target\");")
+    {
+        return Err(
+            "updater bridge Cargo target must use the verified ordinary Windows fixture path"
+                .into(),
+        );
+    }
     let build_args = source
         .split_once("let build_args = vec![")
         .and_then(|(_, remaining)| remaining.split_once("];"))
@@ -1108,25 +1127,51 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))
             .expect("updater fixture source must exist");
-        updater_bridge_feature_contract(&source)
-            .expect("fixture bridge must build with normal product features");
+        let lf = super::super::normalize_source_line_endings(&source);
+        let crlf = lf.replace('\n', "\r\n");
 
-        for feature in ["desktop-runtime,", ",packaged-assets"] {
-            let missing_feature = source.replace(feature, "");
-            assert_ne!(missing_feature, source, "{feature} must be present");
+        for source in [&lf, &crlf] {
+            updater_bridge_feature_contract(source)
+                .expect("LF and CRLF bridge sources must use normal product features");
+
+            for feature in ["desktop-runtime,", ",packaged-assets"] {
+                let missing_feature = source.replace(feature, "");
+                assert_ne!(missing_feature, *source, "{feature} must be present");
+                assert!(
+                    updater_bridge_feature_contract(&missing_feature).is_err(),
+                    "bridge contract must reject omission of {feature} for either newline style"
+                );
+            }
+
+            let extended_target = source.replace(
+                "let target = ordinary_fixture_root.join(\"target\");",
+                "let target = fixture_root.join(\"target\");",
+            );
+            assert_ne!(extended_target, *source);
             assert!(
-                updater_bridge_feature_contract(&missing_feature).is_err(),
-                "bridge contract must reject omission of {feature}"
+                updater_bridge_feature_contract(&extended_target).is_err(),
+                "bridge contract must reject Cargo target paths derived from canonical extended paths"
+            );
+
+            let reordered_features = source.replace(
+                "desktop-runtime,packaged-assets,tauri-update-fixture",
+                "packaged-assets,desktop-runtime,tauri-update-fixture",
+            );
+            assert_ne!(reordered_features, *source);
+            assert!(
+                updater_bridge_feature_contract(&reordered_features).is_err(),
+                "bridge contract must retain exact feature ordering"
+            );
+
+            let fixture_only = source.replace(
+                "desktop-runtime,packaged-assets,tauri-update-fixture",
+                "tauri-update-fixture",
+            );
+            assert!(
+                updater_bridge_feature_contract(&fixture_only).is_err(),
+                "bridge contract must reject fixture-only feature activation"
             );
         }
-        let fixture_only = source.replace(
-            "desktop-runtime,packaged-assets,tauri-update-fixture",
-            "tauri-update-fixture",
-        );
-        assert!(
-            updater_bridge_feature_contract(&fixture_only).is_err(),
-            "bridge contract must reject fixture-only feature activation"
-        );
     }
 
     #[test]

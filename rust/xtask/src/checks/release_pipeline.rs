@@ -88,6 +88,13 @@ fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), Str
         "fn launch_smoke",
         "--selftest-update-active-playback",
         "assert_uninstall_registration_absent()",
+        "fn uninstaller_working_directory(",
+        "fn finish_uninstall(",
+        "wait_tree_timeout(std::time::Duration::from_secs(30))",
+        "active_processes()",
+        "uninstaller exit status:",
+        "uninstall registration:",
+        "bounded_install_root_inventory(",
         "owned_root_cleanup_requires_exact_sentinel_and_direct_runner_temp_scope",
         "incomplete_root_rollback_accepts_only_a_prefix_of_the_created_sentinel",
         "install_root_absence_polling_has_a_deadline",
@@ -117,15 +124,67 @@ fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), Str
     let launch = qualification
         .find("launch_smoke(scope, &app")
         .ok_or("Rust NSIS package qualification does not launch the installed application")?;
+    let uninstall = qualification
+        .find("run_uninstaller(&uninstaller, &install_root, &shell_env)?")
+        .ok_or("Rust NSIS qualification does not run the installed uninstaller")?;
+    let finish_uninstall = qualification
+        .find("finish_uninstall(&install_root, &mut uninstaller)?")
+        .ok_or("Rust NSIS qualification does not await uninstall tree and root cleanup")?;
+    let registry_cleanup = qualification
+        .find("assert_uninstall_registration_absent()?")
+        .ok_or("Rust NSIS qualification must verify uninstall registration removal")?;
+    if qualification.contains("remove_dir_all(&install_root)")
+        || qualification.contains("remove_dir(&install_root)")
+    {
+        return Err("NSIS qualification must not manually delete the install root to claim uninstall success".into());
+    }
     if install >= catalog
         || catalog >= launch
         || songs_guard >= launch
+        || launch >= uninstall
+        || uninstall >= finish_uninstall
+        || finish_uninstall >= registry_cleanup
         || !qualification[catalog..launch].contains("verify-installed")
     {
         return Err(
             "installed catalog and empty user-song checks must follow install and precede app launch"
                 .into(),
         );
+    }
+    let working_directory = harness
+        .split_once("fn uninstaller_working_directory(")
+        .and_then(|(_, body)| body.split_once("\n#[cfg(windows)]\npub(crate) fn finish_uninstall("))
+        .map(|(body, _)| body)
+        .ok_or("NSIS uninstaller working-directory guard is not bounded")?;
+    if !working_directory.contains("let cwd = install_root")
+        || !working_directory.contains(".parent()")
+        || !working_directory.contains("cwd.starts_with(&install_root)")
+    {
+        return Err(
+            "NSIS uninstaller working directory must remain outside its install root".into(),
+        );
+    }
+    let completion = harness
+        .split_once("pub(crate) fn finish_uninstall(")
+        .and_then(|(_, body)| {
+            body.split_once("\n#[cfg(windows)]\nfn uninstall_registration_diagnostic(")
+        })
+        .map(|(body, _)| body)
+        .ok_or("NSIS uninstall completion guard is not bounded")?;
+    let tree_wait = completion
+        .find("wait_tree_timeout(")
+        .ok_or("NSIS uninstall must wait for the owned process tree")?;
+    let root_wait = completion
+        .find("wait_path_absent(")
+        .ok_or("NSIS uninstall must wait for install-root removal")?;
+    if tree_wait >= root_wait {
+        return Err(
+            "NSIS uninstall must drain its owned process tree before confirming root removal"
+                .into(),
+        );
+    }
+    if completion.contains("remove_dir") {
+        return Err("NSIS qualification must not manually remove the install root to claim uninstall success".into());
     }
     Ok(())
 }
@@ -143,6 +202,8 @@ fn updater_fixture_contract(fixture: &str) -> std::result::Result<(), String> {
         "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
         "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
         "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
+        "run_uninstaller(&uninstaller, &install_root, &env)",
+        "crate::nsis_harness::finish_uninstall",
     ] {
         if !fixture.contains(marker) {
             return Err(format!(
@@ -725,7 +786,8 @@ mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted
     #[test]
     fn installed_nsis_catalog_contract_keeps_safe_order_across_line_endings() {
         let harness = source(include_str!("../nsis_harness.rs"));
-        assert!(nsis_installed_catalog_contract(&harness).is_ok());
+        let result = nsis_installed_catalog_contract(&harness);
+        assert!(result.is_ok(), "{result:?}");
         let crlf = harness.replace('\n', "\r\n");
         assert!(nsis_installed_catalog_contract(&crlf).is_ok());
 
@@ -736,6 +798,21 @@ mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted
             "launch_smoke(scope, &app)?; crate::builtin_catalog::run(",
         );
         assert!(nsis_installed_catalog_contract(&launch_before_catalog).is_err());
+        let cwd_inside_install = harness.replace(
+            "let cwd = install_root\n        .parent()",
+            "let cwd = &install_root",
+        );
+        assert!(nsis_installed_catalog_contract(&cwd_inside_install).is_err());
+        let root_before_tree = harness.replace(
+            "if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {",
+            "if let Err(error) = wait_path_absent(install_root, std::time::Duration::from_secs(30)) { if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {",
+        );
+        assert!(nsis_installed_catalog_contract(&root_before_tree).is_err());
+        let manual_root_delete = harness.replace(
+            "finish_uninstall(&install_root, &mut uninstaller)?;",
+            "std::fs::remove_dir_all(&install_root)?; finish_uninstall(&install_root, &mut uninstaller)?;",
+        );
+        assert!(nsis_installed_catalog_contract(&manual_root_delete).is_err());
     }
 
     #[test]

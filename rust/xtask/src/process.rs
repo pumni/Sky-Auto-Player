@@ -230,6 +230,55 @@ impl OwnedChild {
         }
         Err("Windows child process did not exit within the teardown deadline".into())
     }
+
+    pub(crate) fn active_processes(&self) -> Result<u32> {
+        self.tree.active_processes().map_err(|error| {
+            format!("failed to inspect owned Windows process tree: {error}").into()
+        })
+    }
+
+    pub(crate) fn wait_tree_timeout(&mut self, timeout: Duration) -> Result<()> {
+        let started = Instant::now();
+        loop {
+            let active = self.active_processes()?;
+            if active == 0 {
+                return Ok(());
+            }
+            if started.elapsed() >= timeout {
+                let root_status = self
+                    .try_wait()?
+                    .map_or_else(|| "still running".to_owned(), |status| status.to_string());
+                let teardown = self.terminate();
+                let teardown_deadline = Instant::now() + PROCESS_TEARDOWN_TIMEOUT;
+                let mut remaining = Some(active);
+                while Instant::now() < teardown_deadline {
+                    match self.active_processes() {
+                        Ok(count) => {
+                            remaining = Some(count);
+                            if count == 0 {
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            remaining = None;
+                            break;
+                        }
+                    }
+                    thread::sleep(POLL_INTERVAL);
+                }
+                let remaining =
+                    remaining.map_or_else(|| "unavailable".to_owned(), |count| count.to_string());
+                return Err(format!(
+                    "owned Windows process tree for process {} retained {active} active process(es) after {}ms (root exit: {root_status}); teardown: {}; active after teardown: {remaining}",
+                    self.child.id(),
+                    timeout.as_millis(),
+                    teardown.map_or_else(|error| format!("failed: {error}"), |_| "requested".to_owned())
+                )
+                .into());
+            }
+            thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -699,6 +748,204 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("before-timeout"));
+    }
+
+    #[cfg(windows)]
+    struct ProcessTreeTestRoot(PathBuf);
+
+    #[cfg(windows)]
+    impl Drop for ProcessTreeTestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(windows)]
+    fn wait_for_test_marker(path: &Path, timeout: Duration) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < timeout {
+            if path.is_file() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        path.is_file()
+    }
+
+    #[cfg(windows)]
+    fn spawn_process_tree_helper(root: &Path, descendant_ms: u64) -> OwnedChild {
+        let started = root.join("parent-started.marker");
+        let release = root.join("parent-release.marker");
+        let descendant = root.join("descendant.pid");
+        let program = std::env::current_exe().expect("test executable path");
+        let args = [
+            "--exact",
+            "process::tests::owned_process_tree_helper",
+            "--nocapture",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        let env = [
+            ("SKY_XTASK_OWNED_TREE_MODE".to_owned(), "parent".to_owned()),
+            (
+                "SKY_XTASK_OWNED_TREE_STARTED".to_owned(),
+                started.to_string_lossy().into_owned(),
+            ),
+            (
+                "SKY_XTASK_OWNED_TREE_RELEASE".to_owned(),
+                release.to_string_lossy().into_owned(),
+            ),
+            (
+                "SKY_XTASK_OWNED_TREE_DESCENDANT".to_owned(),
+                descendant.to_string_lossy().into_owned(),
+            ),
+            (
+                "SKY_XTASK_OWNED_TREE_LIFETIME_MS".to_owned(),
+                descendant_ms.to_string(),
+            ),
+        ];
+        let child = spawn_owned_silent_filtered(program.as_os_str(), &args, root, &env, &[])
+            .expect("spawn owned process-tree helper");
+        assert!(
+            wait_for_test_marker(&started, Duration::from_secs(5)),
+            "parent helper did not complete its startup handshake"
+        );
+        std::fs::write(release, b"spawn descendant").expect("release parent helper");
+        child
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn successful_parent_exit_keeps_owned_descendant_until_it_finishes() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-process-tree-drain-test-{}-{nonce:x}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).expect("create synthetic process-tree root");
+        let _root = ProcessTreeTestRoot(root.clone());
+        let descendant = root.join("descendant.pid");
+        let mut child = spawn_process_tree_helper(&root, 700);
+        let status = child
+            .wait_timeout(Duration::from_secs(5))
+            .expect("parent helper must exit within its startup deadline");
+        assert!(status.success(), "parent helper must exit successfully");
+        assert!(
+            wait_for_test_marker(&descendant, Duration::from_secs(3)),
+            "descendant PID marker must be written before parent exit"
+        );
+
+        let started = Instant::now();
+        child
+            .wait_tree_timeout(Duration::from_secs(5))
+            .expect("owned descendant must exit before the bounded deadline");
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "tree wait must outlive the successful direct parent while its descendant is active"
+        );
+        assert_eq!(child.active_processes().unwrap(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn non_exiting_owned_descendant_is_terminated_at_tree_deadline() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-process-tree-timeout-test-{}-{nonce:x}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).expect("create synthetic process-tree root");
+        let _root = ProcessTreeTestRoot(root.clone());
+        let descendant = root.join("descendant.pid");
+        let mut child = spawn_process_tree_helper(&root, 30_000);
+        let status = child
+            .wait_timeout(Duration::from_secs(5))
+            .expect("parent helper must exit within its startup deadline");
+        assert!(status.success(), "parent helper must exit successfully");
+        assert!(
+            wait_for_test_marker(&descendant, Duration::from_secs(3)),
+            "descendant PID marker must be written before parent exit"
+        );
+
+        let started = Instant::now();
+        let error = child
+            .wait_tree_timeout(Duration::from_millis(100))
+            .expect_err("non-exiting descendant must hit the tree deadline");
+        assert!(error.to_string().contains("retained 1 active process"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(child.active_processes().unwrap(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn owned_process_tree_helper() {
+        let Ok(mode) = std::env::var("SKY_XTASK_OWNED_TREE_MODE") else {
+            return;
+        };
+        let descendant = PathBuf::from(
+            std::env::var_os("SKY_XTASK_OWNED_TREE_DESCENDANT").expect("descendant marker path"),
+        );
+        match mode.as_str() {
+            "parent" => {
+                let started = PathBuf::from(
+                    std::env::var_os("SKY_XTASK_OWNED_TREE_STARTED").expect("started marker path"),
+                );
+                let release = PathBuf::from(
+                    std::env::var_os("SKY_XTASK_OWNED_TREE_RELEASE").expect("release marker path"),
+                );
+                std::fs::write(started, b"ready").expect("write startup marker");
+                assert!(
+                    wait_for_test_marker(&release, Duration::from_secs(10)),
+                    "outer test must release parent helper before its startup deadline"
+                );
+                let executable = std::env::current_exe().expect("test executable path");
+                let lifetime = std::env::var("SKY_XTASK_OWNED_TREE_LIFETIME_MS")
+                    .expect("descendant lifetime")
+                    .parse::<u64>()
+                    .expect("numeric descendant lifetime")
+                    .min(30_000);
+                Command::new(executable)
+                    .args([
+                        "--exact",
+                        "process::tests::owned_process_tree_helper",
+                        "--nocapture",
+                    ])
+                    .env("SKY_XTASK_OWNED_TREE_MODE", "descendant")
+                    .env("SKY_XTASK_OWNED_TREE_DESCENDANT", descendant.as_os_str())
+                    .env("SKY_XTASK_OWNED_TREE_LIFETIME_MS", lifetime.to_string())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn owned descendant helper");
+                assert!(
+                    wait_for_test_marker(&descendant, Duration::from_secs(5)),
+                    "descendant must publish its PID before parent exit"
+                );
+            }
+            "descendant" => {
+                std::fs::write(descendant, std::process::id().to_string())
+                    .expect("write descendant PID marker");
+                let lifetime = std::env::var("SKY_XTASK_OWNED_TREE_LIFETIME_MS")
+                    .expect("descendant lifetime")
+                    .parse::<u64>()
+                    .expect("numeric descendant lifetime")
+                    .min(30_000);
+                thread::sleep(Duration::from_millis(lifetime));
+            }
+            other => panic!("unknown process-tree helper mode {other}"),
+        }
     }
 
     #[cfg(windows)]
