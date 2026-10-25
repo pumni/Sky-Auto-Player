@@ -22,6 +22,8 @@ const MAX_HTTP_BODY_BYTES: usize = 512 * 1024 * 1024;
 const MAX_HTTP_REQUESTS: usize = 4096;
 const MAX_HTTP_REQUEST_DURATION: Duration = Duration::from_secs(10);
 const MAX_HTTP_RESPONSE_DURATION: Duration = Duration::from_secs(120);
+const UPDATER_PRODUCT_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
+const CURRENT_NSIS_INSTALLER_HOOK: &str = "nsis-hooks.nsh";
 #[cfg(windows)]
 const BRIDGE_BUILD_OWNER_SENTINEL: &str = ".sky-bridge-fixture-owner";
 #[cfg(windows)]
@@ -60,6 +62,7 @@ struct FixturePayloads {
 #[derive(Default)]
 #[cfg(windows)]
 struct FixtureEvidenceData {
+    bridge: serde_json::Value,
     manifest: serde_json::Value,
     candidate: serde_json::Value,
     preservation: serde_json::Value,
@@ -576,11 +579,10 @@ pub(crate) fn run(repository_root: &Path, args: &[String]) -> Result<()> {
                 sentinel_content_sha256: None,
             },
         )?;
-        if bridge.manifest.publisher != "github"
-            || bridge.manifest.identifier != "io.github.pumni.skyautoplayer"
-        {
-            return Err("updater fixture bridge must retain the historical github publisher and canonical identifier".into());
-        }
+        validate_historical_bridge_manifest_identity(
+            &bridge.manifest.publisher,
+            &bridge.manifest.identifier,
+        )?;
         let (candidate_publisher, candidate_identifier) =
             current_tauri_bundle_identity(repository_root)?;
         if candidate_publisher != "pumni" || candidate_identifier != bridge.manifest.identifier {
@@ -777,6 +779,7 @@ fn write_http_evidence(
             "loopback_client_proxy_disabled": true
         },
         "requests": requests,
+        "bridge": details.bridge,
         "manifest": details.manifest,
         "candidate": details.candidate,
         "preservation": details.preservation,
@@ -989,8 +992,29 @@ fn prepare_and_run(
         return Err("installed bridge catalog does not contain the exact N sentinel bytes".into());
     }
     let bridge_sha = sha256_file(&bridge_app)?;
-    let bridge_registry =
-        assert_publisher_state("github", &bridge.manifest.version, &install_root)?;
+    let bridge_registry = assert_publisher_state(
+        &bridge.manifest.publisher,
+        &bridge.manifest.version,
+        &install_root,
+    )?;
+    details.bridge = serde_json::json!({
+        "status": "PASS",
+        "manifest": {
+            "source_sha": &bridge.manifest.source_sha,
+            "version": &bridge.manifest.version,
+            "publisher": &bridge.manifest.publisher,
+            "identifier": &bridge.manifest.identifier,
+            "installer": &bridge.manifest.installer,
+            "installer_sha256": &bridge.installer_sha256
+        },
+        "installed_registry": {
+            "Publisher": &bridge_registry.publisher,
+            "DisplayVersion": &bridge_registry.version,
+            "InstallLocation": &bridge_registry.install_root,
+            "UninstallString": &bridge_registry.uninstall_string,
+            "uninstall_identity": &bridge_registry.uninstall_identity
+        }
+    });
     let preserved_bridge_root = fixture_root.join("preserved-bridge");
     copy_directory_tree(&install_root, &preserved_bridge_root)?;
     if sha256_file(&preserved_bridge_root.join("sky_desktop_shell.exe"))? != bridge_sha {
@@ -1124,6 +1148,7 @@ fn prepare_and_run(
         assert_publisher_state("pumni", &candidate.manifest.version, &install_root)?;
     if candidate_registry.install_root != bridge_registry.install_root
         || candidate_registry.uninstall_identity != bridge_registry.uninstall_identity
+        || candidate_registry.uninstall_string != bridge_registry.uninstall_string
     {
         return Err("N-to-N+1 migration changed the install root or uninstall identity".into());
     }
@@ -1168,6 +1193,7 @@ fn prepare_and_run(
     let migration = assert_publisher_state("pumni", &candidate.manifest.version, &install_root)?;
     if migration.install_root != bridge_registry.install_root
         || migration.uninstall_identity != bridge_registry.uninstall_identity
+        || migration.uninstall_string != bridge_registry.uninstall_string
     {
         return Err(
             "candidate migration did not preserve publisher-neutral install identity".into(),
@@ -1204,14 +1230,16 @@ fn prepare_and_run(
             "publisher": bridge_registry.publisher,
             "identifier": "io.github.pumni.skyautoplayer",
             "install_root": bridge_registry.install_root,
-            "uninstall_identity": bridge_registry.uninstall_identity
+            "uninstall_identity": bridge_registry.uninstall_identity,
+            "uninstall_string": bridge_registry.uninstall_string
         },
         "candidate": {
             "version": migration.version,
             "publisher": migration.publisher,
             "identifier": "io.github.pumni.skyautoplayer",
             "install_root": migration.install_root,
-            "uninstall_identity": migration.uninstall_identity
+            "uninstall_identity": migration.uninstall_identity,
+            "uninstall_string": migration.uninstall_string
         },
         "install_root_preserved": true,
         "uninstall_identity_preserved": true,
@@ -1658,6 +1686,7 @@ fn assert_publisher_state(
         version: version_value,
         install_root: expected_root.to_string_lossy().into_owned(),
         uninstall_identity: UNINSTALL.to_owned(),
+        uninstall_string,
     })
 }
 
@@ -1746,6 +1775,7 @@ struct PublisherEvidence {
     version: String,
     install_root: String,
     uninstall_identity: String,
+    uninstall_string: String,
 }
 
 #[cfg(windows)]
@@ -1895,9 +1925,7 @@ fn build_bridge_internal(
     fixture_root: &Path,
     output_root: &Path,
 ) -> Result<()> {
-    if !matches!(publisher, "github" | "pumni") {
-        return Err("bridge fixture publisher must be github or pumni".into());
-    }
+    validate_supported_bridge_identity(publisher, UPDATER_PRODUCT_IDENTIFIER)?;
     crate::ci_artifacts::validate_commit_sha(source_sha, "bridge fixture source SHA")?;
     crate::ci_artifacts::validate_semver(bridge_version, "bridge fixture version")?;
     let head = crate::ci::capture_git_text(repository_root, &["rev-parse", "--verify", "HEAD"])?;
@@ -2087,18 +2115,7 @@ fn build_bridge_internal(
         std::fs::write(&lock_path, lock)?;
         let mut config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&config_source_path)?)?;
-        set_json_path(
-            &mut config,
-            &["bundle", "publisher"],
-            serde_json::Value::String(publisher.to_owned()),
-        )?;
-        if publisher == "github" {
-            config
-                .get_mut("bundle")
-                .and_then(serde_json::Value::as_object_mut)
-                .ok_or("Tauri config bundle must be an object")?
-                .remove("installerHooks");
-        }
+        prepare_bridge_tauri_config(&mut config, publisher)?;
         let catalog: sky_app_core::catalog::BuiltinCatalogManifest =
             serde_json::from_slice(&std::fs::read(&catalog_path)?)?;
         let sentinel = catalog
@@ -2188,6 +2205,7 @@ fn build_bridge_internal(
             }
         });
         validate_loopback_build_config(&build_config)?;
+        persist_bridge_tauri_config(&worktree, &config_source_path, &config, publisher)?;
         std::fs::write(&config_path, serde_json::to_vec_pretty(&build_config)?)?;
         let build_args = vec![
             "run".to_owned(),
@@ -2246,7 +2264,7 @@ fn build_bridge_internal(
             source_sha: source_sha.to_owned(),
             version: bridge_version.to_owned(),
             publisher: publisher.to_owned(),
-            identifier: "io.github.pumni.skyautoplayer".to_owned(),
+            identifier: UPDATER_PRODUCT_IDENTIFIER.to_owned(),
             sentinel_id: sentinel_id.clone(),
             sentinel_content_sha256: bridge_song_sha,
         };
@@ -2254,7 +2272,7 @@ fn build_bridge_internal(
         let binding = crate::ci_bridge::BridgeBindings {
             version: Some(bridge_version.to_owned()),
             publisher: Some(publisher.to_owned()),
-            identifier: Some("io.github.pumni.skyautoplayer".to_owned()),
+            identifier: Some(UPDATER_PRODUCT_IDENTIFIER.to_owned()),
             sentinel_id: Some(sentinel_id),
             sentinel_content_sha256: Some(producer.sentinel_content_sha256),
         };
@@ -2523,28 +2541,141 @@ fn replace_desktop_lock_version(source: &str, version: &str) -> Result<String> {
     Ok(format!("{}{version}{}{}", &source[..start], "\"", after))
 }
 
-#[cfg(windows)]
-fn set_json_path(
-    value: &mut serde_json::Value,
-    keys: &[&str],
-    replacement: serde_json::Value,
-) -> Result<()> {
-    let (head, tail) = keys
-        .split_first()
-        .ok_or("JSON config path cannot be empty")?;
-    if tail.is_empty() {
-        let object = value
-            .as_object_mut()
-            .ok_or("Tauri config path parent must be an object")?;
-        object.insert((*head).to_owned(), replacement);
-        return Ok(());
+fn validate_supported_bridge_identity(publisher: &str, identifier: &str) -> Result<()> {
+    if !matches!(publisher, "github" | "pumni") {
+        return Err("bridge fixture publisher must be github or pumni".into());
     }
-    let child = value
-        .as_object_mut()
-        .ok_or("Tauri config path parent must be an object")?
-        .get_mut(*head)
-        .ok_or_else(|| format!("Tauri config is missing {}", keys.join(".")))?;
-    set_json_path(child, tail, replacement)
+    if identifier != UPDATER_PRODUCT_IDENTIFIER {
+        return Err("bridge fixture identity must retain the canonical Tauri identifier".into());
+    }
+    Ok(())
+}
+
+fn validate_historical_bridge_manifest_identity(publisher: &str, identifier: &str) -> Result<()> {
+    if publisher != "github" || identifier != UPDATER_PRODUCT_IDENTIFIER {
+        return Err("updater fixture bridge must retain the historical github publisher and canonical identifier".into());
+    }
+    Ok(())
+}
+
+fn validate_bridge_tauri_config(config: &serde_json::Value, publisher: &str) -> Result<()> {
+    validate_supported_bridge_identity(
+        publisher,
+        config
+            .get("identifier")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("bridge Tauri config identifier is missing or invalid")?,
+    )?;
+    let bundle = config
+        .get("bundle")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("bridge Tauri config bundle must be an object")?;
+    if bundle.get("publisher").and_then(serde_json::Value::as_str) != Some(publisher) {
+        return Err("bridge Tauri bundle publisher does not match bridge manifest identity".into());
+    }
+    if bundle.contains_key("installerHooks") {
+        return Err(
+            "bridge Tauri config contains a misplaced top-level NSIS installer hook".into(),
+        );
+    }
+    let nsis = bundle
+        .get("windows")
+        .and_then(|windows| windows.get("nsis"))
+        .and_then(serde_json::Value::as_object)
+        .ok_or("bridge Tauri config is missing bundle.windows.nsis")?;
+    match publisher {
+        "github" if nsis.contains_key("installerHooks") => Err(
+            "historical bridge Tauri config must omit the nested N+1 NSIS migration hook".into(),
+        ),
+        "pumni"
+            if nsis
+                .get("installerHooks")
+                .and_then(serde_json::Value::as_str)
+                != Some(CURRENT_NSIS_INSTALLER_HOOK) =>
+        {
+            Err("current candidate Tauri config must retain its nested NSIS migration hook".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn prepare_bridge_tauri_config(config: &mut serde_json::Value, publisher: &str) -> Result<()> {
+    validate_supported_bridge_identity(
+        publisher,
+        config
+            .get("identifier")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("bridge Tauri config identifier is missing or invalid")?,
+    )?;
+    let hook = {
+        let bundle = config
+            .get("bundle")
+            .and_then(serde_json::Value::as_object)
+            .ok_or("Tauri config bundle must be an object")?;
+        if bundle.contains_key("installerHooks") {
+            return Err("Tauri config has a misplaced top-level NSIS installer hook".into());
+        }
+        bundle
+            .get("windows")
+            .and_then(|windows| windows.get("nsis"))
+            .and_then(serde_json::Value::as_object)
+            .ok_or("Tauri config is missing bundle.windows.nsis")?
+            .get("installerHooks")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Tauri config is missing bundle.windows.nsis.installerHooks")?
+            .to_owned()
+    };
+    if hook != CURRENT_NSIS_INSTALLER_HOOK {
+        return Err(
+            "Tauri config NSIS installer hook does not match the current migration hook".into(),
+        );
+    }
+    let bundle = config
+        .get_mut("bundle")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or("Tauri config bundle must be an object")?;
+    bundle.insert(
+        "publisher".to_owned(),
+        serde_json::Value::String(publisher.to_owned()),
+    );
+    if publisher == "github" {
+        bundle
+            .get_mut("windows")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|windows| windows.get_mut("nsis"))
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or("Tauri config is missing bundle.windows.nsis")?
+            .remove("installerHooks");
+    }
+    validate_bridge_tauri_config(config, publisher)
+}
+
+fn persist_bridge_tauri_config(
+    worktree_root: &Path,
+    config_source_path: &Path,
+    config: &serde_json::Value,
+    publisher: &str,
+) -> Result<()> {
+    validate_bridge_tauri_config(config, publisher)?;
+    let root = std::fs::canonicalize(worktree_root)?;
+    let metadata = std::fs::symlink_metadata(config_source_path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("ephemeral bridge Tauri config must be a regular file".into());
+    }
+    let canonical_config = std::fs::canonicalize(config_source_path)?;
+    if !canonical_config.starts_with(&root) {
+        return Err("ephemeral bridge Tauri config escaped its temporary Git worktree".into());
+    }
+    let bytes = serde_json::to_vec_pretty(config)?;
+    std::fs::write(&canonical_config, &bytes)?;
+    let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&canonical_config)?)?;
+    validate_bridge_tauri_config(&persisted, publisher)?;
+    if persisted != *config {
+        return Err(
+            "persisted bridge Tauri config differs from the validated in-memory config".into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -2611,6 +2742,152 @@ fn direct_regular_files(root: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bridge_tauri_config() -> serde_json::Value {
+        serde_json::json!({
+            "identifier": UPDATER_PRODUCT_IDENTIFIER,
+            "bundle": {
+                "publisher": "pumni",
+                "windows": {
+                    "nsis": {
+                        "installMode": "currentUser",
+                        "installerHooks": CURRENT_NSIS_INSTALLER_HOOK
+                    }
+                }
+            }
+        })
+    }
+
+    fn temporary_config_root() -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "sky-bridge-tauri-config-test-{}-{nonce:x}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn bridge_tauri_config_persists_historical_identity_and_removes_nested_migration_hook() {
+        struct TestRoot(std::path::PathBuf);
+        impl Drop for TestRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let root = temporary_config_root();
+        let _root = TestRoot(root.clone());
+        let source_root = root.join("source");
+        let config_path = source_root.join("desktop/src-tauri/tauri.conf.json");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create disposable worktree config path");
+        let mut config = bridge_tauri_config();
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).expect("serialize source config"),
+        )
+        .expect("write original disposable worktree config");
+        prepare_bridge_tauri_config(&mut config, "github")
+            .expect("prepare legacy bridge-only bundle identity");
+        persist_bridge_tauri_config(&source_root, &config_path, &config, "github")
+            .expect("persist and validate the isolated bridge config");
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config_path).expect("read persisted config"))
+                .expect("persisted config remains valid JSON");
+        validate_bridge_tauri_config(&persisted, "github")
+            .expect("persisted config must match bridge metadata identity");
+        assert_eq!(
+            persisted["bundle"]["publisher"],
+            serde_json::Value::String("github".to_owned())
+        );
+        assert_eq!(
+            persisted["identifier"],
+            serde_json::Value::String(UPDATER_PRODUCT_IDENTIFIER.to_owned())
+        );
+        assert!(
+            persisted["bundle"]["windows"]["nsis"]
+                .get("installerHooks")
+                .is_none()
+        );
+        assert_eq!(
+            persisted["bundle"]["windows"]["nsis"]["installMode"],
+            "currentUser"
+        );
+        assert!(persisted["bundle"].get("installerHooks").is_none());
+
+        let outside_config = root.join("outside-worktree-tauri.conf.json");
+        let outside_bytes = br#"{"publisher":"must remain unchanged"}"#;
+        std::fs::write(&outside_config, outside_bytes).expect("write outside sentinel config");
+        assert!(
+            persist_bridge_tauri_config(&source_root, &outside_config, &config, "github").is_err()
+        );
+        assert_eq!(
+            std::fs::read(&outside_config).expect("read outside sentinel config"),
+            outside_bytes,
+            "bridge config writer must not modify a file outside its temporary Git worktree"
+        );
+    }
+
+    #[test]
+    fn bridge_tauri_config_preserves_current_candidate_migration_hook() {
+        let mut config = bridge_tauri_config();
+        prepare_bridge_tauri_config(&mut config, "pumni")
+            .expect("prepare current candidate bundle identity");
+        validate_bridge_tauri_config(&config, "pumni")
+            .expect("candidate config retains the current nested migration hook");
+        assert_eq!(config["bundle"]["publisher"], "pumni");
+        assert_eq!(
+            config["bundle"]["windows"]["nsis"]["installerHooks"],
+            CURRENT_NSIS_INSTALLER_HOOK
+        );
+    }
+
+    #[test]
+    fn bridge_tauri_config_rejects_wrong_hook_path_and_mismatched_manifest_identity() {
+        let mut misplaced = bridge_tauri_config();
+        let bundle = misplaced
+            .get_mut("bundle")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("bundle object");
+        bundle.insert(
+            "installerHooks".to_owned(),
+            serde_json::Value::String(CURRENT_NSIS_INSTALLER_HOOK.to_owned()),
+        );
+        bundle["windows"]["nsis"]
+            .as_object_mut()
+            .expect("nsis object")
+            .remove("installerHooks");
+        assert!(
+            prepare_bridge_tauri_config(&mut misplaced, "github").is_err(),
+            "a top-level hook must not stand in for bundle.windows.nsis.installerHooks"
+        );
+
+        let mut wrong_hook = bridge_tauri_config();
+        wrong_hook["bundle"]["windows"]["nsis"]["installerHooks"] =
+            serde_json::Value::String("wrong-hook.nsh".to_owned());
+        assert!(
+            prepare_bridge_tauri_config(&mut wrong_hook, "github").is_err(),
+            "unknown migration hooks must fail closed"
+        );
+
+        let mut bridge_config = bridge_tauri_config();
+        prepare_bridge_tauri_config(&mut bridge_config, "github").unwrap();
+        assert!(
+            validate_bridge_tauri_config(&bridge_config, "pumni").is_err(),
+            "Tauri publisher must agree with the bridge manifest publisher"
+        );
+        assert!(
+            validate_historical_bridge_manifest_identity("pumni", UPDATER_PRODUCT_IDENTIFIER)
+                .is_err()
+        );
+        assert!(
+            validate_historical_bridge_manifest_identity("github", "wrong.identifier").is_err()
+        );
+    }
 
     #[cfg(windows)]
     fn bridge_test_roots() -> (PathBuf, PathBuf, PathBuf) {

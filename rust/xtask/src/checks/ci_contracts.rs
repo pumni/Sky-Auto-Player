@@ -736,6 +736,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     }
     let updater_fixture = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))?;
     updater_bridge_feature_contract(&updater_fixture)?;
+    updater_bridge_configuration_contract(&updater_fixture)?;
     for marker in [
         "fn build_bridge_internal(",
         "git",
@@ -751,6 +752,12 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "verify_signature_text_with_public_key",
         "bridge Tauri signer key pair failed Rust Minisign verification",
         "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+        "prepare_bridge_tauri_config",
+        "persist_bridge_tauri_config",
+        "bridge_tauri_config_persists_historical_identity_and_removes_nested_migration_hook",
+        "bridge_tauri_config_preserves_current_candidate_migration_hook",
+        "bridge_tauri_config_rejects_wrong_hook_path_and_mismatched_manifest_identity",
+        "validate_historical_bridge_manifest_identity",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -1241,6 +1248,77 @@ fn updater_bridge_feature_contract(source: &str) -> Result<()> {
     Ok(())
 }
 
+fn updater_bridge_configuration_contract(source: &str) -> Result<()> {
+    let normalized_source = super::normalize_source_line_endings(source);
+    let source = normalized_source.as_str();
+    let builder = source
+        .split_once("fn build_bridge_internal(")
+        .and_then(|(_, remaining)| {
+            remaining.split_once("\n#[cfg(windows)]\nfn verified_ordinary_windows_path(")
+        })
+        .map(|(body, _)| body)
+        .ok_or("Rust updater bridge builder boundary is missing")?;
+    let prepare = builder
+        .find("prepare_bridge_tauri_config(&mut config, publisher)?;")
+        .ok_or("updater bridge must prepare its isolated Tauri bundle identity")?;
+    let persist = builder
+        .find("persist_bridge_tauri_config(&worktree, &config_source_path, &config, publisher)?;")
+        .ok_or(
+            "updater bridge must persist the validated config into its temporary Git worktree",
+        )?;
+    let build_args = builder
+        .find("let build_args = vec![")
+        .ok_or("updater bridge Tauri build arguments are missing")?;
+    let build = builder
+        .find("run_bun(\n            &desktop,\n            &build_args,")
+        .ok_or("updater bridge must run its bounded Tauri build")?;
+    if !(prepare < persist && persist < build_args && build_args < build) {
+        return Err(
+            "updater bridge must prepare and persist its scoped identity before invoking Tauri build"
+                .into(),
+        );
+    }
+
+    let preparation = source
+        .split_once("fn prepare_bridge_tauri_config(")
+        .and_then(|(_, remaining)| remaining.split_once("\nfn persist_bridge_tauri_config("))
+        .map(|(body, _)| body)
+        .ok_or("bridge Tauri configuration preparation helper is missing")?;
+    for marker in [
+        "get(\"windows\")",
+        "get(\"nsis\")",
+        "get(\"installerHooks\")",
+        "remove(\"installerHooks\")",
+        "CURRENT_NSIS_INSTALLER_HOOK",
+        "validate_bridge_tauri_config(config, publisher)",
+    ] {
+        if !preparation.contains(marker) {
+            return Err(format!(
+                "bridge config must validate the exact nested NSIS hook path: missing {marker}"
+            )
+            .into());
+        }
+    }
+
+    for marker in [
+        "assert_publisher_state(\n        &bridge.manifest.publisher,\n        &bridge.manifest.version,\n        &install_root,",
+        "details.bridge = serde_json::json!",
+        "\"installer_sha256\": &bridge.installer_sha256",
+        "\"Publisher\": &bridge_registry.publisher",
+        "\"DisplayVersion\": &bridge_registry.version",
+        "\"InstallLocation\": &bridge_registry.install_root",
+        "\"UninstallString\": &bridge_registry.uninstall_string",
+    ] {
+        if !source.contains(marker) {
+            return Err(format!(
+                "hosted updater fixture must prove installed bridge identity from bridge.json: missing {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1294,6 +1372,43 @@ mod tests {
                 updater_bridge_feature_contract(&fixture_only).is_err(),
                 "bridge contract must reject fixture-only feature activation"
             );
+        }
+    }
+
+    #[test]
+    fn updater_bridge_configuration_contract_normalizes_newlines_and_rejects_missing_or_wrong_scope()
+     {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))
+            .expect("updater fixture source must exist");
+        let lf = super::super::normalize_source_line_endings(&source);
+        let crlf = lf.replace('\n', "\r\n");
+
+        for source in [&lf, &crlf] {
+            updater_bridge_configuration_contract(source)
+                .expect("LF and CRLF sources must persist bridge-only identity before build");
+
+            let invalid_sources = [
+                lf.replace(
+                    "persist_bridge_tauri_config(&worktree, &config_source_path, &config, publisher)?;",
+                    "validate_bridge_tauri_config(&config, publisher)?;",
+                ),
+                lf.replace(
+                ".remove(\"installerHooks\")",
+                ".remove(\"bundleInstallerHooks\")",
+                ),
+                lf.replace(
+                    "&bridge.manifest.publisher,\n        &bridge.manifest.version,",
+                    "\"github\",\n        &bridge.manifest.version,",
+                ),
+            ];
+            for (index, invalid) in invalid_sources.iter().enumerate() {
+                assert_ne!(invalid, &lf, "negative source mutation {index} must apply");
+                assert!(
+                    updater_bridge_configuration_contract(invalid).is_err(),
+                    "static bridge contract must reject negative source mutation {index}"
+                );
+            }
         }
     }
 
