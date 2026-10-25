@@ -1950,6 +1950,32 @@ fn build_bridge_internal(
         .into());
     }
     let fixture_root = canonical_fixture_root;
+    let git_fixture_root = match git_cli_compatible_windows_path(&fixture_root) {
+        Ok(path) => path,
+        Err(error) => {
+            let rollback = std::fs::remove_dir(&fixture_root);
+            return Err(format!(
+                "bridge fixture root cannot be represented as a verified Git path: {error}; empty-root rollback: {}",
+                rollback.map_or_else(|rollback| rollback.to_string(), |_| "ok".to_owned())
+            )
+            .into());
+        }
+    };
+    let worktree_cli_path = match git_fixture_root
+        .join("source")
+        .into_os_string()
+        .into_string()
+    {
+        Ok(path) => path,
+        Err(_) => {
+            let rollback = std::fs::remove_dir(&fixture_root);
+            return Err(format!(
+                "bridge Git worktree path is not valid Unicode; empty-root rollback: {}",
+                rollback.map_or_else(|rollback| rollback.to_string(), |_| "ok".to_owned())
+            )
+            .into());
+        }
+    };
     let owner_path = fixture_root.join(BRIDGE_BUILD_OWNER_SENTINEL);
     let mut owner_created = false;
     let owner_setup = (|| -> std::io::Result<()> {
@@ -1985,7 +2011,7 @@ fn build_bridge_internal(
             "worktree".to_owned(),
             "add".to_owned(),
             "--detach".to_owned(),
-            worktree.to_string_lossy().into_owned(),
+            worktree_cli_path.clone(),
             source_sha.to_owned(),
         ],
         repository_root,
@@ -2001,7 +2027,7 @@ fn build_bridge_internal(
                     "worktree".to_owned(),
                     "remove".to_owned(),
                     "--force".to_owned(),
-                    worktree.to_string_lossy().into_owned(),
+                    worktree_cli_path.clone(),
                 ],
                 repository_root,
                 &[],
@@ -2230,7 +2256,7 @@ fn build_bridge_internal(
             "worktree".to_owned(),
             "remove".to_owned(),
             "--force".to_owned(),
-            worktree.to_string_lossy().into_owned(),
+            worktree_cli_path,
         ],
         repository_root,
         &[],
@@ -2287,6 +2313,39 @@ fn build_bridge_internal(
         .into());
     }
     operation
+}
+
+#[cfg(windows)]
+fn git_cli_compatible_windows_path(canonical_path: &Path) -> Result<PathBuf> {
+    let canonical_text = canonical_path
+        .to_str()
+        .ok_or("canonical bridge path is not valid Unicode")?;
+    let ordinary_text = if canonical_text
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\"))
+    {
+        format!(r"\\{}", &canonical_text[8..])
+    } else if let Some(path) = canonical_text.strip_prefix(r"\\?\") {
+        path.to_owned()
+    } else {
+        canonical_text.to_owned()
+    };
+    if ordinary_text.starts_with(r"\\?\") {
+        return Err("canonical bridge path uses an unsupported Windows device prefix".into());
+    }
+    let ordinary_path = PathBuf::from(&ordinary_text);
+    if !ordinary_path.is_absolute() {
+        return Err("Git worktree path must remain an absolute Windows path".into());
+    }
+    let resolved = std::fs::canonicalize(&ordinary_path)?;
+    let resolved_text = resolved
+        .to_str()
+        .ok_or("normalized Git path resolved to a non-Unicode path")?
+        .replace('/', "\\");
+    if !resolved_text.eq_ignore_ascii_case(&canonical_text.replace('/', "\\")) {
+        return Err("ordinary Git path does not resolve to its canonical bridge path".into());
+    }
+    Ok(ordinary_path)
 }
 
 #[cfg(windows)]
@@ -2545,6 +2604,140 @@ mod tests {
         (base, runner_temp, workspace)
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths() {
+        struct TestRoot(PathBuf);
+        impl Drop for TestRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let (base, runner_temp, workspace) = bridge_test_roots();
+        let _root = TestRoot(base.clone());
+        let repository = workspace.join("source repository");
+        std::fs::create_dir(&repository).expect("create isolated synthetic Git repository");
+        let repository = std::fs::canonicalize(&repository).expect("canonicalize source repo");
+        let repository_cli = git_cli_compatible_windows_path(&repository)
+            .expect("source repository must have an ordinary Git-compatible path");
+
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repository_cli)
+            .output()
+            .expect("run isolated git init");
+        assert!(init.status.success(), "git init failed: {init:?}");
+        for (key, value) in [
+            ("user.name", "Sky Auto Player fixture"),
+            ("user.email", "fixture@example.invalid"),
+            ("commit.gpgsign", "false"),
+        ] {
+            let configured = std::process::Command::new("git")
+                .args(["config", key, value])
+                .current_dir(&repository_cli)
+                .output()
+                .expect("configure isolated synthetic Git repository");
+            assert!(
+                configured.status.success(),
+                "git config failed: {configured:?}"
+            );
+        }
+        std::fs::write(
+            repository.join("fixture.txt"),
+            b"synthetic worktree fixture\n",
+        )
+        .expect("write synthetic Git source file");
+        let add_source = std::process::Command::new("git")
+            .args(["add", "--", "fixture.txt"])
+            .current_dir(&repository_cli)
+            .output()
+            .expect("stage synthetic Git source file");
+        assert!(
+            add_source.status.success(),
+            "git add failed: {add_source:?}"
+        );
+        let commit = std::process::Command::new("git")
+            .args(["commit", "--quiet", "--no-gpg-sign", "-m", "fixture"])
+            .current_dir(&repository_cli)
+            .output()
+            .expect("commit synthetic Git source file");
+        assert!(commit.status.success(), "git commit failed: {commit:?}");
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "HEAD"])
+            .current_dir(&repository_cli)
+            .output()
+            .expect("read synthetic Git HEAD");
+        assert!(head.status.success(), "git rev-parse failed: {head:?}");
+        let source_sha = String::from_utf8(head.stdout)
+            .expect("synthetic Git SHA is UTF-8")
+            .trim()
+            .to_owned();
+
+        let fixture_root = runner_temp.join("bridge fixture with spaces");
+        std::fs::create_dir(&fixture_root).expect("create synthetic bridge root");
+        let canonical_fixture_root =
+            std::fs::canonicalize(&fixture_root).expect("canonicalize synthetic bridge root");
+        let git_fixture_root = git_cli_compatible_windows_path(&canonical_fixture_root)
+            .expect("bridge root must normalize to a verified ordinary Git path");
+        let worktree = git_fixture_root.join("source worktree");
+        let worktree_text = worktree
+            .to_str()
+            .expect("synthetic Git worktree path is UTF-8")
+            .to_owned();
+        assert!(
+            !worktree_text.starts_with(r"\\?\"),
+            "Git CLI path must not retain the Windows extended-length prefix"
+        );
+
+        let added = std::process::Command::new("git")
+            .args(["worktree", "add", "--detach"])
+            .arg(&worktree_text)
+            .arg(&source_sha)
+            .current_dir(&repository_cli)
+            .output()
+            .expect("add isolated synthetic Git worktree");
+        assert!(
+            added.status.success(),
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+        assert_eq!(
+            std::fs::read(worktree.join("fixture.txt")).expect("read synthetic worktree file"),
+            b"synthetic worktree fixture\n"
+        );
+
+        let removed = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&worktree_text)
+            .current_dir(&repository_cli)
+            .output()
+            .expect("remove isolated synthetic Git worktree");
+        assert!(
+            removed.status.success(),
+            "git worktree remove failed: {}",
+            String::from_utf8_lossy(&removed.stderr)
+        );
+        assert!(!worktree.exists(), "synthetic Git worktree must be removed");
+        let remaining = std::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&repository_cli)
+            .output()
+            .expect("inspect isolated Git worktree registrations");
+        assert!(
+            remaining.status.success(),
+            "git worktree list failed: {remaining:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&remaining.stdout)
+                .lines()
+                .filter(|line| line.starts_with("worktree "))
+                .count(),
+            1,
+            "only the synthetic repository's primary worktree may remain"
+        );
+    }
+
     fn response(port: u16, path: &str) -> HttpResponse {
         http_get_loopback(&format!("http://127.0.0.1:{port}{path}")).unwrap()
     }
@@ -2585,8 +2778,19 @@ mod tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 256];
+            while request.len() < 2048 && !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            assert!(
+                request.windows(4).any(|window| window == b"\r\n\r\n"),
+                "synthetic HTTP client must finish its request before the server responds"
+            );
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\nshort")
                 .unwrap();

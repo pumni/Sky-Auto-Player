@@ -11,6 +11,54 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
     Err("CI workflow must use the Rust candidate producer and build-once topology".into())
 }
 
+fn packaged_sccache_precedes_cargo_contract(packaged: &str) -> Result<()> {
+    let setup_count = packaged.matches("name: Set up sccache").count();
+    let setup_position = packaged
+        .find("name: Set up sccache")
+        .ok_or("packaged consumer must install sccache before invoking Cargo")?;
+    let dependency_check_position = packaged
+        .find("name: Fail fast on package qualification dependencies")
+        .ok_or("packaged consumer must verify sccache before invoking Cargo")?;
+    let first_cargo_position = packaged
+        .find("cargo xtask ci candidate validate")
+        .ok_or("packaged consumer must validate the exact candidate with Cargo")?;
+    if setup_count != 1
+        || setup_position >= dependency_check_position
+        || dependency_check_position >= first_cargo_position
+        || !packaged.contains("version: \"v0.17.0\"")
+    {
+        return Err(
+            "packaged consumer must install and verify pinned sccache before its first Cargo command".into(),
+        );
+    }
+    if packaged[..setup_position].contains("cargo ") {
+        return Err("packaged consumer invoked Cargo before setting up sccache".into());
+    }
+    Ok(())
+}
+
+fn isolated_xtask_rust_runner_step_contract(step: &str) -> Result<()> {
+    let copy_position = step
+        .find("Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\"")
+        .ok_or("Rust verification must copy the built xtask executable to an isolated path")?;
+    let run_position = step
+        .find("& $isolatedXtask check rust")
+        .ok_or("Rust verification must invoke the isolated xtask executable")?;
+    let cleanup_position = step
+        .find("Remove-Item -LiteralPath $isolatedXtask")
+        .ok_or("Rust verification must remove its isolated xtask executable")?;
+    if copy_position >= run_position
+        || run_position >= cleanup_position
+        || !step.contains("finally {")
+        || step.contains("cargo xtask check rust")
+    {
+        return Err(
+            "Rust verification must run and clean up a copied xtask without holding Cargo's target executable".into(),
+        );
+    }
+    Ok(())
+}
+
 fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
     let ordinary_ci = normalized
@@ -158,6 +206,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     let validate_position = packaged
         .find("name: Validate exact current candidate contract")
         .ok_or("packaged consumer must validate candidate.json before qualification")?;
+    packaged_sccache_precedes_cargo_contract(packaged)?;
     let cache_position = packaged
         .find("name: Rust cache")
         .ok_or("packaged consumer must restore Rust cache before staging")?;
@@ -708,6 +757,13 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             "Windows validation must consolidate its shared dependency check exactly once".into(),
         );
     }
+    let rust_check_position = validate
+        .find("name: Repository verification — Rust")
+        .ok_or("Windows validation is missing its Rust repository verification step")?;
+    let rust_check_step_end = validate[rust_check_position..]
+        .find("\n      - name:")
+        .map_or(validate.len(), |offset| rust_check_position + offset);
+    isolated_xtask_rust_runner_step_contract(&validate[rust_check_position..rust_check_step_end])?;
     let rust_cache_position = validate
         .find("name: Rust cache")
         .ok_or("Windows validation is missing its Rust cache step")?;
@@ -1107,5 +1163,82 @@ mod tests {
     needs: [changes, static, candidate]
 "#;
         assert!(packaged_ci_contract_source(source).is_err());
+    }
+
+    #[test]
+    fn packaged_candidate_contract_requires_verified_sccache_before_cargo() {
+        let valid = r#"
+      - name: Set up sccache
+        with:
+          version: "v0.17.0"
+      - name: Fail fast on package qualification dependencies
+      - name: Validate exact current candidate contract
+        run: cargo xtask ci candidate validate
+"#;
+        packaged_sccache_precedes_cargo_contract(valid)
+            .expect("pinned sccache setup and verification must precede Cargo");
+
+        let missing_setup = valid.replace("name: Set up sccache", "name: missing sccache");
+        assert!(
+            packaged_sccache_precedes_cargo_contract(&missing_setup).is_err(),
+            "packaged contract must reject a missing sccache setup"
+        );
+
+        let late_setup = r#"
+      - name: Validate exact current candidate contract
+        run: cargo xtask ci candidate validate
+      - name: Set up sccache
+        with:
+          version: "v0.17.0"
+      - name: Fail fast on package qualification dependencies
+"#;
+        assert!(
+            packaged_sccache_precedes_cargo_contract(late_setup).is_err(),
+            "packaged contract must reject Cargo before sccache setup"
+        );
+
+        let early_cargo = valid.replace(
+            "      - name: Set up sccache",
+            "      - name: Earlier Cargo command\n        run: cargo metadata\n      - name: Set up sccache",
+        );
+        assert!(
+            packaged_sccache_precedes_cargo_contract(&early_cargo).is_err(),
+            "packaged contract must reject any Cargo command before sccache"
+        );
+    }
+
+    #[test]
+    fn windows_rust_ci_invokes_an_isolated_xtask_copy() {
+        let valid = r#"
+          Copy-Item -LiteralPath "rust/target/debug/xtask.exe" -Destination $isolatedXtask
+          try {
+            & $isolatedXtask check rust
+          } finally {
+            Remove-Item -LiteralPath $isolatedXtask -Force
+          }
+"#;
+        isolated_xtask_rust_runner_step_contract(valid)
+            .expect("the copied xtask must run and clean up outside Cargo's target path");
+
+        let missing_copy = valid.replace(
+            "Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\" -Destination $isolatedXtask",
+            "# copy removed",
+        );
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&missing_copy).is_err(),
+            "Rust CI contract must reject removal of the isolated copy"
+        );
+
+        let cargo_alias = valid.replace("& $isolatedXtask check rust", "cargo xtask check rust");
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&cargo_alias).is_err(),
+            "Rust CI contract must reject the self-locking cargo alias"
+        );
+
+        let no_finally = valid.replace("} finally {", "} else {");
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&no_finally).is_err(),
+            "Rust CI contract must require cleanup on every exit path"
+        );
     }
 }

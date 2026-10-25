@@ -386,8 +386,12 @@ function Test-RawUploadRequiresCreated {
 
 Test-RawUploadRequiresCreated
 
-if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Count -ne 1) {
-    Fail "production orchestrator must have exactly one call site"
+$releaseActionCallPattern = '(?m)^\s*&\s*cargo xtask credential run-action `\r?\n\s*--action release `'
+if (([regex]::Matches($pipeline, $releaseActionCallPattern)).Count -ne 1) {
+    Fail "release pipeline must invoke exactly one Rust credential release action"
+}
+if ($pipeline.Contains("orchestrate_v4_production_release.ps1")) {
+    Fail "release pipeline must delegate the orchestrator target to the Rust credential action"
 }
 foreach ($marker in @(
     'Preflight', 'BuildCandidate', 'PublishRelease',
@@ -423,7 +427,7 @@ foreach ($marker in @(
     'draft false; stable publish true; beta publish false',
     'Start-MpScan',
     'scan_performed',
-    'v4_updater_credential_broker.ps1',
+    '& cargo xtask credential run-action', '--action release',
     'docs/releases/v$Version.md',
     'release notes path must match the requested version',
     'release notes heading must match the requested version',

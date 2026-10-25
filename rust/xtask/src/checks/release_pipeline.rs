@@ -7,6 +7,56 @@ use crate::Result;
 use std::fs;
 use std::path::Path;
 
+const RELEASE_ORCHESTRATOR_TARGET: &str = "scripts/orchestrate_v4_production_release.ps1";
+const RELEASE_ACTION_CALL: &str = "& cargo xtask credential run-action";
+
+fn release_action_integration_contract_source(pipeline: &str, rust_target: &str) -> Result<()> {
+    let pipeline = pipeline.replace("\r\n", "\n");
+    if pipeline.matches(RELEASE_ACTION_CALL).count() != 1 {
+        return Err(
+            "release pipeline must invoke exactly one Rust credential release action".into(),
+        );
+    }
+    if rust_target != RELEASE_ORCHESTRATOR_TARGET
+        || pipeline.contains("orchestrate_v4_production_release.ps1")
+    {
+        return Err(
+            "Rust release action must map to the canonical production orchestrator without a direct PowerShell caller".into(),
+        );
+    }
+    let start = pipeline
+        .find(RELEASE_ACTION_CALL)
+        .ok_or("release pipeline is missing its Rust credential action")?;
+    let mut invocation = String::new();
+    for line in pipeline[start..].lines() {
+        invocation.push_str(line);
+        invocation.push('\n');
+        if !line.trim_end().ends_with('`') {
+            break;
+        }
+    }
+    for marker in [
+        "--action release",
+        "--expected-source-sha $SourceSha",
+        "--version $Version",
+        "--channel $Channel",
+        "--key-path $keyPath",
+    ] {
+        if !invocation.contains(marker) {
+            return Err(format!(
+                "Rust release action call is missing its exact allowlisted argument: {marker}"
+            )
+            .into());
+        }
+    }
+    if invocation.contains("--action verify-private-key") {
+        return Err(
+            "production release caller selected the private-key verification action".into(),
+        );
+    }
+    Ok(())
+}
+
 fn v4_release_pipeline_contract_source(
     workflow: &str,
     pipeline: &str,
@@ -160,16 +210,8 @@ fn v4_release_pipeline_contract_source(
         }
     }
 
-    if pipeline
-        .matches("cargo xtask credential run-action")
-        .count()
-        != 1
-        || pipeline.contains("orchestrate_v4_production_release.ps1")
-    {
-        return Err(
-            "production build must have exactly one Rust-owned credential action call site".into(),
-        );
-    }
+    let rust_release_target = crate::credential_cli::action_script_relative_path("release")?;
+    release_action_integration_contract_source(pipeline, rust_release_target)?;
     for marker in [
         "Preflight",
         "BuildCandidate",
@@ -379,6 +421,7 @@ fn v4_release_pipeline_contract_source(
         "fixture_server_teardown_is_bounded_for_a_stalled_partial_request",
         "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
         "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
+        "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -641,13 +684,13 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         }
     }
     let credential_cli = fs::read_to_string(root.join("rust/xtask/src/credential_cli.rs"))?;
-    if credential_cli
-        .matches("scripts/orchestrate_v4_production_release.ps1")
-        .count()
-        != 1
+    if !credential_cli.contains("pub(crate) fn action_script_relative_path(")
+        || crate::credential_cli::action_script_relative_path("release")?
+            != RELEASE_ORCHESTRATOR_TARGET
     {
         return Err(
-            "Rust credential action must allowlist exactly one production orchestrator".into(),
+            "Rust credential action must map release to the canonical production orchestrator"
+                .into(),
         );
     }
     for marker in [
@@ -839,6 +882,44 @@ mod tests {
 
         v4_release_pipeline_contract_source(&workflow, &pipeline, &regression)
             .expect("release pipeline contract should pass its repository fixture");
+
+        let release_target = crate::credential_cli::action_script_relative_path("release")
+            .expect("Rust release action must remain allowlisted");
+        release_action_integration_contract_source(&pipeline, release_target)
+            .expect("release caller must map to the canonical Rust action target");
+
+        let missing_release_action =
+            pipeline.replace(RELEASE_ACTION_CALL, "# release action removed");
+        assert!(
+            release_action_integration_contract_source(&missing_release_action, release_target)
+                .is_err(),
+            "release contract must reject a missing Rust release action"
+        );
+
+        let duplicated_release_action = pipeline.replace(
+            RELEASE_ACTION_CALL,
+            "& cargo xtask credential run-action `\n    & cargo xtask credential run-action",
+        );
+        assert!(
+            release_action_integration_contract_source(&duplicated_release_action, release_target)
+                .is_err(),
+            "release contract must reject duplicate Rust release actions"
+        );
+
+        assert!(
+            release_action_integration_contract_source(
+                &pipeline,
+                "scripts/unapproved_release_target.ps1"
+            )
+            .is_err(),
+            "release contract must reject a substituted Rust child target"
+        );
+
+        let wrong_action = pipeline.replace("--action release", "--action verify-private-key");
+        assert!(
+            release_action_integration_contract_source(&wrong_action, release_target).is_err(),
+            "release contract must reject substituting the action kind"
+        );
 
         let reordered = workflow.replacen("-State Preflight `", "-State BuildCandidate `", 1);
         assert!(v4_release_pipeline_contract_source(&reordered, &pipeline, &regression).is_err());

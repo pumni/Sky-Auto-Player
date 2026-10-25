@@ -14,6 +14,8 @@ use zeroize::Zeroizing;
 
 const ACTION_PASSWORD_ENV: &str = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD";
 const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+const RELEASE_ACTION_SCRIPT: &str = "scripts/orchestrate_v4_production_release.ps1";
+const VERIFY_PRIVATE_KEY_ACTION_SCRIPT: &str = "scripts/verify_v4_updater_private_key.ps1";
 
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let action = args.first().ok_or("credential action is required")?;
@@ -143,6 +145,7 @@ fn run_action(
         }
     }
 
+    let action_script = action_script_relative_path(action_kind)?;
     let mut command = Command::new("pwsh");
     command.args([
         "-NoProfile",
@@ -151,10 +154,10 @@ fn run_action(
         "Bypass",
         "-File",
     ]);
+    command.arg(root.join(action_script));
     match action_kind {
         "release" => {
             command
-                .arg(root.join("scripts/orchestrate_v4_production_release.ps1"))
                 .arg("-ExpectedSourceSha")
                 .arg(source_sha.ok_or("release action requires --expected-source-sha")?)
                 .arg("-Version")
@@ -166,16 +169,23 @@ fn run_action(
         }
         "verify-private-key" => {
             command
-                .arg(root.join("scripts/verify_v4_updater_private_key.ps1"))
                 .arg("-KeyPath")
                 .arg(key_path.ok_or("verify-private-key action requires --key-path")?);
         }
-        _ => return Err("credential run-action accepts only release or verify-private-key".into()),
+        _ => unreachable!("action script mapping accepts only supported action kinds"),
     }
 
     execute_one_shot_action(store, &mut command, root, |output, stderr| {
         write_process_output(output, stderr)
     })
+}
+
+pub(crate) fn action_script_relative_path(action_kind: &str) -> Result<&'static str> {
+    match action_kind {
+        "release" => Ok(RELEASE_ACTION_SCRIPT),
+        "verify-private-key" => Ok(VERIFY_PRIVATE_KEY_ACTION_SCRIPT),
+        _ => Err("credential run-action accepts only release or verify-private-key".into()),
+    }
 }
 
 fn validate_action_environment() -> Result<()> {
@@ -405,6 +415,20 @@ mod tests {
 
     const CHILD_MODE_ENV: &str = "SKY_XTASK_SYNTHETIC_ACTION_CHILD_MODE";
     const CHILD_PID_FILE_ENV: &str = "SKY_XTASK_SYNTHETIC_ACTION_CHILD_PID_FILE";
+
+    #[test]
+    fn release_action_routes_to_the_canonical_orchestrator() {
+        assert_eq!(
+            action_script_relative_path("release").expect("release action must be supported"),
+            "scripts/orchestrate_v4_production_release.ps1"
+        );
+        assert_eq!(
+            action_script_relative_path("verify-private-key")
+                .expect("private-key verification must be supported"),
+            "scripts/verify_v4_updater_private_key.ps1"
+        );
+        assert!(action_script_relative_path("release-preview").is_err());
+    }
 
     struct SyntheticStore {
         secret: Zeroizing<String>,
