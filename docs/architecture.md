@@ -67,11 +67,30 @@ the official Tauri updater. The native test suites are grouped under
 `native_runtime/tests/` by catalog, calibration, event delivery, and playback
 integration.
 
-The architecture audit applies explicit size budgets to the native composition
-root, its ownership modules, and their grouped test suites. The larger regression
-suites in `rust/crates/sky_player/src/engine/tests.rs` and
-`desktop/src-tauri/src/native_runtime/tests/playback_integration.rs` remain
-deferred maintenance debt.
+The `sky_player` engine suite remains entered through `engine.rs`'s
+`#[cfg(test)] mod tests;`. Its `engine/tests.rs` root contains the shared test
+imports and module declarations and stays at or below 750 lines. Shared fixtures
+and builders belong to `engine/tests/support.rs`. The semantic test owners are:
+
+- `startup_admission.rs`: startup ordering, readiness and armed publication,
+  pre-roll, and startup failure handling.
+- `lease_supervision.rs`: supervisor lease progress, expiry, and terminal ownership.
+- `preparation_dispatch.rs`: schedule preparation, preparation checkpoints,
+  stale packets, and dispatch admission.
+- `release_cleanup.rs`: terminal outcomes, scoped release, and failure cleanup.
+- `native_dispatch.rs`: native session send paths, packet faults, and dispatch
+  contracts.
+- `telemetry_metrics.rs`: telemetry records, traces, metrics, and mixed-packet
+  event cardinality.
+- `target_focus_admission.rs`: target identity and focus validation, plus final
+  down admission.
+- `pause_suspend.rs`: pause, resume, suspend, and transition races.
+- `timing_wait.rs`: timing policies, deadlines, wait paths, and join behavior.
+
+The architecture audit enforces the exact direct `.rs` owner inventory and a
+2,200-line ceiling for each owner. The larger
+`desktop/src-tauri/src/native_runtime/tests/playback_integration.rs` suite
+remains deferred maintenance debt at about 4,100 lines.
 
 ## Playback boundary
 
@@ -180,10 +199,10 @@ policy, and desktop/native orchestration. Focused owners contain the validators:
 - `checks/bindings.rs` owns TypeScript and IPC binding generation and checks.
 
 The architecture audit budgets each owner module and requires the root
-`checks.rs` to remain at or below 1,600 lines. The larger regression suites in
-`rust/crates/sky_player/src/engine/tests.rs` and
-`desktop/src-tauri/src/native_runtime/tests/playback_integration.rs` remain
-deferred maintenance debt.
+`checks.rs` to remain at or below 1,600 lines. It also enforces the `sky_player`
+engine test root and owner budgets, plus their exact sibling inventory. The
+larger `desktop/src-tauri/src/native_runtime/tests/playback_integration.rs`
+suite remains deferred maintenance debt at about 4,100 lines.
 
 Use the Rust repository tool for current verification groups:
 

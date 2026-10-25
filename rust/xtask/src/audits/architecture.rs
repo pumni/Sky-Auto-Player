@@ -37,6 +37,47 @@ const NATIVE_RUNTIME_MODULE_BUDGETS: &[(&str, usize)] = &[
         4_200,
     ),
 ];
+const ENGINE_TEST_ROOT_PATH: &str = "rust/crates/sky_player/src/engine/tests.rs";
+const ENGINE_TEST_ROOT_BUDGET: usize = 750;
+const ENGINE_TEST_MODULE_BUDGETS: &[(&str, usize)] = &[
+    (
+        "rust/crates/sky_player/src/engine/tests/startup_admission.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/lease_supervision.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/preparation_dispatch.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/release_cleanup.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/native_dispatch.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/telemetry_metrics.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/target_focus_admission.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/pause_suspend.rs",
+        2_200,
+    ),
+    (
+        "rust/crates/sky_player/src/engine/tests/timing_wait.rs",
+        2_200,
+    ),
+    ("rust/crates/sky_player/src/engine/tests/support.rs", 2_200),
+];
 
 fn native_runtime_line_budget_violation(path: &str, source: &str, budget: usize) -> Option<String> {
     module_line_budget_violation("native_runtime_module_lines", path, source, budget)
@@ -59,6 +100,73 @@ fn native_runtime_module_budgets(root: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn engine_test_module_inventory_violation(
+    expected: &BTreeSet<String>,
+    actual: &BTreeSet<String>,
+) -> Option<String> {
+    (expected != actual).then(|| {
+        format!(
+            "[engine_test_module_ownership] engine/tests/: observed={actual:?}, expected={expected:?}"
+        )
+    })
+}
+
+fn engine_test_module_budgets(root: &Path) -> Result<()> {
+    let root_source = fs::read_to_string(root.join(ENGINE_TEST_ROOT_PATH))?;
+    if let Some(violation) = module_line_budget_violation(
+        "engine_test_root_lines",
+        ENGINE_TEST_ROOT_PATH,
+        &root_source,
+        ENGINE_TEST_ROOT_BUDGET,
+    ) {
+        return Err(violation.into());
+    }
+
+    let tests_root = root.join("rust/crates/sky_player/src/engine/tests");
+    let expected = ENGINE_TEST_MODULE_BUDGETS
+        .iter()
+        .filter_map(|(path, _)| path.strip_prefix("rust/crates/sky_player/src/engine/tests/"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mut actual = BTreeSet::new();
+    for entry in fs::read_dir(&tests_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file()
+            || entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("rs")
+        {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "engine test module name must be valid UTF-8")?;
+        actual.insert(name);
+    }
+    if let Some(violation) = engine_test_module_inventory_violation(&expected, &actual) {
+        return Err(violation.into());
+    }
+
+    for (path, budget) in ENGINE_TEST_MODULE_BUDGETS {
+        let source = fs::read_to_string(root.join(path))?;
+        if let Some(violation) =
+            module_line_budget_violation("engine_test_module_lines", path, &source, *budget)
+        {
+            return Err(violation.into());
+        }
+    }
+    Ok(())
+}
+
+fn is_engine_test_owner_path(path: &str) -> bool {
+    ENGINE_TEST_MODULE_BUDGETS
+        .iter()
+        .any(|(owner_path, _)| *owner_path == path)
 }
 
 const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
@@ -551,6 +659,7 @@ fn audit_unsafe_source(
 }
 
 pub(crate) fn architecture(root: &Path) -> Result<()> {
+    engine_test_module_budgets(root)?;
     let allowlist = load_architecture_allowlist(root)?;
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -690,38 +799,40 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                 );
                 continue;
             }
-            let limit = if FACADES.contains(
-                &absolute
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(""),
-            ) {
-                FACADE_HARD_LIMIT
-            } else {
-                REGULAR_HARD_LIMIT
-            };
-            if clean.len() > limit {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &relative,
-                    if limit == FACADE_HARD_LIMIT {
-                        "facade_lines"
-                    } else {
-                        "regular_module_lines"
-                    },
-                    format!("{} lines (> {limit})", clean.len()),
-                );
-            }
-            if limit == REGULAR_HARD_LIMIT
-                && clean.len() > REGULAR_SOFT_LIMIT
-                && clean.len() <= REGULAR_HARD_LIMIT
-            {
-                warnings.push(format!(
-                    "[regular_module_soft_lines] {relative}: {} lines (> {REGULAR_SOFT_LIMIT})",
-                    clean.len()
-                ));
+            if !is_engine_test_owner_path(&relative) {
+                let limit = if FACADES.contains(
+                    &absolute
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(""),
+                ) {
+                    FACADE_HARD_LIMIT
+                } else {
+                    REGULAR_HARD_LIMIT
+                };
+                if clean.len() > limit {
+                    architecture_record(
+                        &mut errors,
+                        &mut warnings,
+                        &allowlist,
+                        &relative,
+                        if limit == FACADE_HARD_LIMIT {
+                            "facade_lines"
+                        } else {
+                            "regular_module_lines"
+                        },
+                        format!("{} lines (> {limit})", clean.len()),
+                    );
+                }
+                if limit == REGULAR_HARD_LIMIT
+                    && clean.len() > REGULAR_SOFT_LIMIT
+                    && clean.len() <= REGULAR_HARD_LIMIT
+                {
+                    warnings.push(format!(
+                        "[regular_module_soft_lines] {relative}: {} lines (> {REGULAR_SOFT_LIMIT})",
+                        clean.len()
+                    ));
+                }
             }
             if crate_name == "sky_player"
                 && relative == "rust/crates/sky_player/src/engine/worker/orchestration.rs"
@@ -969,6 +1080,49 @@ mod tests {
     }
 
     #[test]
+    fn engine_test_module_budgets_reject_regrowth_and_cover_the_current_tree() {
+        assert_eq!(
+            module_line_budget_violation(
+                "engine_test_root_lines",
+                ENGINE_TEST_ROOT_PATH,
+                "one\ntwo\n",
+                1,
+            ),
+            Some(format!(
+                "[engine_test_root_lines] {ENGINE_TEST_ROOT_PATH}: 2 lines (> 1)"
+            ))
+        );
+        assert_eq!(
+            module_line_budget_violation(
+                "engine_test_module_lines",
+                ENGINE_TEST_MODULE_BUDGETS[0].0,
+                "one\ntwo\n",
+                1,
+            ),
+            Some(format!(
+                "[engine_test_module_lines] {}: 2 lines (> 1)",
+                ENGINE_TEST_MODULE_BUDGETS[0].0
+            ))
+        );
+        engine_test_module_budgets(&crate::repo::root())
+            .expect("engine test owners stay within their budgets and exact inventory");
+    }
+
+    #[test]
+    fn engine_test_module_ownership_rejects_unbudgeted_modules() {
+        let expected = ["startup_admission.rs", "support.rs"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let actual = ["startup_admission.rs", "support.rs", "unowned.rs"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert!(engine_test_module_inventory_violation(&expected, &actual).is_some());
+        assert!(engine_test_module_inventory_violation(&expected, &expected).is_none());
+    }
+
+    #[test]
     fn xtask_module_budgets_reject_regrowth_and_cover_the_current_tree() {
         assert_eq!(
             module_line_budget_violation("xtask_module_lines", "checks.rs", "one\ntwo\n", 1),
@@ -1039,10 +1193,9 @@ mod tests {
     fn architecture_allowlist_is_loaded_and_current_tree_passes() {
         let root = repo::root();
         let allowlist = load_architecture_allowlist(&root).unwrap();
-        assert!(allowlist.contains_key(&(
-            "rust/crates/sky_player/src/engine/tests.rs".into(),
-            "regular_module_lines".into()
-        )));
+        assert!(
+            !allowlist.contains_key(&(ENGINE_TEST_ROOT_PATH.into(), "regular_module_lines".into()))
+        );
         architecture(&root).unwrap();
     }
 
