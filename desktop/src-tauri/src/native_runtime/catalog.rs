@@ -463,23 +463,17 @@ impl NativeDesktopRuntime {
             .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
     }
 
-    pub(super) fn ensure_catalog_loaded(
-        &self,
-    ) -> Result<sky_app_core::catalog::CatalogSnapshot, String> {
+    pub(super) fn ensure_catalog_loaded(&self) -> Result<u64, String> {
         let claim = {
             let mut state = self
                 .catalog_load
                 .lock()
                 .map_err(|_| "native catalog load state lock poisoned".to_string())?;
             match &*state {
-                CatalogLoadState::Cached { .. }
-                | CatalogLoadState::Reconciling { .. }
-                | CatalogLoadState::Ready { .. } => {
-                    return self
-                        .catalog
-                        .lock()
-                        .map_err(|_| "native catalog lock poisoned".to_string())
-                        .map(|catalog| catalog.index.snapshot());
+                CatalogLoadState::Cached { generation }
+                | CatalogLoadState::Reconciling { generation }
+                | CatalogLoadState::Ready { generation } => {
+                    return Ok(*generation);
                 }
                 CatalogLoadState::Loading => {
                     return Err("catalog_loading: catalog is still loading".into());
@@ -521,10 +515,9 @@ impl NativeDesktopRuntime {
         };
         match result {
             Ok(Some((snapshot, _))) => {
-                *state = CatalogLoadState::Ready {
-                    generation: snapshot.generation,
-                };
-                Ok(snapshot)
+                let generation = snapshot.generation;
+                *state = CatalogLoadState::Ready { generation };
+                Ok(generation)
             }
             Ok(None) => {
                 *state = CatalogLoadState::Uninitialized;
@@ -862,7 +855,7 @@ impl NativeDesktopRuntime {
         let generation = if has_new_import {
             self.reload()?.generation
         } else {
-            self.ensure_catalog_loaded()?.generation
+            self.ensure_catalog_loaded()?
         };
         Ok(LibraryPlaylistImportResultDto {
             playlist: self.playlist_summary(playlist)?,
@@ -874,19 +867,13 @@ impl NativeDesktopRuntime {
     pub(super) fn search(&self, request: CatalogSearchRequest) -> Result<CatalogSearchDto, String> {
         self.ensure_catalog_loaded()?;
         let settings = self.settings_snapshot()?;
-        let allowed_ids = match &request.source {
+        let playlist_ids: Option<BTreeSet<String>> = match &request.source {
             LibrarySource::Smart {
                 id: CatalogSourceId::Liked,
-            } => Some(settings.liked_songs.ids().clone()),
+            } => None,
             LibrarySource::Smart {
                 id: CatalogSourceId::All,
-            } => {
-                let catalog = self
-                    .catalog
-                    .lock()
-                    .map_err(|_| "native catalog lock poisoned".to_string())?;
-                Some(catalog.library_membership.clone())
-            }
+            } => None,
             LibrarySource::Playlist { id } => {
                 if !sky_app_core::library::is_valid_collection_id(id) {
                     return Err("invalid_params: playlist source ID is invalid".into());
@@ -905,7 +892,7 @@ impl NativeDesktopRuntime {
                         .song_ids
                         .iter()
                         .cloned()
-                        .collect(),
+                        .collect::<BTreeSet<_>>(),
                 )
             }
         };
@@ -913,6 +900,20 @@ impl NativeDesktopRuntime {
             .catalog
             .lock()
             .map_err(|_| "native catalog lock poisoned".to_string())?;
+        let allowed_ids = match &request.source {
+            LibrarySource::Smart {
+                id: CatalogSourceId::Liked,
+            } => Some(settings.liked_songs.ids()),
+            LibrarySource::Smart {
+                id: CatalogSourceId::All,
+            } => {
+                // Library membership is a subset of this generation's index. Equal
+                // cardinality means there are no imported-only rows to filter out.
+                (catalog.library_membership.len() != catalog.index.len())
+                    .then_some(&catalog.library_membership)
+            }
+            LibrarySource::Playlist { .. } => playlist_ids.as_ref(),
+        };
         let liked_total = catalog
             .index
             .count_allowed_ids(settings.liked_songs.ids(), request.generation)
@@ -925,7 +926,7 @@ impl NativeDesktopRuntime {
                 request.offset as usize,
                 request.limit as usize,
                 request.generation,
-                allowed_ids.as_ref(),
+                allowed_ids,
             )
             .map_err(catalog_error)?;
         let cache = self
@@ -1036,12 +1037,13 @@ impl NativeDesktopRuntime {
                 .catalog
                 .lock()
                 .map_err(|_| "native catalog lock poisoned".to_string())?;
-            let snapshot = catalog.index.snapshot();
-            if snapshot.generation != request.generation {
+            let generation = catalog.index.generation();
+            let total = catalog.index.len();
+            if generation != request.generation {
                 return Err("catalog generation is stale".into());
             }
             let song_ids = if request.song_ids.is_empty() {
-                if snapshot.total == 0 {
+                if total == 0 {
                     if request.first_index != 0
                         || request.last_index != -1
                         || request.selected_song_id.is_some()
@@ -1053,7 +1055,7 @@ impl NativeDesktopRuntime {
                     Vec::new()
                 } else {
                     if request.last_index < request.first_index as i64
-                        || request.last_index as u64 >= snapshot.total as u64
+                        || request.last_index as u64 >= total as u64
                         || request
                             .last_index
                             .saturating_sub(request.first_index as i64)
