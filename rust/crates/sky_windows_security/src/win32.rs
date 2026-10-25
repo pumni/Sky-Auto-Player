@@ -15,6 +15,8 @@ use std::os::windows::io::AsRawHandle;
 use std::process::Child;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
+#[cfg(test)]
+use windows_sys::Win32::Security::Credentials::CRED_PERSIST_LOCAL_MACHINE;
 use windows_sys::Win32::Security::Credentials::{
     CRED_PERSIST_SESSION, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
     CredWriteW,
@@ -165,7 +167,11 @@ fn read_credential(target: &str) -> Result<Zeroizing<String>, CredentialReadErro
     }
     // SAFETY: Successful CredReadW returns a CredFree-owned CREDENTIALW.
     let credential = unsafe { &*pointer };
-    let result = if credential.CredentialBlobSize == 0 {
+    let result = if credential.Persist != CRED_PERSIST_SESSION {
+        Err(CredentialReadError::Failed(NativeBoundaryError::new(
+            "Windows Credential Manager credential is not session-persistent",
+        )))
+    } else if credential.CredentialBlobSize == 0 {
         Ok(Zeroizing::new(String::new()))
     } else if credential.CredentialBlob.is_null()
         || credential.CredentialBlobSize as usize > MAX_CREDENTIAL_BLOB
@@ -213,6 +219,22 @@ fn read_credential(target: &str) -> Result<Zeroizing<String>, CredentialReadErro
 }
 
 pub(crate) fn credential_write(target: &str, secret: &str) -> Result<(), NativeBoundaryError> {
+    credential_write_with_persistence(target, secret, CRED_PERSIST_SESSION)
+}
+
+#[cfg(test)]
+pub(crate) fn credential_write_machine_for_test(
+    target: &str,
+    secret: &str,
+) -> Result<(), NativeBoundaryError> {
+    credential_write_with_persistence(target, secret, CRED_PERSIST_LOCAL_MACHINE)
+}
+
+fn credential_write_with_persistence(
+    target: &str,
+    secret: &str,
+    persistence: u32,
+) -> Result<(), NativeBoundaryError> {
     let mut target_wide: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
     let mut comment_wide: Vec<u16> = "Sky Auto Player V4 Updater Production Session Credential"
         .encode_utf16()
@@ -241,7 +263,7 @@ pub(crate) fn credential_write(target: &str, secret: &str) -> Result<(), NativeB
         LastWritten: Default::default(),
         CredentialBlobSize: blob.len() as u32,
         CredentialBlob: blob.as_mut_ptr(),
-        Persist: CRED_PERSIST_SESSION,
+        Persist: persistence,
         AttributeCount: 0,
         Attributes: null_mut(),
         TargetAlias: null_mut(),

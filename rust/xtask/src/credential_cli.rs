@@ -2,7 +2,7 @@
 
 use crate::Result;
 use sky_windows_security::credential::{
-    CredentialStore, CredentialTarget, reject_ambient_password, run_one_shot,
+    CredentialStore, CredentialTarget, SessionCredentialOps, reject_ambient_password, run_one_shot,
 };
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
@@ -127,17 +127,7 @@ fn run_action(
     action_kind: Option<&str>,
     values: &[(String, String)],
 ) -> Result<()> {
-    reject_ambient_password(std::env::var_os(ACTION_PASSWORD_ENV).as_deref())?;
-    for variable in [
-        "TAURI_SIGNING_PRIVATE_KEY",
-        "TAURI_SIGNING_PRIVATE_KEY_PATH",
-    ] {
-        if std::env::var_os(variable).is_some_and(|value| !value.is_empty()) {
-            return Err(
-                format!("ambient {variable} is forbidden for credential-backed actions").into(),
-            );
-        }
-    }
+    validate_action_environment()?;
     let action_kind = action_kind.ok_or("run-action requires --action")?;
     let mut key_path = None;
     let mut source_sha = None;
@@ -183,10 +173,52 @@ fn run_action(
         _ => return Err("credential run-action accepts only release or verify-private-key".into()),
     }
 
+    execute_one_shot_action(store, &mut command, root, |output, stderr| {
+        write_process_output(output, stderr)
+    })
+}
+
+fn validate_action_environment() -> Result<()> {
+    validate_action_environment_values(
+        std::env::var_os(ACTION_PASSWORD_ENV).as_deref(),
+        std::env::var_os("TAURI_SIGNING_PRIVATE_KEY").as_deref(),
+        std::env::var_os("TAURI_SIGNING_PRIVATE_KEY_PATH").as_deref(),
+    )
+}
+
+fn validate_action_environment_values(
+    password: Option<&std::ffi::OsStr>,
+    private_key: Option<&std::ffi::OsStr>,
+    private_key_path: Option<&std::ffi::OsStr>,
+) -> Result<()> {
+    reject_ambient_password(password)?;
+    for variable in [
+        ("TAURI_SIGNING_PRIVATE_KEY", private_key),
+        ("TAURI_SIGNING_PRIVATE_KEY_PATH", private_key_path),
+    ] {
+        if variable.1.is_some_and(|value| !value.is_empty()) {
+            return Err(format!(
+                "ambient {} is forbidden for credential-backed actions",
+                variable.0
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn execute_one_shot_action(
+    store: &impl SessionCredentialOps,
+    command: &mut Command,
+    root: &Path,
+    mut emit: impl FnMut(&[u8], bool) -> std::io::Result<()>,
+) -> Result<()> {
     let boundary = run_one_shot(store, |secret| {
-        let (status, stdout, stderr) = run_child(&mut command, root, secret)?;
-        write_sanitized(&stdout, secret, false).map_err(|error| error.to_string())?;
-        write_sanitized(&stderr, secret, true).map_err(|error| error.to_string())?;
+        let (status, stdout, stderr) = run_child(command, root, secret)?;
+        let stdout = redact_secret_bytes(&stdout, secret);
+        let stderr = redact_secret_bytes(&stderr, secret);
+        emit(&stdout, false).map_err(|error| error.to_string())?;
+        emit(&stderr, true).map_err(|error| error.to_string())?;
         if status == 0 {
             Ok(())
         } else {
@@ -264,7 +296,6 @@ fn run_child(
     }
     let stdout = join_pipe(stdout_reader)?;
     let stderr = join_pipe(stderr_reader)?;
-    drop(process_tree);
     Ok((status.code().unwrap_or(-1), stdout, stderr))
 }
 
@@ -316,15 +347,14 @@ fn join_pipe(
         .map_err(|_| "credential action output reader panicked".to_owned())?
 }
 
-fn write_sanitized(bytes: &[u8], secret: &str, stderr: bool) -> std::io::Result<()> {
-    let output = redact_secret_bytes(bytes, secret);
+fn write_process_output(output: &[u8], stderr: bool) -> std::io::Result<()> {
     if stderr {
         let mut stream = std::io::stderr().lock();
-        stream.write_all(&output)?;
+        stream.write_all(output)?;
         stream.flush()
     } else {
         let mut stream = std::io::stdout().lock();
-        stream.write_all(&output)?;
+        stream.write_all(output)?;
         stream.flush()
     }
 }
@@ -366,6 +396,251 @@ fn redact_secret_bytes(output: &[u8], secret: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::fs;
+    #[cfg(windows)]
+    use std::path::PathBuf;
+    #[cfg(windows)]
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const CHILD_MODE_ENV: &str = "SKY_XTASK_SYNTHETIC_ACTION_CHILD_MODE";
+    const CHILD_PID_FILE_ENV: &str = "SKY_XTASK_SYNTHETIC_ACTION_CHILD_PID_FILE";
+
+    struct SyntheticStore {
+        secret: Zeroizing<String>,
+        deleted: Cell<bool>,
+    }
+
+    impl SyntheticStore {
+        fn new(secret: &str) -> Self {
+            Self {
+                secret: Zeroizing::new(secret.to_owned()),
+                deleted: Cell::new(false),
+            }
+        }
+    }
+
+    impl SessionCredentialOps for SyntheticStore {
+        fn read(&self) -> std::result::Result<Zeroizing<String>, String> {
+            Ok(self.secret.clone())
+        }
+
+        fn delete(&self) -> std::result::Result<(), String> {
+            self.deleted.set(true);
+            Ok(())
+        }
+    }
+
+    fn synthetic_child_command(mode: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("current test executable"));
+        command
+            .args([
+                "--exact",
+                "credential_cli::tests::synthetic_child_entry",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE_ENV, mode)
+            .env_remove(ACTION_PASSWORD_ENV);
+        command
+    }
+
+    #[test]
+    fn synthetic_child_entry() {
+        let Ok(mode) = std::env::var(CHILD_MODE_ENV) else {
+            return;
+        };
+        match mode.as_str() {
+            "action-success" | "action-failure" => {
+                let secret = std::env::var(ACTION_PASSWORD_ENV)
+                    .expect("action password must be supplied only through the child environment");
+                println!("synthetic stdout secret: {secret}");
+                eprintln!("synthetic stderr secret: {secret}");
+                println!("synthetic argv: {:?}", std::env::args().collect::<Vec<_>>());
+                if mode == "action-failure" {
+                    std::process::exit(37);
+                }
+            }
+            "early-parent-exit" => {
+                let pid_file = std::env::var_os(CHILD_PID_FILE_ENV)
+                    .expect("descendant test requires a PID file");
+                let executable =
+                    std::env::current_exe().expect("current test executable must be available");
+                let mut descendant = Command::new(executable);
+                descendant
+                    .args([
+                        "--exact",
+                        "credential_cli::tests::synthetic_child_entry",
+                        "--nocapture",
+                    ])
+                    .env(CHILD_MODE_ENV, "pipe-descendant")
+                    .env(CHILD_PID_FILE_ENV, pid_file)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit());
+                drop(
+                    descendant
+                        .spawn()
+                        .expect("synthetic pipe-holding descendant must start"),
+                );
+            }
+            "pipe-descendant" => {
+                let pid_file = std::env::var_os(CHILD_PID_FILE_ENV)
+                    .expect("pipe descendant requires a PID file");
+                fs::write(pid_file, std::process::id().to_string())
+                    .expect("write synthetic descendant PID");
+                std::thread::sleep(Duration::from_secs(30));
+            }
+            other => panic!("unknown synthetic child mode: {other}"),
+        }
+    }
+
+    fn capture_synthetic_action(mode: &str, secret: &str) -> (Result<()>, Vec<u8>, Vec<u8>, bool) {
+        let store = SyntheticStore::new(secret);
+        let mut command = synthetic_child_command(mode);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = execute_one_shot_action(&store, &mut command, root, |output, is_stderr| {
+            if is_stderr {
+                stderr.extend_from_slice(output);
+            } else {
+                stdout.extend_from_slice(output);
+            }
+            Ok(())
+        });
+        (result, stdout, stderr, store.deleted.get())
+    }
+
+    #[test]
+    fn actual_child_launcher_redacts_environment_secret_and_deletes_after_success_or_failure() {
+        let secret = "BENIGN_SYNTHETIC_ACTION_SECRET";
+        let (success, stdout, stderr, deleted) = capture_synthetic_action("action-success", secret);
+        assert!(success.is_ok());
+        assert!(deleted);
+        let stdout_text = String::from_utf8(stdout).expect("synthetic child output is UTF-8");
+        assert!(stdout_text.contains("synthetic argv:"));
+        assert!(stdout_text.contains("[REDACTED]"));
+        assert!(!stdout_text.contains(secret));
+        assert!(
+            !stdout_text
+                .split("synthetic argv:")
+                .nth(1)
+                .is_some_and(|argv| argv.contains(secret)),
+            "the action secret must not be present in the child argument vector"
+        );
+        let stderr_text = String::from_utf8(stderr).expect("synthetic child output is UTF-8");
+        assert!(stderr_text.contains("[REDACTED]"));
+        assert!(!stderr_text.contains(secret));
+
+        let (failure, stdout, stderr, deleted) = capture_synthetic_action("action-failure", secret);
+        let failure = failure.unwrap_err().to_string();
+        assert!(
+            failure.contains("exited with code 37"),
+            "unexpected child failure: {failure}"
+        );
+        assert!(deleted);
+        for output in [stdout, stderr] {
+            let output = String::from_utf8(output).expect("synthetic child output is UTF-8");
+            assert!(output.contains("[REDACTED]"));
+            assert!(!output.contains(secret));
+        }
+    }
+
+    #[cfg(windows)]
+    struct SyntheticDescendantGuard {
+        root: PathBuf,
+        pid_file: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl Drop for SyntheticDescendantGuard {
+        fn drop(&mut self) {
+            if let Ok(pid) = fs::read_to_string(&self.pid_file)
+                && let Ok(pid) = pid.trim().parse::<u32>()
+            {
+                let _ = Command::new("taskkill.exe")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output();
+            }
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[cfg(windows)]
+    fn synthetic_process_is_running(pid: u32) -> bool {
+        let Ok(output) = Command::new("tasklist.exe")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+        else {
+            return true;
+        };
+        String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            line.split(',')
+                .nth(1)
+                .is_some_and(|field| field.trim_matches('"') == pid.to_string())
+        })
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actual_child_launcher_kills_early_parent_descendant_holding_output_pipes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-credential-child-{}-{nonce:032x}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).expect("create isolated synthetic child directory");
+        let pid_file = root.join("descendant.pid");
+        let _guard = SyntheticDescendantGuard {
+            root: root.clone(),
+            pid_file: pid_file.clone(),
+        };
+        let mut command = synthetic_child_command("early-parent-exit");
+        command.env(CHILD_PID_FILE_ENV, &pid_file);
+        let started = Instant::now();
+        let result = run_child(&mut command, &root, "synthetic-only-action-secret")
+            .expect("bounded process-tree teardown should complete");
+        assert_eq!(result.0, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(7),
+            "pipe-holder teardown exceeded its bound"
+        );
+        let pid: u32 = fs::read_to_string(&pid_file)
+            .expect("descendant must have published its process ID")
+            .trim()
+            .parse()
+            .expect("descendant process ID must be numeric");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while synthetic_process_is_running(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !synthetic_process_is_running(pid),
+            "pipe-holding descendant process {pid} survived process-tree teardown"
+        );
+    }
+
+    #[test]
+    fn action_environment_rejects_ambient_password_and_private_key_material() {
+        use std::ffi::OsStr;
+
+        assert!(
+            validate_action_environment_values(Some(OsStr::new("ambient sentinel")), None, None)
+                .is_err()
+        );
+        assert!(
+            validate_action_environment_values(None, Some(OsStr::new("ambient key")), None)
+                .is_err()
+        );
+        assert!(
+            validate_action_environment_values(None, None, Some(OsStr::new("ambient path")))
+                .is_err()
+        );
+        assert!(validate_action_environment_values(None, None, None).is_ok());
+    }
 
     #[test]
     fn redacts_utf8_and_utf16_secret_bytes_before_forwarding_action_output() {

@@ -295,11 +295,13 @@ fn terminate_unowned_process_tree(process_id: u32, deadline: Instant) -> Result<
 
 fn cleanup_timed_out_process(
     child: &mut Child,
-    mut process_tree: Option<sky_windows_security::ProcessTree>,
+    process_tree: Option<sky_windows_security::ProcessTree>,
     stdout: JoinHandle<std::result::Result<Vec<u8>, String>>,
     stderr: JoinHandle<std::result::Result<Vec<u8>, String>>,
     deadline: Instant,
 ) -> Result<()> {
+    #[cfg(windows)]
+    let mut process_tree = process_tree;
     let mut errors = Vec::new();
     if let Some(owner) = &process_tree
         && let Err(error) = owner.terminate()
@@ -307,6 +309,7 @@ fn cleanup_timed_out_process(
         errors.push(format!("process-tree termination failed: {error}"));
         // Closing a kill-on-close job is the fallback when explicit
         // termination fails. The reader joins below still have a bound.
+        #[cfg(windows)]
         drop(process_tree.take());
     }
     if process_tree.is_none() {
@@ -461,10 +464,7 @@ fn run_bounded_command(
     let stdout = stdout_result.map_err(|error| format!("calibration stdout pipe failed: {error}"));
     let stderr = stderr_result.map_err(|error| format!("calibration stderr pipe failed: {error}"));
     match (stdout, stderr) {
-        (Ok(stdout), Ok(stderr)) => {
-            drop(process_tree);
-            Ok((status, stdout, stderr))
-        }
+        (Ok(stdout), Ok(stderr)) => Ok((status, stdout, stderr)),
         (stdout, stderr) => {
             let mut errors = Vec::new();
             if let Err(error) = stdout {

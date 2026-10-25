@@ -82,6 +82,9 @@ cargo xtask updater-trust inventory
      allowlisted child process environment, redacts child output, and deletes the entry after
      success or failure. The caller process environment is not modified.
    - The updater private key remains stored outside the repository and workspace.
+   - Rust requires the exact session persistence class when checking presence or consuming the
+     credential. A same-name local-machine or enterprise credential is rejected, and one-shot
+     handling still attempts idempotent deletion of that target.
    - Passphrases **never** go into GitHub Secrets, runner `.env` files, command-line arguments,
      GitHub issues/chat/PRs, or repository files.
 

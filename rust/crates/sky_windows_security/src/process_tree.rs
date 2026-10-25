@@ -31,4 +31,13 @@ impl ProcessTree {
     pub fn terminate(&self) -> Result<(), NativeBoundaryError> {
         self.job.terminate()
     }
+
+    /// Keeps cross-platform callers explicit while refusing to claim that a
+    /// Windows process-tree teardown occurred on other operating systems.
+    #[cfg(not(windows))]
+    pub fn terminate(&self) -> Result<(), NativeBoundaryError> {
+        Err(NativeBoundaryError::new(
+            "Windows process-tree termination is unavailable on this platform",
+        ))
+    }
 }

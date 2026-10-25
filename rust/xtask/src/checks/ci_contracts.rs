@@ -355,6 +355,15 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
+    let process_tree =
+        fs::read_to_string(root.join("rust/crates/sky_windows_security/src/process_tree.rs"))?;
+    if !process_tree.contains("#[cfg(not(windows))]\n    pub fn terminate")
+        || !process_tree.contains("Windows process-tree termination is unavailable")
+    {
+        return Err(
+            "Windows process-tree boundary must expose a fail-closed cross-platform API".into(),
+        );
+    }
     for script in [
         "scripts/ci_classify.ps1",
         "scripts/test_ci_classify.ps1",

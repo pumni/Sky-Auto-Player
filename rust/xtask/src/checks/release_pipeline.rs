@@ -504,6 +504,7 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "test_target",
         "MAX_CREDENTIAL_BLOB",
         "write_session",
+        "write_machine_persistent_for_test",
         "run_one_shot",
         "reject_ambient_password",
         "CredentialBoundaryError",
@@ -521,6 +522,8 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "CredDeleteW",
         "CRED_TYPE_GENERIC",
         "CRED_PERSIST_SESSION",
+        "credential is not session-persistent",
+        "credential_write_machine_for_test",
         "CredFree",
     ] {
         if !credential_native.contains(marker) {
@@ -571,12 +574,31 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "run_one_shot",
         "reject_ambient_password",
         "redact_secret_bytes",
+        "execute_one_shot_action",
+        "actual_child_launcher_redacts_environment_secret_and_deletes_after_success_or_failure",
+        "actual_child_launcher_kills_early_parent_descendant_holding_output_pipes",
+        "action_environment_rejects_ambient_password_and_private_key_material",
         "credential action exited with code",
     ] {
         if !credential_cli.contains(marker) {
             return Err(
                 format!("Rust credential CLI is missing its lifecycle contract: {marker}").into(),
             );
+        }
+    }
+    let credential_cli_windows_test =
+        fs::read_to_string(root.join("rust/xtask/tests/credential_cli_windows.rs"))?;
+    for marker in [
+        "actual_cli_action_rejects_ambient_password_and_deletes_after_child_failure",
+        "BENIGN_RUST_ACTION_SECRET_",
+        "write_session",
+        "has_nonempty",
+    ] {
+        if !credential_cli_windows_test.contains(marker) {
+            return Err(format!(
+                "Windows credential CLI regression is missing its isolated action marker: {marker}"
+            )
+            .into());
         }
     }
     for marker in [

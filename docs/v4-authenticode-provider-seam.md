@@ -76,6 +76,12 @@ password on its command line.
 Production mode requires a valid 40-character approved thumbprint, a provider, and exactly one
 provider script or command; CI test signer identities and unexpected Windows statuses fail closed.
 
+Repeated artifact arguments cross the Rust-to-Windows adapter boundary in a bounded UTF-8 JSON
+manifest with schema_version 1 (at most 256 files and 1 MiB). Each record binds the resolved Unicode
+path, exact filename, and Rust-computed SHA-256. The adapter validates that inventory, checks the
+file hash before and after platform/CMS verification, and returns facts that Rust matches against
+every requested filename and digest.
+
 The bundle verifier binds the final NSIS evidence to the exact installer bytes. The installed-tree
 qualification repeats the same check for every project-owned PE; the generated `uninstall.exe` is
 not treated as a project-owned binary. These checks do not replace the Tauri updater signature,
@@ -102,5 +108,6 @@ The focused Windows contract suite uses throwaway material only:
 pwsh scripts/test_v4_production_signing_contract.ps1
 ```
 
-It proves that unsigned-state verification rejects signed PE files, test mode validates the
-independent CMS/SPC proof, tampering fails, and test evidence cannot satisfy production policy.
+It proves that unsigned-state verification rejects signed PE files, the Rust CLI and adapter verify
+two signed synthetic PE files in one request, missing and tampered artifacts fail closed, test mode
+validates the independent CMS/SPC proof, and test evidence cannot satisfy production policy.

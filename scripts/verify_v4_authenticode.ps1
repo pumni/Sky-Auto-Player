@@ -8,7 +8,7 @@ param(
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
-    [string[]]$Artifact,
+    [string]$ArtifactManifest,
 
     [Parameter(Mandatory = $false)]
     [string]$ExpectedThumbprint,
@@ -19,19 +19,72 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "v4_authenticode_crypto.ps1")
-if ($Artifact.Count -eq 0) { throw "At least one Authenticode artifact is required" }
+
+$maximumArtifactCount = 256
+$maximumManifestBytes = 1MB
+$manifestFile = Get-Item -LiteralPath $ArtifactManifest -ErrorAction Stop
+if ($manifestFile.PSIsContainer -or
+    (($manifestFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+    $manifestFile.Length -le 0 -or
+    $manifestFile.Length -gt $maximumManifestBytes) {
+    throw "Authenticode artifact manifest must be a bounded regular file"
+}
+$manifestBytes = [IO.File]::ReadAllBytes($manifestFile.FullName)
+if ($manifestBytes.Length -gt $maximumManifestBytes) {
+    throw "Authenticode artifact manifest exceeds the $maximumManifestBytes-byte limit"
+}
+$strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+$manifestJson = $strictUtf8.GetString($manifestBytes)
+$manifest = $manifestJson |
+    ConvertFrom-Json -ErrorAction Stop
+$manifestProperties = @($manifest.PSObject.Properties.Name)
+if ($manifestProperties.Count -ne 2 -or
+    -not ($manifestProperties -ccontains "schema_version") -or
+    -not ($manifestProperties -ccontains "files") -or
+    $manifest.schema_version -ne 1 -or
+    $manifest.files -isnot [Array] -or
+    $manifest.files.Count -lt 1 -or
+    $manifest.files.Count -gt $maximumArtifactCount) {
+    throw "Authenticode artifact manifest has an unsupported schema or file count"
+}
 
 $seen = @{}
-$records = foreach ($path in $Artifact) {
+$records = foreach ($entry in $manifest.files) {
+    $entryProperties = @($entry.PSObject.Properties.Name)
+    if ($entryProperties.Count -ne 3 -or
+        -not ($entryProperties -ccontains "path") -or
+        -not ($entryProperties -ccontains "name") -or
+        -not ($entryProperties -ccontains "sha256") -or
+        $entry.path -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($entry.path) -or
+        $entry.name -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($entry.name) -or
+        $entry.sha256 -isnot [string] -or
+        $entry.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw "Authenticode artifact manifest contains a malformed entry"
+    }
+
+    $path = $entry.path
     $resolved = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path
     $item = Get-Item -LiteralPath $resolved -ErrorAction Stop
-    if ($item.PSIsContainer -or $item.Extension.ToLowerInvariant() -notin @(".exe", ".dll")) {
+    if ($item.PSIsContainer -or
+        (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+        $item.Extension.ToLowerInvariant() -notin @(".exe", ".dll")) {
         throw "Authenticode inspection target must be a regular PE file: $path"
     }
-    if ($seen.ContainsKey($item.Name)) {
+    if ($item.Name -cne $entry.name) {
+        throw "Authenticode inspection filename does not match its manifest entry"
+    }
+    if ($seen.ContainsKey($item.Name.ToLowerInvariant())) {
         throw "Duplicate Authenticode inspection filename: $($item.Name)"
     }
-    $seen[$item.Name] = $true
+    $seen[$item.Name.ToLowerInvariant()] = $true
+
+    $expectedHash = [string]$entry.sha256
+    $initialHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (-not [string]::Equals($initialHash, $expectedHash, [StringComparison]::Ordinal)) {
+        throw "Authenticode inspection file does not match its manifest SHA-256: $($item.Name)"
+    }
 
     $signature = Get-AuthenticodeSignature -LiteralPath $item.FullName
     $signerThumbprint = $null
@@ -54,10 +107,15 @@ $records = foreach ($path in $Artifact) {
         }
     }
 
+    $finalHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (-not [string]::Equals($finalHash, $expectedHash, [StringComparison]::Ordinal)) {
+        throw "Authenticode inspection file changed while it was being verified: $($item.Name)"
+    }
+
     [ordered]@{
         name = $item.Name
         platform_status = [string]$signature.Status
-        sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = $finalHash
         signer_thumbprint = $signerThumbprint
         signer_subject = $signerSubject
         signed_digest_algorithm = $digestAlgorithm

@@ -267,6 +267,11 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "ExpectedThumbprint",
         "v4_authenticode_crypto.ps1",
         "Get-AuthenticodeIntegrityProof",
+        "ArtifactManifest",
+        "maximumArtifactCount",
+        "maximumManifestBytes",
+        "Authenticode artifact manifest contains a malformed entry",
+        "inspection file does not match its manifest SHA-256",
         "platform_status",
         "signed_digest_algorithm",
         "computed_digest",
@@ -290,6 +295,11 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "authenticode-verification",
         "unsigned-zero-budget accepts only a real NotSigned PE with no signer",
         "Authenticode signed CMS digest does not match the computed PE image digest",
+        "MAX_AUTHENTICODE_ARTIFACTS",
+        "MAX_ARTIFACT_MANIFEST_BYTES",
+        "artifact_manifest_bytes",
+        "adapter_evidence_must_cover_every_requested_file_and_exact_hash",
+        "artifact_manifest_is_bounded_and_preserves_exact_unicode_inventory",
         "write_evidence",
     ] {
         if !rust_policy.contains(marker) {
@@ -433,7 +443,13 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "Production verification rejects CI test certificate",
         "unsigned-zero-budget verification rejects signed binary",
         "Production verification rejects test thumbprint",
-        "cargo xtask authenticode verify",
+        "Contract Test 3b: Rust CLI passes two signed synthetic PE files through the manifest adapter",
+        "Contract Test 3c: missing artifact fails closed",
+        "Contract Test 3d: tampered signed PE fails closed through the manifest adapter",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodePeLayout",
+        "cargo @cargoArguments",
+        r#"@("xtask", "authenticode", "verify", "--mode", $Mode)"#,
         "CI test certificate cannot satisfy production mode or zero-budget unsigned state",
     ] {
         if !contract_test.contains(marker) {

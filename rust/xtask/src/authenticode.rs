@@ -1,28 +1,50 @@
 #![forbid(unsafe_code)]
 
 use crate::Result;
+#[cfg(any(windows, test))]
+use crate::ci_artifacts::is_reparse_point;
+#[cfg(windows)]
 use crate::ci_artifacts::{
-    is_reparse_point, replace_file_with_rollback, require_directory, require_regular_file,
-    sha256_file, unique_sibling,
+    replace_file_with_rollback, require_directory, require_regular_file, sha256_file,
+    unique_sibling,
 };
+#[cfg(any(windows, test))]
 use serde_json::{Value, json};
+#[cfg(any(windows, test))]
 use std::collections::BTreeSet;
+#[cfg(any(windows, test))]
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
+#[cfg(any(windows, test))]
+use std::fs;
+#[cfg(windows)]
+use std::fs::OpenOptions;
+#[cfg(windows)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 
+#[cfg(windows)]
 const ADAPTER_FILE: &str = "scripts/verify_v4_authenticode.ps1";
 const UNSIGNED_MODE: &str = "unsigned-zero-budget";
+#[cfg(any(windows, test))]
 const UNSIGNED_POLICY: &str = "unsigned-project-owned-pe-files-and-canonical-nsis";
+#[cfg(any(windows, test))]
 const SIGNED_POLICY: &str =
     "exact-signer-independent-authenticode-integrity-with-platform-trust-diagnostic";
+#[cfg(any(windows, test))]
 const PRODUCTION_POLICY: &str =
     "windows-valid-platform-and-exact-approved-signer-independent-authenticode-integrity";
+#[cfg(any(windows, test))]
 const SIGNATURE_VALID: &str = "signature-valid-independent-cryptographic-integrity";
+#[cfg(any(windows, test))]
 const INTEGRITY_VERIFIER: &str = "signedcms-spc-indirect-data-authenticode-hash";
+#[cfg(any(windows, test))]
 const TEST_TRUST_EXCEPTION: &str = "test-platform-status-not-used-for-integrity";
+#[cfg(any(windows, test))]
+const MAX_AUTHENTICODE_ARTIFACTS: usize = 256;
+#[cfg(any(windows, test))]
+const MAX_ARTIFACT_MANIFEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -41,6 +63,7 @@ impl Mode {
         }
     }
 
+    #[cfg(any(windows, test))]
     fn as_str(self) -> &'static str {
         match self {
             Self::UnsignedZeroBudget => UNSIGNED_MODE,
@@ -49,6 +72,7 @@ impl Mode {
         }
     }
 
+    #[cfg(any(windows, test))]
     fn verification_policy(self) -> &'static str {
         match self {
             Self::UnsignedZeroBudget => UNSIGNED_POLICY,
@@ -58,6 +82,7 @@ impl Mode {
     }
 }
 
+#[cfg(any(windows, test))]
 struct Policy {
     mode: Mode,
     expected_thumbprint: Option<String>,
@@ -117,13 +142,15 @@ fn verify(root: &Path, mode: Mode, artifacts: &[PathBuf], evidence: Option<&Path
     #[cfg(not(windows))]
     {
         let _ = (root, mode, artifacts, evidence);
-        return Err("Authenticode verification requires Windows".into());
+        Err("Authenticode verification requires Windows".into())
     }
     #[cfg(windows)]
     {
         let policy = policy_from_environment(mode)?;
         let expected_files = resolve_artifacts(artifacts)?;
         let temporary = TemporaryDirectory::create(&std::env::temp_dir())?;
+        let artifact_manifest = temporary.path.join("authenticode-artifacts.json");
+        write_artifact_manifest(&artifact_manifest, &expected_files)?;
         let adapter_evidence = temporary.path.join("authenticode-adapter-evidence.json");
         let adapter = root.join(ADAPTER_FILE);
         if !adapter.is_file() {
@@ -144,10 +171,7 @@ fn verify(root: &Path, mode: Mode, artifacts: &[PathBuf], evidence: Option<&Path
         if let Some(expected) = &policy.expected_thumbprint {
             command.arg("-ExpectedThumbprint").arg(expected);
         }
-        command.arg("-Artifact");
-        for (path, _) in &expected_files {
-            command.arg(path);
-        }
+        command.arg("-ArtifactManifest").arg(&artifact_manifest);
         let output = command.arg("-Evidence").arg(&adapter_evidence).output()?;
         if !output.status.success() {
             return Err(format!(
@@ -176,6 +200,7 @@ fn verify(root: &Path, mode: Mode, artifacts: &[PathBuf], evidence: Option<&Path
     }
 }
 
+#[cfg(windows)]
 fn policy_from_environment(mode: Mode) -> Result<Policy> {
     let expected_thumbprint = match mode {
         Mode::UnsignedZeroBudget => None,
@@ -219,16 +244,19 @@ fn policy_from_environment(mode: Mode) -> Result<Policy> {
     })
 }
 
+#[cfg(windows)]
 fn required_environment(name: &str) -> Result<String> {
     optional_environment(name).ok_or_else(|| format!("Authenticode policy requires {name}").into())
 }
 
+#[cfg(windows)]
 fn optional_environment(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
 }
 
+#[cfg(any(windows, test))]
 fn validate_thumbprint(value: &str, description: &str) -> Result<String> {
     let value = value.trim();
     if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -237,6 +265,7 @@ fn validate_thumbprint(value: &str, description: &str) -> Result<String> {
     Ok(value.to_ascii_uppercase())
 }
 
+#[cfg(any(windows, test))]
 fn validate_production_provider(
     provider: Option<&str>,
     script: Option<&str>,
@@ -267,6 +296,7 @@ fn validate_production_provider(
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn validate_test_pfx_password(value: Option<&OsStr>) -> Result<()> {
     if value.is_some_and(|value| !value.is_empty()) {
         return Err(
@@ -276,6 +306,7 @@ fn validate_test_pfx_password(value: Option<&OsStr>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn validate_test_pfx(path: &Path, runner_temp: Option<&Path>) -> Result<()> {
     let root = match runner_temp {
         Some(path) => path.to_path_buf(),
@@ -303,6 +334,7 @@ fn validate_test_pfx(path: &Path, runner_temp: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn valid_test_pfx_name(name: &str) -> bool {
     name.strip_prefix("sky-v4-test-signing-")
         .and_then(|name| name.strip_suffix(".pfx"))
@@ -311,7 +343,14 @@ fn valid_test_pfx_name(name: &str) -> bool {
         })
 }
 
+#[cfg(windows)]
 fn resolve_artifacts(paths: &[PathBuf]) -> Result<Vec<(PathBuf, (String, String))>> {
+    if paths.is_empty() || paths.len() > MAX_AUTHENTICODE_ARTIFACTS {
+        return Err(format!(
+            "Authenticode artifact inventory must contain 1 to {MAX_AUTHENTICODE_ARTIFACTS} files"
+        )
+        .into());
+    }
     let mut names = BTreeSet::new();
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
@@ -319,14 +358,20 @@ fn resolve_artifacts(paths: &[PathBuf]) -> Result<Vec<(PathBuf, (String, String)
         if is_reparse_point(path, &metadata) {
             return Err("Authenticode artifact must not be a reparse point".into());
         }
-        let extension = path
+        let resolved = fs::canonicalize(path)
+            .map_err(|_| "Authenticode artifact path could not be resolved")?;
+        let resolved_metadata = require_regular_file(&resolved, "Authenticode artifact")?;
+        if is_reparse_point(&resolved, &resolved_metadata) {
+            return Err("resolved Authenticode artifact must not be a reparse point".into());
+        }
+        let extension = resolved
             .extension()
             .and_then(|extension| extension.to_str())
             .unwrap_or_default();
         if !extension.eq_ignore_ascii_case("exe") && !extension.eq_ignore_ascii_case("dll") {
             return Err("Authenticode evidence target must be a regular PE file".into());
         }
-        let name = path
+        let name = resolved
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or("Authenticode artifact filename is not Unicode")?
@@ -334,11 +379,58 @@ fn resolve_artifacts(paths: &[PathBuf]) -> Result<Vec<(PathBuf, (String, String)
         if !names.insert(name.to_ascii_lowercase()) {
             return Err(format!("duplicate Authenticode evidence filename: {name}").into());
         }
-        files.push((path.to_path_buf(), (name, sha256_file(path)?)));
+        files.push((resolved.clone(), (name, sha256_file(&resolved)?)));
     }
     Ok(files)
 }
 
+#[cfg(any(windows, test))]
+fn artifact_manifest_bytes(expected_files: &[(PathBuf, (String, String))]) -> Result<Vec<u8>> {
+    if expected_files.is_empty() || expected_files.len() > MAX_AUTHENTICODE_ARTIFACTS {
+        return Err(format!(
+            "Authenticode artifact inventory must contain 1 to {MAX_AUTHENTICODE_ARTIFACTS} files"
+        )
+        .into());
+    }
+    let files = expected_files
+        .iter()
+        .map(|(path, (name, sha256))| {
+            let path = path
+                .to_str()
+                .ok_or("Authenticode artifact path is not Unicode")?;
+            Ok(json!({
+                "path": path,
+                "name": name,
+                "sha256": sha256,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let bytes = serde_json::to_vec(&json!({
+        "schema_version": 1,
+        "files": files,
+    }))?;
+    if bytes.len() > MAX_ARTIFACT_MANIFEST_BYTES {
+        return Err(format!(
+            "Authenticode artifact manifest exceeds the {MAX_ARTIFACT_MANIFEST_BYTES}-byte limit"
+        )
+        .into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn write_artifact_manifest(
+    path: &Path,
+    expected_files: &[(PathBuf, (String, String))],
+) -> Result<()> {
+    let bytes = artifact_manifest_bytes(expected_files)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
 fn validate_adapter_evidence(
     payload: &Value,
     policy: &Policy,
@@ -387,6 +479,7 @@ fn validate_adapter_evidence(
     }))
 }
 
+#[cfg(any(windows, test))]
 fn validate_record(
     record: &Value,
     policy: &Policy,
@@ -540,6 +633,7 @@ fn validate_record(
     }))
 }
 
+#[cfg(any(windows, test))]
 fn accepted_status(mode: Mode, status: &str) -> bool {
     match mode {
         Mode::UnsignedZeroBudget => status == "NotSigned",
@@ -555,6 +649,7 @@ fn accepted_status(mode: Mode, status: &str) -> bool {
     }
 }
 
+#[cfg(any(windows, test))]
 fn required_record_string<'a>(record: &'a Value, field: &str) -> Result<&'a str> {
     record
         .get(field)
@@ -562,6 +657,7 @@ fn required_record_string<'a>(record: &'a Value, field: &str) -> Result<&'a str>
         .ok_or_else(|| format!("Authenticode evidence {field} is missing or invalid").into())
 }
 
+#[cfg(windows)]
 fn write_evidence(path: &Path, value: &Value) -> Result<()> {
     let parent = path
         .parent()
@@ -584,10 +680,12 @@ fn write_evidence(path: &Path, value: &Value) -> Result<()> {
     result
 }
 
+#[cfg(windows)]
 struct TemporaryDirectory {
     path: PathBuf,
 }
 
+#[cfg(windows)]
 impl TemporaryDirectory {
     fn create(root: &Path) -> Result<Self> {
         for _ in 0..8 {
@@ -602,6 +700,7 @@ impl TemporaryDirectory {
     }
 }
 
+#[cfg(windows)]
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
@@ -721,6 +820,70 @@ mod tests {
         assert!(validate_adapter_evidence(&signed, &policy, &expected).is_err());
         let tampered = unsigned_payload("signed.exe", &"bb".repeat(32));
         assert!(validate_adapter_evidence(&tampered, &policy, &expected).is_err());
+    }
+
+    #[test]
+    fn artifact_manifest_is_bounded_and_preserves_exact_unicode_inventory() {
+        let files = vec![(
+            PathBuf::from(r"C:\staging\Sky Player 中\one.exe"),
+            ("one.exe".into(), "aa".repeat(32)),
+        )];
+        let manifest: Value =
+            serde_json::from_slice(&artifact_manifest_bytes(&files).unwrap()).unwrap();
+        assert_eq!(manifest["schema_version"], json!(1));
+        assert_eq!(
+            manifest["files"][0]["path"],
+            json!(r"C:\staging\Sky Player 中\one.exe")
+        );
+        assert_eq!(manifest["files"][0]["name"], json!("one.exe"));
+        assert_eq!(manifest["files"][0]["sha256"], json!("aa".repeat(32)));
+
+        let too_many = vec![
+            (
+                PathBuf::from("one.exe"),
+                ("one.exe".into(), "aa".repeat(32))
+            );
+            MAX_AUTHENTICODE_ARTIFACTS + 1
+        ];
+        assert!(artifact_manifest_bytes(&too_many).is_err());
+
+        let too_large = vec![(
+            PathBuf::from("x".repeat(MAX_ARTIFACT_MANIFEST_BYTES)),
+            ("one.exe".into(), "aa".repeat(32)),
+        )];
+        assert!(artifact_manifest_bytes(&too_large).is_err());
+    }
+
+    #[test]
+    fn adapter_evidence_must_cover_every_requested_file_and_exact_hash() {
+        let policy = Policy {
+            mode: Mode::UnsignedZeroBudget,
+            expected_thumbprint: None,
+        };
+        let expected = vec![
+            (
+                PathBuf::from("one.exe"),
+                ("one.exe".into(), "aa".repeat(32)),
+            ),
+            (
+                PathBuf::from("two.dll"),
+                ("two.dll".into(), "bb".repeat(32)),
+            ),
+        ];
+        let mut payload = unsigned_payload("one.exe", &"aa".repeat(32));
+        payload["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(unsigned_payload("two.dll", &"bb".repeat(32))["files"][0].clone());
+        assert!(validate_adapter_evidence(&payload, &policy, &expected).is_ok());
+
+        let mut missing = payload.clone();
+        missing["files"].as_array_mut().unwrap().pop();
+        assert!(validate_adapter_evidence(&missing, &policy, &expected).is_err());
+
+        let mut mismatched_hash = payload;
+        mismatched_hash["files"][1]["sha256"] = json!("cc".repeat(32));
+        assert!(validate_adapter_evidence(&mismatched_hash, &policy, &expected).is_err());
     }
 
     #[test]

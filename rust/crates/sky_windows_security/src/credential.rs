@@ -225,6 +225,13 @@ mod platform {
     pub(super) fn write(target: &str, secret: &str) -> Result<(), NativeBoundaryError> {
         win32::credential_write(target, secret)
     }
+    #[cfg(test)]
+    pub(super) fn write_machine_persistent_for_test(
+        target: &str,
+        secret: &str,
+    ) -> Result<(), NativeBoundaryError> {
+        win32::credential_write_machine_for_test(target, secret)
+    }
     pub(super) fn delete(target: &str) -> Result<bool, NativeBoundaryError> {
         win32::credential_delete(target)
     }
@@ -396,6 +403,55 @@ mod tests {
         assert!(error.to_string().contains("cleanup failed"));
         assert!(error.to_string().contains("delete failed"));
         assert!(store.deleted.get());
+    }
+
+    #[cfg(windows)]
+    struct IsolatedWindowsStore(CredentialStore);
+
+    #[cfg(windows)]
+    impl IsolatedWindowsStore {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after Unix epoch")
+                .as_nanos();
+            let target = format!("{TEST_TARGET_PREFIX}{nonce:032x}");
+            let store = CredentialStore::new(
+                CredentialTarget::test_target(target).expect("isolated test target"),
+            );
+            let _ = store.delete();
+            Self(store)
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for IsolatedWindowsStore {
+        fn drop(&mut self) {
+            let _ = self.0.delete();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn non_session_credential_is_rejected_before_action_and_deleted() {
+        let fixture = IsolatedWindowsStore::new();
+        let store = &fixture.0;
+        platform::write_machine_persistent_for_test(
+            store.target().as_str(),
+            "synthetic wrong-persistence sentinel",
+        )
+        .unwrap();
+
+        assert!(store.has_nonempty().is_err());
+        let action_ran = Cell::new(false);
+        let error = run_one_shot(store, |_| {
+            action_ran.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(!action_ran.get());
+        assert!(error.to_string().contains("not session-persistent"));
+        assert!(!store.has_nonempty().unwrap());
     }
 
     #[test]
