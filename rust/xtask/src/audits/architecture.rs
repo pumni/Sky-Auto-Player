@@ -32,9 +32,38 @@ const NATIVE_RUNTIME_MODULE_BUDGETS: &[(&str, usize)] = &[
         "desktop/src-tauri/src/native_runtime/tests/event_delivery.rs",
         800,
     ),
+];
+const PLAYBACK_INTEGRATION_ROOT_PATH: &str =
+    "desktop/src-tauri/src/native_runtime/tests/playback_integration.rs";
+const PLAYBACK_INTEGRATION_ROOT_BUDGET: usize = 500;
+const PLAYBACK_INTEGRATION_MODULE_BUDGETS: &[(&str, usize)] = &[
     (
-        "desktop/src-tauri/src/native_runtime/tests/playback_integration.rs",
-        4_200,
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/supervisor_lease.rs",
+        1_600,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/terminal_release.rs",
+        1_600,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/presentation_events.rs",
+        1_600,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/diagnostics_trace.rs",
+        1_600,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs",
+        1_600,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/storage_bootstrap.rs",
+        1_600,
+    ),
+    (
+        "desktop/src-tauri/src/native_runtime/tests/playback_integration/commands_status.rs",
+        1_600,
     ),
 ];
 const ENGINE_TEST_ROOT_PATH: &str = "rust/crates/sky_player/src/engine/tests.rs";
@@ -96,6 +125,72 @@ fn native_runtime_module_budgets(root: &Path) -> Result<()> {
     for (path, budget) in NATIVE_RUNTIME_MODULE_BUDGETS {
         let source = fs::read_to_string(root.join(path))?;
         if let Some(violation) = native_runtime_line_budget_violation(path, &source, *budget) {
+            return Err(violation.into());
+        }
+    }
+    Ok(())
+}
+
+fn playback_integration_module_inventory_violation(
+    expected: &BTreeSet<String>,
+    actual: &BTreeSet<String>,
+) -> Option<String> {
+    (expected != actual).then(|| {
+        format!(
+            "[native_playback_test_module_ownership] native_runtime/tests/playback_integration/: observed={actual:?}, expected={expected:?}"
+        )
+    })
+}
+
+fn playback_integration_module_budgets(root: &Path) -> Result<()> {
+    let root_source = fs::read_to_string(root.join(PLAYBACK_INTEGRATION_ROOT_PATH))?;
+    if let Some(violation) = module_line_budget_violation(
+        "native_playback_test_root_lines",
+        PLAYBACK_INTEGRATION_ROOT_PATH,
+        &root_source,
+        PLAYBACK_INTEGRATION_ROOT_BUDGET,
+    ) {
+        return Err(violation.into());
+    }
+
+    let tests_root = root.join("desktop/src-tauri/src/native_runtime/tests/playback_integration");
+    let expected = PLAYBACK_INTEGRATION_MODULE_BUDGETS
+        .iter()
+        .filter_map(|(path, _)| {
+            path.strip_prefix("desktop/src-tauri/src/native_runtime/tests/playback_integration/")
+        })
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mut actual = BTreeSet::new();
+    for entry in fs::read_dir(&tests_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file()
+            || entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("rs")
+        {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "native playback test module name must be valid UTF-8")?;
+        actual.insert(name);
+    }
+    if let Some(violation) = playback_integration_module_inventory_violation(&expected, &actual) {
+        return Err(violation.into());
+    }
+
+    for (path, budget) in PLAYBACK_INTEGRATION_MODULE_BUDGETS {
+        let source = fs::read_to_string(root.join(path))?;
+        if let Some(violation) = module_line_budget_violation(
+            "native_playback_test_module_lines",
+            path,
+            &source,
+            *budget,
+        ) {
             return Err(violation.into());
         }
     }
@@ -1047,6 +1142,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     adapter_boundary(root)?;
     architecture(root)?;
     native_runtime_module_budgets(root)?;
+    playback_integration_module_budgets(root)?;
     xtask_module_budgets(root)
 }
 
@@ -1077,6 +1173,49 @@ mod tests {
         );
         native_runtime_module_budgets(&crate::repo::root())
             .expect("native runtime ownership modules stay within their budgets");
+    }
+
+    #[test]
+    fn playback_integration_module_budgets_reject_regrowth_and_cover_the_current_tree() {
+        assert_eq!(
+            module_line_budget_violation(
+                "native_playback_test_root_lines",
+                PLAYBACK_INTEGRATION_ROOT_PATH,
+                "one\ntwo\n",
+                1,
+            ),
+            Some(format!(
+                "[native_playback_test_root_lines] {PLAYBACK_INTEGRATION_ROOT_PATH}: 2 lines (> 1)"
+            ))
+        );
+        assert_eq!(
+            module_line_budget_violation(
+                "native_playback_test_module_lines",
+                PLAYBACK_INTEGRATION_MODULE_BUDGETS[0].0,
+                "one\ntwo\n",
+                1,
+            ),
+            Some(format!(
+                "[native_playback_test_module_lines] {}: 2 lines (> 1)",
+                PLAYBACK_INTEGRATION_MODULE_BUDGETS[0].0
+            ))
+        );
+        playback_integration_module_budgets(&crate::repo::root())
+            .expect("native playback test owners stay within budgets and exact inventory");
+    }
+
+    #[test]
+    fn playback_integration_module_ownership_rejects_unbudgeted_siblings() {
+        let expected = ["supervisor_lease.rs", "terminal_release.rs"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let actual = ["supervisor_lease.rs", "terminal_release.rs", "unowned.rs"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert!(playback_integration_module_inventory_violation(&expected, &actual).is_some());
+        assert!(playback_integration_module_inventory_violation(&expected, &expected).is_none());
     }
 
     #[test]
