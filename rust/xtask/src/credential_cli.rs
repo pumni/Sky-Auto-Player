@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::Result;
+use crate::{Result, process, repo, updater_trust, version};
 use sky_windows_security::credential::{
     CredentialStore, CredentialTarget, SessionCredentialOps, reject_ambient_password, run_one_shot,
 };
@@ -14,8 +14,10 @@ use zeroize::Zeroizing;
 
 const ACTION_PASSWORD_ENV: &str = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD";
 const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
-const RELEASE_ACTION_SCRIPT: &str = "scripts/orchestrate_v4_production_release.ps1";
 const VERIFY_PRIVATE_KEY_ACTION_SCRIPT: &str = "scripts/verify_v4_updater_private_key.ps1";
+const CREDENTIAL_ACTION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const BUN_INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const BUILD_CANDIDATE_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let action = args.first().ok_or("credential action is required")?;
@@ -145,6 +147,10 @@ fn run_action(
         }
     }
 
+    if action_kind == "build-candidate" {
+        return build_candidate(root, store, key_path, source_sha, version, channel);
+    }
+
     let action_script = action_script_relative_path(action_kind)?;
     let mut command = Command::new("pwsh");
     command.args([
@@ -156,17 +162,6 @@ fn run_action(
     ]);
     command.arg(root.join(action_script));
     match action_kind {
-        "release" => {
-            command
-                .arg("-ExpectedSourceSha")
-                .arg(source_sha.ok_or("release action requires --expected-source-sha")?)
-                .arg("-Version")
-                .arg(version.ok_or("release action requires --version")?)
-                .arg("-Channel")
-                .arg(channel.ok_or("release action requires --channel")?)
-                .arg("-UpdaterPrivateKeyPath")
-                .arg(key_path.ok_or("release action requires --key-path")?);
-        }
         "verify-private-key" => {
             command
                 .arg("-KeyPath")
@@ -182,10 +177,100 @@ fn run_action(
 
 pub(crate) fn action_script_relative_path(action_kind: &str) -> Result<&'static str> {
     match action_kind {
-        "release" => Ok(RELEASE_ACTION_SCRIPT),
         "verify-private-key" => Ok(VERIFY_PRIVATE_KEY_ACTION_SCRIPT),
-        _ => Err("credential run-action accepts only release or verify-private-key".into()),
+        _ => Err("credential run-action accepts only build-candidate or verify-private-key".into()),
     }
+}
+
+fn build_candidate(
+    root: &Path,
+    store: &impl SessionCredentialOps,
+    key_path: Option<&str>,
+    source_sha: Option<&str>,
+    version_text: Option<&str>,
+    channel: Option<&str>,
+) -> Result<()> {
+    let key_path = key_path.ok_or("build-candidate action requires --key-path")?;
+    let source_sha = source_sha.ok_or("build-candidate action requires --expected-source-sha")?;
+    let version_text = version_text.ok_or("build-candidate action requires --version")?;
+    let channel = channel.ok_or("build-candidate action requires --channel")?;
+    if source_sha.len() != 40 || !source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("build-candidate source identity must be an exact commit SHA".into());
+    }
+    let parsed = version::parse(version_text)?;
+    version::validate_channel(channel, version_text, &parsed)?;
+    if repo::project_version(root)? != version_text {
+        return Err("build-candidate version differs from the checked-out Tauri package".into());
+    }
+    let key_path =
+        std::fs::canonicalize(key_path).map_err(|_| "updater private key path is not a file")?;
+    let workspace = std::fs::canonicalize(root)?;
+    if !key_path.is_file() || key_path.starts_with(&workspace) {
+        return Err("updater private key must be a file outside the workspace".into());
+    }
+    let head = repo::git_head(root, true)?;
+    if !head.eq_ignore_ascii_case(source_sha) {
+        return Err("build-candidate source SHA differs from clean checked-out HEAD".into());
+    }
+
+    let desktop = root.join("desktop");
+    let install_args = vec!["install".to_owned(), "--frozen-lockfile".to_owned()];
+    let install = process::capture_owned_timeout_filtered(
+        std::ffi::OsStr::new("bun"),
+        &install_args,
+        &desktop,
+        &[],
+        &[],
+        BUN_INSTALL_TIMEOUT,
+    )?;
+    write_process_output(&install.stdout, false)?;
+    write_process_output(&install.stderr, true)?;
+    if !install.status.success() {
+        return Err(format!(
+            "pinned desktop dependency installation failed with {}",
+            install.status
+        )
+        .into());
+    }
+
+    let verify_key = key_path.clone();
+    let mut command = Command::new("bun");
+    command
+        .args(["run", "tauri", "build", "--ci", "--", "--profile", "dist"])
+        .env("TAURI_SIGNING_PRIVATE_KEY", &key_path)
+        .env("TAURI_SIGNING_PRIVATE_KEY_PATH", &key_path)
+        .env("SKY_AUTHENTICODE_MODE", "unsigned-zero-budget")
+        .env_remove("SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT")
+        .env_remove("SKY_AUTHENTICODE_PROVIDER")
+        .env_remove("SKY_AUTHENTICODE_PROVIDER_SCRIPT")
+        .env_remove("SKY_AUTHENTICODE_PROVIDER_COMMAND")
+        .env_remove("SKY_AUTHENTICODE_TEST_PFX_PATH")
+        .env_remove("SKY_AUTHENTICODE_TEST_PFX_PASSWORD")
+        .env_remove("SKY_AUTHENTICODE_TEST_THUMBPRINT");
+    let operation = run_one_shot(store, |secret| {
+        updater_trust::verify_local_private_key(root, &verify_key, Some(secret))
+            .map_err(|error| error.to_string())?;
+        let (status, stdout, stderr) =
+            run_child(&mut command, &desktop, secret, BUILD_CANDIDATE_TIMEOUT)?;
+        let stdout = redact_secret_bytes(&stdout, secret);
+        let stderr = redact_secret_bytes(&stderr, secret);
+        write_process_output(&stdout, false).map_err(|error| error.to_string())?;
+        write_process_output(&stderr, true).map_err(|error| error.to_string())?;
+        if status != 0 {
+            return Err(format!(
+                "Tauri candidate build failed with exit code {status}"
+            ));
+        }
+        Ok(())
+    });
+    operation.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+
+    let after = repo::git_head(root, true)?;
+    if !after.eq_ignore_ascii_case(source_sha) {
+        return Err("candidate build changed the checked-out release source identity".into());
+    }
+    println!("V4 Rust BuildCandidate build adapter: PASS (source SHA and worktree unchanged)");
+    Ok(())
 }
 
 fn validate_action_environment() -> Result<()> {
@@ -224,7 +309,7 @@ fn execute_one_shot_action(
     mut emit: impl FnMut(&[u8], bool) -> std::io::Result<()>,
 ) -> Result<()> {
     let boundary = run_one_shot(store, |secret| {
-        let (status, stdout, stderr) = run_child(command, root, secret)?;
+        let (status, stdout, stderr) = run_child(command, root, secret, CREDENTIAL_ACTION_TIMEOUT)?;
         let stdout = redact_secret_bytes(&stdout, secret);
         let stderr = redact_secret_bytes(&stderr, secret);
         emit(&stdout, false).map_err(|error| error.to_string())?;
@@ -242,6 +327,7 @@ fn run_child(
     command: &mut Command,
     root: &Path,
     secret: &str,
+    timeout: Duration,
 ) -> std::result::Result<(i32, Vec<u8>, Vec<u8>), String> {
     command
         .current_dir(root)
@@ -257,7 +343,13 @@ fn run_child(
         Ok(owner) => Some(owner),
         Err(error) => {
             let _ = child.kill();
-            let _ = child.wait();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                if child.try_wait().ok().flatten().is_some() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
             return Err(format!(
                 "credential action process-tree ownership failed: {error}"
             ));
@@ -276,14 +368,47 @@ fn run_child(
         .ok_or("credential action stderr was not captured")?;
     let stdout_reader = capture_pipe(stdout);
     let stderr_reader = capture_pipe(stderr);
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(error) => {
-            if let Some(owner) = &process_tree {
-                let _ = owner.terminate();
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let teardown = terminate_child_bounded(&mut child, process_tree.as_ref());
+                let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+                let stdout_closed = wait_for_reader(&stdout_reader, cleanup_deadline);
+                let stderr_closed = wait_for_reader(&stderr_reader, cleanup_deadline);
+                if stdout_closed {
+                    let _ = join_pipe(stdout_reader);
+                }
+                if stderr_closed {
+                    let _ = join_pipe(stderr_reader);
+                }
+                let descendant_error = if stdout_closed && stderr_closed {
+                    String::new()
+                } else {
+                    "; credential action descendants retained output pipes after teardown"
+                        .to_owned()
+                };
+                let teardown_error = teardown
+                    .err()
+                    .map(|error| format!("; process-tree teardown failed: {error}"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "credential action timed out after {} ms{teardown_error}{descendant_error}",
+                    timeout.as_millis()
+                ));
             }
-            let _ = child.kill();
-            return Err(format!("credential action wait failed: {error}"));
+            Err(error) => {
+                let teardown = terminate_child_bounded(&mut child, process_tree.as_ref());
+                return Err(format!(
+                    "credential action wait failed: {error}{}",
+                    teardown
+                        .err()
+                        .map(|error| format!("; process-tree teardown failed: {error}"))
+                        .unwrap_or_default()
+                ));
+            }
         }
     };
     let pipe_deadline = Instant::now() + Duration::from_secs(3);
@@ -307,6 +432,30 @@ fn run_child(
     let stdout = join_pipe(stdout_reader)?;
     let stderr = join_pipe(stderr_reader)?;
     Ok((status.code().unwrap_or(-1), stdout, stderr))
+}
+
+fn terminate_child_bounded(
+    child: &mut std::process::Child,
+    process_tree: Option<&sky_windows_security::ProcessTree>,
+) -> std::result::Result<(), String> {
+    let teardown = match process_tree {
+        Some(owner) => owner.terminate().map_err(|error| error.to_string()),
+        None => child.kill().map_err(|error| error.to_string()),
+    };
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return teardown,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                return Err("credential action child did not exit within teardown deadline".into());
+            }
+            Err(error) => return Err(format!("could not inspect child during teardown: {error}")),
+        }
+    }
 }
 
 fn capture_pipe(
@@ -417,17 +566,14 @@ mod tests {
     const CHILD_PID_FILE_ENV: &str = "SKY_XTASK_SYNTHETIC_ACTION_CHILD_PID_FILE";
 
     #[test]
-    fn release_action_routes_to_the_canonical_orchestrator() {
-        assert_eq!(
-            action_script_relative_path("release").expect("release action must be supported"),
-            "scripts/orchestrate_v4_production_release.ps1"
-        );
+    fn release_build_action_is_rust_owned_and_operator_verifier_is_narrow() {
+        assert!(action_script_relative_path("build-candidate").is_err());
         assert_eq!(
             action_script_relative_path("verify-private-key")
                 .expect("private-key verification must be supported"),
             "scripts/verify_v4_updater_private_key.ps1"
         );
-        assert!(action_script_relative_path("release-preview").is_err());
+        assert!(action_script_relative_path("release").is_err());
     }
 
     struct SyntheticStore {
@@ -506,6 +652,30 @@ mod tests {
                         .spawn()
                         .expect("synthetic pipe-holding descendant must start"),
                 );
+            }
+            "spawn-and-wait" => {
+                let pid_file = std::env::var_os(CHILD_PID_FILE_ENV)
+                    .expect("descendant test requires a PID file");
+                let executable =
+                    std::env::current_exe().expect("current test executable must be available");
+                let mut descendant = Command::new(executable);
+                descendant
+                    .args([
+                        "--exact",
+                        "credential_cli::tests::synthetic_child_entry",
+                        "--nocapture",
+                    ])
+                    .env(CHILD_MODE_ENV, "pipe-descendant")
+                    .env(CHILD_PID_FILE_ENV, pid_file)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit());
+                drop(
+                    descendant
+                        .spawn()
+                        .expect("synthetic pipe-holding descendant must start"),
+                );
+                std::thread::sleep(Duration::from_secs(30));
             }
             "pipe-descendant" => {
                 let pid_file = std::env::var_os(CHILD_PID_FILE_ENV)
@@ -625,8 +795,13 @@ mod tests {
         let mut command = synthetic_child_command("early-parent-exit");
         command.env(CHILD_PID_FILE_ENV, &pid_file);
         let started = Instant::now();
-        let result = run_child(&mut command, &root, "synthetic-only-action-secret")
-            .expect("bounded process-tree teardown should complete");
+        let result = run_child(
+            &mut command,
+            &root,
+            "synthetic-only-action-secret",
+            CREDENTIAL_ACTION_TIMEOUT,
+        )
+        .expect("bounded process-tree teardown should complete");
         assert_eq!(result.0, 0);
         assert!(
             started.elapsed() < Duration::from_secs(7),
@@ -644,6 +819,50 @@ mod tests {
         assert!(
             !synthetic_process_is_running(pid),
             "pipe-holding descendant process {pid} survived process-tree teardown"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actual_child_launcher_kills_timed_out_process_tree() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-credential-timeout-{}-{nonce:032x}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).expect("create isolated synthetic child directory");
+        let pid_file = root.join("descendant.pid");
+        let _guard = SyntheticDescendantGuard {
+            root: root.clone(),
+            pid_file: pid_file.clone(),
+        };
+        let mut command = synthetic_child_command("spawn-and-wait");
+        command.env(CHILD_PID_FILE_ENV, &pid_file);
+        let started = Instant::now();
+        let error = run_child(
+            &mut command,
+            &root,
+            "synthetic-only-action-secret",
+            Duration::from_millis(100),
+        )
+        .expect_err("synthetic process tree must time out");
+        assert!(error.contains("timed out after 100 ms"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let pid: u32 = fs::read_to_string(&pid_file)
+            .expect("synthetic descendant must publish its PID before timeout")
+            .trim()
+            .parse()
+            .expect("synthetic descendant PID must be numeric");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while synthetic_process_is_running(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !synthetic_process_is_running(pid),
+            "timed-out descendant process {pid} survived process-tree teardown"
         );
     }
 

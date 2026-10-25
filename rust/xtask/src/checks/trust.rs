@@ -454,30 +454,23 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let orchestrator =
-        fs::read_to_string(root.join("scripts/orchestrate_v4_production_release.ps1"))?;
+    let release_owner = fs::read_to_string(root.join("rust/xtask/src/release_v4.rs"))?;
     for marker in [
-        "ExpectedSourceSha",
-        "Version",
-        "Channel",
-        "UpdaterPrivateKeyPath",
-        "ApprovedSignerThumbprint",
-        "updater-trust verify-private-key",
-        "Redact-UpdaterVerifierOutput",
-        "updater-trust verify-signature",
-        "V4_QUALIFICATION_EVIDENCE.json",
-        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
-        "sign_v4_authenticode.ps1",
-        "cargo xtask authenticode verify",
-        "unsigned-zero-budget",
-        "Invoke-PrePackagingStaleOutputPurge",
-        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
-        "cargo xtask ci nsis smoke",
-        "--allow-protected-release-runner",
+        "fn build_candidate",
+        "fn candidate_record",
+        "fn write_release_evidence",
+        "fn validate_candidate_evidence",
+        "fn validate_qualification_evidence",
+        "fn publish_release",
+        "fn promote_metadata",
+        "fn final_verify",
+        "fn doctor_report",
+        "capture_owned_timeout_to_file_filtered",
+        "GITHUB_RETRY_ATTEMPTS",
     ] {
-        if !orchestrator.contains(marker) {
+        if !release_owner.contains(marker) {
             return Err(format!(
-                "v4 production release orchestrator is missing its required marker: {marker}"
+                "Rust v4 release owner is missing its required boundary: {marker}"
             )
             .into());
         }
@@ -503,42 +496,26 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let evidence_builder = fs::read_to_string(root.join("scripts/v4_qualification_evidence.ps1"))?;
-    for marker in [
-        "New-V4CanonicalQualificationEvidence",
-        "tauri-nsis-qualified-release",
-        "install-launch-uninstall",
-    ] {
-        if !evidence_builder.contains(marker) {
-            return Err(format!(
-                "v4 qualification evidence builder is missing required marker: {marker}"
-            )
-            .into());
-        }
-    }
-    let orchestrator_test =
-        fs::read_to_string(root.join("scripts/test_v4_production_orchestrator.ps1"))?;
-    for marker in [
-        "[PASS] All V4 production orchestrator contract tests passed",
-        "Parameter validation fails closed on missing parameters",
-        "Source SHA mismatch fails closed before packaging",
-        "Channel policy validation fails closed on invalid SemVer / channel",
-        "Mutually exclusive provider configuration fails closed",
-        "Wrong updater private key fails pre-flight verification before packaging",
-        "Secret values are not emitted by expected error paths",
-        "Inherited signing key environment fails closed",
-        "Stale candidate artifacts and evidence are purged before packaging",
-        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
-        "Stale-output purge did not execute strictly BEFORE pre-packaging updater key verification",
-        "Updater signature verification rejects corrupted signature",
-        "Tampered candidate binary is detected",
-        "Production verification rejects CI test certificate",
-    ] {
-        if !orchestrator_test.contains(marker) {
-            return Err(format!(
-                "v4 production orchestrator test is missing its required marker: {marker}"
-            )
-            .into());
+    let retired_release_scripts = [
+        "scripts/v4_release_pipeline.ps1",
+        "scripts/release_doctor.ps1",
+        "scripts/orchestrate_v4_production_release.ps1",
+        "scripts/promote_v4_metadata.ps1",
+        "scripts/v4_release_asset_upload.ps1",
+        "scripts/v4_release_draft_lookup.ps1",
+        "scripts/v4_release_latest_policy.ps1",
+        "scripts/ci_v4_release_latest_guard.ps1",
+        "scripts/probe_v4_metadata_app_access.ps1",
+        "scripts/cleanup_v4_release_state.ps1",
+        "scripts/v4_qualification_evidence.ps1",
+        "scripts/test_v4_release_pipeline.ps1",
+        "scripts/test_v4_post_publication_transaction.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+        "scripts/test_v4_production_orchestrator.ps1",
+    ];
+    for relative in retired_release_scripts {
+        if root.join(relative).exists() {
+            return Err(format!("retired PowerShell release authority remains: {relative}").into());
         }
     }
     let topology_doc = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))?;

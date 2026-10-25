@@ -344,25 +344,11 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
-      - name: Read-only GitHub Latest baseline guard
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: pwsh scripts/ci_v4_release_latest_guard.ps1
+      - name: V4 Rust release state-machine mock self-test
+        run: cargo xtask release-v4 self-test
 
-      - name: Promotion digest regression self-test
-        run: pwsh scripts/promote_v4_metadata.ps1 -SelfTest
-
-      - name: Run V4 release Latest guard behavioral test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1
-
-      - name: Run V4 post-publication transaction behavioral test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1
-
-      - name: V4 release pipeline mock state-machine self-test
-        run: pwsh scripts/test_v4_release_pipeline.ps1
-
-      - name: Run V4 production release orchestrator contract test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_orchestrator.ps1
+      - name: V4 Rust release state-machine regression tests
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests
 
       - name: Run V4 updater private-key verifier secret-output regression
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_updater_private_key.ps1

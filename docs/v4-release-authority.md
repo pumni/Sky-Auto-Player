@@ -237,7 +237,7 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
 During the publication of `v4.1.0` (run `35255186714`, source SHA `5e5ab9d9a89aaced2af97a32c64fff21681c4c56`),
 candidate qualification, draft asset upload, and exact-byte OIDC attestations succeeded, and the GitHub
 Release was transitioned to published (`draft = false`, making it GitHub Latest). However, a state-object
-property assignment error in `v4_release_pipeline.ps1` terminated the workflow immediately after publication,
+a release workflow error terminated the then-current PowerShell transaction immediately after publication,
 before metadata promotion could execute. As a result, GitHub Latest reached `v4.1.0` while
 `channels/stable/latest.json` remained at `4.0.1`.
 
@@ -253,7 +253,6 @@ The read-only `release-doctor` queries external truth, local state, and workflow
 
 ```powershell
 cargo xtask release-doctor --tag <tag> [--run-id <id>] [--workflow-sha <sha>] [--format <text|json>]
-pwsh scripts/release_doctor.ps1 -Tag <tag> [-RunId <id>] [-WorkflowSha <sha>] [-Format <Text|Json>]
 ```
 
 ## Release and update domain authority ownership map
@@ -262,7 +261,7 @@ To maintain single authoritative ownership and prevent duplicated domain rules a
 the v4 architecture defines exact ownership boundaries:
 
 ```text
-GitHub Actions = transaction orchestration
+GitHub Actions = protected runner lifecycle, permissions, and attestation
 cargo xtask    = deterministic release/update domain validation
 PowerShell     = Windows adapters and bounded glue
 Tauri Rust     = runtime updater authority
@@ -273,9 +272,9 @@ React          = presentation
 
 | Layer | Component / Tooling | Canonical Ownership | Non-Goals / Excluded Roles |
 |---|---|---|---|
-| **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Workflow lifecycle & environment gates; job sequencing (`Preflight` &rarr; `BuildCandidate` &rarr; `Attest` &rarr; `PublishRelease` &rarr; `PromoteMetadata` &rarr; `FinalVerify`); OIDC attestation issuance. | Does not define SemVer rules, asset naming patterns, or metadata schemas. |
-| **`cargo xtask` (Rust)** | `rust/xtask/src/` (`release_metadata.rs`, `tauri_bundle.rs`, `sbom.rs`, `version.rs`, `updater_trust.rs`, `ci_classifier.rs`, `ci_candidate.rs`, `ci_bridge.rs`, `ci_artifacts.rs`, `calibration.rs`, `nsis_harness.rs`, `updater_fixture.rs`) and `sky_windows_security::registry` | Single canonical source of truth for deterministic release and CI rules: SemVer validation and channel classification (`Stable`/`Beta`); canonical asset naming and digest verification; release metadata schemas; updater trust material inventory; SPDX SBOM generation/verification; installed catalog validation; CI lane classification; candidate/bridge schemas and exact artifact inventories; calibration build, staging, PE/hash validation, and installed help verification; HKCU snapshots/restoration; bounded NSIS/updater process lifecycle; exact-byte loopback fixture and N-to-N+1 qualification. | Does not interact with Windows Credential Manager or native OS desktop sessions directly, except through the guarded disposable NSIS/updater harness and isolated Win32 registry/process adapters. |
-| **PowerShell** | `scripts/` (`v4_updater_credential_broker.ps1`, `sign_v4_authenticode.ps1`, `verify_v4_authenticode.ps1`, `promote_v4_metadata.ps1`, `v4_release_pipeline.ps1`, `orchestrate_v4_production_release.ps1`) | Retained Windows adapters and release transaction orchestration: Credential Manager operator prompting and Rust command launch; raw Authenticode platform/CMS facts and signing tool invocation; GitHub CLI (`gh`), release publication, and metadata promotion; protected workflow setup and release sequencing. The release scripts delegate candidate/updater/NSIS qualification to Rust. | Wave D still owns migration of the release transaction authority. PowerShell must not independently own credential lifecycle, Authenticode policy/evidence, SemVer, fixture isolation, artifact schemas, file inventory, hash, PE, or installed calibration verification rules owned by Rust. |
+| **GitHub Actions** | .github/workflows/release-v4.yml, rehearse-v4.yml, ci.yml | Protected runner lifecycle, exact source checkout, scoped token issuance, and OIDC attestations. The workflow invokes the ordered Rust release phases. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
+| **cargo xtask (Rust)** | rust/xtask/src/release_v4.rs and related release_metadata.rs, sbom.rs, version.rs, updater_trust.rs, calibration.rs, nsis_harness.rs, updater_fixture.rs | Single transaction authority for Preflight, BuildCandidate, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform and credential adapters; does not mint GitHub workflow tokens or operate the release runner. |
+| **PowerShell** | scripts/sign_v4_authenticode.ps1, verify_v4_authenticode.ps1, v4_authenticode_crypto.ps1, scan_v4_defender_exact.ps1, verify_v4_release_runner.ps1, Credential Manager operator helpers | Narrow Windows and provider adapters for Authenticode signing and facts, Defender scanning, runner boundary checks, and operator credential setup. | Does not own the release transaction, GitHub API policy, release-doctor, state transitions, evidence schemas, or SemVer. |
 | **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
 | **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 
@@ -287,7 +286,7 @@ React          = presentation
      - Channel prerelease classification (`stable` rejects prerelease versions; `beta` requires prerelease versions)
      - Release tag exactness (`v<version>`)
      - Cargo project version matching (`desktop/src-tauri/Cargo.toml`)
-   - PowerShell orchestration scripts (`scripts/v4_release_pipeline.ps1`, `scripts/orchestrate_v4_production_release.ps1`) delegate SemVer and channel classification directly to `cargo xtask version check`, eliminating duplicate regex and policy logic.
+   - cargo xtask release-v4 uses the canonical cargo xtask version owner; PowerShell does not implement release policy.
 
 2. **Isolated NSIS and Updater Qualification**:
    - `cargo xtask ci nsis smoke` and `cargo xtask ci updater-fixture run` own real package execution, restricted to a disposable hosted Windows runner or exact protected release workflow context.

@@ -1,5 +1,7 @@
 use crate::Result;
 use std::ffi::OsStr;
+#[cfg(windows)]
+use std::fs::OpenOptions;
 #[cfg(any(test, windows))]
 use std::io::Read;
 use std::path::Path;
@@ -474,6 +476,88 @@ pub(crate) fn capture_owned_timeout_filtered(
         let _ = (program, args, cwd, env, remove_env, timeout);
         Err("bounded Windows process-tree execution is unavailable on this platform".into())
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn capture_owned_timeout_to_file_filtered(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    remove_env: &[String],
+    stdout_path: &Path,
+    timeout: Duration,
+) -> Result<Output> {
+    eprintln!(
+        "[xtask] {} {} (timeout={}ms, stdout=file)",
+        program.to_string_lossy(),
+        args.join(" "),
+        timeout.as_millis()
+    );
+    let stdout_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stdout_path)?;
+    let mut child = spawn_owned(
+        program,
+        args,
+        cwd,
+        env,
+        remove_env,
+        Stdio::from(stdout_file),
+        Stdio::piped(),
+    )?;
+    let mut stderr_reader = Some(spawn_bounded_reader(
+        child
+            .child
+            .stderr
+            .take()
+            .ok_or("timed child has no stderr pipe")?,
+    ));
+    let status = match child.wait_timeout(timeout) {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = child.terminate();
+            let stderr =
+                collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+            return Err(format!("{error}\nstderr: {}", String::from_utf8_lossy(&stderr)).into());
+        }
+    };
+    let stderr = collect_bounded_reader(&mut stderr_reader, READER_DRAIN_TIMEOUT, "stderr")?;
+    let Some(stderr) = stderr else {
+        let teardown = child.terminate();
+        let _ = collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr");
+        return Err(format!(
+            "process {} exited while a descendant kept stderr open{}",
+            program.to_string_lossy(),
+            teardown
+                .err()
+                .map(|error| format!("; process-tree teardown failed: {error}"))
+                .unwrap_or_default()
+        )
+        .into());
+    };
+    Ok(Output {
+        status,
+        stdout: Vec::new(),
+        stderr,
+    })
+}
+
+#[cfg(not(windows))]
+pub(crate) fn capture_owned_timeout_to_file_filtered(
+    _program: &OsStr,
+    _args: &[String],
+    _cwd: &Path,
+    _env: &[(String, String)],
+    _remove_env: &[String],
+    _stdout_path: &Path,
+    _timeout: Duration,
+) -> Result<Output> {
+    Err("bounded Windows process-tree execution is unavailable on this platform".into())
 }
 
 #[cfg(windows)]
