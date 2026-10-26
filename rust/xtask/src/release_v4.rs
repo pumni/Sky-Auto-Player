@@ -867,6 +867,10 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     }
 }
 
+pub(crate) fn usage() -> &'static str {
+    "Usage:\n  cargo xtask release-v4 preflight --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 <build-unsigned|sign-candidate|qualify-candidate|verify-candidate|probe-verify-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify> --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 cleanup --state-root <dir>\n  cargo xtask release-v4 cleanup-signing-material\n  cargo xtask release-v4 doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]\n  cargo xtask release-v4 self-test\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan <path> --plan-run-id <id> --plan-sha256 <sha256> --confirm-metadata-only-recovery\nRecovery is operator-gated by .github/workflows/v4-metadata-recovery.yml; plan is read-only and apply writes stable channel metadata only."
+}
+
 fn expected_job_for_command(command: &str) -> Option<&'static str> {
     match command {
         "build-unsigned" => Some("build_unsigned"),
@@ -1798,6 +1802,9 @@ fn unique_temp(parent: &Path, prefix: &str) -> PathBuf {
     parent.join(format!("{prefix}-{entropy}"))
 }
 
+static NEXT_DOCTOR_METADATA_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
 fn purge_build_outputs(
     workspace: &Path,
     dist: &Path,
@@ -2594,6 +2601,46 @@ impl CandidateManifest {
 }
 
 fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport) -> Result<()> {
+    publish_release_with_signature_verifier(
+        root,
+        options,
+        transport,
+        crate::updater_trust::verify_updater_signature_for_version,
+    )
+}
+
+fn publish_release_with_mock_verifier(
+    root: &Path,
+    options: &Options,
+    transport: &mut dyn Transport,
+) -> Result<()> {
+    publish_release_with_signature_verifier(
+        root,
+        options,
+        transport,
+        |installer, signature, version| {
+            let installer_name = release_metadata::canonical_installer_name(version);
+            let signature_name = format!("{installer_name}.sig");
+            if installer.file_name().and_then(|name| name.to_str()) != Some(&installer_name)
+                || signature.file_name().and_then(|name| name.to_str()) != Some(&signature_name)
+                || !installer.is_file()
+                || !signature.is_file()
+            {
+                return Err(
+                    "mock signature verifier received unexpected downloaded asset names".into(),
+                );
+            }
+            Ok(())
+        },
+    )
+}
+
+fn publish_release_with_signature_verifier(
+    root: &Path,
+    options: &Options,
+    transport: &mut dyn Transport,
+    mut verify_signature: impl FnMut(&Path, &Path, &str) -> Result<()>,
+) -> Result<()> {
     let context = read_context(root, options)?;
     let mut state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
     if state.phase != Phase::Ready || !state.attested {
@@ -2695,7 +2742,15 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
             &format!("repos/{REPOSITORY}/releases/{release_id}"),
             None,
         )?;
-        verify_public_assets(transport, &draft, &manifest.public_assets, false)?;
+        verify_draft_assets_before_publication(
+            options,
+            transport,
+            &draft,
+            &manifest.public_assets,
+            &context,
+            release_id,
+            &mut verify_signature,
+        )?;
         prepublication_metadata_qualification(
             root,
             options,
@@ -2787,6 +2842,97 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
         context.tag, release_id
     );
     Ok(())
+}
+
+fn verify_draft_assets_before_publication(
+    options: &Options,
+    transport: &mut dyn Transport,
+    draft: &Value,
+    expected: &[CandidateRecord],
+    context: &Context,
+    release_id: u64,
+    verify_signature: &mut dyn FnMut(&Path, &Path, &str) -> Result<()>,
+) -> Result<()> {
+    if draft["id"].as_u64() != Some(release_id)
+        || draft["draft"] != true
+        || draft["immutable"] != false
+        || !matches_transaction(draft, context)
+    {
+        return Err("draft asset readback requires the exact owned unpublished release".into());
+    }
+    verify_public_assets(transport, draft, expected, false)?;
+    let installer_name = release_metadata::canonical_installer_name(&context.version);
+    let installer_release_name =
+        release_metadata::canonical_release_installer_name(&context.version);
+    let signature_name = format!("{installer_name}.sig");
+    let signature_release_name = format!("{installer_release_name}.sig");
+    let installer = expected
+        .iter()
+        .find(|record| record.role == "installer")
+        .ok_or("candidate manifest lacks the installer for draft readback")?;
+    let signature = expected
+        .iter()
+        .find(|record| record.role == "updater-signature")
+        .ok_or("candidate manifest lacks the updater signature for draft readback")?;
+    if expected.len() != 2
+        || installer.source_name != installer_name
+        || installer.release_name != installer_release_name
+        || signature.source_name != signature_name
+        || signature.release_name != signature_release_name
+    {
+        return Err(
+            "draft readback asset source/public names differ from the canonical v4 pair".into(),
+        );
+    }
+
+    let directory = options.state_root.join("publication-readback");
+    fs::create_dir(&directory)?;
+    let verification = (|| -> Result<()> {
+        for (record, source_name) in [
+            (installer, installer_name.as_str()),
+            (signature, signature_name.as_str()),
+        ] {
+            let asset = draft["assets"]
+                .as_array()
+                .and_then(|assets| {
+                    assets
+                        .iter()
+                        .find(|asset| asset["name"] == record.release_name)
+                })
+                .ok_or("draft asset disappeared before exact-byte readback")?;
+            let url = asset["url"]
+                .as_str()
+                .ok_or("draft asset API URL is missing")?;
+            let destination = directory.join(source_name);
+            transport.download(asset_api_endpoint(url)?, &destination)?;
+            let metadata = fs::symlink_metadata(&destination)?;
+            if !metadata.file_type().is_file()
+                || metadata.len() != record.size
+                || crate::hash::sha256(&destination)? != record.sha256
+            {
+                return Err(format!(
+                    "draft asset readback differs from the frozen candidate: {}",
+                    record.release_name
+                )
+                .into());
+            }
+        }
+        verify_signature(
+            &directory.join(&installer_name),
+            &directory.join(&signature_name),
+            &context.version,
+        )?;
+        Ok(())
+    })();
+    let cleanup = fs::remove_dir_all(&directory);
+    match (verification, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(format!("draft readback cleanup failed: {error}").into()),
+        (Err(error), Err(cleanup_error)) => {
+            Err(format!("{error}; draft readback cleanup failed: {cleanup_error}").into())
+        }
+    }
 }
 
 fn prepublication_metadata_qualification(
@@ -3350,6 +3496,7 @@ fn promote_metadata(root: &Path, options: &Options, transport: &mut dyn Transpor
         context.channel
     );
     let existing = transport.request("GET", &endpoint, None)?;
+    validate_latest_for_metadata_promotion(options, &context, &state, &published, transport)?;
     let current_sha = if let Some(existing) = existing.as_ref() {
         let bytes = decode_contents(existing)?;
         let current = options
@@ -3415,6 +3562,49 @@ fn promote_metadata(root: &Path, options: &Options, transport: &mut dyn Transpor
         "V4 Rust PromoteMetadata: PASS (channel={}, tag={})",
         context.channel, context.tag
     );
+    Ok(())
+}
+
+fn validate_latest_for_metadata_promotion(
+    options: &Options,
+    context: &Context,
+    state: &ReleaseState,
+    published: &Value,
+    transport: &mut dyn Transport,
+) -> Result<()> {
+    let current_latest = required_api(
+        transport,
+        "GET",
+        &format!("repos/{REPOSITORY}/releases/latest"),
+        None,
+    )?;
+    validate_stable_latest(&current_latest)?;
+    if context.channel == "stable" {
+        if state.release_id != current_latest["id"].as_u64()
+            || current_latest["tag_name"] != context.tag
+            || !current_latest["target_commitish"]
+                .as_str()
+                .is_some_and(|sha| sha.eq_ignore_ascii_case(&context.source_sha))
+            || !same_github_latest(published, &current_latest)
+        {
+            return Err(
+                "GitHub Latest changed after publication; refusing channel metadata promotion"
+                    .into(),
+            );
+        }
+    } else {
+        let preflight_latest: Value = read_json::<Value>(
+            &options.state_root.join("preflight-evidence.json"),
+        )?["pre_publication_latest"]
+            .clone();
+        validate_stable_latest(&preflight_latest)?;
+        if !same_github_latest(&preflight_latest, &current_latest) {
+            return Err(
+                "GitHub Latest changed while beta metadata promotion was waiting; refusing channel metadata promotion"
+                    .into(),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -4363,12 +4553,28 @@ fn print_doctor_report(report: &Value, format: &str) -> Result<()> {
 }
 
 fn doctor_validate_metadata(bytes: &[u8], channel: &str) -> Result<()> {
-    let path = unique_temp(&env::temp_dir(), "sky-release-doctor-metadata");
-    let validation = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
+    let (path, mut file) = loop {
+        let base = unique_temp(&env::temp_dir(), "sky-release-doctor-metadata");
+        let sequence =
+            NEXT_DOCTOR_METADATA_TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file_name = format!(
+            "{}-{sequence}",
+            base.file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("metadata validation temporary filename is invalid")?
+        );
+        let path = base.with_file_name(file_name);
+        match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path)?;
+            .open(&path)
+        {
+            Ok(file) => break (path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let validation = (|| -> Result<()> {
         use std::io::Write;
         file.write_all(bytes)?;
         drop(file);
@@ -4416,11 +4622,13 @@ fn valid_workflow_run(run: &Value, sha: Option<&str>, repository: &str) -> bool 
 fn self_test() -> Result<()> {
     let outcomes = [
         mock_publish_succeeds(),
+        mock_draft_readback_failures_never_patch(),
         mock_non_monotonic_candidate_never_mutates(),
         mock_draft_post_timeout_reconciles_exact_marker(),
         mock_upload_timeout_reconciles_exact_asset(),
         mock_complete_transaction_and_raw_metadata(),
         mock_metadata_promotion_is_idempotent_after_committed_timeout(),
+        mock_metadata_promotion_rejects_changed_latest(),
         mock_publication_identity_and_asset_inventory_fail_closed(),
         mock_pr_merge_sha_does_not_break_release_or_owned_cleanup(),
         mock_conflicting_draft_is_not_deleted(),
@@ -4473,15 +4681,28 @@ fn mock_publish_succeeds() -> Result<()> {
         &options.state_root.join("candidate-manifest.json"),
         &manifest,
     )?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
     assert_eq!(state.phase, Phase::PublishedPendingMetadata);
     assert_eq!(state.release_id, Some(12));
+    assert!(state.qualified_after_download);
     let post = github
         .events
         .iter()
         .position(|event| event == "PATCH repos/pumni/Sky-Auto-Player/releases/12")
         .ok_or("publish PATCH missing")?;
+    let downloads = github
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| event.starts_with("DOWNLOAD "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        downloads.len(),
+        2,
+        "draft installer and signature are read back"
+    );
+    assert!(downloads.iter().all(|(index, _)| *index < post));
     let verify = github
         .events
         .iter()
@@ -4493,6 +4714,77 @@ fn mock_publish_succeeds() -> Result<()> {
     );
     assert!(github.deletions.is_empty());
     let _ = fs::remove_dir_all(&options.state_root);
+    Ok(())
+}
+
+fn mock_draft_readback_failures_never_patch() -> Result<()> {
+    for failure in 0..4 {
+        let (root, options, context, manifest) = fixture()?;
+        let mut github = FakeTransport::new();
+        github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
+        prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
+        let result = match failure {
+            0 => {
+                github.fail_download = true;
+                publish_release_with_mock_verifier(&root, &options, &mut github)
+            }
+            1 => {
+                github.corrupt_download = true;
+                publish_release_with_mock_verifier(&root, &options, &mut github)
+            }
+            2 => {
+                github.corrupt_signature_download = true;
+                publish_release_with_mock_verifier(&root, &options, &mut github)
+            }
+            _ => publish_release_with_signature_verifier(
+                &root,
+                &options,
+                &mut github,
+                |installer, signature, version| {
+                    let expected_installer = release_metadata::canonical_installer_name(version);
+                    let expected_signature = format!("{expected_installer}.sig");
+                    if installer.file_name().and_then(|name| name.to_str())
+                        != Some(expected_installer.as_str())
+                        || signature.file_name().and_then(|name| name.to_str())
+                            != Some(expected_signature.as_str())
+                    {
+                        return Err(
+                            "downloaded verifier input filenames were not source names".into()
+                        );
+                    }
+                    Err("injected cryptographic signature verification failure".into())
+                },
+            ),
+        };
+        let error = result.expect_err("failed draft readback must block publication");
+        match failure {
+            0 => assert!(
+                error
+                    .to_string()
+                    .contains("injected draft asset download failure")
+            ),
+            1 => assert!(error.to_string().contains("draft asset readback differs")),
+            2 => {
+                assert!(!github.corrupt_signature_download);
+                assert!(error.to_string().contains("draft asset readback differs"));
+            }
+            _ => assert!(
+                error
+                    .to_string()
+                    .contains("injected cryptographic signature")
+            ),
+        }
+        assert!(
+            github
+                .events
+                .iter()
+                .all(|event| event != "PATCH repos/pumni/Sky-Auto-Player/releases/12")
+        );
+        let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
+        assert!(!state.qualified_after_download);
+        assert_eq!(github.deletions, [12]);
+        let _ = fs::remove_dir_all(&options.state_root);
+    }
     Ok(())
 }
 
@@ -4521,7 +4813,7 @@ fn mock_non_monotonic_candidate_never_mutates() -> Result<()> {
             .metadata_files
             .insert(context.channel.clone(), fs::read(&current_path)?);
         prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-        assert!(publish_release(&root, &options, &mut github).is_err());
+        assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
         assert!(github.events.iter().all(|event| {
             !(event.starts_with("POST ")
                 || event.starts_with("PATCH ")
@@ -4536,7 +4828,7 @@ fn mock_non_monotonic_candidate_never_mutates() -> Result<()> {
         let mut github = FakeTransport::new();
         github.latest = fake_release(11, &context.tag, &context.source_sha, false, false, true);
         prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-        assert!(publish_release(&root, &options, &mut github).is_err());
+        assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
         assert!(github.events.iter().all(|event| {
             !(event.starts_with("POST ")
                 || event.starts_with("PATCH ")
@@ -4555,7 +4847,7 @@ fn mock_draft_post_timeout_reconciles_exact_marker() -> Result<()> {
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     github.post_created_then_timeout = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
     assert_eq!(state.phase, Phase::PublishedPendingMetadata);
     assert_eq!(state.release_id, Some(12));
@@ -4575,7 +4867,7 @@ fn mock_upload_timeout_reconciles_exact_asset() -> Result<()> {
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     github.fail_upload_after_commit = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     assert_eq!(
         github
             .events
@@ -4613,7 +4905,7 @@ fn mock_complete_transaction_and_raw_metadata() -> Result<()> {
     let mut github = FakeTransport::new();
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     promote_metadata(&root, &options, &mut github)?;
     final_verify(&root, &options, &mut github)?;
     let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
@@ -4679,7 +4971,7 @@ fn mock_metadata_promotion_is_idempotent_after_committed_timeout() -> Result<()>
     let mut github = FakeTransport::new();
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     github.fail_metadata_put_after_write = true;
     promote_metadata(&root, &options, &mut github)?;
     assert!(github.metadata_files.contains_key("stable"));
@@ -4709,12 +5001,32 @@ fn mock_metadata_promotion_is_idempotent_after_committed_timeout() -> Result<()>
     Ok(())
 }
 
+fn mock_metadata_promotion_rejects_changed_latest() -> Result<()> {
+    let (root, options, context, manifest) = fixture()?;
+    let mut github = FakeTransport::new();
+    github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
+    prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
+    github.latest = fake_release(13, "v4.4.0", "c".repeat(40), false, false, true);
+
+    let error = promote_metadata(&root, &options, &mut github)
+        .expect_err("changed GitHub Latest must block metadata promotion");
+    assert!(
+        error
+            .to_string()
+            .contains("GitHub Latest changed after publication")
+    );
+    assert!(github.events.iter().all(|event| !event.starts_with("PUT ")));
+    let _ = fs::remove_dir_all(&options.state_root);
+    Ok(())
+}
+
 fn mock_publication_identity_and_asset_inventory_fail_closed() -> Result<()> {
     let (root, options, context, manifest) = fixture()?;
     let mut github = FakeTransport::new();
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     let published = github
         .releases
         .get(&12)
@@ -4773,7 +5085,7 @@ fn mock_release_doctor_detects_metadata_endpoint_divergence() -> Result<()> {
     let mut github = FakeTransport::new();
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     promote_metadata(&root, &options, &mut github)?;
     final_verify(&root, &options, &mut github)?;
     github.workflow_runs.insert(
@@ -5090,7 +5402,7 @@ fn mock_pr_merge_sha_does_not_break_release_or_owned_cleanup() -> Result<()> {
     github.releases.insert(12, stale);
     github.next_id = 13;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     assert_eq!(github.deletions, vec![12]);
     assert_eq!(
         read_json::<ReleaseState>(&options.state_root.join("release-state.json"))?.release_id,
@@ -5112,7 +5424,7 @@ fn mock_conflicting_draft_is_not_deleted() -> Result<()> {
     github.releases.insert(12, conflict);
     github.next_id = 13;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    assert!(publish_release(&root, &options, &mut github).is_err());
+    assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
     assert!(github.deletions.is_empty());
     assert!(!github.events.iter().any(|event| event.starts_with("POST ")));
     let _ = fs::remove_dir_all(&options.state_root);
@@ -5125,7 +5437,7 @@ fn mock_digest_mismatch_cleans_owned_draft() -> Result<()> {
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     github.bad_digest = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    assert!(publish_release(&root, &options, &mut github).is_err());
+    assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
     assert_eq!(github.deletions, vec![12]);
     assert!(!github.releases.contains_key(&12));
     let _ = fs::remove_dir_all(&options.state_root);
@@ -5138,7 +5450,7 @@ fn mock_partial_upload_cleans_owned_draft() -> Result<()> {
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     github.fail_upload_after_first = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    let error = publish_release(&root, &options, &mut github)
+    let error = publish_release_with_mock_verifier(&root, &options, &mut github)
         .expect_err("partial asset upload must fail the pre-publication transaction");
     assert!(error.to_string().contains("injected upload failure"));
     assert_eq!(github.deletions, vec![12]);
@@ -5162,7 +5474,7 @@ fn mock_cleanup_failure_preserves_original_error() -> Result<()> {
     github.bad_digest = true;
     github.fail_delete = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    let error = publish_release(&root, &options, &mut github)
+    let error = publish_release_with_mock_verifier(&root, &options, &mut github)
         .expect_err("draft cleanup failure must remain visible with the original failure");
     let message = error.to_string();
     assert!(message.contains("GitHub server digest mismatch"));
@@ -5179,7 +5491,7 @@ fn mock_patch_timeout_reconciles_exact_release_id() -> Result<()> {
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     github.patch_applies_then_fails = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    publish_release(&root, &options, &mut github)?;
+    publish_release_with_mock_verifier(&root, &options, &mut github)?;
     assert!(
         github
             .events
@@ -5198,7 +5510,7 @@ fn mock_unknown_publication_never_cleans_up() -> Result<()> {
     github.fail_reconcile_after_patch = true;
     github.patch_applies_then_fails = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    assert!(publish_release(&root, &options, &mut github).is_err());
+    assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
     assert!(github.deletions.is_empty());
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
@@ -5210,7 +5522,7 @@ fn mock_latest_policy_failure_is_post_publication() -> Result<()> {
     github.latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
     github.preserve_latest_on_publish = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    assert!(publish_release(&root, &options, &mut github).is_err());
+    assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
     let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
     assert_eq!(state.phase, Phase::PublishedPendingMetadata);
     assert!(github.deletions.is_empty());
@@ -5391,6 +5703,9 @@ struct FakeTransport {
     events: Vec<String>,
     deletions: Vec<u64>,
     bad_digest: bool,
+    fail_download: bool,
+    corrupt_download: bool,
+    corrupt_signature_download: bool,
     patch_applies_then_fails: bool,
     fail_reconcile_after_patch: bool,
     preserve_latest_on_publish: bool,
@@ -5688,6 +6003,32 @@ impl Transport for FakeTransport {
     }
 
     fn download(&mut self, endpoint: &str, destination: &Path) -> Result<()> {
+        self.events.push(format!("DOWNLOAD {endpoint}"));
+        if self.fail_download {
+            self.fail_download = false;
+            return Err("injected draft asset download failure".into());
+        }
+        if self.corrupt_signature_download
+            && self.releases.values().any(|release| {
+                release["assets"].as_array().is_some_and(|assets| {
+                    assets.iter().any(|asset| {
+                        asset["url"] == endpoint
+                            && asset["name"]
+                                .as_str()
+                                .is_some_and(|name| name.ends_with(".sig"))
+                    })
+                })
+            })
+        {
+            self.corrupt_signature_download = false;
+            fs::write(destination, b"corrupted draft signature")?;
+            return Ok(());
+        }
+        if self.corrupt_download {
+            self.corrupt_download = false;
+            fs::write(destination, b"corrupted draft asset")?;
+            return Ok(());
+        }
         let bytes = self.assets.get(endpoint).ok_or("fake asset not found")?;
         fs::write(destination, bytes)?;
         Ok(())
@@ -6294,11 +6635,13 @@ fn main() {{
     #[test]
     fn mock_release_success_and_reconciliation() {
         mock_publish_succeeds().unwrap();
+        mock_draft_readback_failures_never_patch().unwrap();
         mock_pr_merge_sha_does_not_break_release_or_owned_cleanup().unwrap();
         mock_draft_post_timeout_reconciles_exact_marker().unwrap();
         mock_patch_timeout_reconciles_exact_release_id().unwrap();
         mock_complete_transaction_and_raw_metadata().unwrap();
         mock_metadata_promotion_is_idempotent_after_committed_timeout().unwrap();
+        mock_metadata_promotion_rejects_changed_latest().unwrap();
         mock_publication_identity_and_asset_inventory_fail_closed().unwrap();
         metadata_token_probe_rejects_wrong_repository_state().unwrap();
     }

@@ -276,10 +276,22 @@ Under coordinator decision for program #322 / issue #323:
 ### Metadata-only recovery for a valid immutable stable release
 
 `.github/workflows/v4-metadata-recovery.yml` supports one narrowly scoped exception when normal
-publication completed but stable metadata promotion did not. The operator first dispatches a
-read-only plan from `main`, reviews its artifact and plan SHA-256, then dispatches apply with that
-plan run ID/hash and explicit confirmation. The protected `v4-production-release` Environment
-approval is required before the write-capable App token is minted.
+publication completed but stable metadata promotion did not. Publication changes GitHub Latest at
+the release PATCH, while stable metadata changes later through a separate Contents API write; these
+services do not provide an atomic transaction. The stable pointer can therefore temporarily lag
+GitHub Latest. Recovery apply and the normal release workflow share the `v4-release-control-plane`
+concurrency group, so their mutation phases cannot overlap. A recovery plan remains read-only and
+does not take that lock. The protected `v4-production-release` Environment approval is required
+before the apply job can write; its human approval delay can extend the Latest-to-stable interval.
+
+The operator first dispatches a read-only plan from `main`, reviews its artifact and plan SHA-256,
+then dispatches apply with that plan run ID/hash and explicit confirmation. Each selected plan run
+must have exactly these completed job records: `Validate operator dispatch=success`, `Verify
+immutable release and publish read-only plan=success`, and `Protected metadata-only apply=skipped`.
+Rust binds each record to the same run ID, head SHA, and attempt; duplicate names or IDs, extra jobs,
+missing jobs, changed identity, or any other status/conclusion fail closed. Apply reads and validates
+the exact original release attempt again before writing. The protected `v4-production-release`
+Environment approval is required before the write-capable App token is minted.
 
 The `plan` and `apply` jobs each declare `actions: read`, `attestations: read`, and `contents: read`.
 Apply maps the workflow token to `GH_TOKEN` for Actions run/job inspection, release and asset
@@ -317,6 +329,15 @@ release is not fully valid, stop and use the approved incident containment proce
 new greater SemVer release after qualification. Beta remains unavailable until separately
 qualified and promoted through the normal beta release path.
 
+The published `v4.2.0` record is not retrofitted into this modern recovery contract. Its original
+release run (`39583492799`) completed successfully and promoted stable metadata; it is not a
+post-publication metadata incident. That historical run used the earlier two-job guard/state-machine
+workflow graph, and its release marker has no `run_attempt` field. Modern recovery requires the
+canonical release workflow's exact attempt-bound job inventory and transaction marker. Do not
+synthesize missing evidence, change the historical marker, or mutate the immutable v4.2.0 release,
+assets, tag, or metadata. A recovery plan is eligible only for a modern release run whose verified
+publication succeeded and whose stable metadata promotion failed or timed out.
+
 Operational sequence:
 
 1. Dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with `operation=plan`, the exact
@@ -335,6 +356,12 @@ The read-only `release-doctor` queries external truth, local state, and workflow
 ```powershell
 cargo xtask release-doctor --tag <tag> [--run-id <id>] [--workflow-sha <sha>] [--format <text|json>]
 ```
+
+The Rust release phase and recovery command syntax is printed by `cargo xtask release-v4 --help`.
+Release phases are invoked by their exact workflow jobs; incident recovery is dispatched only
+through the manual plan/apply workflow above. The product package and installer qualification remain
+Windows x64 NSIS/current-user only; Ubuntu release jobs are limited to orchestration, metadata,
+attestations, and bounded subprocess verification.
 
 ## Release and update domain authority ownership map
 

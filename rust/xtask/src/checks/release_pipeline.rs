@@ -25,8 +25,11 @@ fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), St
         "fn validate_recovery_plan_run(",
         "fn list_run_attempt_jobs(",
         "RELEASE_PREPUBLISH_JOB_NAMES",
+        "RECOVERY_PLAN_JOB_CONCLUSIONS",
         "RELEASE_METADATA_PROMOTE_JOB",
         "fn build_plan(",
+        "exact_job_map(&jobs, &expected_names, None)?",
+        "recovery_plan_run_requires_the_exact_three_job_attempt_inventory",
         "verify_updater_signature_for_version",
         "gh",
         "--source-digest",
@@ -759,6 +762,8 @@ fn rust_release_state_machine_contract(
         );
     }
     if !main.contains("\"release-v4\" => release_v4::run")
+        || !main.contains("release_v4::usage()")
+        || main.contains("build-candidate")
         || !main.contains("\"release-doctor\" =>")
         || !main.contains("release_v4::run(&repo::root(), &doctor_args)")
         || main.contains("scripts/release_doctor.ps1")
@@ -766,6 +771,30 @@ fn rust_release_state_machine_contract(
         return Err(
             "xtask CLI must route release-v4 and release-doctor to the native Rust owner".into(),
         );
+    }
+    let release_help = rust
+        .split_once("pub(crate) fn usage()")
+        .and_then(|(_, body)| body.split_once("\nfn expected_job_for_command("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release-v4 CLI help is missing")?;
+    for command in [
+        "build-unsigned",
+        "sign-candidate",
+        "qualify-candidate",
+        "probe-verify-candidate",
+        "metadata-recovery-plan",
+        "metadata-recovery-apply",
+        "--plan-run-id",
+        "--confirm-metadata-only-recovery",
+    ] {
+        if !release_help.contains(command) {
+            return Err(format!(
+                "release-v4 CLI help omits current command syntax: {command}"
+            ));
+        }
+    }
+    if release_help.contains("build-candidate") {
+        return Err("release-v4 CLI help advertises a retired command".into());
     }
     for marker in [
         "cargo xtask release-v4 self-test",
@@ -1053,6 +1082,14 @@ mod tests {
             "release-v4 build-candidate",
         );
         assert!(rust_release_state_machine_contract(&legacy, "", &rust, &main, &ci).is_err());
+        let stale_help = replace_fixture(
+            &rust,
+            "build-unsigned|sign-candidate",
+            "build-candidate|sign-candidate",
+        );
+        assert!(
+            rust_release_state_machine_contract(&workflow, "", &stale_help, &main, &ci).is_err()
+        );
     }
 
     #[test]

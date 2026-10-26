@@ -203,7 +203,11 @@ release ID/source/tag, the exact installer/signature inventory and API/local SHA
 production updater signature and signed version, installer/signature build attestations, the SPDX
 SBOM attestation, current stable/beta metadata, and the public stable endpoint. It emits a JSON plan
 artifact and SHA-256; the artifact contains the proposed metadata bytes for operator review.
-Every prepublication job through `publish` must have completed successfully. A failed overall
+The plan run's complete job inventory is exactly `Validate operator dispatch=success`, `Verify
+immutable release and publish read-only plan=success`, and `Protected metadata-only apply=skipped`;
+all are completed records bound to that run ID, head SHA, and attempt. Duplicate, extra, missing,
+or changed records are rejected. Every job in the original release attempt through `publish` must
+have completed successfully. A failed overall
 release workflow is eligible only when `metadata_promote` failed or timed out after successful
 publication and `final_verify` was skipped. Failed or cancelled publication, other failed jobs,
 missing jobs, and ambiguous attempts are rejected. Apply downloads the artifact from the selected
@@ -219,6 +223,11 @@ again at the write boundary, and issues at most one Contents API `PUT` for
 `channels/stable/latest.json`. It then verifies exact readback, unchanged beta state and GitHub
 Latest, and raw stable endpoint convergence. Unknown outcomes are reconciled by read-only GETs and
 never retried as a second mutation. No updater private key or passphrase is used.
+
+GitHub Latest advances at immutable release publication; stable metadata is a separate later
+write, so a temporary Latest-to-stable mismatch is inherent. The normal release workflow and the
+recovery `apply` job share the `v4-release-control-plane` concurrency group. Recovery's human
+Environment approval can delay apply and extend the mismatch window.
 
 Both `plan` and `apply` explicitly declare `actions: read`, `attestations: read`, and `contents: read`.
 The apply job's `GH_TOKEN` is the workflow token and authenticates every Actions run/job query,
@@ -308,7 +317,17 @@ Preflight -> BuildUnsigned -> SignCandidate -> QualifyCandidate
 ```
 
 `BuildUnsigned` creates the only production installer and exports the calibration executable that
-was generated during the same Windows build. `SignCandidate` receives the encrypted key and
+was generated during the same Windows build. Its same-run, run-attempt-bound unsigned artifact has
+an exact three-file inventory: the canonical NSIS installer, typed manifest, and
+`native_calibration.exe`. The typed manifest binds each file's name, size, SHA-256, source and
+workflow SHAs, version, run ID, and attempt. `SignCandidate` validates all three downloaded files,
+including the calibration PE's x64 identity and digest, then passes that transferred calibration
+path into the existing candidate qualification contract. It does not read a generated calibration
+file from its own checkout or rebuild either executable. The installed NSIS resource check compares
+the installed calibration digest with those build-origin bytes. Calibration is qualification input;
+the public release remains exactly the installer and detached `.sig` pair.
+
+`SignCandidate` receives the encrypted key and
 passphrase only in its own protected signing process; it verifies the key against the existing
 public root and signs the manifest-bound installer. `QualifyCandidate` runs in the next workflow
 step with no signing secret mapping. It uses the validated transferred calibration bytes to create
@@ -364,12 +383,19 @@ does not match its ownership boundary. Candidate files are never written into th
   manifest. Failure cannot proceed to publish.
 - **PublishRelease** is the only release mutation phase. It verifies candidate bytes and current
   metadata/Latest state again, reconciles only an exactly owned unpublished draft, refuses existing
-  tags, uploads exactly the manifest's `.exe` and `.sig`, checks GitHub's SHA-256 asset digest and
-  read-back bytes, and publishes only after checks pass. An unknown publication outcome is never
-  retried as a second mutation or automatically cleaned up.
-- **PromoteMetadata** requires the immutable release and revalidates the exact asset pair. Rust
-  generates channel JSON, verifies schema and per-channel SemVer monotonicity, and updates only the
-  canonical `release-metadata` channel file with the contents-scoped GitHub App token.
+  tags, and uploads exactly the manifest's `.exe` and `.sig`. Before the irreversible release PATCH,
+  Rust reads back both draft assets, checks their exact sizes and SHA-256 values against the frozen
+  candidate, and verifies the detached updater signature and version on those downloaded bytes. It
+  then records `qualified_after_download=true` and attempts publication. That flag is pre-PATCH
+  qualification evidence; publication is established only by exact-release-ID readback after the
+  PATCH. A lost PATCH response is reconciled against that ID and is never retried as a second
+  mutation or automatically cleaned up.
+- **PromoteMetadata** requires the immutable release and revalidates the exact asset pair. Immediately
+  before a no-op decision or Contents write, Rust fetches GitHub Latest again and requires the exact
+  just-published stable release identity (or the unchanged preflight Latest for beta). It generates
+  channel JSON, verifies schema and per-channel SemVer monotonicity, and updates only the canonical
+  `release-metadata` channel file with the contents-scoped GitHub App token and existing blob-SHA
+  compare-and-swap. An unknown write outcome is reconciled by GET and is never blindly repeated.
 - **FinalVerify** fetches the exact release, GitHub Latest, stable/beta metadata Contents and raw
   endpoint, checks release identity and asset digests, and records final state only after convergence.
 

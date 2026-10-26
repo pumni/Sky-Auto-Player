@@ -135,6 +135,9 @@ jobs:
     needs: validate
     if: inputs.operation == 'apply' && inputs.confirm
     runs-on: ubuntu-latest
+    concurrency:
+      group: v4-release-control-plane
+      cancel-in-progress: false
     timeout-minutes: 30
     environment: v4-production-release
     permissions:
