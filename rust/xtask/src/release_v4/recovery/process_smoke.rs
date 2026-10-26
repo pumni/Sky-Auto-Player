@@ -377,11 +377,7 @@ fn require_latest_token(
         .iter()
         .rev()
         .find(|invocation| {
-            invocation.command == command
-                && invocation
-                    .args
-                    .iter()
-                    .any(|argument| argument.contains(args_marker))
+            invocation.command == command && invocation.args.join(" ").contains(args_marker)
         })
         .ok_or("expected fake CLI invocation was not recorded")?;
     if invocation.gh_token != expected
