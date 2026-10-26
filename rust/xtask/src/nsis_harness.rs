@@ -242,11 +242,7 @@ fn is_protected_release_context(
         && repository == Some("pumni/Sky-Auto-Player")
         && matches!(
             (workflow, job),
-            (Some("V4 Release Pipeline"), Some("release"))
-                | (
-                    Some("V4 Production Pre-Publication Qualification"),
-                    Some("qualification")
-                )
+            (Some("V4 Release Pipeline"), Some("sign_qualify"))
         )
 }
 
@@ -274,12 +270,17 @@ pub(crate) fn require_protected_release_runner() -> Result<()> {
     if run_id.is_empty() || !run_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("GITHUB_RUN_ID must be a numeric workflow run identity".into());
     }
-    let expected_state_root = runner_temp.join(format!("sky-v4-release-{run_id}"));
+    let run_attempt =
+        std::env::var("GITHUB_RUN_ATTEMPT").map_err(|_| "GITHUB_RUN_ATTEMPT is required")?;
+    if run_attempt.is_empty() || !run_attempt.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("GITHUB_RUN_ATTEMPT must be a numeric workflow attempt identity".into());
+    }
+    let expected_state_root = runner_temp.join(format!("sky-v4-release-{run_id}-{run_attempt}"));
     if state_root != std::fs::canonicalize(expected_state_root)?
         || state_root.parent() != Some(runner_temp.as_path())
         || state_root.starts_with(&workspace)
     {
-        return Err("protected release state root must be the exact run-scoped direct child of RUNNER_TEMP and outside the workspace".into());
+        return Err("protected release state root must be the exact run-and-attempt direct child of RUNNER_TEMP and outside the workspace".into());
     }
     Ok(())
 }
@@ -1214,12 +1215,12 @@ mod tests {
         assert!(is_protected_release_context(
             Some("true"),
             Some("V4 Release Pipeline"),
-            Some("release"),
+            Some("sign_qualify"),
             Some("workflow_dispatch"),
             Some("refs/heads/main"),
             Some("pumni/Sky-Auto-Player"),
         ));
-        assert!(is_protected_release_context(
+        assert!(!is_protected_release_context(
             Some("true"),
             Some("V4 Production Pre-Publication Qualification"),
             Some("qualification"),

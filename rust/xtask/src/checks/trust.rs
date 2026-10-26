@@ -458,7 +458,9 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     }
     let release_owner = fs::read_to_string(root.join("rust/xtask/src/release_v4.rs"))?;
     for marker in [
-        "fn build_candidate",
+        "fn build_unsigned",
+        "fn sign_candidate",
+        "fn qualify_candidate",
         "fn candidate_record",
         "fn write_release_evidence",
         "fn validate_candidate_evidence",

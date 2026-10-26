@@ -591,7 +591,6 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/pages.yml",
     ".github/workflows/release-v4.yml",
-    ".github/workflows/rehearse-v4.yml",
 ];
 
 fn validate_active_github_hosted_ubuntu_labels(source: &str) -> Result<()> {
@@ -1218,9 +1217,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     if release.contains("inputs:") || release.contains("inputs.") {
         return Err("production release workflow must have zero semantic dispatch inputs".into());
     }
-    let rehearsal = fs::read_to_string(root.join(".github/workflows/rehearse-v4.yml"))?;
-    if rehearsal.contains("mode: topology") || rehearsal.contains("mode: draft") {
-        return Err("rehearsal workflow must not expose a topology/draft mode input".into());
+    if root.join(".github/workflows/rehearse-v4.yml").exists() {
+        return Err("duplicate production rehearsal workflow must be retired".into());
     }
 
     println!("[xtask] CI/release control-plane contract: PASS");

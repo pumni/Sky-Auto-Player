@@ -6,7 +6,6 @@ on:
       - ".github/workflows/hosted-v4-signing-proof.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release-v4.yml"
-      - ".github/workflows/rehearse-v4.yml"
       - "desktop/**"
       - "rust/**"
       - "scripts/**"

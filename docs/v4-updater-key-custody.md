@@ -42,17 +42,21 @@ cargo xtask updater-trust inventory
 ## 2. Key Custody
 
 1. **Storage Isolation**:
-   - The production private updater key must NEVER be committed to Git, stored in
-     cloud storage, transmitted over email/chat, or configured in GitHub Actions
-     repository secrets.
-   - The private key is held outside the repository and workspace, encrypted at rest. Offline
-     encrypted storage is sufficient; an HSM or paid key service is not required.
+   - The production private updater key must NEVER be committed to Git, sent through email/chat,
+     placed in repository or organization secrets, or written into workflow artifacts.
+   - The current encrypted key may be configured only as GitHub Environment secret
+     `V4_TAURI_UPDATER_PRIVATE_KEY` in `v4-production-release`. Its passphrase is the separate
+     Environment secret `V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD`. GitHub stores Environment secret
+     values encrypted at rest; the values must never appear in logs, code, release notes, or chat.
+   - Keep the independent encrypted offline backup outside the repository and workspace. An HSM or
+     paid key service is not required.
 
 2. **Access Control**:
-   - Only authorized Release Operators have access to the physical media and its
-     decryption passphrase.
-   - Access is limited to the maintainer responsible for the release and protected by the
-     encryption passphrase.
+   - Only authorized Release Operators may configure the Environment secrets or access the
+     independent backup and its decryption passphrase.
+   - Before a production cutover, a maintainer must verify that `v4-production-release` allows
+     deployment from `main` only and requires the intended human review/approval. The workflow
+     checks `main` in Rust and YAML; code review cannot prove the live Environment settings.
 
 3. **Passphrase Standards**:
    - The private key passphrase must be strong and managed separately from the key file.
@@ -68,25 +72,25 @@ cargo xtask updater-trust inventory
    - This is an output-secrecy guarantee only. PowerShell/.NET managed strings are not claimed
      to be cryptographically zeroized by this runbook.
 
-5. **Production Release Passphrase Transport (Windows Credential Manager Broker)**:
-   - Parent-process environment variable inheritance does NOT reach Actions step processes
-     on dedicated runner hosts (incident #140). It is explicitly **not** the production transport.
-   - For production release dispatch, the Release Operator provisions a generic session credential
-     in Windows Credential Manager using `scripts/set_v4_updater_session_credential.ps1`.
-   - The provisioning adapter uses `Read-Host -AsSecureString` and sends the passphrase only over
-     redirected stdin to Rust. Rust owns `CredWriteW` with `CRED_TYPE_GENERIC` and
-     `CRED_PERSIST_SESSION`.
-   - The credential target name is fixed public metadata: `SkyAutoPlayer/V4UpdaterProduction`.
-   - The production workflow (`release-v4.yml`) `BuildCandidate` step calls
-     `cargo xtask credential run-action`. Rust reads the credential, gives it only to the
-     allowlisted child process environment, redacts child output, and deletes the entry after
-     success or failure. The caller process environment is not modified.
-   - The updater private key remains stored outside the repository and workspace.
-   - Rust requires the exact session persistence class when checking presence or consuming the
-     credential. A same-name local-machine or enterprise credential is rejected, and one-shot
-     handling still attempts idempotent deletion of that target.
-   - Passphrases **never** go into GitHub Secrets, runner `.env` files, command-line arguments,
-     GitHub issues/chat/PRs, or repository files.
+5. **Production Release Secret Delivery (Protected GitHub Environment)**:
+   - `.github/workflows/release-v4.yml` is `workflow_dispatch` only and guards canonical `main` in
+     both the workflow and Rust. Its `sign_qualify` job references `v4-production-release`; the
+     encrypted updater key and passphrase are mapped only to the `Sign the independently verified
+     exact candidate` step.
+   - The Rust `sign-candidate` adapter bounds both values, requires encrypted Minisign material,
+     materializes the encrypted key only under the run-owned direct `RUNNER_TEMP` directory, and
+     verifies it against Key ID `19AABD2E7838818C` before signing.
+   - The passphrase is supplied only to the bounded Tauri signer child process environment. It is
+     never passed as a command-line argument. The signing command exits before `qualify-candidate`
+     starts; that later qualification step receives neither updater secret.
+   - Rust removes the temporary key when the signing command exits. An unconditional workflow
+     cleanup step validates its run/attempt ownership marker and removes leftover signing material
+     after success or failure. Candidate artifacts contain no key or passphrase.
+   - Do not configure either updater secret at repository or organization scope. These GitHub
+     Environment secrets are not available to pull-request, fork, or general CI workflows.
+   - The Rust credential CLI and Windows Credential Manager helpers remain available to local
+     maintenance consumers, but the hosted production workflow has no Credential Manager
+     requirement. Their local session credentials are not a fallback for production signing.
 
 ## 3. Local Private Key Verification
 
@@ -125,7 +129,7 @@ pwsh scripts/set_v4_updater_session_credential.ps1
 # 2. Verify private key through the Rust one-shot action boundary:
 pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key" -UseCredentialBroker
 
-# 3. Clean up session credential when finished (if not consumed by BuildCandidate):
+# 3. Clean up the local session credential when finished:
 pwsh scripts/remove_v4_updater_session_credential.ps1
 ```
 

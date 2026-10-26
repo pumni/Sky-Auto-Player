@@ -1,9 +1,8 @@
 # Hosted V4 Test-Key Signing Proof and Migration Ledger
 
-This document records the Wave A implementation decision and the active dependency inventory for
-moving v4 release execution from a dedicated Windows runner toward GitHub-hosted Windows. The
-production release and pre-publication workflows remain on their existing protected runner until a
-later reviewed wave changes them.
+The audit and dependency table below are a historical Wave A snapshot of the release path before
+the protected hosted migration. The Wave B implementation record at the end supersedes those
+active-path statements without changing the original proof evidence.
 
 ## Wave A source audit snapshot
 
@@ -48,8 +47,10 @@ The workflow builds one canonical NSIS installer with Tauri updater artifact cre
 with all ambient Tauri signing variables removed. It hashes that installer, then in a later step
 generates a disposable updater key under `RUNNER_TEMP` and signs the unchanged file with Tauri CLI
 2.12.3 and `--app-version`. The Rust verifier checks the exact NSIS filename, installer SHA-256,
-signature bytes, signed filename and version, public key identity, and checked-out source SHA. It
-writes bounded proof JSON to the same temporary directory. An unconditional cleanup step removes
+signature bytes, signed filename and version, and public key identity. The workflow first runs
+`cargo xtask ci source-identity` to bind the actual clean checkout to `GITHUB_SHA`; the verifier's
+`--source-sha` argument validates SHA syntax and records it but does not independently compare it to
+Git HEAD. It writes bounded proof JSON to the same temporary directory. An unconditional cleanup step removes
 the owned build tree and test key after success or failure.
 
 The verifier refuses the canonical production updater public root. Rust negative tests cover a
@@ -101,12 +102,12 @@ only disposable test keys. Wave B must retain one production installer build and
 key boundary into the protected GitHub environment; this proof does not authorize production
 dispatch or alter the current v4.2.0 updater key.
 
-## Runner-local and Credential Manager dependency ledger
+## Runner-local and Credential Manager dependency ledger (Wave A baseline)
 
 These are active production dependencies observed at the Wave A source revision. Wave A leaves them
 in place so that a future hosted transaction can replace them coherently after review.
 
-| Current dependency | Active source and consumer | Wave B disposition |
+| Dependency observed at the Wave A source revision | Source and consumer at that revision | Wave B plan recorded at Wave A |
 | --- | --- | --- |
 | Dedicated self-hosted Windows runner labels | `.github/workflows/release-v4.yml` job `release`; `.github/workflows/rehearse-v4.yml` job `qualification`; the allowlist in `rust/xtask/src/checks/release_runner.rs`; operator requirements in `docs/v4-release-execution-topology.md` | Replace only in the protected production workflow after environment restrictions and hosted source/ref guards are implemented. Keep the test-key proof on ordinary hosted Windows. |
 | Runner-local `RUNNER_TEMP` release state | Both production workflows; `rust/xtask/src/release_v4.rs` state-root validation and cleanup | Keep bounded state outside the workspace. Revalidate path ownership and cleanup on GitHub-hosted runners. |
@@ -114,6 +115,33 @@ in place so that a future hosted transaction can replace them coherently after r
 | Windows Credential Manager passphrase transport | `rust/xtask/src/credential_cli.rs`; `rust/crates/sky_windows_security/src/credential.rs` and `src/win32.rs`; `SkyAutoPlayer/V4UpdaterProduction` target | Remove from the production hosted path after a scoped adapter is proven. Inventory local maintenance users before retiring the credential CLI. |
 | Operator provisioning and verification adapters | `scripts/set_v4_updater_session_credential.ps1`, `scripts/remove_v4_updater_session_credential.ps1`, `scripts/verify_v4_updater_private_key.ps1`, and `scripts/v4_updater_credential_broker.ps1`; current instructions in `docs/v4-updater-key-custody.md` | Retain any independently used local maintenance tools; update production runbooks when protected environment custody is implemented. |
 
-The hosted proof workflow is not added to the production self-hosted runner allowlist. Its synthetic
-key lifecycle is local to one hosted job and cannot publish a GitHub Release or write stable/beta
-metadata.
+At Wave A, the hosted proof workflow was not part of the then-current production runner allowlist.
+Its synthetic key lifecycle was local to one hosted job and could not publish a GitHub Release or
+write stable/beta metadata.
+
+## Wave B implementation record
+
+Wave B replaces the baseline production topology with one workflow,
+`.github/workflows/release-v4.yml`, on GitHub-hosted Windows and Ubuntu jobs. It gates dispatch on
+canonical `main`, a successful latest exact-head push CI run, and Rust Preflight. The separate
+`rehearse-v4.yml` production rebuild is retired.
+
+The workflow builds one unsigned canonical NSIS installer, exports a run/attempt-bound manifest,
+and transfers that artifact to `sign_qualify`. Rust validates the exact file inventory, source and
+workflow identity, version, size, and SHA-256 before signing. The protected key and passphrase names
+are `V4_TAURI_UPDATER_PRIVATE_KEY` and `V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD`; the workflow maps
+them only to `sign-candidate` in Environment `v4-production-release`. Rust verifies the key against
+the unchanged public Key ID `19AABD2E7838818C`, signs the transferred bytes, confirms the installer
+digest is unchanged, then exits. A following step qualifies the same bytes without signing secrets.
+
+Qualification, OIDC attestations, exact-digest publication, scoped metadata probing/promotion, and
+final read-back remain in Rust-owned release transaction phases. The public pair remains exactly
+the canonical `.exe` and `.sig`; v4.2.0's stable endpoint, updater JSON/signature contract, NSIS
+identity, and trust root are unchanged. The Rust credential CLI and Credential Manager helpers stay
+available to independent local maintenance consumers; the production workflow no longer requires
+them.
+
+This code review and its tests do not inspect or use GitHub Environment secret values/settings and
+do not dispatch the production workflow or mutate a release, tag, stable/beta metadata, or a
+published artifact. A maintainer still needs to verify the live Environment's main-only deployment
+restriction and human approval policy before cutover; workflow YAML cannot prove those settings.

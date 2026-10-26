@@ -102,12 +102,15 @@ identity, exact platform shape, signature contents, canonical URLs, and channel 
 
 ## Release transaction
 
-The production workflow `.github/workflows/release-v4.yml` is manual, runs only through the
-protected `v4-production-release` environment on the dedicated signing runner, and uses the
-canonical repository token for same-repository release operations. Its transaction is:
+The production workflow `.github/workflows/release-v4.yml` is `workflow_dispatch` only and requires
+canonical `main`, the latest exact-head successful CI run, and Rust Preflight. It uses GitHub-hosted
+Windows and Ubuntu runners. The protected `v4-production-release` environment is referenced by the
+signing and metadata jobs; updater signing secrets are mapped only into the Rust signing step. Its
+transaction is:
 
 ```text
-Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
+Preflight -> BuildUnsigned -> SignCandidate -> QualifyCandidate -> VerifyCandidate
+          -> VerifyAttestations -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
 
 The ordering is security-critical:
@@ -116,12 +119,23 @@ The ordering is security-critical:
    `release-context.json` state artifact, then validates the canonical repository, `main` source ref,
    and `release-metadata` branch readiness. It is externally read-only: collision state and any
    matching stale draft are observed and classified, but not mutated.
-2. **BuildCandidate**: Builds the exact source SHA once and completes full qualification against the
-   local candidate bundle (unsigned-zero-budget Authenticode, Tauri updater signature verification,
-   SPDX SBOM, exact bundle verification, previous-v4 E2E fixture, Defender exact scan, catalog
-   verification, and active-playback update rejection). Freezes `candidate-manifest.json` with SHA-256
-   digests and file sizes.
-3. **PublishRelease**: Executes a single cohesive publication transaction boundary:
+2. **BuildUnsigned**: Builds one unsigned canonical NSIS installer with Tauri updater sidecar
+   creation disabled. A typed run/attempt-bound manifest records its exact size and SHA-256. This job
+   has no production secrets or write permissions.
+3. **SignCandidate**: Independently verifies the downloaded artifact name, inventory, source and
+   workflow SHAs, run ID/attempt, canonical filename, size, and digest. The Rust adapter verifies the
+   encrypted updater key against Key ID `19AABD2E7838818C`, signs the same installer bytes, and
+   verifies the unchanged installer hash and version-bound signature. The key and passphrase are
+   mapped only to this signing step.
+4. **QualifyCandidate**: Runs in the next step without signing secrets. It revalidates the handoff
+   and signed installer, then completes unsigned Authenticode verification, Tauri updater signature
+   verification, SPDX SBOM, exact bundle verification, updater fixture, Defender exact scan, and
+   Windows NSIS install/launch/uninstall qualification. It freezes `candidate-manifest.json` with
+   SHA-256 digests and file sizes.
+5. **VerifyCandidate / VerifyAttestations**: Independently revalidates the candidate in the OIDC
+   attestation job, attests the exact installer, signature, and SPDX SBOM, then verifies those
+   attestations against the exact source, workflow, and candidate digests before publication.
+6. **PublishRelease**: Executes a single cohesive publication transaction boundary:
    - Reconciles and deletes only a matching unpublished stale draft immediately before creating the
      new draft; mismatched or published releases fail closed.
    - Creates a draft in the official repository (`name = $Tag`, `draft = true`, `make_latest = "false"`)
@@ -134,9 +148,9 @@ The ordering is security-critical:
    - Reconciles publication status strictly via exact `release_id` GET.
    - Fail-closed draft self-cleanup: on any failure prior to the irreversible publication PATCH,
      the transaction immediately deletes the remote draft release.
-4. **PromoteMetadata**: Mints scoped App token, generates, validates, and promotes only the selected
+7. **PromoteMetadata**: Mints a contents-scoped App token, generates, validates, and promotes only the selected
    stable/beta metadata file after the guard.
-5. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
+8. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
    `raw.githubusercontent.com` endpoint used by the client.
 
 Published release assets and tags are never repaired in place. A failed unpublished draft is
@@ -152,8 +166,9 @@ The release gate preserves these properties while using one repository:
 - SPDX SBOM and GitHub OIDC provenance/attestation;
 - immutable GitHub Release publication;
 - strict stable/beta SemVer policy and monotonic metadata promotion;
-- protected production environment and isolated signing runner;
-- runner-local updater key outside the workspace, with no key-path workflow input;
+- protected production environment and GitHub-hosted signing job;
+- encrypted updater key and passphrase are available only as Environment secrets to the signer;
+- no Windows Credential Manager or permanent self-hosted runner requirement in production;
 - least-privilege permissions and `persist-credentials: false` checkout;
 - fail-closed validation when metadata, release assets, signatures, or public endpoints differ.
 
@@ -177,12 +192,12 @@ state as authoritative, eliminating complex mutable intermediate phase files:
 
 ### Transaction marker and candidate manifest
 
-1. **`candidate-manifest.json`**: Frozen during `BuildCandidate`, recording exact file paths, roles,
+1. **`candidate-manifest.json`**: Frozen during `QualifyCandidate`, recording exact file paths, roles,
    sizes, and SHA-256 digests for all candidate assets and public release projections.
 2. **Transaction marker**: When creating the draft, the pipeline embeds a hidden HTML comment marker
    into the release body:
    ```text
-   <!-- v4-release-tx: {"repository":"...","run_id":"...","source_sha":"...","version":"...","tag":"..."} -->
+   <!-- v4-release-tx: {"repository":"...","run_id":"...","run_attempt":2,"source_sha":"...","version":"...","tag":"..."} -->
    ```
    This uniquely binds the remote draft to the specific workflow run, repository, source SHA, and tag,
    allowing deterministic reconciliation upon network timeout and safe cleanup of stale matching drafts.
@@ -213,7 +228,7 @@ run evidence to report the observed lifecycle phases and diagnostic classificati
 Dispatched manually from `refs/heads/main` via `workflow_dispatch`. Progresses through the canonical pipeline. A fresh run refuses adoption of any existing published release.
 
 #### Pre-publication failure (`RECOVERABLE_PRE_PUBLICATION_FAILURE`)
-If a failure occurs during `Preflight`, `BuildCandidate`, or before publication PATCH in `PublishRelease`:
+If a failure occurs during `Preflight`, `BuildUnsigned`, `SignCandidate`, `QualifyCandidate`, or before publication PATCH in `PublishRelease`:
 - No external release is published.
 - Any draft release on GitHub is automatically deleted by draft self-cleanup, or by `Preflight` on the next run.
 - Recovery: Safe to re-dispatch.
@@ -272,9 +287,9 @@ React          = presentation
 
 | Layer | Component / Tooling | Canonical Ownership | Non-Goals / Excluded Roles |
 |---|---|---|---|
-| **GitHub Actions** | .github/workflows/release-v4.yml, rehearse-v4.yml, ci.yml | Protected runner lifecycle, exact source checkout, scoped token issuance, and OIDC attestations. The workflow invokes the ordered Rust release phases. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
-| **cargo xtask (Rust)** | rust/xtask/src/release_v4.rs and related release_metadata.rs, sbom.rs, version.rs, updater_trust.rs, calibration.rs, nsis_harness.rs, updater_fixture.rs | Single transaction authority for Preflight, BuildCandidate, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform and credential adapters; does not mint GitHub workflow tokens or operate the release runner. |
-| **PowerShell** | scripts/sign_v4_authenticode.ps1, verify_v4_authenticode.ps1, v4_authenticode_crypto.ps1, scan_v4_defender_exact.ps1, verify_v4_release_runner.ps1, Credential Manager operator helpers | Narrow Windows and provider adapters for Authenticode signing and facts, Defender scanning, runner boundary checks, and operator credential setup. | Does not own the release transaction, GitHub API policy, release-doctor, state transitions, evidence schemas, or SemVer. |
+| **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Hosted job lifecycle, exact source checkout, scoped permissions, protected environment references, artifact handoff, and OIDC attestations. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
+| **cargo xtask (Rust)** | `rust/xtask/src/release_v4.rs`, `release_handoff.rs`, `release_signing.rs`, and related release modules | Single transaction authority for Preflight, BuildUnsigned, SignCandidate, QualifyCandidate, VerifyCandidate, VerifyAttestations, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform adapters; does not mint GitHub workflow tokens or select the release runner. |
+| **PowerShell** | `scripts/verify_v4_authenticode.ps1`, `scripts/v4_authenticode_crypto.ps1`, `scripts/scan_v4_defender_exact.ps1`, local Credential Manager helpers | Narrow Windows and provider adapters for Authenticode facts, Defender scanning, and independent local maintenance. | Does not own the production release transaction, GitHub API policy, release-doctor, state transitions, evidence schemas, or SemVer. |
 | **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
 | **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 

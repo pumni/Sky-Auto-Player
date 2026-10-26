@@ -295,7 +295,7 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "rust/xtask/src/updater_fixture.rs",
     "scripts/verify_v4_release_runner.ps1",
     ".github/workflows/release-v4.yml",
-    ".github/workflows/rehearse-v4.yml",
+    ".github/workflows/hosted-v4-signing-proof.yml",
     "desktop/src-tauri/src/native_update.rs",
     "desktop/src-tauri/tauri.conf.json",
     "desktop/src-tauri/Cargo.toml",
@@ -784,7 +784,7 @@ releases/latest
         for surface in [
             "desktop/src-tauri/src/native_update.rs",
             "desktop/src-tauri/tauri.conf.json",
-            ".github/workflows/rehearse-v4.yml",
+            ".github/workflows/release-v4.yml",
         ] {
             assert!(ACTIVE_RELEASE_SURFACES.contains(&surface));
         }
@@ -804,10 +804,10 @@ releases/latest
         assert!(config_error.to_string().contains("tauri.conf.json"));
 
         let workflow_error = validate_active_release_surface(
-            ".github/workflows/rehearse-v4.yml",
+            ".github/workflows/release-v4.yml",
             "AuthorityCheckout",
         )
         .expect_err("legacy authority marker must be rejected in release workflow surfaces");
-        assert!(workflow_error.to_string().contains("rehearse-v4.yml"));
+        assert!(workflow_error.to_string().contains("release-v4.yml"));
     }
 }

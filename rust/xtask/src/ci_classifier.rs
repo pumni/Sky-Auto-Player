@@ -125,7 +125,6 @@ fn classify_path(
             && ![
                 ".github/workflows/pages.yml",
                 ".github/workflows/release-v4.yml",
-                ".github/workflows/rehearse-v4.yml",
             ]
             .contains(&path))
         || (path.starts_with(".github/actions/")
@@ -135,12 +134,7 @@ fn classify_path(
         return;
     }
 
-    if [
-        ".github/workflows/release-v4.yml",
-        ".github/workflows/rehearse-v4.yml",
-    ]
-    .contains(&path)
-    {
+    if path == ".github/workflows/release-v4.yml" {
         classification.add("release_required");
         return;
     }
@@ -839,7 +833,6 @@ mod tests {
             ),
             (".github/workflows/pages.yml", &["site_required"]),
             (".github/workflows/release-v4.yml", &["release_required"]),
-            (".github/workflows/rehearse-v4.yml", &["release_required"]),
             (".github/workflows/ci.yml", &LANES),
             (
                 ".config/security_audit_baseline.json",

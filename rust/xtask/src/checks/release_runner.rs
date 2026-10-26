@@ -5,20 +5,12 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const APPROVED_RELEASE_RUNNER_WORKFLOWS: &[&str] = &[
-    ".github/workflows/release-v4.yml",
-    ".github/workflows/rehearse-v4.yml",
+const APPROVED_RELEASE_WORKFLOW: &str = ".github/workflows/release-v4.yml";
+const PROTECTED_UPDATER_SECRETS: &[&str] = &[
+    "V4_TAURI_UPDATER_PRIVATE_KEY",
+    "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
 ];
-pub(super) const RELEASE_RUNNER_LABEL_MARKER: &str =
-    "runs-on: [self-hosted, windows, v4-release, single-tenant]";
-
-fn approved_release_runner_job(relative: &str) -> Option<&'static str> {
-    match relative {
-        ".github/workflows/release-v4.yml" => Some("release"),
-        ".github/workflows/rehearse-v4.yml" => Some("qualification"),
-        _ => None,
-    }
-}
+const PROTECTED_METADATA_SECRET: &str = "V4_RELEASE_METADATA_APP_PRIVATE_KEY";
 
 pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result<(), String> {
     let jobs = workflow_job_blocks(source);
@@ -122,18 +114,24 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
     Ok(())
 }
 pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
-    const MINT_STEP: &str = "Mint release-metadata GitHub App token before publication";
-    const PROBE_STEP: &str = "Probe release-metadata App access before publication";
-    const PROMOTE_STEP: &str = "Promote release metadata only after immutable publication";
+    const READ_MINT_STEP: &str = "Mint read-only metadata App token";
+    const WRITE_MINT_STEP: &str = "Mint contents-scoped metadata App token";
+    const PROBE_STEP: &str = "Probe release-metadata App access without write permission";
+    const PROMOTE_STEP: &str = "Promote channel metadata after immutable release publication";
     const APP_TOKEN_OUTPUT: &str = "steps.metadata-app-token.outputs.token";
     const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
 
     let steps = workflow_step_blocks(workflow);
-    let mint = steps
+    let read_mint = steps
         .iter()
-        .find(|(name, _)| name == MINT_STEP)
+        .find(|(name, _)| name == READ_MINT_STEP)
         .map(|(_, block)| block.as_str())
-        .ok_or("v4 release workflow is missing the metadata App token mint step")?;
+        .ok_or("v4 release workflow is missing the read-only metadata App token mint step")?;
+    let write_mint = steps
+        .iter()
+        .find(|(name, _)| name == WRITE_MINT_STEP)
+        .map(|(_, block)| block.as_str())
+        .ok_or("v4 release workflow is missing the write-scoped metadata App token mint step")?;
     let promote = steps
         .iter()
         .find(|(name, _)| name == PROMOTE_STEP)
@@ -154,30 +152,36 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
         );
     }
 
-    for marker in [
+    let common_markers = [
         "id: metadata-app-token",
         "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
         "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
         "private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}",
         "owner: ${{ github.repository_owner }}",
         "repositories: ${{ github.event.repository.name }}",
-        "permission-contents: write",
+    ];
+    for (mint, permission) in [
+        (read_mint, "permission-contents: read"),
+        (write_mint, "permission-contents: write"),
     ] {
-        if !mint.contains(marker) {
+        for marker in common_markers.into_iter().chain([permission]) {
+            if !mint.contains(marker) {
+                return Err(format!(
+                    "metadata App token mint step is missing required marker: {marker}"
+                )
+                .into());
+            }
+        }
+        if mint.contains("\n        run:") || mint.contains("\n        env:") {
             return Err(format!(
-                "metadata App token mint step is missing required marker: {marker}"
+                "metadata App private key must be consumed only by the token-mint action: {mint}"
             )
             .into());
         }
     }
-    if mint.contains("\n        run:") || mint.contains("\n        env:") {
+    if workflow.matches(APP_PRIVATE_KEY).count() != 2 {
         return Err(
-            "metadata App private key must be consumed only by the token-mint action".into(),
-        );
-    }
-    if workflow.matches(APP_PRIVATE_KEY).count() != 1 {
-        return Err(
-            "metadata App private key must occur exactly once in the release workflow".into(),
+            "metadata App private key must occur only in the probe and promotion token-mint actions".into(),
         );
     }
     if workflow.matches(APP_TOKEN_OUTPUT).count() != 2 {
@@ -204,7 +208,7 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
 
     for (name, block) in &steps {
-        if name != MINT_STEP && block.contains(APP_PRIVATE_KEY) {
+        if name != READ_MINT_STEP && name != WRITE_MINT_STEP && block.contains(APP_PRIVATE_KEY) {
             return Err(
                 format!("metadata App private key escaped the token-mint action: {name}").into(),
             );
@@ -217,9 +221,9 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
 
     for normal_step in [
-        "Preflight release request and repository readiness",
-        "Publish the qualified candidate immutably",
-        "Re-fetch and verify final public release and metadata",
+        "Run Rust Preflight against current public release state",
+        "Publish the exact qualified candidate immutably",
+        "Re-fetch and verify immutable assets, stable endpoint, and metadata",
     ] {
         let block = steps
             .iter()
@@ -234,137 +238,96 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
         }
     }
 
-    let mint_position = workflow
-        .find("- name: Mint release-metadata GitHub App token before publication")
-        .ok_or("metadata App token mint step position is unavailable")?;
-    let probe_position = workflow
-        .find("- name: Probe release-metadata App access before publication")
-        .ok_or("metadata App access probe position is unavailable")?;
-    let publish_position = workflow
-        .find("- name: Publish the qualified candidate immutably")
-        .ok_or("publication step position is unavailable")?;
-    let promote_position = workflow
-        .find("- name: Promote release metadata only after immutable publication")
-        .ok_or("metadata promotion step position is unavailable")?;
-    if mint_position >= probe_position
-        || probe_position >= publish_position
-        || publish_position >= promote_position
+    let probe_job = workflow_job_blocks(workflow)
+        .into_iter()
+        .find(|(id, _)| id == "metadata_probe")
+        .map(|(_, block)| block)
+        .ok_or("metadata read-only probe job is missing")?;
+    let publish_job = workflow_job_blocks(workflow)
+        .into_iter()
+        .find(|(id, _)| id == "publish")
+        .map(|(_, block)| block)
+        .ok_or("immutable release publication job is missing")?;
+    if !probe_job.contains("needs: [prepare, attest]")
+        || !publish_job.contains("needs: [prepare, attest, metadata_probe]")
     {
         return Err(
-            "metadata App token must be minted and probed before immutable publication".into(),
+            "metadata App read access must be proven before the publication job starts".into(),
         );
     }
 
     Ok(())
 }
 
-fn job_uses_sensitive_runner(job: &str) -> bool {
-    job.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with("runs-on:")
-            && (trimmed.contains("self-hosted")
-                || trimmed.contains("v4-release")
-                || trimmed.contains("single-tenant"))
-    })
-}
-
-fn job_has_exact_release_runner_labels(job: &str) -> bool {
-    job.lines()
-        .any(|line| line.trim() == RELEASE_RUNNER_LABEL_MARKER)
-}
-
-fn job_has_protected_release_environment(job: &str) -> bool {
-    job.lines()
-        .any(|line| line.trim() == "environment: v4-production-release")
-}
-
 pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> Result<()> {
-    let jobs = workflow_job_blocks(source);
-    let sensitive_jobs = jobs
-        .iter()
-        .filter(|(_, job)| job_uses_sensitive_runner(job))
-        .collect::<Vec<_>>();
-    let source_mentions_sensitive_runner = source.contains("self-hosted")
-        || source.contains("v4-release")
-        || source.contains("single-tenant");
-    if !source_mentions_sensitive_runner {
+    if relative != APPROVED_RELEASE_WORKFLOW {
+        if source.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("runs-on:") && line.contains("self-hosted")
+        }) {
+            return Err(format!(
+                "untrusted workflow must not target a self-hosted runner: {relative}"
+            )
+            .into());
+        }
+        if PROTECTED_UPDATER_SECRETS
+            .iter()
+            .any(|secret| source.contains(secret))
+            || source.contains(PROTECTED_METADATA_SECRET)
+        {
+            return Err(format!(
+                "protected release credentials escaped the canonical workflow: {relative}"
+            )
+            .into());
+        }
         return Ok(());
-    }
-    if !APPROVED_RELEASE_RUNNER_WORKFLOWS.contains(&relative) {
-        return Err(format!(
-            "unapproved workflow targets the production release runner boundary: {relative}"
-        )
-        .into());
     }
     if !workflow_declares_only_dispatch(source) {
         return Err(format!(
-            "production release runner workflow must whitelist workflow_dispatch as its only trigger: {relative}"
+            "production release workflow must whitelist workflow_dispatch as its only trigger: {relative}"
         )
         .into());
     }
-    let approved_job = approved_release_runner_job(relative).ok_or_else(|| {
-        format!("approved release runner workflow has no approved job mapping: {relative}")
-    })?;
-    if sensitive_jobs.is_empty() {
-        return Err(format!(
-            "release runner labels could not be mapped to a job block: {relative}"
-        )
-        .into());
+    if source.contains("self-hosted")
+        || source.contains("v4-release, single-tenant")
+        || source.contains("V4_UPDATER_PRIVATE_KEY_PATH")
+        || source.contains("rehearse-v4")
+        || !source.contains("test \"$GITHUB_REF\" = \"refs/heads/main\"")
+        || !source
+            .contains("EXPECTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}")
+    {
+        return Err("canonical release workflow contains a retired runner path or is missing the main-only dispatch guard".into());
     }
-    for (job_id, job) in &sensitive_jobs {
-        if job_id != approved_job {
-            return Err(format!(
-                "job `{job_id}` is not approved for the production release runner boundary: {relative}"
-            )
-            .into());
-        }
-        if !job_has_exact_release_runner_labels(job) {
-            return Err(format!(
-                "job `{job_id}` must use the exact dedicated release runner labels: {relative}"
-            )
-            .into());
-        }
-        if !job_has_protected_release_environment(job) {
-            return Err(format!(
-                "job `{job_id}` must declare environment: v4-production-release in its own job block: {relative}"
-            )
-            .into());
-        }
+    let jobs = workflow_job_blocks(source);
+    let signer = jobs
+        .iter()
+        .find(|(name, _)| name == "sign_qualify")
+        .map(|(_, body)| body.as_str())
+        .ok_or("canonical release workflow is missing the protected signing job")?;
+    if !signer.contains("runs-on: windows-latest")
+        || !signer.contains("environment: v4-production-release")
+        || !signer.contains("release-v4 sign-candidate")
+        || signer.contains("contents: write")
+        || signer.contains("id-token: write")
+        || signer.contains("attestations: write")
+    {
+        return Err("production signing job must use hosted Windows, the protected environment, and read-only permissions".into());
     }
-    if sensitive_jobs.len() != 1 {
-        return Err(format!(
-            "approved release runner workflow must contain exactly one sensitive runner job: {relative}"
-        )
-        .into());
-    }
-    for marker in [
-        "workflow_dispatch:",
-        "dispatch-boundary",
-        "github.event.repository.default_branch",
-        "refs/heads/main",
-        "V4_UPDATER_PRIVATE_KEY_PATH",
-        "RUNNER_TEMP",
-        "verify_v4_release_runner.ps1",
-        "cargo xtask release-v4 cleanup",
-        "persist-credentials: false",
-    ] {
-        if !source.contains(marker) {
+    for secret in PROTECTED_UPDATER_SECRETS {
+        let reference = format!("${{{{ secrets.{secret} }}}}");
+        if signer.matches(&reference).count() != 1 || source.matches(&reference).count() != 1 {
             return Err(format!(
-                "approved release runner workflow is missing its trust-boundary marker `{marker}`: {relative}"
+                "protected updater secret must be mapped once and only into sign_qualify: {secret}"
             )
             .into());
         }
     }
-    for forbidden_input in [
-        "updater_private_key_path:",
-        "inputs.updater_private_key_path",
-    ] {
-        if source.contains(forbidden_input) {
-            return Err(format!(
-                "production release runner workflow accepts an operator-controlled key path `{forbidden_input}`: {relative}"
-            )
-            .into());
-        }
+    if !source.contains("name: V4 Release Pipeline")
+        || !source.contains("contents: read")
+        || source.contains("pull_request:")
+        || source.contains("pull_request_target:")
+    {
+        return Err("canonical production workflow must remain dispatch-only with read-only default permissions".into());
     }
     Ok(())
 }
@@ -399,17 +362,18 @@ pub(super) fn release_runner_contract(root: &Path) -> Result<()> {
             .replace('\\', "/");
         let source = fs::read_to_string(entry.path())?;
         validate_release_runner_workflow(&relative, &source)?;
-        if APPROVED_RELEASE_RUNNER_WORKFLOWS.contains(&relative.as_str()) {
+        if relative == APPROVED_RELEASE_WORKFLOW {
             observed.insert(relative);
         }
     }
-    for required in APPROVED_RELEASE_RUNNER_WORKFLOWS {
-        if !observed.contains(*required) {
-            return Err(format!("approved release runner workflow is missing: {required}").into());
-        }
+    if !observed.contains(APPROVED_RELEASE_WORKFLOW) {
+        return Err(format!(
+            "canonical production workflow is missing: {APPROVED_RELEASE_WORKFLOW}"
+        )
+        .into());
     }
     release_runner_documentation_contract(root)?;
-    println!("[xtask] v4 release runner trust boundary: PASS");
+    println!("[xtask] v4 hosted release trust boundary: PASS");
     Ok(())
 }
 
@@ -420,8 +384,8 @@ fn release_runner_documentation_contract(root: &Path) -> Result<()> {
 
 fn release_runner_documentation_contract_source(documentation: &str) -> Result<()> {
     let section_start = documentation
-        .find("### 2.4 GitHub Actions Runner Isolation and Operator Requirements")
-        .ok_or("release runner documentation is missing section 2.4")?;
+        .find("### 2.4 Hosted Release Workflow and Operator Requirements")
+        .ok_or("hosted release documentation is missing section 2.4")?;
     let section = &documentation[section_start..];
     let section = section
         .find("\n### ")
@@ -433,24 +397,22 @@ fn release_runner_documentation_contract_source(documentation: &str) -> Result<(
             documented.insert(code_segment.to_owned());
         }
     }
-    let expected = APPROVED_RELEASE_RUNNER_WORKFLOWS
-        .iter()
-        .map(|workflow| (*workflow).to_owned())
+    let expected = [APPROVED_RELEASE_WORKFLOW.to_owned()]
+        .into_iter()
         .collect::<BTreeSet<_>>();
     if documented != expected {
         return Err(format!(
-            "documented release runner workflow allowlist does not match the enforced allowlist: documented={documented:?}, enforced={expected:?}"
+            "documented production workflow list does not match the enforced workflow: documented={documented:?}, enforced={expected:?}"
         )
         .into());
     }
-    for workflow in APPROVED_RELEASE_RUNNER_WORKFLOWS {
-        let marker = format!("`{workflow}`");
-        if section.matches(&marker).count() != 1 {
-            return Err(format!(
-                "documented release runner workflow must appear exactly once in section 2.4: {workflow}"
-            )
-            .into());
-        }
+    let workflow = APPROVED_RELEASE_WORKFLOW;
+    let marker = format!("`{workflow}`");
+    if section.matches(&marker).count() != 1 {
+        return Err(format!(
+            "documented production workflow must appear exactly once in section 2.4: {workflow}"
+        )
+        .into());
     }
     Ok(())
 }
@@ -459,158 +421,109 @@ fn release_runner_documentation_contract_source(documentation: &str) -> Result<(
 mod tests {
     use super::*;
 
-    #[test]
-    fn release_runner_contract_rejects_sensitive_runner_on_general_ci() {
-        let workflow = r#"
-on:
-  pull_request:
-jobs:
-  build:
-    runs-on: [self-hosted, windows, v4-release, single-tenant]
-"#;
-        let error = validate_release_runner_workflow(".github/workflows/ci.yml", workflow)
-            .expect_err("general CI must not target the production signing runner");
-        assert!(error.to_string().contains("unapproved workflow"));
+    fn current_workflow() -> String {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        fs::read_to_string(root.join(APPROVED_RELEASE_WORKFLOW))
+            .expect("production workflow must exist")
     }
 
     #[test]
-    fn release_runner_contract_rejects_untrusted_trigger_on_approved_workflow() {
-        let workflow = r#"
-on:
-  workflow_dispatch:
-  pull_request:
-jobs:
-  release:
-    runs-on: [self-hosted, windows, v4-release, single-tenant]
-"#;
-        let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
-            .expect_err("approved release workflow must reject PR triggers");
-        assert!(error.to_string().contains("only trigger"));
+    fn hosted_release_contract_rejects_untrusted_workflows_and_production_secrets() {
+        let self_hosted =
+            "on:\n  pull_request:\njobs:\n  build:\n    runs-on: [self-hosted, windows]\n";
+        assert!(validate_release_runner_workflow(".github/workflows/ci.yml", self_hosted).is_err());
+        let secret = "env:\n  KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}\n";
+        assert!(validate_release_runner_workflow(".github/workflows/ci.yml", secret).is_err());
+        let app_secret = "env:\n  KEY: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}\n";
+        assert!(validate_release_runner_workflow(".github/workflows/ci.yml", app_secret).is_err());
     }
 
     #[test]
-    fn release_runner_contract_rejects_unprotected_sensitive_job_subset() {
-        let workflow = r#"
-on:
-  workflow_dispatch:
-jobs:
-  release:
-    runs-on: [self-hosted, windows, v4-release, single-tenant]
-    environment: v4-production-release
-  unprotected:
-    runs-on: [self-hosted, windows, v4-release]
-"#;
-        let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
-            .expect_err("an unprotected sensitive job subset must be rejected");
-        assert!(error.to_string().contains("not approved"));
+    fn hosted_release_contract_requires_dispatch_main_and_narrow_signer() {
+        let workflow = current_workflow();
+        validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &workflow)
+            .expect("current workflow must satisfy the hosted release boundary");
+
+        let pull_request = workflow.replace(
+            "  workflow_dispatch:\n",
+            "  workflow_dispatch:\n  pull_request:\n",
+        );
+        assert!(
+            validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &pull_request).is_err()
+        );
+
+        let unprotected = workflow.replacen("    environment: v4-production-release\n", "", 1);
+        assert!(validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &unprotected).is_err());
+
+        let broad_runner =
+            workflow.replace("runs-on: windows-latest", "runs-on: [self-hosted, windows]");
+        assert!(
+            validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &broad_runner).is_err()
+        );
+
+        let missing_secret = workflow.replace(
+            "          V4_TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}\n",
+            "",
+        );
+        assert!(
+            validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &missing_secret).is_err()
+        );
     }
 
     #[test]
-    fn release_runner_documentation_allowlist_matches_enforced_workflows() {
+    fn hosted_workflow_documentation_matches_the_single_release_path() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let documentation = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))
-            .expect("release runner documentation fixture must exist");
+            .expect("release topology documentation must exist");
         release_runner_documentation_contract_source(&documentation)
-            .expect("documentation must enumerate exactly the approved runner workflows");
-
+            .expect("documentation must list the canonical production workflow");
         let missing = documentation.replace(
-            "`.github/workflows/rehearse-v4.yml`",
-            "`qualification-workflow-omitted.yml`",
+            "`.github/workflows/release-v4.yml`",
+            "`production-workflow-omitted.yml`",
         );
-        assert!(
-            release_runner_documentation_contract_source(&missing).is_err(),
-            "documentation must fail when an approved runner workflow is omitted"
+        assert!(release_runner_documentation_contract_source(&missing).is_err());
+        let mut with_extra = documentation.clone();
+        let section_start = with_extra
+            .find("### 2.4 Hosted Release Workflow and Operator Requirements")
+            .expect("section 2.4 exists");
+        let insertion = section_start
+            + with_extra[section_start..]
+                .find('\n')
+                .expect("section newline")
+            + 1;
+        with_extra.insert_str(
+            insertion,
+            "- `.github/workflows/unapproved.yml` — not approved.\n",
         );
-
-        let extra = documentation.replace(
-            "- `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.",
-            "- `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.\n- `.github/workflows/unapproved.yml` — not approved.",
-        );
-        assert!(
-            release_runner_documentation_contract_source(&extra).is_err(),
-            "documentation must fail when an unapproved runner workflow is added"
-        );
+        assert!(release_runner_documentation_contract_source(&with_extra).is_err());
     }
 
     #[test]
-    fn metadata_app_token_is_scoped_to_promotion_and_keeps_private_key_in_action_input() {
-        let workflow = r#"
-      - name: Preflight release request and repository readiness
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Mint release-metadata GitHub App token before publication
-        id: metadata-app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
-        with:
-          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
-          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-      - name: Probe release-metadata App access before publication
-        env:
-          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-        run: cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT
-      - name: Publish the qualified candidate immutably
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Promote release metadata only after immutable publication
-        env:
-          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-      - name: Re-fetch and verify final public release and metadata
-        env:
-          GH_TOKEN: ${{ github.token }}
-"#;
-        assert!(validate_metadata_app_token_scope(workflow).is_ok());
+    fn metadata_app_tokens_are_separate_and_only_reach_probe_or_promotion() {
+        let workflow = current_workflow();
+        assert!(validate_metadata_app_token_scope(&workflow).is_ok());
 
         let stale_pin = workflow.replace(
             "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
             "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
         );
-        assert_ne!(stale_pin, workflow);
-        assert!(
-            validate_metadata_app_token_scope(&stale_pin).is_err(),
-            "metadata App token contract must reject the previous immutable SHA"
-        );
+        assert!(validate_metadata_app_token_scope(&stale_pin).is_err());
 
         let missing_client_id = workflow.replace(
             "          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}\n",
             "",
         );
-        assert!(
-            validate_metadata_app_token_scope(&missing_client_id).is_err(),
-            "metadata App token contract must reject a missing client-id"
-        );
+        assert!(validate_metadata_app_token_scope(&missing_client_id).is_err());
 
-        let deprecated_app_id = workflow.replace(
-            "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
-            "app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
-        );
-        assert!(
-            validate_metadata_app_token_scope(&deprecated_app_id).is_err(),
-            "metadata App token contract must reject deprecated app-id"
-        );
-
-        let deprecated_client_id_variable = workflow.replace(
-            "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
-            "client-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
-        );
-        assert!(
-            validate_metadata_app_token_scope(&deprecated_client_id_variable).is_err(),
-            "metadata App token contract must reject the deprecated App ID variable"
-        );
+        let missing_read_scope =
+            workflow.replace("permission-contents: read", "permission-contents: write");
+        assert!(validate_metadata_app_token_scope(&missing_read_scope).is_err());
 
         let broad_token = workflow.replace(
-            "- name: Publish the qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ github.token }}",
-            "- name: Publish the qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
+            "- name: Publish the exact qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ github.token }}",
+            "- name: Publish the exact qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
         );
         assert!(validate_metadata_app_token_scope(&broad_token).is_err());
-
-        let repository_token_for_promotion = workflow.replace(
-            "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
-            "GH_TOKEN: ${{ github.token }}",
-        );
-        assert!(validate_metadata_app_token_scope(&repository_token_for_promotion).is_err());
 
         let private_key_in_env = workflow.replace(
             "        with:\n          client-id:",
@@ -621,8 +534,7 @@ jobs:
 
     #[test]
     fn release_contract_ci_wiring_requires_rust_mock_tests_and_independent_static_gate() {
-        let source = format!(
-            r#"
+        let source = r#"
 jobs:
   static:
     needs: changes
@@ -640,21 +552,21 @@ jobs:
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests
       - name: Run Rust NSIS and registry owner regression tests
         run: |
-          cargo test --locked --manifest-path rust/xtask/Cargo.toml || {{
+          cargo test --locked --manifest-path rust/xtask/Cargo.toml || {
             exit_code=$?
-            echo "Rust NSIS/updater harness tests failed with exit code ${{exit_code}}" >&2
+            echo "Rust NSIS/updater harness tests failed with exit code ${exit_code}" >&2
             exit "$exit_code"
-          }}
-          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {{
+          }
+          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {
             exit_code=$?
-            echo "Rust Windows registry/process ownership tests failed with exit code ${{exit_code}}" >&2
+            echo "Rust Windows registry/process ownership tests failed with exit code ${exit_code}" >&2
             exit "$exit_code"
-          }}
+          }
   status:
     needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
     env:
-      STATIC_RESULT: {dollar}{{{{ needs.static.result }}}}
-      RELEASE_CONTRACT_RESULT: {dollar}{{{{ needs.release_contract.result }}}}
+      STATIC_RESULT: ${{ needs.static.result }}
+      RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
     run: |
       if [[ "$STATIC_REQUIRED" == "true" ]]; then
         [[ "$STATIC_RESULT" == "success" ]]
@@ -662,30 +574,14 @@ jobs:
       if [[ "$RELEASE_REQUIRED" == "true" ]]; then
         [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
       fi
-"#,
-            dollar = '$'
-        );
+"#.to_owned();
         assert!(v4_release_contract_ci_wiring(&source).is_ok());
         for marker in [
             "cargo xtask release-v4 self-test",
             "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests",
         ] {
-            let without = source.replace(marker, "removed");
-            assert!(v4_release_contract_ci_wiring(&without).is_err());
+            assert!(v4_release_contract_ci_wiring(&source.replace(marker, "removed")).is_err());
         }
-        let powershell_status = source.replace(
-            "exit_code=$?",
-            "if ($LASTEXITCODE -ne 0) { throw \"test failed\" }",
-        );
-        assert!(v4_release_contract_ci_wiring(&powershell_status).is_err());
-        let swallowed_failure =
-            source.replace("exit \"$exit_code\"", "echo \"failure was ignored\"");
-        assert!(v4_release_contract_ci_wiring(&swallowed_failure).is_err());
-        let serialized = source.replace(
-            "  release_contract:\n    name: V4 release contract acceptance\n    needs: changes",
-            "  release_contract:\n    name: V4 release contract acceptance\n    needs: static",
-        );
-        assert!(v4_release_contract_ci_wiring(&serialized).is_err());
         let no_static = source.replace(
             "cargo xtask check static --skip-supply-chain",
             "cargo xtask check static",

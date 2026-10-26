@@ -1,83 +1,14 @@
-use super::workflow::{workflow_declares_only_dispatch, workflow_step_blocks};
+use super::workflow::{workflow_declares_only_dispatch, workflow_job_blocks, workflow_step_blocks};
 use crate::Result;
 use std::fs;
 use std::path::Path;
-
-const RELEASE_COMMANDS: &[&str] = &[
-    "preflight",
-    "build-candidate",
-    "verify-attestations",
-    "probe-metadata-token",
-    "publish-release",
-    "promote-metadata",
-    "final-verify",
-    "cleanup",
-];
-const REQUIRED_RELEASE_INVOCATIONS: &[(&str, &str)] = &[
-    (
-        "Preflight release request and repository readiness",
-        "cargo xtask release-v4 preflight --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Build and qualify the single production candidate",
-        "cargo xtask release-v4 build-candidate --state-root $env:V4_RELEASE_STATE_ROOT --key-path $env:V4_UPDATER_PRIVATE_KEY_PATH --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Verify exact-source OIDC attestations",
-        "cargo xtask release-v4 verify-attestations --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Probe release-metadata App access before publication",
-        "cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Publish the qualified candidate immutably",
-        "cargo xtask release-v4 publish-release --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Promote release metadata only after immutable publication",
-        "cargo xtask release-v4 promote-metadata --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Re-fetch and verify final public release and metadata",
-        "cargo xtask release-v4 final-verify --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-    ),
-    (
-        "Clean runner-local release state",
-        "cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT",
-    ),
-];
 
 fn source(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn release_command_sequence(workflow: &str) -> Vec<String> {
-    workflow
-        .lines()
-        .filter_map(|line| line.split_once("cargo xtask release-v4 "))
-        .filter_map(|(_, command)| command.split_whitespace().next())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn require_step_command(
-    workflow: &str,
-    name: &str,
-    command: &str,
-) -> std::result::Result<(), String> {
-    let steps = workflow_step_blocks(workflow);
-    let block = steps
-        .iter()
-        .find(|(step_name, _)| step_name == name)
-        .map(|(_, block)| block.as_str())
-        .ok_or_else(|| format!("release workflow is missing step `{name}`"))?;
-    if !block.contains(command) {
-        return Err(format!(
-            "release workflow step `{name}` is missing its exact Rust invocation"
-        ));
-    }
-    Ok(())
+fn has_permission(job: &str, permission: &str) -> bool {
+    job.lines().any(|line| line.trim() == permission)
 }
 
 fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), String> {
@@ -222,74 +153,247 @@ fn rust_release_state_machine_contract(
     ci: &str,
 ) -> std::result::Result<(), String> {
     let workflow = source(workflow);
-    let rehearsal = source(rehearsal);
     let rust = source(rust);
     let main = source(main);
     let ci = source(ci);
-    if !workflow_declares_only_dispatch(&workflow) || !workflow_declares_only_dispatch(&rehearsal) {
+    if !workflow_declares_only_dispatch(&workflow) {
         return Err(
-            "production workflows must expose workflow_dispatch as their only trigger".into(),
+            "production release workflow must expose workflow_dispatch as its only trigger".into(),
         );
+    }
+    if !rehearsal.trim().is_empty() {
+        return Err("the duplicate production rehearsal workflow must be retired".into());
     }
     for marker in [
         "name: V4 Release Pipeline",
         "workflow_dispatch:",
-        "runs-on: [self-hosted, windows, v4-release, single-tenant]",
+        "runs-on: ubuntu-latest",
+        "runs-on: windows-latest",
         "environment: v4-production-release",
         "contents: read",
         "contents: write",
         "id-token: write",
+        "attestations: read",
         "attestations: write",
         "ref: ${{ github.sha }}",
         "persist-credentials: false",
-        "V4_UPDATER_PRIVATE_KEY_PATH",
-        "actions/attest@",
-        "actions/upload-artifact@",
-        "Mint release-metadata GitHub App token before publication",
-        "permission-contents: write",
-        "if: always()",
-        "EXPECTED_REPOSITORY: pumni/Sky-Auto-Player",
-        "EXPECTED_WORKFLOW: rehearse-v4.yml",
+        "GITHUB_RUN_ATTEMPT",
+        "workflow_dispatch",
         "EXPECTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
         "test \"$GITHUB_EVENT_NAME\" = \"workflow_dispatch\"",
         "test \"$GITHUB_REPOSITORY\" = \"$EXPECTED_REPOSITORY\"",
         "test \"$GITHUB_REF\" = \"refs/heads/main\"",
         "test \"$EXPECTED_DEFAULT_BRANCH\" = \"main\"",
-        "actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA&per_page=100",
-        "V4 Production Pre-Publication Qualification",
-        "head_branch == \"main\"",
-        "conclusion == \"success\"",
+        ".event == \"push\"",
+        ".head_branch == \"main\"",
+        ".head_sha == env.GITHUB_SHA",
+        "workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=100",
+        "max_by(.run_number)",
+        "test \"$status\" = \"completed\" && test \"$conclusion\" = \"success\"",
+        "v4-context-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-published-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-promoted-${{ github.run_id }}-${{ github.run_attempt }}",
+        "V4_TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}",
+        "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}",
+        "actions/attest@",
+        "actions/upload-artifact@",
+        "actions/download-artifact@",
+        "Mint read-only metadata App token",
+        "Mint contents-scoped metadata App token",
+        "permission-contents: read",
+        "permission-contents: write",
+        "if: always()",
     ] {
         if !workflow.contains(marker) {
             return Err(format!("production release workflow is missing `{marker}`"));
         }
     }
-    if workflow.contains("inputs:") || workflow.contains("inputs.") {
-        return Err("production release workflow must not expose semantic dispatch inputs".into());
-    }
-    if workflow.contains("EXPECTED_WORKFLOW: .github/workflows/") {
-        return Err("exact-head qualification must pass the workflow file name".into());
-    }
-    let command_sequence = release_command_sequence(&workflow);
-    if command_sequence
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        != RELEASE_COMMANDS
-    {
-        return Err(format!(
-            "production workflow must invoke the ordered Rust release commands {RELEASE_COMMANDS:?}, got {command_sequence:?}"
-        ));
-    }
-    for (name, command) in REQUIRED_RELEASE_INVOCATIONS {
-        require_step_command(&workflow, name, command)?;
-    }
-    if !workflow.contains("gh api \\")
-        || !workflow.contains("actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch")
+    if workflow.contains("inputs:")
+        || workflow.contains("inputs.")
+        || workflow.contains("self-hosted")
+        || workflow.contains("rehearse-v4")
+        || workflow.contains("V4_UPDATER_PRIVATE_KEY_PATH")
+        || workflow.contains("build-candidate")
     {
         return Err(
-            "release dispatch boundary must query a completed exact-source qualification".into(),
+            "production workflow contains a retired dispatch, self-hosted, or combined-build path"
+                .into(),
         );
+    }
+
+    let jobs = workflow_job_blocks(&workflow);
+    let observed = jobs.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+    let expected = [
+        "prepare",
+        "build_unsigned",
+        "sign_qualify",
+        "attest",
+        "metadata_probe",
+        "publish",
+        "metadata_promote",
+        "final_verify",
+    ];
+    if observed != expected {
+        return Err(format!(
+            "production release jobs must preserve the eight bounded stages, got {observed:?}"
+        ));
+    }
+    let job = |id: &str| {
+        jobs.iter()
+            .find(|(job_id, _)| job_id == id)
+            .map(|(_, block)| block.as_str())
+            .ok_or_else(|| format!("production release workflow is missing job {id}"))
+    };
+    for (id, needs) in [
+        ("build_unsigned", "needs: prepare"),
+        ("sign_qualify", "needs: [prepare, build_unsigned]"),
+        ("attest", "needs: [prepare, sign_qualify]"),
+        ("metadata_probe", "needs: [prepare, attest]"),
+        ("publish", "needs: [prepare, attest, metadata_probe]"),
+        ("metadata_promote", "needs: [prepare, publish]"),
+        ("final_verify", "needs: [prepare, metadata_promote]"),
+    ] {
+        if !job(id)?.lines().any(|line| line.trim() == needs) {
+            return Err(format!("release job {id} must remain behind `{needs}`"));
+        }
+    }
+    for (id, expected_runner) in [
+        ("prepare", "runs-on: ubuntu-latest"),
+        ("build_unsigned", "runs-on: windows-latest"),
+        ("sign_qualify", "runs-on: windows-latest"),
+        ("attest", "runs-on: ubuntu-latest"),
+        ("metadata_probe", "runs-on: ubuntu-latest"),
+        ("publish", "runs-on: ubuntu-latest"),
+        ("metadata_promote", "runs-on: ubuntu-latest"),
+        ("final_verify", "runs-on: ubuntu-latest"),
+    ] {
+        if !job(id)?.lines().any(|line| line.trim() == expected_runner) {
+            return Err(format!("release job {id} must use {expected_runner}"));
+        }
+        if !job(id)?.contains("ref: ${{ github.sha }}")
+            || !job(id)?.contains("persist-credentials: false")
+        {
+            return Err(format!(
+                "release job {id} must check out the exact SHA without persisted credentials"
+            ));
+        }
+    }
+    let unsigned = job("build_unsigned")?;
+    if unsigned.contains("secrets.")
+        || unsigned.contains("environment:")
+        || has_permission(unsigned, "contents: write")
+        || has_permission(unsigned, "id-token: write")
+        || has_permission(unsigned, "attestations: write")
+        || !unsigned.contains("release-v4 build-unsigned")
+    {
+        return Err("unsigned build must be hosted, credential-free, and read-only".into());
+    }
+    let signer = job("sign_qualify")?;
+    let sign_steps = workflow_step_blocks(signer);
+    let secret_step = sign_steps
+        .iter()
+        .find(|(name, _)| name == "Sign the independently verified exact candidate")
+        .map(|(_, block)| block.as_str())
+        .ok_or("protected signing job is missing its narrow Rust signing step")?;
+    if !signer.contains("environment: v4-production-release")
+        || !has_permission(signer, "contents: read")
+        || has_permission(signer, "contents: write")
+        || has_permission(signer, "id-token: write")
+        || has_permission(signer, "attestations: write")
+        || secret_step
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}")
+            .count()
+            != 1
+        || secret_step
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}")
+            .count()
+            != 1
+        || !secret_step.contains("release-v4 sign-candidate")
+        || !signer.contains("release-v4 qualify-candidate")
+    {
+        return Err("production signing must be environment-protected, read-only, and scoped to the Rust signing step".into());
+    }
+    for (name, block) in &sign_steps {
+        if name != "Sign the independently verified exact candidate"
+            && (block.contains("secrets.V4_TAURI_UPDATER_PRIVATE_KEY")
+                || block.contains("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"))
+        {
+            return Err(format!(
+                "production updater secrets escaped the dedicated signing step: {name}"
+            ));
+        }
+    }
+    for (id, marker) in [
+        ("attest", "id-token: write"),
+        ("attest", "attestations: write"),
+        ("publish", "contents: write"),
+        ("publish", "attestations: read"),
+    ] {
+        if !job(id)?.contains(marker) {
+            return Err(format!("release job {id} is missing permission {marker}"));
+        }
+    }
+    for id in [
+        "prepare",
+        "build_unsigned",
+        "sign_qualify",
+        "attest",
+        "metadata_probe",
+        "publish",
+        "metadata_promote",
+        "final_verify",
+    ] {
+        let block = job(id)?;
+        if block.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
+            && id != "metadata_probe"
+            && id != "metadata_promote"
+        {
+            return Err(format!(
+                "metadata App private key escaped its protected job: {id}"
+            ));
+        }
+        if block.contains("V4_TAURI_UPDATER_PRIVATE_KEY") && id != "sign_qualify" {
+            return Err(format!(
+                "production updater key escaped the protected signing job: {id}"
+            ));
+        }
+    }
+    if !job("metadata_probe")?.contains("permission-contents: read")
+        || has_permission(job("metadata_probe")?, "contents: write")
+        || !job("metadata_promote")?.contains("permission-contents: write")
+        || has_permission(job("metadata_promote")?, "contents: write")
+    {
+        return Err("metadata App tokens must be read-scoped for probing and write-scoped only in the Rust promotion job".into());
+    }
+    if job("publish")?.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
+        || job("publish")?.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || job("metadata_promote")?.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || workflow
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}")
+            .count()
+            != 1
+        || workflow
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}")
+            .count()
+            != 1
+    {
+        return Err(
+            "updater production secrets must be available only to the protected signer".into(),
+        );
+    }
+    let workflow_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
+    for relative in ["ci.yml", "hosted-v4-signing-proof.yml"] {
+        let source =
+            fs::read_to_string(workflow_root.join(relative)).map_err(|error| error.to_string())?;
+        if source.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+            || source.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD")
+        {
+            return Err(format!(
+                "production updater secrets must never enter PR/general CI: {relative}"
+            ));
+        }
     }
     for old in [
         "scripts/v4_release_pipeline.ps1",
@@ -302,39 +406,9 @@ fn rust_release_state_machine_contract(
         "-State PromoteMetadata",
         "-State FinalVerify",
     ] {
-        if workflow.contains(old) || rehearsal.contains(old) {
+        if workflow.contains(old) {
             return Err(format!(
                 "legacy PowerShell release authority is still called: {old}"
-            ));
-        }
-    }
-    let rehearsal_sequence = release_command_sequence(&rehearsal);
-    if rehearsal_sequence
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        != ["preflight", "build-candidate", "cleanup"]
-    {
-        return Err(format!(
-            "rehearsal must invoke exactly Preflight -> BuildCandidate -> cleanup, got {rehearsal_sequence:?}"
-        ));
-    }
-    for forbidden in [
-        "cargo xtask release-v4 publish-release",
-        "cargo xtask release-v4 promote-metadata",
-        "cargo xtask release-v4 final-verify",
-        "gh release create",
-        "gh release upload",
-        "gh release delete",
-        "actions/attest@",
-        "actions/create-github-app-token@",
-        "contents: write",
-        "id-token: write",
-        "attestations: write",
-    ] {
-        if rehearsal.contains(forbidden) {
-            return Err(format!(
-                "rehearsal workflow crosses the publication boundary: {forbidden}"
             ));
         }
     }
@@ -361,7 +435,13 @@ fn rust_release_state_machine_contract(
         "GITHUB_WORKFLOW_REF",
         "--workflow-sha is required for Preflight",
         "runtime_identity_fails_closed_without_exact_workflow_context",
-        "require_runtime_context(root, &options, command == \"build-candidate\")?",
+        "require_runtime_context(root, &options, expected_job)?",
+        "fn build_unsigned",
+        "fn sign_candidate",
+        "fn qualify_candidate",
+        "fn verify_candidate_handoff",
+        "run_attempt",
+        "unsigned_handoff",
         "channels/{channel}/latest.json?ref=release-metadata",
         "metadata_token_probe_rejects_wrong_repository_state",
         "fn promote_metadata",
@@ -414,10 +494,11 @@ fn rust_release_state_machine_contract(
         .map(|(body, _)| body)
         .ok_or("Rust release CLI is missing its production runtime guard")?;
     let runtime_guard = release_cli
-        .find("require_runtime_context(root, &options, command == \"build-candidate\")?")
+        .find("require_runtime_context(root, &options, expected_job)?")
         .ok_or("release side-effect phases must require exact runtime identity")?;
-    let command_dispatch = release_cli
+    let command_dispatch = release_cli[runtime_guard..]
         .find("match command")
+        .map(|offset| runtime_guard + offset)
         .ok_or("release CLI phase dispatch is missing")?;
     if runtime_guard >= command_dispatch {
         return Err("release phases must validate runtime identity before dispatch".into());
@@ -487,7 +568,6 @@ fn rust_release_state_machine_contract(
         .contains("workflow_sha\n        .ok_or(\"--workflow-sha is required for Preflight\")")
         || !identity.contains("GITHUB_WORKFLOW_REF")
         || !identity.contains("RELEASE_WORKFLOW_REF")
-        || !identity.contains("REHEARSE_WORKFLOW_REF")
     {
         return Err(
             "Preflight must require the explicit workflow SHA and an exact canonical workflow ref"
@@ -531,8 +611,53 @@ fn rust_release_state_machine_contract(
             ));
         }
     }
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let handoff = source(
+        &fs::read_to_string(manifest_dir.join("src/release_handoff.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    let signing = source(
+        &fs::read_to_string(manifest_dir.join("src/release_signing.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    for marker in [
+        "struct UnsignedArtifactManifest",
+        "deny_unknown_fields",
+        "MAX_HANDOFF_MANIFEST_BYTES",
+        "MAX_INSTALLER_BYTES",
+        "validate_unsigned_handoff",
+        "validate_handoff_directory",
+        "artifact_name",
+        "run_attempt",
+        "installer_sha256",
+        "producer_job",
+    ] {
+        if !handoff.contains(marker) {
+            return Err(format!("Rust unsigned handoff is missing bound `{marker}`"));
+        }
+    }
+    for marker in [
+        "V4_TAURI_UPDATER_PRIVATE_KEY",
+        "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
+        "Zeroizing",
+        "MAX_PRIVATE_KEY_BYTES",
+        "MAX_PASSPHRASE_BYTES",
+        "RUNNER_TEMP",
+        "create_new(true)",
+        "verify_local_private_key",
+        "verify_updater_signature_for_version",
+        "19AABD2E7838818C",
+        "cleanup_run_material",
+        "capture_owned_timeout_filtered",
+    ] {
+        if !signing.contains(marker) {
+            return Err(format!(
+                "Rust production signing adapter is missing boundary `{marker}`"
+            ));
+        }
+    }
     let credentials = source(
-        &fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/credential_cli.rs"))
+        &fs::read_to_string(manifest_dir.join("src/credential_cli.rs"))
             .map_err(|error| error.to_string())?,
     );
     for marker in [
@@ -545,6 +670,14 @@ fn rust_release_state_machine_contract(
                 "Rust candidate builder is missing bounded-process contract `{marker}`"
             ));
         }
+    }
+    if !rust.contains("createUpdaterArtifacts\":false")
+        || !workflow.contains("release-v4 build-unsigned")
+        || !workflow.contains("release-v4 sign-candidate")
+        || !workflow.contains("release-v4 qualify-candidate")
+        || workflow.matches("release-v4 build-unsigned").count() != 1
+    {
+        return Err("release pipeline must disable build-time updater sidecars and keep build/sign as separate Rust phases".into());
     }
     for obsolete in [
         "scripts/test_v4_release_pipeline.ps1",
@@ -569,7 +702,7 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     rust_release_state_machine_contract(
         &read(".github/workflows/release-v4.yml")?,
-        &read(".github/workflows/rehearse-v4.yml")?,
+        "",
         &read("rust/xtask/src/release_v4.rs")?,
         &read("rust/xtask/src/main.rs")?,
         &read(".github/workflows/ci.yml")?,
@@ -583,248 +716,46 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn valid() -> (String, String, String, String, String) {
-        let release_commands = [
-            (
-                "Preflight release request and repository readiness",
-                "cargo xtask release-v4 preflight --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Build and qualify the single production candidate",
-                "cargo xtask release-v4 build-candidate --state-root $env:V4_RELEASE_STATE_ROOT --key-path $env:V4_UPDATER_PRIVATE_KEY_PATH --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Verify exact-source OIDC attestations",
-                "cargo xtask release-v4 verify-attestations --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Probe release-metadata App access before publication",
-                "cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Publish the qualified candidate immutably",
-                "cargo xtask release-v4 publish-release --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Promote release metadata only after immutable publication",
-                "cargo xtask release-v4 promote-metadata --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Re-fetch and verify final public release and metadata",
-                "cargo xtask release-v4 final-verify --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
-            ),
-            (
-                "Clean runner-local release state",
-                "cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT",
-            ),
-        ];
-        let release_steps = release_commands
-            .iter()
-            .map(|(name, command)| format!("      - name: {name}\n        run: {command}\n"))
-            .collect::<String>();
-        let release = format!(
-            "name: V4 Release Pipeline\non:\n  workflow_dispatch:\npermissions:\n  contents: read\nEXPECTED_REPOSITORY: pumni/Sky-Auto-Player\nEXPECTED_DEFAULT_BRANCH: ${{{{ github.event.repository.default_branch }}}}\nEXPECTED_WORKFLOW: rehearse-v4.yml\ntest \"$GITHUB_EVENT_NAME\" = \"workflow_dispatch\"\ntest \"$GITHUB_REPOSITORY\" = \"$EXPECTED_REPOSITORY\"\ntest \"$GITHUB_REF\" = \"refs/heads/main\"\ntest \"$EXPECTED_DEFAULT_BRANCH\" = \"main\"\nqualified_run=\"$(gh api \\\n  \\\"repos/$GITHUB_REPOSITORY/actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA&per_page=100\\\" --jq '.workflow_runs[] | select(.status == \\\"completed\\\" and .conclusion == \\\"success\\\" and .event == \\\"workflow_dispatch\\\" and .head_branch == \\\"main\\\" and .name == \\\"V4 Production Pre-Publication Qualification\\\") | .id')\"\nhead_branch == \"main\"\nconclusion == \"success\"\nruns-on: [self-hosted, windows, v4-release, single-tenant]\nenvironment: v4-production-release\ncontents: read\ncontents: write\nid-token: write\nattestations: write\nref: ${{{{ github.sha }}}}\npersist-credentials: false\nV4_UPDATER_PRIVATE_KEY_PATH\nactions/attest@\nactions/upload-artifact@\nMint release-metadata GitHub App token before publication\npermission-contents: write\nif: always()\njobs:\n  release:\n    steps:\n{}",
-            release_steps
-        );
-        let rehearsal = "name: V4 Production Pre-Publication Qualification\non:\n  workflow_dispatch:\njobs:\n  qualification:\n    steps:\n      - name: Run Preflight\n        run: cargo xtask release-v4 preflight --state-root state --workflow-sha $env:GITHUB_SHA\n      - name: Run BuildCandidate\n        run: cargo xtask release-v4 build-candidate --state-root state --key-path key --workflow-sha $env:GITHUB_SHA\n      - name: Clean state\n        run: cargo xtask release-v4 cleanup --state-root state\n".to_owned();
-        let rust = r#"trait Transport
-struct GhTransport
-fn publish_release(
-prepublication_metadata_qualification(
-transport.request(
-"POST"
-prepublication_metadata_qualification(
-transport.request(
-"PATCH"
-}
-fn prepublication_metadata_qualification(
-validate_monotonic
-same_github_latest
-fn same_github_latest(
-fn delete_owned_draft(
-transport.request("GET"
-current["id"]
-current["draft"] != true
-matches_transaction(&current, context)
-transport.request("DELETE"
-fn verify_public_assets(
-fn request_with_retry_policy(
-method.eq_ignore_ascii_case("GET")
-retry_github(operation, sleep)
-operation().map_err
-pub(crate) fn run(
-fn identity(
-workflow_sha
-        .ok_or("--workflow-sha is required for Preflight")
-GITHUB_WORKFLOW_REF
-RELEASE_WORKFLOW_REF
-REHEARSE_WORKFLOW_REF
-fn git_text(
-fn validate_context(
-pure_context_validation
-fn preflight(
-pub(crate) fn run(
-require_runtime_context(root, &options, command == "build-candidate")?
-match command
-fn require_runtime_context(
-fn probe_metadata_token(
-for channel in ["stable", "beta"]
-doctor_validate_metadata
-channels/{channel}/latest.json?ref=release-metadata
-fn cleanup_local_state(
-mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted mock_pr_merge_sha_does_not_break_release_or_owned_cleanup mock_upload_timeout_reconciles_exact_asset mutation_adapter_is_at_most_once MutationOutcomeUnknown await_raw_metadata_convergence raw_metadata_retry_converges_after_cache_lag raw_metadata_retry_fails_with_bounded_diagnostics RuntimeIdentity::from_environment GITHUB_WORKFLOW_REF runtime_identity_fails_closed_without_exact_workflow_context metadata_token_probe_rejects_wrong_repository_state fn promote_metadata fn final_verify fn doctor fn verify_attestations POST_PUBLICATION_INCIDENT release_id sha256: raw.githubusercontent.com mock_publish_succeeds mock_draft_post_timeout_reconciles_exact_marker mock_digest_mismatch_cleans_owned_draft mock_patch_timeout_reconciles_exact_release_id mock_unknown_publication_never_cleans_up canonical_upload_url RELEASE_BUILD_STEP_TIMEOUT RELEASE_DEFENDER_STEP_TIMEOUT ATTESTATION_VERIFY_TIMEOUT mock_release_doctor_detects_metadata_endpoint_divergence mock_metadata_promotion_is_idempotent_after_committed_timeout mock_publication_identity_and_asset_inventory_fail_closed doctor_state_input_rejects_malformed_and_oversized_files malformed_github_api_json_fails_closed_with_endpoint_context retry_policy_retries_only_transient_responses env::current_exe()?"#
-            .to_owned();
-        let main = "\"release-v4\" => release_v4::run\n\"release-doctor\" =>\nrelease_v4::run(&repo::root(), &doctor_args)".to_owned();
-        let ci = "cargo xtask release-v4 self-test\ncargo test --locked --manifest-path rust/xtask/Cargo.toml".to_owned();
-        (release, rehearsal, rust, main, ci)
+    fn current_sources() -> (String, String, String, String) {
+        let root = crate::repo::root();
+        (
+            fs::read_to_string(root.join(".github/workflows/release-v4.yml")).expect("workflow"),
+            fs::read_to_string(root.join("rust/xtask/src/release_v4.rs"))
+                .expect("Rust release owner"),
+            fs::read_to_string(root.join("rust/xtask/src/main.rs")).expect("xtask entrypoint"),
+            fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow"),
+        )
     }
 
     #[test]
-    fn release_state_machine_requires_ordered_rust_stages_and_security_boundaries() {
-        let (release, rehearsal, rust, main, ci) = valid();
-        rust_release_state_machine_contract(&release, &rehearsal, &rust, &main, &ci)
-            .expect("valid Rust release authority fixture must satisfy the contract");
-        let reordered = release.replace(
-            "cargo xtask release-v4 publish-release --state-root",
-            "cargo xtask release-v4 promote-metadata --state-root",
-        );
-        assert!(
-            rust_release_state_machine_contract(&reordered, &rehearsal, &rust, &main, &ci).is_err()
-        );
-        let legacy = release.replace(
-            "cargo xtask release-v4 publish-release --state-root",
-            "pwsh scripts/v4_release_pipeline.ps1",
-        );
-        assert!(
-            rust_release_state_machine_contract(&legacy, &rehearsal, &rust, &main, &ci).is_err()
-        );
-        let unsafe_rehearsal = format!("{rehearsal}cargo xtask release-v4 publish-release");
-        assert!(
-            rust_release_state_machine_contract(&release, &unsafe_rehearsal, &rust, &main, &ci)
-                .is_err()
-        );
-        let no_negative_test = rust.replace("mock_digest_mismatch_cleans_owned_draft", "removed");
-        assert!(
-            rust_release_state_machine_contract(
-                &release,
-                &rehearsal,
-                &no_negative_test,
-                &main,
-                &ci
-            )
-            .is_err()
-        );
-        let ambient_pr_sha = rust.replace(
-            "pure_context_validation\nfn preflight(",
-            "env::var(\"GITHUB_SHA\")\npure_context_validation\nfn preflight(",
-        );
-        assert!(
-            rust_release_state_machine_contract(&release, &rehearsal, &ambient_pr_sha, &main, &ci)
-                .is_err()
-        );
-        let runtime_guard_after_dispatch = rust.replace(
-            "require_runtime_context(root, &options, command == \"build-candidate\")?\nmatch command",
-            "match command\nrequire_runtime_context(root, &options, command == \"build-candidate\")?",
-        );
-        assert!(
-            rust_release_state_machine_contract(
-                &release,
-                &rehearsal,
-                &runtime_guard_after_dispatch,
-                &main,
-                &ci
-            )
-            .is_err()
-        );
-        let recursive_cargo = rust.replace("env::current_exe()?", "process::capture(\"cargo\"");
-        assert!(
-            rust_release_state_machine_contract(&release, &rehearsal, &recursive_cargo, &main, &ci)
-                .is_err()
-        );
+    fn hosted_release_contract_accepts_the_current_rust_pipeline() {
+        let (workflow, rust, main, ci) = current_sources();
+        rust_release_state_machine_contract(&workflow, "", &rust, &main, &ci)
+            .expect("current hosted release pipeline must satisfy its contracts");
+    }
 
-        let no_exact_head = release.replace("head_sha=$GITHUB_SHA", "head_branch=main");
+    #[test]
+    fn hosted_release_contract_rejects_stale_sha_and_duplicate_build_paths() {
+        let (workflow, rust, main, ci) = current_sources();
+        let stale_gate = workflow.replace("head_sha=$GITHUB_SHA", "head_branch=main");
+        assert!(rust_release_state_machine_contract(&stale_gate, "", &rust, &main, &ci).is_err());
         assert!(
-            rust_release_state_machine_contract(&no_exact_head, &rehearsal, &rust, &main, &ci)
+            rust_release_state_machine_contract(&workflow, "retired rehearsal", &rust, &main, &ci)
                 .is_err()
         );
-        let missing_workflow_sha = release.replace("--workflow-sha $env:GITHUB_SHA", "");
-        assert!(
-            rust_release_state_machine_contract(
-                &missing_workflow_sha,
-                &rehearsal,
-                &rust,
-                &main,
-                &ci
-            )
-            .is_err()
-        );
-        for (_, command) in REQUIRED_RELEASE_INVOCATIONS {
-            let arguments = command.split_whitespace().collect::<Vec<_>>();
-            for index in 0..arguments.len().saturating_sub(1) {
-                if arguments[index].starts_with("--") {
-                    let argument = format!("{} {}", arguments[index], arguments[index + 1]);
-                    let missing = release.replacen(&argument, "", 1);
-                    assert!(
-                        rust_release_state_machine_contract(
-                            &missing, &rehearsal, &rust, &main, &ci
-                        )
-                        .is_err(),
-                        "removing `{argument}` must fail the release workflow contract"
-                    );
-                }
-            }
+        let legacy = workflow.replace("release-v4 sign-candidate", "release-v4 build-candidate");
+        assert!(rust_release_state_machine_contract(&legacy, "", &rust, &main, &ci).is_err());
+    }
+
+    #[test]
+    fn production_signing_secrets_cannot_enter_pr_ci() {
+        let root = crate::repo::root();
+        let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
+        let proof = fs::read_to_string(root.join(".github/workflows/hosted-v4-signing-proof.yml"))
+            .expect("test-key proof workflow");
+        for source in [&ci, &proof] {
+            assert!(!source.contains("V4_TAURI_UPDATER_PRIVATE_KEY"));
+            assert!(!source.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"));
         }
-
-        let crlf_release = release.replace('\n', "\r\n");
-        let crlf_rehearsal = rehearsal.replace('\n', "\r\n");
-        assert!(
-            rust_release_state_machine_contract(&crlf_release, &crlf_rehearsal, &rust, &main, &ci)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn installed_nsis_catalog_contract_keeps_safe_order_across_line_endings() {
-        let harness = source(include_str!("../nsis_harness.rs"));
-        let result = nsis_installed_catalog_contract(&harness);
-        assert!(result.is_ok(), "{result:?}");
-        let crlf = harness.replace('\n', "\r\n");
-        assert!(nsis_installed_catalog_contract(&crlf).is_ok());
-
-        let missing_catalog = harness.replace("crate::builtin_catalog::run(", "");
-        assert!(nsis_installed_catalog_contract(&missing_catalog).is_err());
-        let launch_before_catalog = harness.replace(
-            "crate::builtin_catalog::run(",
-            "launch_smoke(scope, &app)?; crate::builtin_catalog::run(",
-        );
-        assert!(nsis_installed_catalog_contract(&launch_before_catalog).is_err());
-        let cwd_inside_install = harness.replace(
-            "let cwd = install_root\n        .parent()",
-            "let cwd = &install_root",
-        );
-        assert!(nsis_installed_catalog_contract(&cwd_inside_install).is_err());
-        let root_before_tree = harness.replace(
-            "if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {",
-            "if let Err(error) = wait_path_absent(install_root, std::time::Duration::from_secs(30)) { if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {",
-        );
-        assert!(nsis_installed_catalog_contract(&root_before_tree).is_err());
-        let manual_root_delete = harness.replace(
-            "finish_uninstall(&install_root, &mut uninstaller)?;",
-            "std::fs::remove_dir_all(&install_root)?; finish_uninstall(&install_root, &mut uninstaller)?;",
-        );
-        assert!(nsis_installed_catalog_contract(&manual_root_delete).is_err());
-    }
-
-    #[test]
-    fn updater_fixture_static_contract_keeps_required_negative_regressions() {
-        let fixture = include_str!("../updater_fixture.rs");
-        assert!(updater_fixture_contract(fixture).is_ok());
-        let crlf = fixture.replace('\n', "\r\n");
-        assert!(updater_fixture_contract(&crlf).is_ok());
-        let missing_worktree_test = fixture.replace(
-            "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
-            "removed_test_name",
-        );
-        assert!(updater_fixture_contract(&missing_worktree_test).is_err());
     }
 }

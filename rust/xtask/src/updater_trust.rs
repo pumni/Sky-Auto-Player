@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{Result, process};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use minisign_verify::{PublicKey, Signature};
 use serde::Serialize;
@@ -6,7 +6,8 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
+use zeroize::{Zeroize, Zeroizing};
 
 const MAX_PUBLIC_KEY_BYTES: usize = 4096;
 const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
@@ -163,7 +164,7 @@ pub fn verify_local_private_key(
     if !key_path.is_file() {
         return Err(format!("private key file does not exist: {}", key_path.display()).into());
     }
-    let key_bytes = fs::read(key_path)?;
+    let key_bytes = Zeroizing::new(fs::read(key_path)?);
     if key_bytes.is_empty() || key_bytes.len() > MAX_PUBLIC_KEY_BYTES {
         return Err("private key file is empty or unbounded".into());
     }
@@ -195,25 +196,39 @@ pub fn verify_local_private_key(
     let desktop_dir = root.join("desktop");
     let canonical_key_path = fs::canonicalize(key_path)?;
 
-    let mut command = Command::new("bun");
-    command
-        .args([
-            "run",
-            "tauri",
-            "signer",
-            "sign",
-            payload_path.to_str().unwrap(),
-        ])
-        .current_dir(&desktop_dir)
-        .env("TAURI_SIGNING_PRIVATE_KEY_PATH", &canonical_key_path)
-        .env("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", password.unwrap_or(""))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let output = command.output();
+    let mut env_values = vec![
+        (
+            "TAURI_SIGNING_PRIVATE_KEY_PATH".to_owned(),
+            canonical_key_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD".to_owned(),
+            password.unwrap_or("").to_owned(),
+        ),
+    ];
+    let args = vec![
+        "run".to_owned(),
+        "tauri".to_owned(),
+        "signer".to_owned(),
+        "sign".to_owned(),
+        payload_path.to_string_lossy().into_owned(),
+    ];
+    let output = process::capture_owned_timeout_filtered(
+        std::ffi::OsStr::new("bun"),
+        &args,
+        &desktop_dir,
+        &env_values,
+        &[
+            "TAURI_SIGNING_PRIVATE_KEY".to_owned(),
+            "V4_TAURI_UPDATER_PRIVATE_KEY".to_owned(),
+            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD".to_owned(),
+        ],
+        Duration::from_secs(5 * 60),
+    );
+    env_values[1].1.zeroize();
+    let output = output.map_err(|_| "failed to execute bounded updater signer verification")?;
     let result = match output {
-        Ok(out) if out.status.success() => {
+        out if out.status.success() => {
             if signature_path.is_file() {
                 match decode_signature(&signature_path) {
                     Ok(signature) => {
@@ -236,7 +251,7 @@ pub fn verify_local_private_key(
                 Err("signer completed but signature file was not produced".into())
             }
         }
-        Ok(out) => {
+        out => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             if stderr.contains("Wrong password")
                 || stderr.contains("incorrect updater private key password")
@@ -249,7 +264,6 @@ pub fn verify_local_private_key(
                 )
             }
         }
-        Err(e) => Err(format!("failed to execute bun signer: {e}").into()),
     };
 
     let _ = fs::remove_file(&payload_path);
