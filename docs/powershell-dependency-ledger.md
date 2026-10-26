@@ -34,18 +34,55 @@ retires no physical, UI, publication, or manual evidence entrypoint.
 | scripts/v4_release_asset_upload.ps1, scripts/v4_release_draft_lookup.ps1, scripts/v4_release_latest_policy.ps1, scripts/ci_v4_release_latest_guard.ps1 | rust/xtask/src/release_v4.rs | one Transport and state machine; exact asset pair, immutable release, stable Latest, beta preservation, and bounded retries are tested | MIGRATED in Wave D |
 | scripts/probe_v4_metadata_app_access.ps1, scripts/cleanup_v4_release_state.ps1 | Rust probe-metadata-token and cleanup phases | release-v4.yml uses Rust; cleanup checks RUNNER_TEMP containment and the exact ownership sentinel | MIGRATED in Wave D |
 | scripts/test_v4_release_pipeline.ps1, scripts/test_v4_post_publication_transaction.ps1, scripts/test_ci_v4_release_latest_guard.ps1, scripts/test_v4_production_orchestrator.ps1 | rust/xtask/src/release_v4.rs and checks/release_pipeline.rs | CI uses the 22-scenario fake-transport self-test and Rust regression tests; production release APIs are not called by these tests | MIGRATED in Wave D |
-| scripts/audit_dispatch_assembly.ps1, scripts/audit_prepared_normal_assembly.ps1, scripts/audit_modifier_guard_assembly.ps1 | rust/xtask/src/assembly_audit.rs | `cargo xtask audit assembly` preserves the assembly reports and pass/fail assertions; seven Rust fixtures cover report-only targets, required clean targets, prepared sender bounds, modifier order, and null-window queries | MIGRATED in Wave E; thin PowerShell adapters KEEP |
+| scripts/audit_dispatch_assembly.ps1, scripts/audit_prepared_normal_assembly.ps1, scripts/audit_modifier_guard_assembly.ps1 | rust/xtask/src/assembly_audit.rs | `cargo xtask audit assembly` preserves reports and pass/fail assertions; ten Rust tests cover required-clean targets, sender bounds, modifier order, PowerShell-compatible admission/prepared suffixes, fake/duplicate labels, lock-prefixed atomic metrics, and null-window queries | MIGRATED in Wave E; thin PowerShell adapters KEEP |
 | `Write-StartupCalibrationProjection` in scripts/lib/startup_calibration_projection.ps1 | rust/xtask/src/calibration.rs, `cargo xtask calibration project-evidence` | Existing exporter self-test runs the adapter and checks LF/CRLF parity, UTF-8 without BOM, exact SHA-256 sidecars, `eol=lf`, and checkout behavior with `core.autocrlf=true` | MIGRATED in Wave E; thin PowerShell adapter KEEP |
 
 Legacy path names remain in ci_classifier.rs regression cases where deletion of an old path must
 still select release validation. These are lane-mapping data, not runtime callers.
 
 The offline optimized assembly smoke at Wave E base `8cf0907d58f89d7dde030cf6c975dc7ff1384493`
-returned the existing fail-closed outcomes on the generated `dist` artifacts: `dispatch_due_from_plan`
-contains one `memcpy` despite its required-clean policy; the prepared-normal symbol was not emitted;
-and the modifier audit could not find its expected admission symbol. The Rust migration keeps those
-assertions and exit failures. This smoke did not run native input acceptance and is not assembly
-qualification evidence.
+returned fail-closed outcomes on the generated `dist` artifacts: `dispatch_due_from_plan` contains
+one `memcpy` despite its required-clean policy; the prepared-normal symbol was not emitted; and the
+modifier audit could not find its expected admission symbol. The Rust migration keeps those
+assertions and exit failures. These are unqualified artifact outcomes, not PASS results or evidence
+of a Wave E runtime regression; the Wave E diff does not modify either runtime crate. This smoke did
+not run native input acceptance.
+
+The frozen PowerShell oracles from BASE `8cf0907d58f89d7dde030cf6c975dc7ff1384493` and the Rust
+CLI were then run against the same assembly paths: nine synthetic fixture cases and three
+representative optimized `dist` audits. All 12 cases had matching verdicts and exit codes, and all
+emitted policy metrics matched exactly (zero parity mismatches).
+
+| Shared input | PowerShell oracle | Rust audit | Matched evidence |
+| --- | --- | --- | --- |
+| Dispatch clean fixture | PASS / 0 | PASS / 0 | Target report metrics and caller counts identical; `dispatch_due_from_plan memcpy=0` |
+| Dispatch forbidden-copy fixture | FAIL / 1 | FAIL / 1 | Identical report metrics; required-clean target reports `memcpy=1` |
+| Prepared-normal valid fixture | PASS / 0 | PASS / 0 | Sender=1, prepared QPC=1, post-modifier/pre-control QPC=1, focus-loss QPC=1; forbidden/copy counts=0 |
+| Prepared-normal fake `_fake:` label | FAIL / 1 | FAIL / 1 | Both reject the missing exact target |
+| Modifier valid fixture | PASS / 0 | PASS / 0 | Observer queries=5, admission queries=5, prepared probe=1, sender=1, lease-age QPC=1 |
+| Modifier fake admission `_extra:` / prepared `_fake:` labels | FAIL / 1 each | FAIL / 1 each | Both reject zero exact matches |
+| Modifier duplicate admission / prepared labels | FAIL / 1 each | FAIL / 1 each | Both reject two exact matches |
+| Dist dispatch: `sky_player-4c11b6fb35acee29.s` | FAIL / 1 | FAIL / 1 | `dispatch_due_from_plan`: 445 instructions, stack=1464, `memcpy=1`; caller helper=0, sender=1, atomic RMW=2, power-consume RMW=1; metrics identical |
+| Dist prepared-normal / modifier-guard | FAIL / 1 each | FAIL / 1 each | Prepared boundary absent; modifier admission exact match count=0 |
+
+The paired dist files were emitted while BASE was checked out, on
+`x86_64-pc-windows-msvc`, using:
+
+```text
+cargo rustc --locked --manifest-path rust/Cargo.toml -p sky_player --profile dist --lib -- --emit=asm
+cargo rustc --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --profile dist --lib -- --emit=asm
+```
+
+SHA-256:
+`sky_player-4c11b6fb35acee29.s` =
+`b7833816424e0831acedce4df846379fbc8f5cbce96f0b90f32db52a5a1d5d14`;
+`sky_dispatch_win32-b6df949a7739b755.s` =
+`a9aa697ecd99bb4d404e4b82125314ee566234cf992d7bd96e3a89c6fc2c6a65`. The differential run
+confirmed all three dist audits still FAIL under both implementations. Since the artifacts were
+emitted from BASE and Wave E changes no runtime crate, this does not indicate a Wave E runtime
+regression or a stale artifact. The precise source/codegen/build-configuration cause of the missing
+symbols and required-clean `memcpy` remains unresolved. These results are not native
+physical-acceptance or assembly-qualification evidence.
 
 ## Retained dependencies
 

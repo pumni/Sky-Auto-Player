@@ -25,10 +25,38 @@ fn contains_word(line: &str, token: &str) -> bool {
         })
 }
 
+fn contains_word_with_suffix(line: &str, token: &str) -> bool {
+    let folded_line = line.to_ascii_lowercase();
+    let folded_token = token.to_ascii_lowercase();
+    folded_line
+        .match_indices(&folded_token)
+        .any(|(start, matched)| {
+            let token_end = start + matched.len();
+            let before = start
+                .checked_sub(1)
+                .and_then(|index| folded_line.as_bytes().get(index))
+                .copied();
+            let suffix_len = folded_line.as_bytes()[token_end..]
+                .iter()
+                .take_while(|byte| is_word_byte(**byte))
+                .count();
+            let end = token_end + suffix_len;
+            let after = folded_line.as_bytes().get(end).copied();
+            !before.is_some_and(is_word_byte) && !after.is_some_and(is_word_byte)
+        })
+}
+
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
     haystack
         .to_ascii_lowercase()
         .contains(&needle.to_ascii_lowercase())
+}
+
+fn ends_with_ascii_case_insensitive(value: &str, suffix: &str) -> bool {
+    value
+        .as_bytes()
+        .get(value.len().saturating_sub(suffix.len())..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix.as_bytes()))
 }
 
 fn is_call_to(line: &str, fragment: &str) -> bool {
@@ -338,22 +366,13 @@ fn dispatch_audit(root: &Path, assembly_argument: Option<&str>) -> Result<()> {
         let atomic_rmw = caller
             .iter()
             .filter(|line| {
-                let opcode = line
-                    .trim_start()
-                    .split_ascii_whitespace()
-                    .next()
-                    .unwrap_or_default();
-                opcode.starts_with("xchg") || opcode.starts_with("cmpxchg")
+                contains_word_with_suffix(line, "xchg")
+                    || contains_word_with_suffix(line, "cmpxchg")
             })
             .count();
         let power_consume_rmw = caller
             .iter()
-            .filter(|line| {
-                line.trim_start()
-                    .split_ascii_whitespace()
-                    .next()
-                    .is_some_and(|opcode| opcode.starts_with("cmpxchg"))
-            })
+            .filter(|line| contains_word_with_suffix(line, "cmpxchg"))
             .count();
         println!(
             "normal precision caller: retained_helper_call_refs={helper_calls} prepared_sender_calls={sender_calls} atomic_rmw_instructions={atomic_rmw} power_consume_rmw_candidates={power_consume_rmw}"
@@ -665,27 +684,23 @@ fn modifier_guard_audit(root: &Path, sky_argument: &str, win32_argument: &str) -
     let query_range = find_unique_function_body(
         &sky_lines,
         |line| {
-            contains_ascii_case_insensitive(line, "modifier_guard26observe_modifier_keys_with")
-                && line.trim_end().ends_with(':')
+            ends_with_ascii_case_insensitive(line, "modifier_guard26observe_modifier_keys_with:")
         },
         "modifier_guard26observe_modifier_keys_with.*:$",
     )?;
     let admission_range = find_unique_function_body(
         &sky_lines,
         |line| {
-            contains_ascii_case_insensitive(
+            ends_with_ascii_case_insensitive(
                 line,
-                "admission37modifier_guard_and_final_revalidation",
-            ) && line.trim_end().ends_with(':')
+                "admission37modifier_guard_and_final_revalidation:",
+            )
         },
         "admission37modifier_guard_and_final_revalidation:$",
     )?;
     let prepared_range = find_unique_function_body(
         &sky_lines,
-        |line| {
-            contains_ascii_case_insensitive(line, "prepared30dispatch_prepared_normal_frame")
-                && line.trim_end().ends_with(':')
-        },
+        |line| ends_with_ascii_case_insensitive(line, "prepared30dispatch_prepared_normal_frame:"),
         "prepared30dispatch_prepared_normal_frame:$",
     )?;
     let authored_range = find_unique_function_body(
@@ -700,10 +715,7 @@ fn modifier_guard_audit(root: &Path, sky_argument: &str, win32_argument: &str) -
     )?;
     let win32_query_range = find_unique_function_body(
         &win32_lines,
-        |line| {
-            contains_ascii_case_insensitive(line, "physical21query_async_key_state:")
-                && line.trim_end().ends_with(':')
-        },
+        |line| ends_with_ascii_case_insensitive(line, "physical21query_async_key_state:"),
         "physical21query_async_key_state:$",
     )?;
     let query_body = body(&sky_lines, query_range);
@@ -984,6 +996,50 @@ mod tests {
         }
     }
 
+    fn modifier_guard_fixture() -> Vec<String> {
+        let mut sky = vec!["modifier_guard26observe_modifier_keys_with:".to_owned()];
+        append_modifier_queries(&mut sky);
+        sky.push(".seh_endproc".to_owned());
+        sky.push("admission37modifier_guard_and_final_revalidation:".to_owned());
+        append_modifier_queries(&mut sky);
+        sky.extend([
+            "  callq QpcClock3now".to_owned(),
+            "  callq final_control_precheck".to_owned(),
+            ".seh_endproc".to_owned(),
+            "prepared30dispatch_prepared_normal_frame:".to_owned(),
+            "  callq modifier_guard26observe_modifier_keys_with".to_owned(),
+            "  callq QpcClock3now".to_owned(),
+            "  callq final_control_precheck".to_owned(),
+            "  callq send_prepared_physical_packet_at_final_boundary".to_owned(),
+            ".seh_endproc".to_owned(),
+            ".seh_proc _fixture_authored24dispatch_authored_packet".to_owned(),
+        ]);
+        append_modifier_queries(&mut sky);
+        sky.extend([
+            "  callq QpcClock3now".to_owned(),
+            "  callq final_control_precheck".to_owned(),
+            ".seh_endproc".to_owned(),
+        ]);
+        sky
+    }
+
+    fn modifier_guard_paths(directory: &TempAssemblyRoot, sky: &[String]) -> (PathBuf, PathBuf) {
+        let sky_path = directory.write("sky_player.s", &sky.join("\n"));
+        let win32_path = directory.write(
+            "sky_dispatch_win32.s",
+            "physical21query_async_key_state:\n  callq *__imp_GetAsyncKeyState\n.seh_endproc\n",
+        );
+        (sky_path, win32_path)
+    }
+
+    fn modifier_guard_result(sky_path: &Path, win32_path: &Path) -> Result<()> {
+        modifier_guard_audit(
+            crate::repo::root().as_path(),
+            &sky_path.to_string_lossy(),
+            &win32_path.to_string_lossy(),
+        )
+    }
+
     fn prepared_fixture(sender_count: usize) -> String {
         let mut assembly = vec![
             "dispatch_prepared_normal_frame:".to_owned(),
@@ -1034,6 +1090,36 @@ mod tests {
         );
         let incomplete = lines("label:\n  callq foo");
         assert!(find_function_body(&incomplete, |line| line == "label:", "label").is_err());
+    }
+
+    #[test]
+    fn assembly_word_prefix_counts_match_the_original_regex_for_lock_prefixed_mnemonics() {
+        assert!(contains_word_with_suffix(
+            "lock cmpxchgq %rax, (%rbx)",
+            "cmpxchg"
+        ));
+        assert!(contains_word_with_suffix("xchgb %al, (%rcx)", "xchg"));
+        assert!(!contains_word_with_suffix(
+            "callq helper_cmpxchgq",
+            "cmpxchg"
+        ));
+        assert!(!contains_word_with_suffix("callq helperxchg", "xchg"));
+    }
+
+    #[test]
+    fn modifier_symbol_suffix_matching_preserves_the_powershell_regex_contract() {
+        assert!(ends_with_ascii_case_insensitive(
+            "_ZN12rust_mangled_ADMISSION37MODIFIER_GUARD_AND_FINAL_REVALIDATION:",
+            "admission37modifier_guard_and_final_revalidation:"
+        ));
+        assert!(!ends_with_ascii_case_insensitive(
+            "admission37modifier_guard_and_final_revalidation_extra:",
+            "admission37modifier_guard_and_final_revalidation:"
+        ));
+        assert!(!ends_with_ascii_case_insensitive(
+            "admission37modifier_guard_and_final_revalidation: ",
+            "admission37modifier_guard_and_final_revalidation:"
+        ));
     }
 
     #[test]
@@ -1122,52 +1208,53 @@ mod tests {
     #[test]
     fn modifier_guard_audit_accepts_the_expected_source_and_optimized_call_shape() {
         let directory = TempAssemblyRoot::new("sky-xtask-modifier-audit-shape");
-        let mut sky = vec!["modifier_guard26observe_modifier_keys_with:".to_owned()];
-        append_modifier_queries(&mut sky);
-        sky.push(".seh_endproc".to_owned());
-        sky.push("admission37modifier_guard_and_final_revalidation:".to_owned());
-        append_modifier_queries(&mut sky);
-        sky.extend([
-            "  callq QpcClock3now".to_owned(),
-            "  callq final_control_precheck".to_owned(),
-            ".seh_endproc".to_owned(),
-            "prepared30dispatch_prepared_normal_frame:".to_owned(),
-            "  callq modifier_guard26observe_modifier_keys_with".to_owned(),
-            "  callq QpcClock3now".to_owned(),
-            "  callq final_control_precheck".to_owned(),
-            "  callq send_prepared_physical_packet_at_final_boundary".to_owned(),
-            ".seh_endproc".to_owned(),
-            ".seh_proc _fixture_authored24dispatch_authored_packet".to_owned(),
-        ]);
-        append_modifier_queries(&mut sky);
-        sky.extend([
-            "  callq QpcClock3now".to_owned(),
-            "  callq final_control_precheck".to_owned(),
-            ".seh_endproc".to_owned(),
-        ]);
-        let sky_path = directory.write("sky_player.s", &sky.join("\n"));
-        let win32_path = directory.write(
-            "sky_dispatch_win32.s",
-            "physical21query_async_key_state:\n  callq *__imp_GetAsyncKeyState\n.seh_endproc\n",
-        );
-        assert!(
-            modifier_guard_audit(
-                crate::repo::root().as_path(),
-                &sky_path.to_string_lossy(),
-                &win32_path.to_string_lossy(),
-            )
-            .is_ok()
-        );
+        let sky = modifier_guard_fixture();
+        let (sky_path, win32_path) = modifier_guard_paths(&directory, &sky);
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_ok());
 
         let reordered = sky.join("\n").replace("$91", "$92");
         fs::write(&sky_path, reordered).unwrap();
-        assert!(
-            modifier_guard_audit(
-                crate::repo::root().as_path(),
-                &sky_path.to_string_lossy(),
-                &win32_path.to_string_lossy(),
-            )
-            .is_err()
-        );
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+    }
+
+    #[test]
+    fn modifier_guard_audit_rejects_fake_and_duplicate_admission_or_prepared_labels() {
+        let directory = TempAssemblyRoot::new("sky-xtask-modifier-audit-label-identity");
+        let canonical = modifier_guard_fixture();
+        let (sky_path, win32_path) = modifier_guard_paths(&directory, &canonical);
+
+        let mut fake_admission = canonical.clone();
+        *fake_admission
+            .iter_mut()
+            .find(|line| line.as_str() == "admission37modifier_guard_and_final_revalidation:")
+            .unwrap() = "admission37modifier_guard_and_final_revalidation_extra:".to_owned();
+        fs::write(&sky_path, fake_admission.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+
+        let mut fake_prepared = canonical.clone();
+        *fake_prepared
+            .iter_mut()
+            .find(|line| line.as_str() == "prepared30dispatch_prepared_normal_frame:")
+            .unwrap() = "prepared30dispatch_prepared_normal_frame_fake:".to_owned();
+        fs::write(&sky_path, fake_prepared.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+
+        let mut duplicate_admission = canonical.clone();
+        duplicate_admission.extend([
+            "admission37modifier_guard_and_final_revalidation:".to_owned(),
+            "  nop".to_owned(),
+            ".seh_endproc".to_owned(),
+        ]);
+        fs::write(&sky_path, duplicate_admission.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+
+        let mut duplicate_prepared = canonical;
+        duplicate_prepared.extend([
+            "prepared30dispatch_prepared_normal_frame:".to_owned(),
+            "  nop".to_owned(),
+            ".seh_endproc".to_owned(),
+        ]);
+        fs::write(&sky_path, duplicate_prepared.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
     }
 }
