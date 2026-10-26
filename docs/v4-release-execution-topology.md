@@ -147,6 +147,9 @@ The enforced production workflow list contains exactly:
 
 - `.github/workflows/release-v4.yml` — canonical dispatch-only release transaction.
 
+A separate manual, protected metadata-only operator workflow cannot build, sign, create or edit a
+release, upload assets, or change a tag. It does not add a production installer build path.
+
 The workflow jobs are `prepare`, `build_unsigned`, `sign_qualify`, `attest`, `metadata_probe`,
 `publish`, `metadata_promote`, and `final_verify`. Only `sign_qualify` may reference the updater
 signing secrets. Only `attest` receives `id-token: write` and `attestations: write`; only `publish`
@@ -167,6 +170,47 @@ The run remains human controlled: there is no automatic publish on pull request,
 Pull-request, fork, and general CI jobs stay on ordinary unprivileged runners and never map either
 updater signing secret into their workflow definitions.
 
+Every Bun subprocess in the protected signing phase, including the Tauri CLI version probe, local
+private-key challenge, and final installer signer, starts with an environment allowlist. Rust clears
+the inherited child environment and forwards only the Windows runtime values, plus the temporary
+key path and passphrase when the Tauri signer needs them. Git identity subprocesses use the same
+runtime-only policy. A spawned-child regression records the actual environment and rejects
+synthetic updater secrets, GitHub tokens, and unrelated secrets. The signing executable is built and
+source/hash checked before updater secrets are injected; the secret-bearing step executes that
+binary directly without Cargo. This narrows child exposure while the protected hosted job and its
+ephemeral VM remain the trust boundary.
+
+### Metadata Only Recovery
+
+Use recovery only after an immutable stable release is valid and the normal transaction stopped
+after publication. First dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with
+`operation=plan`, the exact `v4.x.y` tag, and `confirm=false`. The read-only job validates the
+transaction marker and successful original release workflow run, GitHub Latest, exact immutable
+release ID/source/tag, the exact installer/signature inventory and API/local SHA-256 values, the
+production updater signature and signed version, installer/signature build attestations, the SPDX
+SBOM attestation, current stable/beta metadata, and the public stable endpoint. It emits a JSON plan
+artifact and SHA-256; the artifact contains the proposed metadata bytes for operator review.
+
+To apply, dispatch the same workflow with `operation=apply`, the same tag, the plan run ID, the
+reviewed plan SHA-256, and `confirm=true`. The `v4-production-release` Environment approval occurs
+before the apply job runs. The job builds and hashes the Rust recovery executable before minting a
+separate repository-scoped App token with `contents: write`. Rust then rebuilds the plan from current
+GitHub state and requires the reviewed hash to match. It checks GitHub Latest, stable and beta state
+again at the write boundary, and issues at most one Contents API `PUT` for
+`channels/stable/latest.json`. It then verifies exact readback, unchanged beta state and GitHub
+Latest, and raw stable endpoint convergence. Unknown outcomes are reconciled by read-only GETs and
+never retried as a second mutation. No updater private key or passphrase is used.
+
+The recovery operation is not a second release lifecycle. It shares the Rust transport, metadata
+schema, signature verifier, provenance checks, and monotonic version policy; it has no release
+state file or release asset operation. A stale plan, Latest conflict, non-monotonic candidate,
+unknown release state, invalid signature, missing attestation, changed asset, or endpoint mismatch
+stops before a write. Beta remains unchanged and beta auto-update remains disabled. Do not roll back
+a published release, tag, or channel version. Before immutable publication, use the normal owned
+draft cleanup/re-dispatch path. After publication, either use this exact metadata-only recovery for
+a valid immutable release or issue a new, greater stable SemVer after qualification; incident
+containment outside these paths requires its own authorization.
+
 ### 2.5 Credential Manager Is Not a Production Release Requirement
 
 The production hosted path does not use Windows Credential Manager, a runner-local key path, a
@@ -178,6 +222,27 @@ The Rust credential CLI and Windows Credential Manager implementation remain in 
 independent local maintenance consumers. Their existence does not grant the production release
 workflow a credential-manager path or alter the protected environment secret boundary. The local
 credential tools are not removed in this wave.
+
+### 2.6 Deployed v4.2.0 Compatibility Evidence
+
+Read-only verification of the current public release found immutable release ID `419433937`, tag
+`v4.2.0`, source SHA `9b4baddea9639e5c00212234c26a6b133657240d`, and exactly two public assets. The
+installer is 4,459,233 bytes with SHA-256
+`a6048bd8dc8691798ed2ec7078dd66abe57a5cedfd4d086eedb10cd185751105`; its 448-byte `.sig` has
+SHA-256 `2f1603eb7448339a4a3bd43ec892298a1d82421a38d5bf72ceb0bc4984d678ce`. Both local hashes
+matched the GitHub asset digests. Rust verified the downloaded installer signature for version
+`4.2.0` using public Key ID `19AABD2E7838818C`. Stable metadata was read on 2026-10-26, names
+version `4.2.0` and `pub_date=2026-10-21T10:39:42Z`, and its signature field exactly matches the
+public `.sig` asset. Stable metadata remains at the canonical
+`channels/stable/latest.json` endpoint with a valid `windows-x86_64` record and immutable release
+URL; its downloaded JSON SHA-256 is
+`cff4eb46c40a39ae912c53ba9f9264bbf0d1b0d008ced17025aee2868cfd6477`. The source still declares
+identifier `io.github.pumni.skyautoplayer`, NSIS x64/current-user installation, the same stable
+endpoint, and the existing compiled public key. A same-version `4.2.0 -> 4.2.0` metadata promotion
+is rejected by the strict monotonic validator. The existing Windows updater fixture exercises
+`4.1.3 -> 4.2.0`; a `4.2.0 -> newer` Windows fixture is not possible on this source version without
+creating an unauthorized next-version candidate. Synthetic-key regressions separately reject
+wrong-root, wrong-version, and tampered-byte cases.
 
 ---
 

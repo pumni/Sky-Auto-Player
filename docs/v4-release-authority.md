@@ -25,8 +25,10 @@ beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata
 
 The frontend cannot provide an endpoint, key, URL, or downgrade policy. The `release-metadata`
 branch is mutable deployment state separate from immutable GitHub Release assets. Its channel files
-are created only by a successful qualified promotion; bootstrap must not create fabricated
-`latest.json` files. If a channel file is missing or invalid, updater checks fail closed.
+are created or advanced by a successful qualified promotion, or by the separately protected
+metadata-only recovery procedure for an already immutable, fully verified stable release; bootstrap
+must not create fabricated `latest.json` files. If a channel file is missing or invalid, updater
+checks fail closed.
 Branch ruleset/protection and the approved workflow/maintainer promotion path ensure only qualified
 releases update these endpoints.
 
@@ -153,8 +155,10 @@ The ordering is security-critical:
 8. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
    `raw.githubusercontent.com` endpoint used by the client.
 
-Published release assets and tags are never repaired in place. A failed unpublished draft is
-automatically cleaned up or recreated; a published fix requires a greater SemVer release.
+Published release assets, tags, and release records are never repaired in place. A failed
+unpublished draft is automatically cleaned up or recreated. A valid immutable stable release may
+advance only `channels/stable/latest.json` through the explicit metadata-only recovery procedure
+below. A defective published artifact still requires a greater SemVer release.
 
 ## Qualification and trust properties
 
@@ -242,7 +246,9 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
   - **NEVER** delete, recreate, or replace the published git tag.
   - **NEVER** delete, edit, or replace the published GitHub release.
   - **NEVER** dispatch another release with the same version number.
-  - **NEVER** manually promote `release-metadata` without an explicitly authorized, reviewed recovery procedure.
+  - **NEVER** manually edit `release-metadata` or invoke the normal promotion command for incident
+    recovery. The only exception is the explicit metadata-only workflow documented below, with an
+    operator-reviewed plan and protected Environment approval.
 - **Corrective Action**:
   - The default corrective release target after engineering acceptance is a new SemVer release (`v4.1.2` for the prior v4.1.1 incident; `v4.1.3` for the current v4.1.2 incident).
   - Fix the underlying defect on a corrective branch, qualify locally, and dispatch a fresh release for the new SemVer.
@@ -261,6 +267,40 @@ Under coordinator decision for program #322 / issue #323:
 - **No immediate corrective release**: A corrective release (e.g. `v4.1.1`) is not dispatched at this time solely to reconcile metadata while v3 retirement and update UX standardization remain in flight.
 - **Immutable release preserved**: `v4.1.0` and its assets remain an immutable published incident record.
 - **Reconciliation deferred to final program release**: Stable metadata remains at `4.0.1` until the final stable release of program #322. That final release will execute through the canonical `release-v4.yml` pipeline, simultaneously becoming GitHub Latest and advancing stable metadata in a single transaction.
+
+### Metadata-only recovery for a valid immutable stable release
+
+`.github/workflows/v4-metadata-recovery.yml` supports one narrowly scoped exception when normal
+publication completed but stable metadata promotion did not. The operator first dispatches a
+read-only plan from `main`, reviews its artifact and plan SHA-256, then dispatches apply with that
+plan run ID/hash and explicit confirmation. The protected `v4-production-release` Environment
+approval is required before the write-capable App token is minted.
+
+Rust revalidates the exact release ID, tag, transaction source SHA, successful original workflow run,
+Latest identity, exact public asset inventory and digests, production signature and version-bound
+trusted comment, installer/signature provenance, SPDX SBOM provenance, stable/beta metadata, and
+public stable endpoint. Apply recomputes the operator-reviewed plan and checks state again at the
+write boundary. It can perform at most one Contents API write for `channels/stable/latest.json`;
+beta metadata, releases, assets and tags are never changed. Readback, GitHub Latest, beta
+immutability and public endpoint convergence must all pass. Unknown write outcomes are reconciled
+with GET only and are never retried as a second mutation.
+
+This recovery is for advancing the pointer to an already valid immutable release. It does not
+support version rollback, replacing a defective installer, repairing an asset or retagging. If a
+release is not fully valid, stop and use the approved incident containment procedure or prepare a
+new greater SemVer release after qualification. Beta remains unavailable until separately
+qualified and promoted through the normal beta release path.
+
+Operational sequence:
+
+1. Dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with `operation=plan`, the exact
+   stable tag, and `confirm=false`.
+2. Review the plan artifact and recorded `plan_sha256`. Stop if any release, Latest, digest,
+   signature, provenance, channel, or endpoint fact is unexpected.
+3. Dispatch `operation=apply` with the same tag, the plan run ID and SHA-256, and `confirm=true`.
+   Complete the protected Environment approval.
+4. Verify the successful run summary and final stable endpoint. If the run reports an unknown
+   outcome, perform read-only inspection and do not repeat the write until the exact state is known.
 
 ### Diagnostic tooling
 

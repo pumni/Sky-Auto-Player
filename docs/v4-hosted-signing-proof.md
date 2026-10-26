@@ -29,12 +29,13 @@ standing in for a real Tauri signature. The current PR candidate job generates a
 key and bundles the updater signature in the same Tauri build; the hosted proof added here tests the
 unsigned-build then standalone-sign route separately.
 
-`desktop/src-tauri/tauri.conf.json` currently selects NSIS, current-user installation, updater
-artifact generation during bundling, the deployed v4 public root, and the intentional unsigned
-Authenticode command. `release-v4.yml` and `rehearse-v4.yml` both remain on the dedicated
-self-hosted Windows runner. `rust/xtask/src/checks/release_runner.rs` statically enforces that
-production runner and release workflow boundary. Wave A adds a separate static contract for the
-hosted test-key workflow and does not relax that production guard.
+At the Wave A source snapshot, `desktop/src-tauri/tauri.conf.json` selected NSIS, current-user
+installation, updater artifact generation during bundling, the deployed v4 public root, and the
+intentional unsigned Authenticode command. The release and rehearsal workflows still used a
+self-hosted Windows runner at that historical point. Wave B later replaced that production path
+with the protected GitHub-hosted eight-job workflow, and Wave C retired the obsolete runner-boundary
+PowerShell script. The current workflow and operator policy are defined in
+[`v4-release-execution-topology.md`](v4-release-execution-topology.md).
 
 ## Proof route
 
@@ -104,14 +105,14 @@ dispatch or alter the current v4.2.0 updater key.
 
 ## Runner-local and Credential Manager dependency ledger (Wave A baseline)
 
-These are active production dependencies observed at the Wave A source revision. Wave A leaves them
-in place so that a future hosted transaction can replace them coherently after review.
+These are production dependencies observed at the historical Wave A source revision. The later Wave
+B and Wave C implementation records below supersede the active-path statements in this ledger.
 
 | Dependency observed at the Wave A source revision | Source and consumer at that revision | Wave B plan recorded at Wave A |
 | --- | --- | --- |
-| Dedicated self-hosted Windows runner labels | `.github/workflows/release-v4.yml` job `release`; `.github/workflows/rehearse-v4.yml` job `qualification`; the allowlist in `rust/xtask/src/checks/release_runner.rs`; operator requirements in `docs/v4-release-execution-topology.md` | Replace only in the protected production workflow after environment restrictions and hosted source/ref guards are implemented. Keep the test-key proof on ordinary hosted Windows. |
+| Dedicated self-hosted Windows runner labels | `.github/workflows/release-v4.yml` job `release`; `.github/workflows/rehearse-v4.yml` job `qualification`; the allowlist in `rust/xtask/src/checks/release_runner.rs`; operator requirements in `docs/v4-release-execution-topology.md` | Historical Wave A baseline. Wave B moved production to GitHub-hosted jobs after adding main-only guards and protected environment controls. |
 | Runner-local `RUNNER_TEMP` release state | Both production workflows; `rust/xtask/src/release_v4.rs` state-root validation and cleanup | Keep bounded state outside the workspace. Revalidate path ownership and cleanup on GitHub-hosted runners. |
-| `V4_UPDATER_PRIVATE_KEY_PATH` and key outside workspace | Both production workflows; `scripts/verify_v4_release_runner.ps1`; `release_v4::build_candidate` in `rust/xtask/src/release_v4.rs` | Replace with a Rust-owned protected-environment secret adapter. Do not pass key contents in workflow arguments, logs, or artifacts. |
+| `V4_UPDATER_PRIVATE_KEY_PATH` and key outside workspace | Both production workflows; `scripts/verify_v4_release_runner.ps1`; `release_v4::build_candidate` in `rust/xtask/src/release_v4.rs` | Historical Wave A baseline. Wave B replaced the path with a Rust-owned protected-environment secret adapter; Wave C removed the unused PowerShell runner check. |
 | Windows Credential Manager passphrase transport | `rust/xtask/src/credential_cli.rs`; `rust/crates/sky_windows_security/src/credential.rs` and `src/win32.rs`; `SkyAutoPlayer/V4UpdaterProduction` target | Remove from the production hosted path after a scoped adapter is proven. Inventory local maintenance users before retiring the credential CLI. |
 | Operator provisioning and verification adapters | `scripts/set_v4_updater_session_credential.ps1`, `scripts/remove_v4_updater_session_credential.ps1`, `scripts/verify_v4_updater_private_key.ps1`, and `scripts/v4_updater_credential_broker.ps1`; current instructions in `docs/v4-updater-key-custody.md` | Retain any independently used local maintenance tools; update production runbooks when protected environment custody is implemented. |
 
@@ -145,3 +146,37 @@ This code review and its tests do not inspect or use GitHub Environment secret v
 do not dispatch the production workflow or mutate a release, tag, stable/beta metadata, or a
 published artifact. A maintainer still needs to verify the live Environment's main-only deployment
 restriction and human approval policy before cutover; workflow YAML cannot prove those settings.
+
+## Wave C hardening and operator recovery
+
+The protected signer now isolates every Bun child, including the CLI version check, local private-key
+challenge, and installer signing process. Rust clears inherited child environment variables, keeps
+only the bounded Windows runtime allowlist, and adds the temporary key path/passphrase only where
+the signer requires them. Git identity subprocesses use the runtime-only environment too. A spawned
+child test captures its actual environment and proves synthetic signing secrets, GitHub tokens, and
+unrelated secrets are absent. The release-mode Rust executable is built and source/hash checked
+before updater secrets are injected, then invoked directly with no Cargo call in the secret-bearing
+step.
+
+The deployed public v4.2.0 installer and signature were downloaded read-only. Their local SHA-256
+values matched GitHub's immutable asset digests, and the Rust verifier accepted the exact installer
+for version `4.2.0` under Key ID `19AABD2E7838818C`. The stable metadata JSON was downloaded and
+validated against the canonical endpoint and product contract. This evidence does not stage the
+published v4.2.0 binary on a test channel or claim a `4.2.0 -> newer` Windows update: the current
+source version is 4.2.0, and the updater fixture requires a strictly greater candidate version.
+
+The new `.github/workflows/v4-metadata-recovery.yml` supports a reviewed read-only plan and a
+separately approved apply for one stable metadata file after a valid immutable release. Rust binds
+the plan to the original successful workflow run, release identity, exact asset bytes, public
+signature and version, attestations, Latest, stable/beta metadata, and raw endpoint. Apply rechecks
+the plan and write boundary and can issue one stable Contents API update. It does not use updater
+signing secrets or touch releases, assets, tags, or beta metadata. Recovery does not roll back
+versions; defective releases require a qualified greater SemVer or the incident containment process.
+
+Consumer inventory confirmed the former rehearsal workflow was already retired and the unused
+`scripts/verify_v4_release_runner.ps1` had no active caller, so that obsolete dedicated-runner guard
+was removed. The exact Defender scan and local Credential Manager maintenance tools remain because
+they still have active consumers. CI now runs pinned actionlint v1.7.12 from a pinned Go toolchain.
+Wave C changes and tests do not inspect GitHub Environment values/settings, dispatch production
+workflows, or mutate release/tag/metadata state. The production 8-job pipeline still requires a
+separately authorized main-branch dispatch and operator observation before cutover.

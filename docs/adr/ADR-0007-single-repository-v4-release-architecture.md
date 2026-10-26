@@ -42,8 +42,12 @@ https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channel
 ```
 
 The branch contains mutable stable/beta channel pointers; GitHub Release assets and tags remain
-immutable. Channel files are created only by a qualified post-publication promotion, and promotion
-is strictly monotonic by SemVer. Bootstrap does not fabricate `latest.json` files.
+immutable. Channel files are created by a qualified post-publication promotion, and normal
+promotion is strictly monotonic by SemVer. Bootstrap does not fabricate `latest.json` files. A
+separate, protected metadata-only recovery may advance the stable pointer to an already immutable
+release after independently revalidating its release identity, assets, production signature,
+attestations, Latest state, metadata monotonicity, and public endpoint. Recovery cannot change a
+release, asset, tag, or beta pointer and cannot roll a channel version backward.
 
 ## Release transaction
 

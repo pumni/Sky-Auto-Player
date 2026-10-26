@@ -10,6 +10,8 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod recovery;
+
 pub const REPOSITORY: &str = "pumni/Sky-Auto-Player";
 const RELEASE_WORKFLOW_REF: &str =
     "pumni/Sky-Auto-Player/.github/workflows/release-v4.yml@refs/heads/main";
@@ -659,6 +661,12 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     }
     if command == "doctor" {
         return doctor(root, &args[1..]);
+    }
+    if matches!(
+        command,
+        "metadata-recovery-plan" | "metadata-recovery-apply"
+    ) {
+        return recovery::run(root, command, &args[1..]);
     }
     let mut state_root = None;
     let mut workflow_sha = None;
@@ -5227,6 +5235,7 @@ struct FakeTransport {
     fail_delete: bool,
     post_created_then_timeout: bool,
     fail_metadata_put_after_write: bool,
+    fail_metadata_put_without_write: bool,
     bad_metadata_ref: bool,
     bad_metadata_bootstrap: bool,
     bad_metadata_target: bool,
@@ -5316,6 +5325,13 @@ impl Transport for FakeTransport {
                     }));
                 }
                 "PUT" => {
+                    if self.fail_metadata_put_without_write {
+                        self.fail_metadata_put_without_write = false;
+                        return Err(Box::new(HttpFailure {
+                            status: Some(504),
+                            detail: "injected metadata write timeout before commit".to_owned(),
+                        }));
+                    }
                     let payload = body.ok_or("fake metadata PUT body missing")?;
                     let encoded = payload["content"]
                         .as_str()

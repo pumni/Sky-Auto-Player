@@ -19,11 +19,11 @@ pub fn root() -> PathBuf {
 }
 
 pub fn git_head(root: &Path, require_clean: bool) -> Result<String> {
-    let head = process::capture_text("git", &["rev-parse", "--verify", "HEAD"], root, &[])?;
+    let head = process::capture_text_runtime_only("git", &["rev-parse", "--verify", "HEAD"], root)?;
     if !head.chars().all(|c| c.is_ascii_hexdigit()) || head.len() != 40 {
         return Err(format!("git HEAD is not a full commit SHA: {head:?}").into());
     }
-    let status = process::capture_text("git", &["status", "--porcelain"], root, &[])?;
+    let status = process::capture_text_runtime_only("git", &["status", "--porcelain"], root)?;
     if require_clean && !status.is_empty() {
         return Err(format!("release command requires a clean worktree: {status}").into());
     }
@@ -47,7 +47,8 @@ pub fn project_version(root: &Path) -> Result<String> {
 /// manifest field is deterministic for a given source commit, while retaining
 /// the meaning of `build_time_utc` as a real repository timestamp.
 pub fn commit_time_utc(root: &Path) -> Result<String> {
-    let value = process::capture_text("git", &["show", "-s", "--format=%ct", "HEAD"], root, &[])?;
+    let value =
+        process::capture_text_runtime_only("git", &["show", "-s", "--format=%ct", "HEAD"], root)?;
     let seconds = value.parse::<i64>().map_err(|error| {
         format!("git commit timestamp is not a Unix timestamp: {value:?}: {error}")
     })?;

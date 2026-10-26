@@ -6,6 +6,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 const APPROVED_RELEASE_WORKFLOW: &str = ".github/workflows/release-v4.yml";
+const APPROVED_RECOVERY_WORKFLOW: &str = ".github/workflows/v4-metadata-recovery.yml";
 const PROTECTED_UPDATER_SECRETS: &[&str] = &[
     "V4_TAURI_UPDATER_PRIVATE_KEY",
     "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
@@ -32,6 +33,18 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
     const FULL_STATIC_CHECK: &str = "cargo xtask check static --skip-supply-chain";
     if static_job.matches(FULL_STATIC_CHECK).count() != 1 || release.contains(FULL_STATIC_CHECK) {
         return Err("the independent static check must run exactly once".to_owned());
+    }
+    for marker in [
+        "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00",
+        "go-version: 1.25.0",
+        "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        "actionlint\" -color",
+    ] {
+        if !static_job.contains(marker) {
+            return Err(format!(
+                "CI static job is missing pinned workflow validation `{marker}`"
+            ));
+        }
     }
     if !release.lines().any(|line| line.trim() == "needs: changes")
         || release
@@ -266,6 +279,9 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
 }
 
 pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> Result<()> {
+    if relative == APPROVED_RECOVERY_WORKFLOW {
+        return validate_metadata_recovery_workflow(source);
+    }
     if relative != APPROVED_RELEASE_WORKFLOW {
         if source.lines().any(|line| {
             let line = line.trim_start();
@@ -339,6 +355,145 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
     Ok(())
 }
 
+fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
+    const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
+    const APP_TOKEN: &str = "steps.metadata-app-token.outputs.token";
+    if !workflow_declares_only_dispatch(source)
+        || source.contains("self-hosted")
+        || source.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || source.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD")
+        || !source.contains("test \"$REF\" = \"refs/heads/main\"")
+        || !source.contains("environment: v4-production-release")
+        || !source.contains("--confirm-metadata-only-recovery")
+        || !source.contains("--plan-sha256")
+        || source.contains("gh release create")
+        || source.contains("git tag")
+        || source.contains("gh release upload")
+    {
+        return Err(
+            "metadata recovery workflow must be manual, main-only, protected, and metadata-only"
+                .into(),
+        );
+    }
+    if source.matches(APP_PRIVATE_KEY).count() != 1
+        || source.matches(APP_TOKEN).count() != 1
+        || !source
+            .contains("actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510")
+        || !source.contains("permission-contents: write")
+    {
+        return Err(
+            "metadata recovery must mint exactly one contents-scoped App token for apply".into(),
+        );
+    }
+    let jobs = workflow_job_blocks(source);
+    let observed = jobs.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+    if observed != ["validate", "plan", "apply"] {
+        return Err(format!(
+            "metadata recovery workflow has an unexpected job graph: {observed:?}"
+        )
+        .into());
+    }
+    let job = |id: &str| {
+        jobs.iter()
+            .find(|(job_id, _)| job_id == id)
+            .map(|(_, body)| body.as_str())
+            .ok_or_else(|| format!("metadata recovery workflow is missing job {id}"))
+    };
+    let plan = job("plan")?;
+    let apply = job("apply")?;
+    if !plan.contains("if: inputs.operation == 'plan'")
+        || !plan.contains("contents: read")
+        || !plan.contains("attestations: read")
+        || plan.contains(APP_PRIVATE_KEY)
+        || plan.contains(APP_TOKEN)
+        || !plan.contains("metadata-recovery-plan")
+    {
+        return Err("metadata recovery plan must remain read-only and contain no App token".into());
+    }
+    if !apply.contains("if: inputs.operation == 'apply' && inputs.confirm")
+        || !apply.contains("environment: v4-production-release")
+        || !apply.contains("actions: read")
+        || !apply.contains("attestations: read")
+        || !apply.contains("contents: read")
+        || apply.lines().any(|line| line.trim() == "contents: write")
+    {
+        return Err("metadata recovery apply must require explicit confirmation and protected read-only Actions permissions".into());
+    }
+    let steps = workflow_step_blocks(apply);
+    let step_position = |name: &str| {
+        steps
+            .iter()
+            .position(|(step_name, _)| step_name == name)
+            .ok_or_else(|| format!("metadata recovery is missing step: {name}"))
+    };
+    let download = step_position("Download operator-reviewed plan artifact")?;
+    let bind = step_position("Bind downloaded plan artifact to operator-reviewed hash")?;
+    let build = steps
+        .iter()
+        .position(|(name, _)| name == "Build Rust metadata recovery control before App token")
+        .ok_or(
+            "metadata recovery apply must build its Rust executable before minting the App token",
+        )?;
+    let verify_control =
+        step_position("Verify prebuilt recovery executable before App token mint")?;
+    let mint = step_position("Mint contents-scoped metadata recovery App token")?;
+    let execute = steps
+        .iter()
+        .find(|(name, _)| {
+            name == "Revalidate and apply only stable metadata with prebuilt Rust control"
+        })
+        .map(|(_, body)| body.as_str())
+        .ok_or("metadata recovery executable invocation is missing")?;
+    if download >= bind
+        || bind >= mint
+        || build >= verify_control
+        || verify_control >= mint
+        || !steps[download].1.contains("actions/download-artifact@")
+        || !steps[download]
+            .1
+            .contains("run-id: ${{ inputs.plan_run_id }}")
+        || !steps[bind].1.contains("sha256sum")
+        || !steps[bind].1.contains("PLAN_SHA256")
+        || !steps[bind]
+            .1
+            .contains("test \"$actual\" = \"${PLAN_SHA256,,}\"")
+        || !steps[bind].1.contains(".tag")
+        || !steps[bind].1.contains(".action")
+        || !steps[bind].1.contains("update_stable")
+        || !steps[build]
+            .1
+            .contains("cargo build --locked --manifest-path rust/xtask/Cargo.toml --release")
+        || !steps[verify_control].1.contains("sha256sum")
+        || !steps[verify_control].1.contains("source_sha=")
+        || !steps[verify_control].1.contains("control_sha=")
+        || !execute.contains("rust/target/release/xtask")
+        || !execute.contains("sha256sum")
+        || execute.to_ascii_lowercase().contains("cargo")
+        || !execute.contains(APP_TOKEN)
+        || !execute.contains("metadata-recovery-apply")
+    {
+        return Err("metadata recovery must verify and invoke a prebuilt executable without Cargo after App token mint".into());
+    }
+    for (name, body) in &steps {
+        if name != "Mint contents-scoped metadata recovery App token"
+            && body.contains(APP_PRIVATE_KEY)
+        {
+            return Err(
+                format!("metadata recovery App private key escaped token mint: {name}").into(),
+            );
+        }
+        if name != "Revalidate and apply only stable metadata with prebuilt Rust control"
+            && body.contains(APP_TOKEN)
+        {
+            return Err(format!(
+                "metadata recovery App token escaped the Rust apply process: {name}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn validate_precompiled_signer(signer: &str) -> Result<()> {
     const BUILD_STEP: &str = "Build the pinned Rust release control executable before secrets";
     const VERIFY_STEP: &str = "Verify prebuilt control executable identity before secrets";
@@ -390,6 +545,8 @@ pub(super) fn release_runner_contract(root: &Path) -> Result<()> {
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     let release = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?;
     validate_metadata_app_token_scope(&release)?;
+    let recovery = fs::read_to_string(root.join(APPROVED_RECOVERY_WORKFLOW))?;
+    validate_metadata_recovery_workflow(&recovery)?;
 
     let workflows_root = root.join(".github/workflows");
     let mut observed = BTreeSet::new();
@@ -414,15 +571,19 @@ pub(super) fn release_runner_contract(root: &Path) -> Result<()> {
             .replace('\\', "/");
         let source = fs::read_to_string(entry.path())?;
         validate_release_runner_workflow(&relative, &source)?;
-        if relative == APPROVED_RELEASE_WORKFLOW {
+        if matches!(
+            relative.as_str(),
+            APPROVED_RELEASE_WORKFLOW | APPROVED_RECOVERY_WORKFLOW
+        ) {
             observed.insert(relative);
         }
     }
-    if !observed.contains(APPROVED_RELEASE_WORKFLOW) {
-        return Err(format!(
-            "canonical production workflow is missing: {APPROVED_RELEASE_WORKFLOW}"
-        )
-        .into());
+    for required in [APPROVED_RELEASE_WORKFLOW, APPROVED_RECOVERY_WORKFLOW] {
+        if !observed.contains(required) {
+            return Err(
+                format!("required v4 release authority workflow is missing: {required}").into(),
+            );
+        }
     }
     release_runner_documentation_contract(root)?;
     println!("[xtask] v4 hosted release trust boundary: PASS");
@@ -457,6 +618,14 @@ fn release_runner_documentation_contract_source(documentation: &str) -> Result<(
             "documented production workflow list does not match the enforced workflow: documented={documented:?}, enforced={expected:?}"
         )
         .into());
+    }
+    let recovery_marker = format!("`{APPROVED_RECOVERY_WORKFLOW}`");
+    if !documentation.contains("Metadata Only Recovery")
+        || !documentation.contains(&recovery_marker)
+    {
+        return Err(
+            "metadata recovery workflow must appear once in the operator documentation".into(),
+        );
     }
     let workflow = APPROVED_RELEASE_WORKFLOW;
     let marker = format!("`{workflow}`");
@@ -541,6 +710,37 @@ mod tests {
     }
 
     #[test]
+    fn metadata_recovery_contract_rejects_secret_or_cargo_after_token_mint() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join(APPROVED_RECOVERY_WORKFLOW)).unwrap();
+        validate_metadata_recovery_workflow(&source).unwrap();
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
+                "\"$control\" release-v4 metadata-recovery-apply",
+                "cargo xtask release-v4 metadata-recovery-apply"
+            ))
+            .is_err()
+        );
+        assert!(validate_metadata_recovery_workflow(&source.replace(
+            "      - name: Mint contents-scoped metadata recovery App token",
+            "      - name: Mint contents-scoped metadata recovery App token\n        env:\n          LEAK: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}"
+        )).is_err());
+        assert!(
+            validate_metadata_recovery_workflow(
+                &source.replace("--confirm-metadata-only-recovery", "--publish-release")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
+                "test \"$actual\" = \"${PLAN_SHA256,,}\"",
+                "test -n \"$actual\""
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn hosted_workflow_documentation_matches_the_single_release_path() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let documentation = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))
@@ -616,6 +816,11 @@ jobs:
     needs: changes
     steps:
       - run: cargo xtask check static --skip-supply-chain
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version: 1.25.0
+      - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: "$GOBIN/actionlint" -color
   release_contract:
     name: V4 release contract acceptance
     needs: changes
@@ -651,7 +856,8 @@ jobs:
         [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
       fi
 "#.to_owned();
-        assert!(v4_release_contract_ci_wiring(&source).is_ok());
+        v4_release_contract_ci_wiring(&source)
+            .expect("CI must run the pinned actionlint and Rust release contract gates");
         for marker in [
             "cargo xtask release-v4 self-test",
             "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests",

@@ -2,7 +2,6 @@
 
 use crate::{Result, ci_artifacts, hash, process, updater_trust};
 use std::env;
-use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,36 +14,6 @@ const MAX_PRIVATE_KEY_BYTES: usize = 32 * 1024;
 const MAX_PASSPHRASE_BYTES: usize = 4096;
 const SIGN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const TAURI_CLI_VERSION: &str = "tauri-cli 2.12.3";
-const SIGNER_CHILD_ENV_ALLOWLIST: &[&str] = &[
-    "PATH",
-    "PATHEXT",
-    "SYSTEMROOT",
-    "WINDIR",
-    "COMSPEC",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "PROGRAMDATA",
-    "HOME",
-];
-
-fn signer_child_environment_removals(
-    inherited_names: impl IntoIterator<Item = OsString>,
-) -> Vec<String> {
-    inherited_names
-        .into_iter()
-        .filter_map(|name| {
-            let name = name.to_string_lossy();
-            (!SIGNER_CHILD_ENV_ALLOWLIST
-                .iter()
-                .any(|allowed| name.eq_ignore_ascii_case(allowed)))
-            .then(|| name.into_owned())
-        })
-        .collect()
-}
-
 struct SigningSecrets {
     private_key: Zeroizing<String>,
     passphrase: Zeroizing<String>,
@@ -177,18 +146,11 @@ pub(crate) fn sign_installer(
             secrets.passphrase.to_string(),
         ),
     ];
-    let mut remove_env = signer_child_environment_removals(env::vars_os().map(|(name, _)| name));
-    remove_env.extend([
-        "TAURI_SIGNING_PRIVATE_KEY".to_owned(),
-        PRIVATE_KEY_SECRET.to_owned(),
-        PASSPHRASE_SECRET.to_owned(),
-    ]);
-    let output = process::capture_owned_timeout_filtered(
+    let output = process::capture_owned_timeout_runtime_only(
         std::ffi::OsStr::new("bun"),
         &args,
         &root.join("desktop"),
         &env_values,
-        &remove_env,
         SIGN_TIMEOUT,
     );
     for (name, value) in &mut env_values {
@@ -219,11 +181,10 @@ pub(crate) fn sign_installer(
 }
 
 fn verify_tauri_cli(root: &Path) -> Result<()> {
-    let output = process::capture_owned_timeout_filtered(
+    let output = process::capture_owned_timeout_runtime_only(
         std::ffi::OsStr::new("bun"),
         &["run".to_owned(), "tauri".to_owned(), "--version".to_owned()],
         &root.join("desktop"),
-        &[],
         &[],
         Duration::from_secs(60),
     )?;
@@ -383,42 +344,6 @@ mod tests {
                 "p".repeat(MAX_PASSPHRASE_BYTES + 1),
             )
             .is_err()
-        );
-    }
-
-    #[test]
-    fn signing_subprocess_receives_only_the_windows_runtime_environment() {
-        let inherited = [
-            "Path",
-            "PATHEXT",
-            "SystemRoot",
-            "WINDIR",
-            "COMSPEC",
-            "TEMP",
-            "TMP",
-            "USERPROFILE",
-            "APPDATA",
-            "LOCALAPPDATA",
-            "PROGRAMDATA",
-            "HOME",
-            "GITHUB_TOKEN",
-            "ACTIONS_RUNTIME_TOKEN",
-            "NPM_TOKEN",
-            "V4_TAURI_UPDATER_PRIVATE_KEY",
-            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
-            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-        ];
-        let removed = signer_child_environment_removals(inherited.iter().map(OsString::from));
-        assert_eq!(
-            removed,
-            [
-                "GITHUB_TOKEN",
-                "ACTIONS_RUNTIME_TOKEN",
-                "NPM_TOKEN",
-                "V4_TAURI_UPDATER_PRIVATE_KEY",
-                "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
-                "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-            ]
         );
     }
 

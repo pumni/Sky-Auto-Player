@@ -1,0 +1,225 @@
+name: V4 Metadata Only Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Read-only plan or protected metadata-only apply
+        type: choice
+        options: [plan, apply]
+        default: plan
+        required: true
+      tag:
+        description: Existing immutable stable release tag, for example v4.2.0
+        type: string
+        required: true
+      plan_run_id:
+        description: Successful plan workflow run ID (apply only)
+        type: string
+        required: false
+      plan_sha256:
+        description: SHA-256 printed by the reviewed plan (apply only)
+        type: string
+        required: false
+      confirm:
+        description: I approve changing stable/latest.json only
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+concurrency:
+  group: v4-metadata-recovery-${{ inputs.tag }}-${{ inputs.operation }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Validate operator dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require exact main repository and explicit apply evidence
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          OPERATION: ${{ inputs.operation }}
+          TAG: ${{ inputs.tag }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_NAME" = "workflow_dispatch"
+          test "$REPOSITORY" = "pumni/Sky-Auto-Player"
+          test "$REF" = "refs/heads/main"
+          [[ "$TAG" =~ ^v4\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$OPERATION" == "apply" ]]; then
+            test "$CONFIRM" = "true"
+            [[ "$PLAN_RUN_ID" =~ ^[0-9]{1,20}$ ]]
+            [[ "$PLAN_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
+          else
+            test "$OPERATION" = "plan"
+          fi
+
+  plan:
+    name: Verify immutable release and publish read-only plan
+    needs: validate
+    if: inputs.operation == 'plan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Checkout exact dispatch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Build Rust metadata recovery control before GitHub access
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+
+      - name: Verify public release and write read-only plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RECOVERY_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/v4-metadata-recovery-plan.json"
+          rust/target/release/xtask release-v4 metadata-recovery-plan --tag "$RECOVERY_TAG" --output "$plan"
+          plan_sha256="$(sha256sum "$plan" | cut -d ' ' -f 1)"
+          {
+            echo "## Metadata-only recovery plan"
+            echo "- Tag: `$RECOVERY_TAG`"
+            echo "- Plan SHA-256: `$plan_sha256`"
+            echo "- Action: `$(jq -r .action "$plan")`"
+            echo "- Release ID: `$(jq -r .release_id "$plan")`"
+            echo "- Source SHA: `$(jq -r .source_sha "$plan")`"
+            echo "- Candidate metadata SHA-256: `$(jq -r .candidate_metadata_sha256 "$plan")`"
+            echo "- The plan has no GitHub write capability. Review the complete artifact before any apply dispatch."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reviewed plan artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-metadata-recovery-plan
+          path: ${{ runner.temp }}/v4-metadata-recovery-plan.json
+          if-no-files-found: error
+          retention-days: 30
+
+  apply:
+    name: Protected metadata-only apply
+    needs: validate
+    if: inputs.operation == 'apply' && inputs.confirm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: v4-production-release
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    steps:
+      - name: Checkout exact dispatch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Build Rust metadata recovery control before App token
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+
+      - name: Download operator-reviewed plan artifact
+        uses: actions/download-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-metadata-recovery-plan
+          path: ${{ runner.temp }}/reviewed-metadata-plan
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.plan_run_id }}
+
+      - name: Bind downloaded plan artifact to operator-reviewed hash
+        env:
+          RECOVERY_TAG: ${{ inputs.tag }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/reviewed-metadata-plan/v4-metadata-recovery-plan.json"
+          test "$(jq -r .tag "$plan")" = "$RECOVERY_TAG"
+          actual="$(sha256sum "$plan" | cut -d ' ' -f 1)"
+          test "$actual" = "${PLAN_SHA256,,}"
+          test "$(jq -r .action "$plan")" = "update_stable"
+          echo "Reviewed plan artifact hash matches: $actual" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify prebuilt recovery executable before App token mint
+        id: release-control
+        run: |
+          set -euo pipefail
+          control=rust/target/release/xtask
+          test -f "$control"
+          source_sha="$(git rev-parse HEAD)"
+          control_sha="$(sha256sum "$control" | cut -d ' ' -f 1)"
+          {
+            echo "source_sha=$source_sha"
+            echo "sha256=$control_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint contents-scoped metadata recovery App token
+        id: metadata-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v2.1.0
+        with:
+          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Revalidate and apply only stable metadata with prebuilt Rust control
+        env:
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RECOVERY_TAG: ${{ inputs.tag }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          EXPECTED_RELEASE_CONTROL_SOURCE_SHA: ${{ steps.release-control.outputs.source_sha }}
+          EXPECTED_RELEASE_CONTROL_SHA256: ${{ steps.release-control.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          control=rust/target/release/xtask
+          test "$(git rev-parse HEAD)" = "$EXPECTED_RELEASE_CONTROL_SOURCE_SHA"
+          test "$(sha256sum "$control" | cut -d ' ' -f 1)" = "$EXPECTED_RELEASE_CONTROL_SHA256"
+          "$control" release-v4 metadata-recovery-apply \
+            --tag "$RECOVERY_TAG" \
+            --plan-sha256 "$PLAN_SHA256" \
+            --confirm-metadata-only-recovery

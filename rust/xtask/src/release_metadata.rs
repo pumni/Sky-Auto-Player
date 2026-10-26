@@ -81,24 +81,44 @@ pub fn canonical_asset_url(version: &str) -> String {
 pub fn generate(input: GenerateInput<'_>) -> Result<()> {
     let notes = normalise_notes(&fs::read_to_string(input.notes_path)?)?;
     let signature = normalise_signature(&fs::read_to_string(input.signature_path)?)?;
-    let metadata = build_metadata(
+    let payload = generate_bytes(
         input.channel,
         input.version,
-        notes,
+        &notes,
         input.pub_date,
         input.platform,
         input.asset_url,
-        signature,
+        &signature,
     )?;
-    let payload = serde_json::to_string_pretty(&metadata)? + "\n";
-    fs::write(input.output, payload.as_bytes())?;
+    fs::write(input.output, &payload)?;
     println!(
         "[xtask] generated {} v{} metadata: {}",
         channel_name(input.channel),
-        metadata.version,
+        input.version,
         input.output.display()
     );
     Ok(())
+}
+
+pub(crate) fn generate_bytes(
+    channel: Channel,
+    version: &str,
+    notes: &str,
+    pub_date: &str,
+    platform: &str,
+    asset_url: &str,
+    signature: &str,
+) -> Result<Vec<u8>> {
+    let metadata = build_metadata(
+        channel,
+        version,
+        normalise_notes(notes)?,
+        pub_date,
+        platform,
+        asset_url,
+        normalise_signature(signature)?,
+    )?;
+    Ok((serde_json::to_string_pretty(&metadata)? + "\n").into_bytes())
 }
 
 pub fn validate(channel: Channel, metadata_path: &Path) -> Result<()> {
@@ -381,6 +401,25 @@ mod tests {
         );
         assert!(Channel::Stable.metadata_path().contains("channels/stable/"));
         assert!(Channel::Beta.metadata_path().contains("channels/beta/"));
+    }
+
+    #[test]
+    fn deployed_v4_2_0_contract_keeps_stable_endpoint_asset_and_monotonicity() {
+        assert_eq!(
+            Channel::Stable.metadata_path(),
+            "channels/stable/latest.json"
+        );
+        assert_eq!(
+            canonical_asset_url("4.2.0"),
+            "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.2.0/Sky.Auto.Player_4.2.0_x64-setup.exe"
+        );
+        assert_eq!(
+            canonical_release_installer_name("4.2.0"),
+            "Sky.Auto.Player_4.2.0_x64-setup.exe"
+        );
+        let deployed = metadata("4.2.0", &canonical_asset_url("4.2.0"));
+        assert!(validate_metadata(&deployed, Channel::Stable).is_ok());
+        assert!(validate_roll_forward(Channel::Stable, Some(&deployed), &deployed).is_err());
     }
 
     #[test]

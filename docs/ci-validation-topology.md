@@ -51,6 +51,11 @@ Desktop web/browser meaning; native validation uses the separate
 `desktop_native_required` output. `desktop_e2e_required` remains the
 development-server E2E selector.
 
+The Linux `static` job installs Go 1.25.0 and actionlint v1.7.12 at pinned
+versions, then validates every `.github/workflows/*.yml` file before running
+the Rust static and security contracts. The Rust release-runner contract
+checks that these pins and the actionlint invocation remain in CI.
+
 Unknown paths, classifier failures, and explicit full validation set every
 lane to true. This preserves fail-closed behavior.
 

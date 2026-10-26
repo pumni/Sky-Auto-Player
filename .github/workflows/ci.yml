@@ -280,6 +280,22 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal
 
+      - name: Set up pinned Go for workflow validation
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.25.0
+          check-latest: false
+
+      - name: Validate GitHub Actions workflows with pinned actionlint
+        env:
+          GOBIN: ${{ runner.temp }}/actionlint-bin
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOBIN"
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$GOBIN/actionlint" -color
+
       - name: Run startup calibration export hash self-test
         env:
           RUSTUP_TOOLCHAIN: 1.99.1

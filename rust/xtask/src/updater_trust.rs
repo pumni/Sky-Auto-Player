@@ -213,16 +213,11 @@ pub fn verify_local_private_key(
         "sign".to_owned(),
         payload_path.to_string_lossy().into_owned(),
     ];
-    let output = process::capture_owned_timeout_filtered(
+    let output = process::capture_owned_timeout_runtime_only(
         std::ffi::OsStr::new("bun"),
         &args,
         &desktop_dir,
         &env_values,
-        &[
-            "TAURI_SIGNING_PRIVATE_KEY".to_owned(),
-            "V4_TAURI_UPDATER_PRIVATE_KEY".to_owned(),
-            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD".to_owned(),
-        ],
         Duration::from_secs(5 * 60),
     );
     env_values[1].1.zeroize();

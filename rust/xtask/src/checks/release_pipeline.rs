@@ -11,6 +11,65 @@ fn has_permission(job: &str, permission: &str) -> bool {
     job.lines().any(|line| line.trim() == permission)
 }
 
+fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), String> {
+    let recovery = source(recovery);
+    for marker in [
+        "struct Plan",
+        "fn validate_runtime",
+        "fn parse_marker",
+        "fn validate_run",
+        "fn build_plan(",
+        "verify_updater_signature_for_version",
+        "gh",
+        "--source-digest",
+        "--signer-workflow",
+        "https://spdx.dev/Document/v2.3",
+        "fn read_metadata(",
+        "raw.githubusercontent.com",
+        "fn apply(",
+        "super::reconcile_metadata_put(",
+        "metadata recovery plan is stale or differs from operator-reviewed bytes",
+        "metadata branch, public endpoint, or beta pointer changed after the reviewed plan",
+        "stable metadata changed at the final Contents API write boundary",
+        "metadata_recovery_updates_only_stable_and_reconciles_timeout_once",
+        "metadata_recovery_noop_is_idempotent_and_stale_plan_fails_before_write",
+        "latest_conflict_duplicate_assets_wrong_tag_and_tampered_bytes_fail_closed",
+    ] {
+        if !recovery.contains(marker) {
+            return Err(format!(
+                "Rust metadata-only recovery is missing invariant `{marker}`"
+            ));
+        }
+    }
+    let planner = recovery
+        .split_once("fn build_plan(")
+        .and_then(|(_, body)| body.split_once("\nfn encode_plan("))
+        .map(|(body, _)| body)
+        .ok_or("Rust metadata recovery planner is not bounded")?;
+    if planner.contains("transport.request(\"PUT\"")
+        || planner.contains("transport.request(\"POST\"")
+        || planner.contains("transport.request(\"DELETE\"")
+        || planner.contains("transport.upload(")
+    {
+        return Err("metadata recovery plan must not contain GitHub mutations".into());
+    }
+    let apply = recovery
+        .split_once("fn apply(")
+        .and_then(|(_, body)| body.split_once("\n#[cfg(test)]\nmod tests"))
+        .map(|(body, _)| body)
+        .ok_or("Rust metadata recovery apply path is not bounded")?;
+    if apply.matches("transport.request(\"PUT\"").count() != 1
+        || apply.contains("transport.request(\"POST\"")
+        || apply.contains("transport.request(\"DELETE\"")
+        || apply.contains("transport.upload(")
+        || !apply.contains("channels/stable/latest.json")
+        || apply.contains("channels/beta/latest.json\"")
+    {
+        return Err("metadata recovery may issue one stable Contents PUT and must preserve every immutable or beta asset".into());
+    }
+    Ok(())
+}
+
 fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), String> {
     let harness = source(harness);
     for marker in [
@@ -652,6 +711,8 @@ fn rust_release_state_machine_contract(
     for marker in [
         "cargo xtask release-v4 self-test",
         "cargo test --locked --manifest-path rust/xtask/Cargo.toml",
+        "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        "actionlint\" -color",
     ] {
         if !ci.contains(marker) {
             return Err(format!(
@@ -696,10 +757,7 @@ fn rust_release_state_machine_contract(
         "verify_updater_signature_for_version",
         "19AABD2E7838818C",
         "cleanup_run_material",
-        "capture_owned_timeout_filtered",
-        "const SIGNER_CHILD_ENV_ALLOWLIST",
-        "signer_child_environment_removals(",
-        "env::vars_os().map(|(name, _)| name)",
+        "capture_owned_timeout_runtime_only",
     ] {
         if !signing.contains(marker) {
             return Err(format!(
@@ -707,6 +765,23 @@ fn rust_release_state_machine_contract(
             ));
         }
     }
+    let updater_trust = source(
+        &fs::read_to_string(manifest_dir.join("src/updater_trust.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    let process = source(
+        &fs::read_to_string(manifest_dir.join("src/process.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    let repo = source(
+        &fs::read_to_string(manifest_dir.join("src/repo.rs")).map_err(|error| error.to_string())?,
+    );
+    validate_signing_child_environment(&signing, &updater_trust, &process, &repo)?;
+    let recovery = source(
+        &fs::read_to_string(manifest_dir.join("src/release_v4/recovery.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    metadata_recovery_rust_contract(&recovery)?;
     let credentials = source(
         &fs::read_to_string(manifest_dir.join("src/credential_cli.rs"))
             .map_err(|error| error.to_string())?,
@@ -741,6 +816,54 @@ fn rust_release_state_machine_contract(
                 "CI still executes retired PowerShell release tests: {obsolete}"
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_signing_child_environment(
+    signing: &str,
+    updater_trust: &str,
+    process: &str,
+    repo: &str,
+) -> std::result::Result<(), String> {
+    let signing_phase = signing
+        .split_once("pub(crate) fn sign_installer(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_tauri_cli("))
+        .map(|(body, _)| body)
+        .ok_or("protected signer is missing sign_installer")?;
+    let version_probe = signing
+        .split_once("fn verify_tauri_cli(")
+        .and_then(|(_, body)| body.split_once("\nfn materialize_key("))
+        .map(|(body, _)| body)
+        .ok_or("protected signer is missing its Tauri CLI version probe")?;
+    let key_probe = updater_trust
+        .split_once("pub fn verify_local_private_key(")
+        .and_then(|(_, body)| body.split_once("\n/// Verify a Tauri updater signature"))
+        .map(|(body, _)| body)
+        .ok_or("updater trust is missing its local private-key challenge")?;
+    let actual_child_test = process
+        .split_once("fn runtime_child_environment_is_captured_after_secret_isolation(")
+        .and_then(|(_, body)| body.split_once("\n    #[test]"))
+        .map(|(body, _)| body)
+        .ok_or("process policy is missing its spawned-child secret isolation regression")?;
+    if !version_probe.contains("capture_owned_timeout_runtime_only")
+        || !signing_phase.contains("capture_owned_timeout_runtime_only")
+        || !key_probe.contains("capture_owned_timeout_runtime_only")
+        || signing
+            .matches("capture_owned_timeout_runtime_only")
+            .count()
+            != 2
+        || repo.matches("capture_text_runtime_only").count() < 3
+        || repo.contains("capture_text(\"git\"")
+        || !process.contains("RUNTIME_CHILD_ENV_ALLOWLIST")
+        || !process.contains("runtime_environment_from(env::vars_os(), explicit_env)")
+        || !process.contains("command.env_clear();")
+        || !actual_child_test.contains("capture_owned_timeout_isolated")
+        || !actual_child_test.contains("synthetic-workflow-passphrase")
+        || !actual_child_test.contains("GITHUB_TOKEN")
+        || !actual_child_test.contains("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+    {
+        return Err("all signing-phase subprocesses must use the bounded runtime-only environment, and the spawned-child regression must verify actual secret isolation".into());
     }
     Ok(())
 }
@@ -808,5 +931,78 @@ mod tests {
             assert!(!source.contains("V4_TAURI_UPDATER_PRIVATE_KEY"));
             assert!(!source.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"));
         }
+    }
+
+    #[test]
+    fn signing_subprocess_contract_rejects_any_unfiltered_child_path() {
+        let root = crate::repo::root().join("rust/xtask/src");
+        let signing = fs::read_to_string(root.join("release_signing.rs")).expect("signing");
+        let updater_trust = fs::read_to_string(root.join("updater_trust.rs")).expect("trust");
+        let process = fs::read_to_string(root.join("process.rs")).expect("process");
+        let repo = fs::read_to_string(root.join("repo.rs")).expect("repo");
+        validate_signing_child_environment(&signing, &updater_trust, &process, &repo)
+            .expect("all signing subprocesses must be isolated");
+
+        let unfiltered_signing = signing.replace(
+            "capture_owned_timeout_runtime_only(",
+            "capture_owned_timeout_filtered(",
+        );
+        assert!(
+            validate_signing_child_environment(
+                &unfiltered_signing,
+                &updater_trust,
+                &process,
+                &repo
+            )
+            .is_err()
+        );
+
+        let unfiltered_key_probe = updater_trust.replace(
+            "capture_owned_timeout_runtime_only(",
+            "capture_owned_timeout_filtered(",
+        );
+        assert!(
+            validate_signing_child_environment(&signing, &unfiltered_key_probe, &process, &repo)
+                .is_err()
+        );
+
+        let inherited_process_environment = process.replace("command.env_clear();", "");
+        assert!(
+            validate_signing_child_environment(
+                &signing,
+                &updater_trust,
+                &inherited_process_environment,
+                &repo
+            )
+            .is_err()
+        );
+
+        let inherited_git_environment = repo.replace("capture_text_runtime_only", "capture_text");
+        assert!(
+            validate_signing_child_environment(
+                &signing,
+                &updater_trust,
+                &process,
+                &inherited_git_environment
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn metadata_recovery_static_contract_rejects_mutation_scope_expansion() {
+        let path = crate::repo::root().join("rust/xtask/src/release_v4/recovery.rs");
+        let recovery = fs::read_to_string(path).expect("metadata recovery implementation");
+        metadata_recovery_rust_contract(&recovery).expect("recovery scope must be bounded");
+        let extra_mutation = recovery.replace(
+            "transport.request(\"PUT\", &put_endpoint, Some(&payload))",
+            "transport.request(\"POST\", &put_endpoint, Some(&payload))",
+        );
+        assert!(metadata_recovery_rust_contract(&extra_mutation).is_err());
+        let planner_write = recovery.replace(
+            "fn build_plan(",
+            "fn build_plan(\n    // transport.request(\"PUT\") is forbidden here",
+        );
+        assert!(metadata_recovery_rust_contract(&planner_write).is_err());
     }
 }

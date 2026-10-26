@@ -113,6 +113,40 @@ cargo xtask updater-trust inventory
      failed mint or read-only probe blocks the dependent publication job before the release becomes
      public.
 
+7. **Child Environment Isolation and Hosted Trust Boundary**:
+   - Before any updater secret is mapped, the signing job builds the pinned Rust release executable,
+     binds it to the exact source SHA and executable SHA-256, and verifies both. The secret-bearing
+     step invokes this exact executable directly; it does not call Cargo.
+   - All Bun children in the signing phase (Tauri CLI version probe, private-key challenge and
+     final signer) clear inherited environment state. They receive only the Windows runtime
+     allowlist and, where required, the temporary encrypted key path and passphrase. Rust Git
+     identity subprocesses follow the same runtime-only policy. A real child-process regression
+     verifies that synthetic secret and token values do not appear in the child's environment.
+   - Environment filtering is a child-process boundary, not isolation from the runner itself. The
+     protected hosted Windows job remains responsible for handling the mapped secrets, and the
+     ephemeral runner VM is the trust boundary. Do not run unreviewed code in that job.
+   - Neither updater secret is used by metadata recovery. The recovery job builds its Rust control
+     executable before minting the separate metadata App token; that token can update only the
+     stable metadata Contents file after protected Environment approval.
+
+8. **Metadata-only Incident Recovery**:
+   - For an immutable, valid stable release whose normal transaction stopped after publication,
+     first dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with `operation=plan`.
+     The plan reads and verifies the original workflow run, immutable release, exact public assets,
+     production signature, source-bound attestations, GitHub Latest, stable/beta files and stable
+     raw endpoint. It does not mint a write-capable token or mutate GitHub.
+   - Review the plan artifact and SHA-256. Apply requires a second manual dispatch with the same tag,
+     plan run ID and SHA-256, explicit `confirm=true`, and protected `v4-production-release`
+     Environment approval. Rust recomputes the plan immediately before a single stable metadata PUT.
+   - Recovery cannot rebuild or resign the installer, alter the release or tag, change beta, or
+     decrement the stable SemVer. Unknown outcomes require read-only reconciliation and are never
+     retried blindly. A defective or unverified published installer is handled through the
+     incident-containment procedure or a new greater SemVer release after qualification.
+   - Before cutover, the release owner should verify that the protected environment only permits
+     `main`, requires human approval, and contains the documented secret names. Review the pinned
+     actionlint CI result and the Rust recovery fake-transport tests. Do not verify readiness by
+     dispatching the production release or recovery workflow during code review.
+
 ## 3. Local Private Key Verification
 
 Release Operators must verify that their local private key matches the canonical public root

@@ -47,7 +47,10 @@ fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<St
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("{}", usage());
+        eprintln!(
+            "{}\n\nRecovery-only commands:\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan-sha256 <sha256> --confirm-metadata-only-recovery",
+            usage()
+        );
         return Err("a command is required".into());
     }
     match args[0].as_str() {

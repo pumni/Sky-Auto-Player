@@ -591,6 +591,7 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/pages.yml",
     ".github/workflows/release-v4.yml",
+    ".github/workflows/v4-metadata-recovery.yml",
 ];
 
 fn validate_active_github_hosted_ubuntu_labels(source: &str) -> Result<()> {
