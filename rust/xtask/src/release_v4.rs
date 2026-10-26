@@ -5244,6 +5244,7 @@ struct FakeTransport {
     metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
     raw_metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
     workflow_runs: std::collections::BTreeMap<String, Value>,
+    workflow_jobs: std::collections::BTreeMap<(String, u32), Vec<Value>>,
 }
 
 impl FakeTransport {
@@ -5264,7 +5265,38 @@ impl Transport for FakeTransport {
     ) -> Result<Option<Value>> {
         self.events.push(format!("{method} {endpoint}"));
         if method == "GET" && endpoint.starts_with("repos/pumni/Sky-Auto-Player/actions/runs/") {
-            let id = endpoint.rsplit('/').next().unwrap_or_default();
+            let path = endpoint
+                .strip_prefix("repos/pumni/Sky-Auto-Player/actions/runs/")
+                .unwrap_or_default();
+            if let Some((run_id, attempt_query)) = path.split_once("/attempts/") {
+                let Some((attempt, query)) = attempt_query.split_once("/jobs?") else {
+                    return Err("fake workflow job endpoint omitted attempt jobs path".into());
+                };
+                let run_attempt = attempt.parse::<u32>()?;
+                let query_value = |name: &str| {
+                    query
+                        .split('&')
+                        .find_map(|part| part.strip_prefix(&format!("{name}=")))
+                        .and_then(|value| value.parse::<usize>().ok())
+                };
+                let per_page = query_value("per_page").ok_or("fake jobs page size missing")?;
+                let page = query_value("page").ok_or("fake jobs page number missing")?;
+                if per_page == 0 || page == 0 {
+                    return Err("fake jobs pagination is invalid".into());
+                }
+                let Some(jobs) = self.workflow_jobs.get(&(run_id.to_owned(), run_attempt)) else {
+                    return Ok(None);
+                };
+                let start = (page - 1).saturating_mul(per_page);
+                let items = jobs
+                    .iter()
+                    .skip(start)
+                    .take(per_page)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                return Ok(Some(json!({"total_count":jobs.len(),"jobs":items})));
+            }
+            let id = path.split('?').next().unwrap_or_default();
             return Ok(self.workflow_runs.get(id).cloned());
         }
         if method == "GET" && endpoint == "repos/pumni/Sky-Auto-Player" {

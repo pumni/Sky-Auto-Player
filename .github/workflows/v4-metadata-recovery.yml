@@ -14,7 +14,7 @@ on:
         type: string
         required: true
       plan_run_id:
-        description: Successful plan workflow run ID (apply only)
+        description: Successful plan workflow run ID (apply only; artifact identity is revalidated)
         type: string
         required: false
       plan_sha256:
@@ -158,7 +158,7 @@ jobs:
         run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
 
       - name: Download operator-reviewed plan artifact
-        uses: actions/download-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: v4-metadata-recovery-plan
           path: ${{ runner.temp }}/reviewed-metadata-plan
@@ -169,11 +169,14 @@ jobs:
       - name: Bind downloaded plan artifact to operator-reviewed hash
         env:
           RECOVERY_TAG: ${{ inputs.tag }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
         run: |
           set -euo pipefail
           plan="$RUNNER_TEMP/reviewed-metadata-plan/v4-metadata-recovery-plan.json"
           test "$(jq -r .tag "$plan")" = "$RECOVERY_TAG"
+          test "$(jq -r .plan_run.artifact_name "$plan")" = "v4-metadata-recovery-plan"
+          test "$(jq -r .plan_run.run_id "$plan")" = "$PLAN_RUN_ID"
           actual="$(sha256sum "$plan" | cut -d ' ' -f 1)"
           test "$actual" = "${PLAN_SHA256,,}"
           test "$(jq -r .action "$plan")" = "update_stable"
@@ -211,6 +214,7 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
           RECOVERY_TAG: ${{ inputs.tag }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
           EXPECTED_RELEASE_CONTROL_SOURCE_SHA: ${{ steps.release-control.outputs.source_sha }}
           EXPECTED_RELEASE_CONTROL_SHA256: ${{ steps.release-control.outputs.sha256 }}
@@ -221,5 +225,7 @@ jobs:
           test "$(sha256sum "$control" | cut -d ' ' -f 1)" = "$EXPECTED_RELEASE_CONTROL_SHA256"
           "$control" release-v4 metadata-recovery-apply \
             --tag "$RECOVERY_TAG" \
+            --plan "$RUNNER_TEMP/reviewed-metadata-plan/v4-metadata-recovery-plan.json" \
+            --plan-run-id "$PLAN_RUN_ID" \
             --plan-sha256 "$PLAN_SHA256" \
             --confirm-metadata-only-recovery

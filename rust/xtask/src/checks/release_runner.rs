@@ -358,6 +358,10 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
 fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
     const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
     const APP_TOKEN: &str = "steps.metadata-app-token.outputs.token";
+    const PLAN_UPLOAD: &str =
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2";
+    const PLAN_DOWNLOAD: &str =
+        "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2";
     if !workflow_declares_only_dispatch(source)
         || source.contains("self-hosted")
         || source.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
@@ -427,6 +431,12 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
             .ok_or_else(|| format!("metadata recovery is missing step: {name}"))
     };
     let download = step_position("Download operator-reviewed plan artifact")?;
+    let plan_steps = workflow_step_blocks(plan);
+    let upload = plan_steps
+        .iter()
+        .find(|(name, _)| name == "Upload reviewed plan artifact")
+        .map(|(_, body)| body.as_str())
+        .ok_or("metadata recovery plan artifact upload is missing")?;
     let bind = step_position("Bind downloaded plan artifact to operator-reviewed hash")?;
     let build = steps
         .iter()
@@ -448,7 +458,18 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
         || bind >= mint
         || build >= verify_control
         || verify_control >= mint
-        || !steps[download].1.contains("actions/download-artifact@")
+        || !upload.contains(PLAN_UPLOAD)
+        || !upload.contains("name: v4-metadata-recovery-plan")
+        || !steps[download].1.contains(PLAN_DOWNLOAD)
+        || !steps[download]
+            .1
+            .contains("name: v4-metadata-recovery-plan")
+        || !steps[download]
+            .1
+            .contains("repository: ${{ github.repository }}")
+        || !steps[download]
+            .1
+            .contains("github-token: ${{ github.token }}")
         || !steps[download]
             .1
             .contains("run-id: ${{ inputs.plan_run_id }}")
@@ -458,6 +479,8 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
             .1
             .contains("test \"$actual\" = \"${PLAN_SHA256,,}\"")
         || !steps[bind].1.contains(".tag")
+        || !steps[bind].1.contains("jq -r .plan_run.artifact_name")
+        || !steps[bind].1.contains("jq -r .plan_run.run_id")
         || !steps[bind].1.contains(".action")
         || !steps[bind].1.contains("update_stable")
         || !steps[build]
@@ -468,6 +491,11 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
         || !steps[verify_control].1.contains("control_sha=")
         || !execute.contains("rust/target/release/xtask")
         || !execute.contains("sha256sum")
+        || !execute.contains(
+            "--plan \"$RUNNER_TEMP/reviewed-metadata-plan/v4-metadata-recovery-plan.json\"",
+        )
+        || !execute.contains("--plan-run-id \"$PLAN_RUN_ID\"")
+        || !execute.contains("--plan-sha256 \"$PLAN_SHA256\"")
         || execute.to_ascii_lowercase().contains("cargo")
         || !execute.contains(APP_TOKEN)
         || !execute.contains("metadata-recovery-apply")
@@ -487,6 +515,75 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
         {
             return Err(format!(
                 "metadata recovery App token escaped the Rust apply process: {name}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_recovery_release_job_contract(source: &str) -> Result<()> {
+    const EXPECTED: [(&str, &str, &str); 8] = [
+        (
+            "prepare",
+            "Validate exact main source and release readiness",
+            "",
+        ),
+        (
+            "build_unsigned",
+            "Build one unsigned Windows NSIS installer",
+            "needs: prepare",
+        ),
+        (
+            "sign_qualify",
+            "Protected production signing and exact-byte qualification",
+            "needs: [prepare, build_unsigned]",
+        ),
+        (
+            "attest",
+            "Verify qualified handoff and publish OIDC attestations",
+            "needs: [prepare, sign_qualify]",
+        ),
+        (
+            "metadata_probe",
+            "Verify metadata App access before publication",
+            "needs: [prepare, attest]",
+        ),
+        (
+            "publish",
+            "Verify attestations and publish immutable release assets",
+            "needs: [prepare, attest, metadata_probe]",
+        ),
+        (
+            "metadata_promote",
+            "Promote only the qualified release channel metadata",
+            "needs: [prepare, publish]",
+        ),
+        (
+            "final_verify",
+            "Verify public release assets and updater metadata",
+            "needs: [prepare, metadata_promote]",
+        ),
+    ];
+    let jobs = workflow_job_blocks(source);
+    if jobs.len() != EXPECTED.len() {
+        return Err(
+            "release workflow job graph differs from the recovery eligibility contract".into(),
+        );
+    }
+    for (id, name, needs) in EXPECTED {
+        let body = jobs
+            .iter()
+            .find(|(job_id, _)| job_id == id)
+            .map(|(_, body)| body.as_str())
+            .ok_or_else(|| format!("release workflow is missing recovery-bound job {id}"))?;
+        if !body
+            .lines()
+            .any(|line| line.trim() == format!("name: {name}"))
+            || (!needs.is_empty() && !body.lines().any(|line| line.trim() == needs))
+        {
+            return Err(format!(
+                "release workflow job {id} differs from recovery's exact name/dependency contract"
             )
             .into());
         }
@@ -545,6 +642,7 @@ pub(super) fn release_runner_contract(root: &Path) -> Result<()> {
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     let release = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?;
     validate_metadata_app_token_scope(&release)?;
+    validate_recovery_release_job_contract(&release)?;
     let recovery = fs::read_to_string(root.join(APPROVED_RECOVERY_WORKFLOW))?;
     validate_metadata_recovery_workflow(&recovery)?;
 
@@ -716,6 +814,29 @@ mod tests {
         validate_metadata_recovery_workflow(&source).unwrap();
         assert!(
             validate_metadata_recovery_workflow(&source.replace(
+                "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2",
+                "actions/download-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"
+            ))
+            .is_err(),
+            "upload-artifact SHA must never identify the downloader"
+        );
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
+                "run-id: ${{ inputs.plan_run_id }}",
+                "run-id: ${{ github.run_id }}"
+            ))
+            .is_err(),
+            "plan artifact download must bind the operator-selected run"
+        );
+        assert!(
+            validate_metadata_recovery_workflow(
+                &source.replace("jq -r .plan_run.run_id", "jq -r .plan_run.wrong_run_id")
+            )
+            .is_err(),
+            "plan artifact content must bind the requested run ID"
+        );
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
                 "\"$control\" release-v4 metadata-recovery-apply",
                 "cargo xtask release-v4 metadata-recovery-apply"
             ))
@@ -738,6 +859,23 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn recovery_eligibility_tracks_the_exact_release_job_graph() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join(APPROVED_RELEASE_WORKFLOW)).unwrap();
+        validate_recovery_release_job_contract(&source).unwrap();
+        let wrong_publish_name = source.replace(
+            "name: Verify attestations and publish immutable release assets",
+            "name: Publish possibly mutable release assets",
+        );
+        assert!(validate_recovery_release_job_contract(&wrong_publish_name).is_err());
+        let wrong_publish_boundary = source.replace(
+            "needs: [prepare, attest, metadata_probe]",
+            "needs: [prepare, sign_qualify]",
+        );
+        assert!(validate_recovery_release_job_contract(&wrong_publish_boundary).is_err());
     }
 
     #[test]

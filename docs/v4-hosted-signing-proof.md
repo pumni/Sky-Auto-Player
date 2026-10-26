@@ -167,8 +167,10 @@ source version is 4.2.0, and the updater fixture requires a strictly greater can
 
 The new `.github/workflows/v4-metadata-recovery.yml` supports a reviewed read-only plan and a
 separately approved apply for one stable metadata file after a valid immutable release. Rust binds
-the plan to the original successful workflow run, release identity, exact asset bytes, public
-signature and version, attestations, Latest, stable/beta metadata, and raw endpoint. Apply rechecks
+the plan artifact to its exact recovery run, attempt, source SHA, artifact name, and reviewed digest;
+it binds the release to the exact original run attempt and requires every job through immutable
+publication to have succeeded. A failed overall release run is eligible only when metadata
+promotion failed or timed out after publication and final verification was skipped. Apply rechecks
 the plan and write boundary and can issue one stable Contents API update. It does not use updater
 signing secrets or touch releases, assets, tags, or beta metadata. Recovery does not roll back
 versions; defective releases require a qualified greater SemVer or the incident containment process.

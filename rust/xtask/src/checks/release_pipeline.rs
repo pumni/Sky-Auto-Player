@@ -15,9 +15,15 @@ fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), St
     let recovery = source(recovery);
     for marker in [
         "struct Plan",
+        "struct PlanRun",
         "fn validate_runtime",
         "fn parse_marker",
         "fn validate_run",
+        "fn validate_release_run_with_page_size(",
+        "fn validate_recovery_plan_run(",
+        "fn list_run_attempt_jobs(",
+        "RELEASE_PREPUBLISH_JOB_NAMES",
+        "RELEASE_METADATA_PROMOTE_JOB",
         "fn build_plan(",
         "verify_updater_signature_for_version",
         "gh",
@@ -31,7 +37,11 @@ fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), St
         "metadata recovery plan is stale or differs from operator-reviewed bytes",
         "metadata branch, public endpoint, or beta pointer changed after the reviewed plan",
         "stable metadata changed at the final Contents API write boundary",
-        "metadata_recovery_updates_only_stable_and_reconciles_timeout_once",
+        "postpublication_workflow_failure_after_publish_allows_metadata_only_recovery",
+        "recovery_rejects_failed_cancelled_or_unverifiable_publish_attempts",
+        "release_attempt_job_discovery_paginates_and_binds_each_job_identity",
+        "recovery_revalidates_the_successful_cross_run_plan_artifact_before_writing",
+        "reviewed_plan_artifact_binds_exact_run_name_tag_and_digest",
         "metadata_recovery_noop_is_idempotent_and_stale_plan_fails_before_write",
         "latest_conflict_duplicate_assets_wrong_tag_and_tampered_bytes_fail_closed",
     ] {

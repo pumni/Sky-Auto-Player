@@ -132,11 +132,15 @@ cargo xtask updater-trust inventory
 8. **Metadata-only Incident Recovery**:
    - For an immutable, valid stable release whose normal transaction stopped after publication,
      first dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with `operation=plan`.
-     The plan reads and verifies the original workflow run, immutable release, exact public assets,
+     The plan reads and verifies the exact original workflow attempt, immutable release, exact public assets,
      production signature, source-bound attestations, GitHub Latest, stable/beta files and stable
      raw endpoint. It does not mint a write-capable token or mutate GitHub.
-   - Review the plan artifact and SHA-256. Apply requires a second manual dispatch with the same tag,
-     plan run ID and SHA-256, explicit `confirm=true`, and protected `v4-production-release`
+     Every job through immutable publication must have succeeded. Overall workflow failure is
+     accepted only when metadata promotion failed or timed out after publication and final
+     verification was skipped; failed/cancelled publication and ambiguous job history are rejected.
+   - Review the plan artifact and SHA-256. Apply downloads the named artifact from the selected run;
+     Rust verifies its run ID, attempt, source SHA, artifact name, and digest. Apply requires a
+     second manual dispatch with the same tag, plan run ID and SHA-256, explicit `confirm=true`, and protected `v4-production-release`
      Environment approval. Rust recomputes the plan immediately before a single stable metadata PUT.
    - Recovery cannot rebuild or resign the installer, alter the release or tag, change beta, or
      decrement the stable SemVer. Unknown outcomes require read-only reconciliation and are never

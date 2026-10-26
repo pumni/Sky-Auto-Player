@@ -276,11 +276,15 @@ read-only plan from `main`, reviews its artifact and plan SHA-256, then dispatch
 plan run ID/hash and explicit confirmation. The protected `v4-production-release` Environment
 approval is required before the write-capable App token is minted.
 
-Rust revalidates the exact release ID, tag, transaction source SHA, successful original workflow run,
-Latest identity, exact public asset inventory and digests, production signature and version-bound
-trusted comment, installer/signature provenance, SPDX SBOM provenance, stable/beta metadata, and
-public stable endpoint. Apply recomputes the operator-reviewed plan and checks state again at the
-write boundary. It can perform at most one Contents API write for `channels/stable/latest.json`;
+Rust revalidates the exact release ID, tag, transaction source SHA and run attempt, Latest identity,
+exact public asset inventory and digests, production signature and version-bound trusted comment,
+installer/signature provenance, SPDX SBOM provenance, stable/beta metadata, and public stable
+endpoint. Every prepublication job through the exact immutable `publish` job must have completed
+successfully. The original workflow may conclude `failure` only when `metadata_promote` failed or
+timed out and `final_verify` was skipped; cancelled runs, failed publication, other failed jobs,
+missing jobs, and ambiguous attempts fail closed. Apply binds the downloaded plan to the selected
+run ID, artifact name, source SHA, attempt, and operator-reviewed SHA-256, then recomputes the plan
+and checks state again at the write boundary. It can perform at most one Contents API write for `channels/stable/latest.json`;
 beta metadata, releases, assets and tags are never changed. Readback, GitHub Latest, beta
 immutability and public endpoint convergence must all pass. Unknown write outcomes are reconciled
 with GET only and are never retried as a second mutation.

@@ -185,11 +185,17 @@ ephemeral VM remain the trust boundary.
 Use recovery only after an immutable stable release is valid and the normal transaction stopped
 after publication. First dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with
 `operation=plan`, the exact `v4.x.y` tag, and `confirm=false`. The read-only job validates the
-transaction marker and successful original release workflow run, GitHub Latest, exact immutable
+transaction marker and exact original release workflow attempt, GitHub Latest, exact immutable
 release ID/source/tag, the exact installer/signature inventory and API/local SHA-256 values, the
 production updater signature and signed version, installer/signature build attestations, the SPDX
 SBOM attestation, current stable/beta metadata, and the public stable endpoint. It emits a JSON plan
 artifact and SHA-256; the artifact contains the proposed metadata bytes for operator review.
+Every prepublication job through `publish` must have completed successfully. A failed overall
+release workflow is eligible only when `metadata_promote` failed or timed out after successful
+publication and `final_verify` was skipped. Failed or cancelled publication, other failed jobs,
+missing jobs, and ambiguous attempts are rejected. Apply downloads the artifact from the selected
+plan run and Rust verifies its artifact name, run ID, source SHA, attempt, and operator-reviewed
+SHA-256 before it recomputes the plan.
 
 To apply, dispatch the same workflow with `operation=apply`, the same tag, the plan run ID, the
 reviewed plan SHA-256, and `confirm=true`. The `v4-production-release` Environment approval occurs
