@@ -259,7 +259,7 @@ fn rust_release_state_machine_contract(
         ".head_sha == env.GITHUB_SHA",
         "workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=100",
         "max_by(.run_number)",
-        "test \"$status\" = \"completed\" && test \"$conclusion\" = \"success\"",
+        "if [[ \"$status\" != \"completed\" || \"$conclusion\" != \"success\" ]]; then",
         "v4-context-${{ github.run_id }}-${{ github.run_attempt }}",
         "v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}",
         "v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -907,6 +907,38 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn normalize_fixture(text: &str) -> String {
+        source(text)
+    }
+
+    fn replace_fixture(text: &str, expected: &str, replacement: &str) -> String {
+        let original = normalize_fixture(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replace(expected, replacement);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn replace_fixture_once(text: &str, expected: &str, replacement: &str) -> String {
+        let original = normalize_fixture(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replacen(expected, replacement, 1);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
     fn current_sources() -> (String, String, String, String) {
         let root = crate::repo::root();
         (
@@ -928,13 +960,17 @@ mod tests {
     #[test]
     fn hosted_release_contract_rejects_stale_sha_and_duplicate_build_paths() {
         let (workflow, rust, main, ci) = current_sources();
-        let stale_gate = workflow.replace("head_sha=$GITHUB_SHA", "head_branch=main");
+        let stale_gate = replace_fixture(&workflow, "head_sha=$GITHUB_SHA", "head_branch=main");
         assert!(rust_release_state_machine_contract(&stale_gate, "", &rust, &main, &ci).is_err());
         assert!(
             rust_release_state_machine_contract(&workflow, "retired rehearsal", &rust, &main, &ci)
                 .is_err()
         );
-        let legacy = workflow.replace("release-v4 sign-candidate", "release-v4 build-candidate");
+        let legacy = replace_fixture(
+            &workflow,
+            "release-v4 sign-candidate",
+            "release-v4 build-candidate",
+        );
         assert!(rust_release_state_machine_contract(&legacy, "", &rust, &main, &ci).is_err());
     }
 
@@ -960,7 +996,8 @@ mod tests {
         validate_signing_child_environment(&signing, &updater_trust, &process, &repo)
             .expect("all signing subprocesses must be isolated");
 
-        let unfiltered_signing = signing.replace(
+        let unfiltered_signing = replace_fixture(
+            &signing,
             "capture_owned_timeout_runtime_only(",
             "capture_owned_timeout_filtered(",
         );
@@ -974,7 +1011,8 @@ mod tests {
             .is_err()
         );
 
-        let unfiltered_key_probe = updater_trust.replace(
+        let unfiltered_key_probe = replace_fixture(
+            &updater_trust,
             "capture_owned_timeout_runtime_only(",
             "capture_owned_timeout_filtered(",
         );
@@ -983,7 +1021,7 @@ mod tests {
                 .is_err()
         );
 
-        let inherited_process_environment = process.replace("command.env_clear();", "");
+        let inherited_process_environment = replace_fixture(&process, "command.env_clear();", "");
         assert!(
             validate_signing_child_environment(
                 &signing,
@@ -994,7 +1032,8 @@ mod tests {
             .is_err()
         );
 
-        let inherited_git_environment = repo.replace("capture_text_runtime_only", "capture_text");
+        let inherited_git_environment =
+            replace_fixture(&repo, "capture_text_runtime_only", "capture_text");
         assert!(
             validate_signing_child_environment(
                 &signing,
@@ -1011,12 +1050,14 @@ mod tests {
         let path = crate::repo::root().join("rust/xtask/src/release_v4/recovery.rs");
         let recovery = fs::read_to_string(path).expect("metadata recovery implementation");
         metadata_recovery_rust_contract(&recovery).expect("recovery scope must be bounded");
-        let extra_mutation = recovery.replace(
+        let extra_mutation = replace_fixture(
+            &recovery,
             "transport.request(\"PUT\", &put_endpoint, Some(&payload))",
             "transport.request(\"POST\", &put_endpoint, Some(&payload))",
         );
         assert!(metadata_recovery_rust_contract(&extra_mutation).is_err());
-        let planner_write = recovery.replace(
+        let planner_write = replace_fixture_once(
+            &recovery,
             "fn build_plan(",
             "fn build_plan(\n    // transport.request(\"PUT\") is forbidden here",
         );

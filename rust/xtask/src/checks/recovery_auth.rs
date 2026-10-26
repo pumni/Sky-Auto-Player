@@ -177,6 +177,54 @@ pub(super) fn metadata_recovery_auth_contract(
 mod tests {
     use super::*;
 
+    fn replace_all_fixture(text: &str, expected: &str, replacement: &str) -> String {
+        let original = source(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replace(expected, replacement);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn replace_fixture_once(text: &str, expected: &str, replacement: &str) -> String {
+        let original = source(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replacen(expected, replacement, 1);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn crlf_fixture(text: &str) -> String {
+        source(text).replace('\n', "\r\n")
+    }
+
+    fn mixed_line_ending_fixture(text: &str) -> String {
+        let original = source(text);
+        let mut result = String::with_capacity(original.len());
+        let mut next_crlf = true;
+        for line in original.split_inclusive('\n') {
+            if let Some(content) = line.strip_suffix('\n') {
+                result.push_str(content);
+                result.push_str(if next_crlf { "\r\n" } else { "\n" });
+                next_crlf = !next_crlf;
+            } else {
+                result.push_str(line);
+            }
+        }
+        result
+    }
+
     #[test]
     fn metadata_recovery_auth_contract_rejects_permission_and_token_regressions() {
         let root = crate::repo::root();
@@ -191,23 +239,24 @@ mod tests {
         metadata_recovery_auth_contract(&workflow, &release, &recovery, &process)
             .expect("metadata recovery tokens must remain separately scoped");
 
-        let missing_plan_actions = workflow.replacen("      actions: read\n", "", 1);
+        let missing_plan_actions = replace_fixture_once(&workflow, "      actions: read\n", "");
         assert!(
             metadata_recovery_auth_contract(&missing_plan_actions, &release, &recovery, &process)
                 .is_err()
         );
 
-        let apply_has_write_scope = workflow.replace(
+        let apply_has_write_scope = replace_fixture_once(
+            &workflow,
             "    environment: v4-production-release\n    permissions:\n      actions: read\n      attestations: read\n      contents: read\n    steps:",
             "    environment: v4-production-release\n    permissions:\n      actions: read\n      attestations: read\n      contents: read\n      checks: write\n    steps:",
         );
-        assert_ne!(apply_has_write_scope, workflow);
         assert!(
             metadata_recovery_auth_contract(&apply_has_write_scope, &release, &recovery, &process)
                 .is_err()
         );
 
-        let app_token_used_for_reads = workflow.replace(
+        let app_token_used_for_reads = replace_all_fixture(
+            &workflow,
             "GH_TOKEN: ${{ github.token }}",
             "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
         );
@@ -221,7 +270,8 @@ mod tests {
             .is_err()
         );
 
-        let attestation_uses_write_token = recovery.replace(
+        let attestation_uses_write_token = replace_all_fixture(
+            &recovery,
             "self.read_only_token.clone()",
             "std::env::var(super::METADATA_WRITE_TOKEN_ENV).unwrap()",
         );
@@ -235,7 +285,8 @@ mod tests {
             .is_err()
         );
 
-        let app_token_configures_attestations = recovery.replace(
+        let app_token_configures_attestations = replace_all_fixture(
+            &recovery,
             "GitHubArtifactVerifier::new(read_only_token)",
             "GitHubArtifactVerifier::new(metadata_write_token.unwrap())",
         );
@@ -249,7 +300,8 @@ mod tests {
             .is_err()
         );
 
-        let inherited_transport_environment = release.replace(
+        let inherited_transport_environment = replace_all_fixture(
+            &release,
             "capture_owned_timeout_runtime_only(",
             "capture_owned_timeout_filtered(",
         );
@@ -262,5 +314,35 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn recovery_permission_mutation_is_detected_with_lf_crlf_and_mixed_eol_fixtures() {
+        let root = crate::repo::root();
+        let workflow = fs::read_to_string(root.join(".github/workflows/v4-metadata-recovery.yml"))
+            .expect("metadata recovery workflow");
+        let release = fs::read_to_string(root.join("rust/xtask/src/release_v4.rs"))
+            .expect("metadata recovery transport");
+        let recovery = fs::read_to_string(root.join("rust/xtask/src/release_v4/recovery.rs"))
+            .expect("metadata recovery control plane");
+        let process = fs::read_to_string(root.join("rust/xtask/src/process.rs"))
+            .expect("child process environment policy");
+
+        for fixture in [
+            source(&workflow),
+            crlf_fixture(&workflow),
+            mixed_line_ending_fixture(&workflow),
+        ] {
+            let missing_plan_actions = replace_fixture_once(&fixture, "      actions: read\n", "");
+            assert!(
+                metadata_recovery_auth_contract(
+                    &missing_plan_actions,
+                    &release,
+                    &recovery,
+                    &process
+                )
+                .is_err()
+            );
+        }
     }
 }

@@ -753,6 +753,54 @@ mod tests {
             .expect("production workflow must exist")
     }
 
+    fn normalize_fixture(text: &str) -> String {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    }
+
+    fn replace_all_fixture(text: &str, expected: &str, replacement: &str) -> String {
+        let original = normalize_fixture(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replace(expected, replacement);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn replace_fixture_once(text: &str, expected: &str, replacement: &str) -> String {
+        let original = normalize_fixture(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replacen(expected, replacement, 1);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn mixed_line_ending_fixture(text: &str) -> String {
+        let original = normalize_fixture(text);
+        let mut result = String::with_capacity(original.len());
+        let mut next_crlf = true;
+        for line in original.split_inclusive('\n') {
+            if let Some(content) = line.strip_suffix('\n') {
+                result.push_str(content);
+                result.push_str(if next_crlf { "\r\n" } else { "\n" });
+                next_crlf = !next_crlf;
+            } else {
+                result.push_str(line);
+            }
+        }
+        result
+    }
+
     #[test]
     fn hosted_release_contract_rejects_untrusted_workflows_and_production_secrets() {
         let self_hosted =
@@ -770,7 +818,8 @@ mod tests {
         validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &workflow)
             .expect("current workflow must satisfy the hosted release boundary");
 
-        let pull_request = workflow.replace(
+        let pull_request = replace_fixture_once(
+            &workflow,
             "  workflow_dispatch:\n",
             "  workflow_dispatch:\n  pull_request:\n",
         );
@@ -778,16 +827,21 @@ mod tests {
             validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &pull_request).is_err()
         );
 
-        let unprotected = workflow.replacen("    environment: v4-production-release\n", "", 1);
+        let unprotected =
+            replace_fixture_once(&workflow, "    environment: v4-production-release\n", "");
         assert!(validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &unprotected).is_err());
 
-        let broad_runner =
-            workflow.replace("runs-on: windows-latest", "runs-on: [self-hosted, windows]");
+        let broad_runner = replace_all_fixture(
+            &workflow,
+            "runs-on: windows-latest",
+            "runs-on: [self-hosted, windows]",
+        );
         assert!(
             validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &broad_runner).is_err()
         );
 
-        let missing_secret = workflow.replace(
+        let missing_secret = replace_all_fixture(
+            &workflow,
             "          V4_TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}\n",
             "",
         );
@@ -795,7 +849,8 @@ mod tests {
             validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &missing_secret).is_err()
         );
 
-        let cargo_with_secrets = workflow.replace(
+        let cargo_with_secrets = replace_all_fixture(
+            &workflow,
             "& $controlPath release-v4 sign-candidate",
             "cargo xtask release-v4 sign-candidate",
         );
@@ -804,7 +859,8 @@ mod tests {
                 .is_err()
         );
 
-        let missing_control_build = workflow.replace(
+        let missing_control_build = replace_all_fixture(
+            &workflow,
             "- name: Build the pinned Rust release control executable before secrets",
             "- name: Omitted Rust release control build",
         );
@@ -820,7 +876,8 @@ mod tests {
         let source = fs::read_to_string(root.join(APPROVED_RECOVERY_WORKFLOW)).unwrap();
         validate_metadata_recovery_workflow(&source).unwrap();
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2",
                 "actions/download-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"
             ))
@@ -828,7 +885,8 @@ mod tests {
             "upload-artifact SHA must never identify the downloader"
         );
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "run-id: ${{ inputs.plan_run_id }}",
                 "run-id: ${{ github.run_id }}"
             ))
@@ -836,14 +894,17 @@ mod tests {
             "plan artifact download must bind the operator-selected run"
         );
         assert!(
-            validate_metadata_recovery_workflow(
-                &source.replace("jq -r .plan_run.run_id", "jq -r .plan_run.wrong_run_id")
-            )
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
+                "jq -r .plan_run.run_id",
+                "jq -r .plan_run.wrong_run_id"
+            ))
             .is_err(),
             "plan artifact content must bind the requested run ID"
         );
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "      actions: read\n      contents: read\n      attestations: read\n",
                 "      contents: read\n      attestations: read\n"
             ))
@@ -851,7 +912,8 @@ mod tests {
             "plan job must declare actions:read after narrowing job permissions"
         );
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "GH_TOKEN: ${{ github.token }}",
                 "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}"
             ))
@@ -859,7 +921,8 @@ mod tests {
             "read verification must not select the metadata App token"
         );
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "V4_METADATA_WRITE_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
                 "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}"
             ))
@@ -867,24 +930,30 @@ mod tests {
             "the write token must use its separate credential channel"
         );
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "\"$control\" release-v4 metadata-recovery-apply",
                 "cargo xtask release-v4 metadata-recovery-apply"
             ))
             .is_err()
         );
-        assert!(validate_metadata_recovery_workflow(&source.replace(
+        assert!(validate_metadata_recovery_workflow(&replace_all_fixture(
+            &source,
             "      - name: Mint contents-scoped metadata recovery App token",
             "      - name: Mint contents-scoped metadata recovery App token\n        env:\n          LEAK: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}"
-        )).is_err());
+        ))
+        .is_err());
         assert!(
-            validate_metadata_recovery_workflow(
-                &source.replace("--confirm-metadata-only-recovery", "--publish-release")
-            )
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
+                "--confirm-metadata-only-recovery",
+                "--publish-release"
+            ))
             .is_err()
         );
         assert!(
-            validate_metadata_recovery_workflow(&source.replace(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
                 "test \"$actual\" = \"${PLAN_SHA256,,}\"",
                 "test -n \"$actual\""
             ))
@@ -893,16 +962,27 @@ mod tests {
     }
 
     #[test]
+    fn metadata_recovery_actions_mutation_is_detected_from_mixed_eol_checkout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join(APPROVED_RECOVERY_WORKFLOW)).unwrap();
+        let mixed = mixed_line_ending_fixture(&source);
+        let missing_plan_actions = replace_fixture_once(&mixed, "      actions: read\n", "");
+        assert!(validate_metadata_recovery_workflow(&missing_plan_actions).is_err());
+    }
+
+    #[test]
     fn recovery_eligibility_tracks_the_exact_release_job_graph() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = fs::read_to_string(root.join(APPROVED_RELEASE_WORKFLOW)).unwrap();
         validate_recovery_release_job_contract(&source).unwrap();
-        let wrong_publish_name = source.replace(
+        let wrong_publish_name = replace_all_fixture(
+            &source,
             "name: Verify attestations and publish immutable release assets",
             "name: Publish possibly mutable release assets",
         );
         assert!(validate_recovery_release_job_contract(&wrong_publish_name).is_err());
-        let wrong_publish_boundary = source.replace(
+        let wrong_publish_boundary = replace_all_fixture(
+            &source,
             "needs: [prepare, attest, metadata_probe]",
             "needs: [prepare, sign_qualify]",
         );
@@ -916,12 +996,13 @@ mod tests {
             .expect("release topology documentation must exist");
         release_runner_documentation_contract_source(&documentation)
             .expect("documentation must list the canonical production workflow");
-        let missing = documentation.replace(
+        let missing = replace_all_fixture(
+            &documentation,
             "`.github/workflows/release-v4.yml`",
             "`production-workflow-omitted.yml`",
         );
         assert!(release_runner_documentation_contract_source(&missing).is_err());
-        let mut with_extra = documentation.clone();
+        let mut with_extra = normalize_fixture(&documentation);
         let section_start = with_extra
             .find("### 2.4 Hosted Release Workflow and Operator Requirements")
             .expect("section 2.4 exists");
@@ -934,6 +1015,7 @@ mod tests {
             insertion,
             "- `.github/workflows/unapproved.yml` — not approved.\n",
         );
+        assert_ne!(with_extra, normalize_fixture(&documentation));
         assert!(release_runner_documentation_contract_source(&with_extra).is_err());
     }
 
@@ -942,35 +1024,43 @@ mod tests {
         let workflow = current_workflow();
         assert!(validate_metadata_app_token_scope(&workflow).is_ok());
 
-        let stale_pin = workflow.replace(
+        let stale_pin = replace_all_fixture(
+            &workflow,
             "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
             "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
         );
         assert!(validate_metadata_app_token_scope(&stale_pin).is_err());
 
-        let missing_client_id = workflow.replace(
+        let missing_client_id = replace_all_fixture(
+            &workflow,
             "          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}\n",
             "",
         );
         assert!(validate_metadata_app_token_scope(&missing_client_id).is_err());
 
-        let read_scoped_probe =
-            workflow.replacen("permission-contents: write", "permission-contents: read", 1);
+        let read_scoped_probe = replace_fixture_once(
+            &workflow,
+            "permission-contents: write",
+            "permission-contents: read",
+        );
         assert!(validate_metadata_app_token_scope(&read_scoped_probe).is_err());
 
-        let false_write_evidence = workflow.replace(
+        let false_write_evidence = replace_all_fixture(
+            &workflow,
             "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write",
             "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: read",
         );
         assert!(validate_metadata_app_token_scope(&false_write_evidence).is_err());
 
-        let broad_token = workflow.replace(
+        let broad_token = replace_all_fixture(
+            &workflow,
             "- name: Publish the exact qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ github.token }}",
             "- name: Publish the exact qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
         );
         assert!(validate_metadata_app_token_scope(&broad_token).is_err());
 
-        let private_key_in_env = workflow.replace(
+        let private_key_in_env = replace_all_fixture(
+            &workflow,
             "        with:\n          client-id:",
             "        env:\n          client-id:",
         );
@@ -1031,14 +1121,19 @@ jobs:
             "cargo xtask release-v4 self-test",
             "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests",
         ] {
-            assert!(v4_release_contract_ci_wiring(&source.replace(marker, "removed")).is_err());
+            assert!(
+                v4_release_contract_ci_wiring(&replace_all_fixture(&source, marker, "removed"))
+                    .is_err()
+            );
         }
-        let no_static = source.replace(
+        let no_static = replace_all_fixture(
+            &source,
             "cargo xtask check static --skip-supply-chain",
             "cargo xtask check static",
         );
         assert!(v4_release_contract_ci_wiring(&no_static).is_err());
-        let production_api = source.replace(
+        let production_api = replace_all_fixture(
+            &source,
             "cargo xtask release-v4 self-test",
             "gh api repos/pumni/Sky-Auto-Player/releases",
         );

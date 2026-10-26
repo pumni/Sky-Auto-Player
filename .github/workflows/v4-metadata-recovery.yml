@@ -112,14 +112,14 @@ jobs:
           rust/target/release/xtask release-v4 metadata-recovery-plan --tag "$RECOVERY_TAG" --output "$plan"
           plan_sha256="$(sha256sum "$plan" | cut -d ' ' -f 1)"
           {
-            echo "## Metadata-only recovery plan"
-            echo "- Tag: `$RECOVERY_TAG`"
-            echo "- Plan SHA-256: `$plan_sha256`"
-            echo "- Action: `$(jq -r .action "$plan")`"
-            echo "- Release ID: `$(jq -r .release_id "$plan")`"
-            echo "- Source SHA: `$(jq -r .source_sha "$plan")`"
-            echo "- Candidate metadata SHA-256: `$(jq -r .candidate_metadata_sha256 "$plan")`"
-            echo "- The plan has no GitHub write capability. Review the complete artifact before any apply dispatch."
+            printf '%s\n' '## Metadata-only recovery plan'
+            printf -- '- **Tag:** %s\n' "$RECOVERY_TAG"
+            printf -- '- **Plan SHA-256:** %s\n' "$plan_sha256"
+            printf -- '- **Action:** %s\n' "$(jq -r .action "$plan")"
+            printf -- '- **Release ID:** %s\n' "$(jq -r .release_id "$plan")"
+            printf -- '- **Source SHA:** %s\n' "$(jq -r .source_sha "$plan")"
+            printf -- '- **Candidate metadata SHA-256:** %s\n' "$(jq -r .candidate_metadata_sha256 "$plan")"
+            printf '%s\n' '- The plan has no GitHub write capability. Review the complete artifact before any apply dispatch.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reviewed plan artifact

@@ -54,17 +54,17 @@ jobs:
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=100" \
             --jq '.workflow_runs | map(select(.event == "push" and .head_branch == "main" and .head_sha == env.GITHUB_SHA)) | max_by(.run_number) // empty')"
-          test -n "$ci_run" && test "$ci_run" != "null" || {
+          if [[ -z "$ci_run" || "$ci_run" == "null" ]]; then
             echo "no CI run exists for exact main source $GITHUB_SHA" >&2
             exit 1
-          }
+          fi
           status="$(jq -r '.status // empty' <<<"$ci_run")"
           conclusion="$(jq -r '.conclusion // empty' <<<"$ci_run")"
           run_id="$(jq -r '.id // empty' <<<"$ci_run")"
-          test "$status" = "completed" && test "$conclusion" = "success" || {
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
             echo "latest exact-head CI run $run_id is not successful (status=$status conclusion=$conclusion)" >&2
             exit 1
-          }
+          fi
           echo "accepted latest successful exact-head CI run $run_id for $GITHUB_SHA"
 
       - name: Initialize isolated release state
