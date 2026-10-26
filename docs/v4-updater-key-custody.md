@@ -81,6 +81,10 @@ cargo xtask updater-trust inventory
      records the exact source SHA and executable SHA-256, and verifies those identities. The secret-
      bearing step verifies the executable digest again and invokes `xtask.exe` directly; it must not
      invoke Cargo or compile build scripts with production signing secrets in its environment.
+   - Before Rust starts the Tauri signer, it removes inherited environment variables except the
+     bounded Windows runtime allowlist. The child receives only that runtime context, the temporary
+     key path, and the passphrase required by Tauri; raw workflow secret names and unrelated tokens
+     are removed.
    - The Rust `sign-candidate` adapter bounds both values, requires encrypted Minisign material,
      materializes the encrypted key only under the run-owned direct `RUNNER_TEMP` directory, and
      verifies it against Key ID `19AABD2E7838818C` before signing.

@@ -79,7 +79,9 @@ processes are launched without the updater secret environment variables. The sep
 Before either updater secret is mapped, the job builds the pinned release-mode `xtask.exe`, records
 its SHA-256 and checked-out source SHA, and verifies both identities. The signing step checks the
 executable digest again and invokes that binary directly; it does not invoke Cargo while signing
-secrets are present.
+secrets are present. Rust removes inherited environment variables before starting Bun and keeps only
+the Windows runtime paths and directories needed by the Tauri signer; the signer receives the
+temporary key path and passphrase, while the original workflow secret variable names are removed.
 
 The GitHub App private key for release-metadata access is consumed only as an input to the App token
 mint action. Before publication, the workflow requests a short-lived token scoped to the canonical

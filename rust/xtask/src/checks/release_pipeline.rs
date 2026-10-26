@@ -697,6 +697,9 @@ fn rust_release_state_machine_contract(
         "19AABD2E7838818C",
         "cleanup_run_material",
         "capture_owned_timeout_filtered",
+        "const SIGNER_CHILD_ENV_ALLOWLIST",
+        "signer_child_environment_removals(",
+        "env::vars_os().map(|(name, _)| name)",
     ] {
         if !signing.contains(marker) {
             return Err(format!(
