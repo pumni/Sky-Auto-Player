@@ -1,5 +1,6 @@
 use super::recovery_auth::metadata_recovery_auth_contract;
 use super::workflow::{workflow_declares_only_dispatch, workflow_job_blocks, workflow_step_blocks};
+mod linux_process;
 use crate::Result;
 use std::fs;
 use std::path::Path;
@@ -889,6 +890,7 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let release = read("rust/xtask/src/release_v4.rs")?;
     let recovery = read("rust/xtask/src/release_v4/recovery.rs")?;
     let process = read("rust/xtask/src/process.rs")?;
+    linux_process::validate(root)?;
     metadata_recovery_auth_contract(&recovery_workflow, &release, &recovery, &process)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     rust_release_state_machine_contract(

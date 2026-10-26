@@ -11,6 +11,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+mod process_smoke;
+
+pub(super) fn linux_process_smoke(args: &[String]) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        process_smoke::run(args)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        Err("Linux release subprocess smoke must run on Linux".into())
+    }
+}
+
 const RECOVERY_WORKFLOW: &str =
     "pumni/Sky-Auto-Player/.github/workflows/v4-metadata-recovery.yml@refs/heads/main";
 const SIGNER_WORKFLOW: &str = "pumni/Sky-Auto-Player/.github/workflows/release-v4.yml";

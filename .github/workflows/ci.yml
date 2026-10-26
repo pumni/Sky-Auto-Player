@@ -466,6 +466,49 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  linux_process_runtime:
+    name: Linux production subprocess runtime
+    needs: changes
+    if: needs.changes.outputs.release_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Rust cache for Linux production binary
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: "rust -> target"
+          cache-targets: true
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Run Rust tests on Linux
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
+
+      - name: Build non-test Linux release binary
+        run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+
+      - name: Exercise production subprocess and recovery transports with fake CLIs
+        run: timeout --signal=TERM --kill-after=10s 5m rust/target/release/xtask ci linux-process-smoke
+
   supply_chain:
     name: Supply-chain and advisory security
     needs: changes

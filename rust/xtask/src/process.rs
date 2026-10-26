@@ -1,27 +1,30 @@
 use crate::Result;
 use std::env;
 use std::ffi::{OsStr, OsString};
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use std::fs::OpenOptions;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::sync::mpsc;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::time::Instant;
 
-#[cfg(any(test, windows))]
+#[cfg(unix)]
+mod unix;
+
+#[cfg(any(test, windows, unix))]
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 const READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 const PROCESS_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 const RUNTIME_CHILD_ENV_ALLOWLIST: &[&str] = &[
@@ -164,13 +167,13 @@ pub fn capture_owned(
         .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()).into())
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 struct BoundedReader {
     finished: mpsc::Receiver<Vec<u8>>,
     handle: JoinHandle<()>,
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 fn spawn_bounded_reader<R>(mut reader: R) -> BoundedReader
 where
     R: Read + Send + 'static,
@@ -195,7 +198,7 @@ where
     BoundedReader { finished, handle }
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 fn collect_bounded_reader(
     reader: &mut Option<BoundedReader>,
     timeout: Duration,
@@ -486,84 +489,6 @@ fn capture_windows_timeout(
     })
 }
 
-#[cfg(all(test, not(windows)))]
-fn capture_non_windows_test_timeout(
-    program: &OsStr,
-    args: &[String],
-    cwd: &Path,
-    env: &[(String, String)],
-    remove_env: &[String],
-    clear_environment: bool,
-    timeout: Duration,
-) -> Result<Output> {
-    let mut command = Command::new(program);
-    if clear_environment {
-        command.env_clear();
-    }
-    for name in remove_env {
-        command.env_remove(name);
-    }
-    command
-        .args(args)
-        .current_dir(cwd)
-        .envs(env.iter().map(|(key, value)| (key, value)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()))?;
-    let mut stdout_reader = Some(spawn_bounded_reader(
-        child.stdout.take().ok_or("missing stdout pipe")?,
-    ));
-    let mut stderr_reader = Some(spawn_bounded_reader(
-        child.stderr.take().ok_or("missing stderr pipe")?,
-    ));
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if started.elapsed() >= timeout {
-            let _ = child.kill();
-            child.wait()?;
-            let stdout =
-                collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-            let stderr =
-                collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-            return Err(format!(
-                "process {} timed out after {}ms\nstdout: {}\nstderr: {}",
-                program.to_string_lossy(),
-                timeout.as_millis(),
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            )
-            .into());
-        }
-        thread::sleep(POLL_INTERVAL);
-    };
-    let stdout = collect_bounded_reader(&mut stdout_reader, READER_DRAIN_TIMEOUT, "stdout")?;
-    let stderr = collect_bounded_reader(&mut stderr_reader, READER_DRAIN_TIMEOUT, "stderr")?;
-    if stdout.is_none() || stderr.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout");
-        let _ = collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr");
-        return Err("process exited while a descendant kept a captured pipe open".into());
-    }
-    Ok(Output {
-        status,
-        stdout: stdout.expect("stdout checked above"),
-        stderr: stderr.expect("stderr checked above"),
-    })
-}
-
 #[cfg(test)]
 fn capture_owned_timeout(
     program: &OsStr,
@@ -587,14 +512,14 @@ pub(crate) fn capture_owned_timeout_filtered(
     {
         capture_windows_timeout(program, args, cwd, env, remove_env, false, timeout)
     }
-    #[cfg(all(test, not(windows)))]
+    #[cfg(unix)]
     {
-        capture_non_windows_test_timeout(program, args, cwd, env, remove_env, false, timeout)
+        unix::capture_timeout(program, args, cwd, env, remove_env, false, timeout)
     }
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(not(windows), not(unix)))]
     {
         let _ = (program, args, cwd, env, remove_env, timeout);
-        Err("bounded Windows process-tree execution is unavailable on this platform".into())
+        Err("bounded process capture is unavailable on this platform".into())
     }
 }
 
@@ -620,20 +545,19 @@ fn capture_owned_timeout_isolated(
     {
         capture_windows_timeout(program, args, cwd, child_env, &[], true, timeout)
     }
-    #[cfg(all(test, not(windows)))]
+    #[cfg(unix)]
     {
-        capture_non_windows_test_timeout(program, args, cwd, child_env, &[], true, timeout)
+        unix::capture_timeout(program, args, cwd, child_env, &[], true, timeout)
     }
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(not(windows), not(unix)))]
     {
         let _ = (program, args, cwd, child_env, timeout);
-        Err("bounded Windows process-tree execution is unavailable on this platform".into())
+        Err("bounded process capture is unavailable on this platform".into())
     }
 }
 
 pub fn capture_text_runtime_only(program: &str, args: &[&str], cwd: &Path) -> Result<String> {
     let child_env = runtime_environment_from(env::vars_os(), &[])?;
-    #[cfg(windows)]
     let output = capture_owned_timeout_isolated(
         OsStr::new(program),
         &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
@@ -641,29 +565,6 @@ pub fn capture_text_runtime_only(program: &str, args: &[&str], cwd: &Path) -> Re
         &child_env,
         Duration::from_secs(30),
     )?;
-    #[cfg(all(test, not(windows)))]
-    let output = capture_owned_timeout_isolated(
-        OsStr::new(program),
-        &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
-        cwd,
-        &child_env,
-        Duration::from_secs(30),
-    )?;
-    #[cfg(all(not(windows), not(test)))]
-    let output = {
-        let mut command = Command::new(program);
-        command
-            .env_clear()
-            .envs(child_env.iter().map(|(key, value)| (key, value)))
-            .args(args)
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-            .output()
-            .map_err(|error| format!("failed to execute {program}: {error}"))?
-    };
     if !output.status.success() {
         return Err(format!(
             "{program} failed with {}: {}",
@@ -675,7 +576,7 @@ pub fn capture_text_runtime_only(program: &str, args: &[&str], cwd: &Path) -> Re
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 pub(crate) fn capture_owned_timeout_to_file_filtered(
     program: &OsStr,
     args: &[String],
@@ -685,21 +586,37 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
     stdout_path: &Path,
     timeout: Duration,
 ) -> Result<Output> {
-    capture_windows_timeout_to_file(
-        program,
-        args,
-        cwd,
-        ChildEnvironment {
-            values: env,
-            remove: remove_env,
-            clear_inherited: false,
-        },
-        stdout_path,
-        timeout,
-    )
+    #[cfg(windows)]
+    {
+        capture_windows_timeout_to_file(
+            program,
+            args,
+            cwd,
+            ChildEnvironment {
+                values: env,
+                remove: remove_env,
+                clear_inherited: false,
+            },
+            stdout_path,
+            timeout,
+        )
+    }
+    #[cfg(unix)]
+    {
+        unix::capture_timeout_to_file(
+            program,
+            args,
+            cwd,
+            env,
+            remove_env,
+            false,
+            stdout_path,
+            timeout,
+        )
+    }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 pub(crate) fn capture_owned_timeout_to_file_runtime_only(
     program: &OsStr,
     args: &[String],
@@ -709,18 +626,34 @@ pub(crate) fn capture_owned_timeout_to_file_runtime_only(
     timeout: Duration,
 ) -> Result<Output> {
     let child_env = runtime_environment_from(env::vars_os(), explicit_env)?;
-    capture_windows_timeout_to_file(
-        program,
-        args,
-        cwd,
-        ChildEnvironment {
-            values: &child_env,
-            remove: &[],
-            clear_inherited: true,
-        },
-        stdout_path,
-        timeout,
-    )
+    #[cfg(windows)]
+    {
+        capture_windows_timeout_to_file(
+            program,
+            args,
+            cwd,
+            ChildEnvironment {
+                values: &child_env,
+                remove: &[],
+                clear_inherited: true,
+            },
+            stdout_path,
+            timeout,
+        )
+    }
+    #[cfg(unix)]
+    {
+        unix::capture_timeout_to_file(
+            program,
+            args,
+            cwd,
+            &child_env,
+            &[],
+            true,
+            stdout_path,
+            timeout,
+        )
+    }
 }
 
 #[cfg(windows)]
@@ -790,7 +723,7 @@ fn capture_windows_timeout_to_file(
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(unix)))]
 pub(crate) fn capture_owned_timeout_to_file_filtered(
     _program: &OsStr,
     _args: &[String],
@@ -800,10 +733,10 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
     _stdout_path: &Path,
     _timeout: Duration,
 ) -> Result<Output> {
-    Err("bounded Windows process-tree execution is unavailable on this platform".into())
+    Err("bounded file capture is unavailable on this platform".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(unix)))]
 pub(crate) fn capture_owned_timeout_to_file_runtime_only(
     _program: &OsStr,
     _args: &[String],
@@ -812,7 +745,7 @@ pub(crate) fn capture_owned_timeout_to_file_runtime_only(
     _stdout_path: &Path,
     _timeout: Duration,
 ) -> Result<Output> {
-    Err("bounded Windows process-tree execution is unavailable on this platform".into())
+    Err("bounded file capture is unavailable on this platform".into())
 }
 
 #[cfg(windows)]

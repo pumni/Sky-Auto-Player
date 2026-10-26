@@ -215,6 +215,21 @@ metadata Contents `PUT`. The post-write readback uses `GH_TOKEN`. The Rust proce
 CLI children with a cleared runtime-only environment and supplies only the token selected for that
 operation, so the App write token is not inherited by other child commands.
 
+The shared Rust subprocess adapter has production Linux and Windows implementations. Both cap each
+captured stream at 64 KiB, enforce deadlines, drain pipes with bounded waits, and terminate owned
+process trees when a command times out or leaves captured pipes open. On Linux, children start in
+their own process group and timeout cleanup kills that group. File downloads use an exclusive new
+destination and remove partial output after a failed or timed-out command; an existing file is
+never overwritten. A descendant that deliberately creates a new session can escape the Linux
+process group, so release commands must not daemonize.
+
+The `Linux production subprocess runtime` CI job runs the xtask Rust tests on Ubuntu, builds the
+non-test release binary, then invokes `ci linux-process-smoke`. That smoke starts the same release
+binary with a temporary PATH containing fake `gh` and `curl` executables and synthetic credentials.
+It exercises recovery reads, attestation verification, asset download, the single stable metadata
+write token route, public metadata GET, token isolation, output bounds, timeout cleanup, and partial
+file cleanup. It has no production secrets and cannot reach real GitHub or curl binaries.
+
 The recovery operation is not a second release lifecycle. It shares the Rust transport, metadata
 schema, signature verifier, provenance checks, and monotonic version policy; it has no release
 state file or release asset operation. A stale plan, Latest conflict, non-monotonic candidate,

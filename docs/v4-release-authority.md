@@ -285,6 +285,14 @@ write-result readback, use the workflow token; the public stable raw endpoint is
 credentials. Runtime-only child environments keep the App token out of unrelated GitHub CLI and
 helper processes.
 
+The shared process adapter is implemented for both Windows and Linux production builds. Captured
+stdout and stderr are each limited to 64 KiB, subprocesses have explicit deadlines, and timeout or
+stranded-pipe cleanup terminates the owned process tree (a Unix process group on Linux). Asset
+downloads create a new destination exclusively and remove partial bytes after command failure or
+timeout. The Linux CI lane runs the Rust tests, builds the release-mode xtask, and exercises its
+recovery transport against temporary fake `gh` and `curl` executables with disposable tokens. This
+checks the actual Linux production subprocess path without production credentials or network access.
+
 Rust revalidates the exact release ID, tag, transaction source SHA and run attempt, Latest identity,
 exact public asset inventory and digests, production signature and version-bound trusted comment,
 installer/signature provenance, SPDX SBOM provenance, stable/beta metadata, and public stable

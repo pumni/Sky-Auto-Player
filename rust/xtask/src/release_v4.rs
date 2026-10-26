@@ -32,6 +32,10 @@ const ATTESTATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const RAW_METADATA_RETRY_BUDGET: Duration = Duration::from_secs(60);
 const RAW_METADATA_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
+pub(crate) fn linux_process_smoke(args: &[String]) -> Result<()> {
+    recovery::linux_process_smoke(args)
+}
+
 fn decode_api_response(method: &str, endpoint: &str, bytes: &[u8]) -> Result<Option<Value>> {
     if bytes.is_empty() {
         Ok(None)
