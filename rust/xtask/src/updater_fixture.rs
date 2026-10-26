@@ -1634,7 +1634,10 @@ fn parse_windows_install_location(raw: &str) -> Result<String> {
         return Err("registry InstallLocation is empty or has surrounding whitespace".into());
     }
     let path = match (raw.starts_with('"'), raw.ends_with('"')) {
-        (true, true) => &raw[1..raw.len() - 1],
+        (true, true) => raw
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .ok_or_else(|| "registry InstallLocation has an invalid quote pair".to_owned())?,
         (true, false) | (false, true) => {
             return Err("registry InstallLocation has an unmatched quote".into());
         }
@@ -2911,6 +2914,7 @@ mod tests {
             "relative\\install",
             r"D:relative\install",
             r"\rooted\without\drive",
+            "\"",
             r#""D:\install"#,
             r#"D:\install""#,
             r#""D:\bad"name""#,
