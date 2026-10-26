@@ -277,11 +277,13 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Run startup calibration export hash self-test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_startup_calibration_evidence_export.ps1
-
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Run startup calibration export hash self-test
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_startup_calibration_evidence_export.ps1
 
       - name: Run Rust-native CI, candidate, bridge, and calibration self-tests
         env:

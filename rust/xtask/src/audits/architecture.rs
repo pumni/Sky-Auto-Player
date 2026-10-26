@@ -170,6 +170,8 @@ fn is_engine_test_owner_path(path: &str) -> bool {
 }
 
 const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
+    ("rust/xtask/src/assembly_audit.rs", 1_300),
+    ("rust/xtask/src/calibration.rs", 1_250),
     ("rust/xtask/src/checks.rs", 1_600),
     ("rust/xtask/src/checks/bindings.rs", 700),
     ("rust/xtask/src/checks/ci_contracts.rs", 2_100),

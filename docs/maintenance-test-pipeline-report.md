@@ -106,3 +106,4 @@ Known baseline failures remain separate: website `format:check` reports 112 exis
 - The site formatter reports 112 unchanged files. This branch did not reformat unrelated website content.
 - The locked Rust dependency graph contains the three current zip 4.6.1 advisories. Updating or suppressing them requires a separate dependency/security decision; neither was done here.
 - One catalog validation reuse removes a duplicate read/parse walk from check all, but its subsecond cost is below aggregate measurement noise. Measured full-gate wall times do not demonstrate a stable overall speedup.
+- Separate Playwright Workbench risk: behavior under six-worker load remains unresolved. The required Wave E `check all` run exercised desktop E2E with six workers and passed once, but it did not run a targeted, sustained Workbench stress qualification; the risk remains open.

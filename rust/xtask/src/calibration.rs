@@ -7,6 +7,7 @@ use crate::ci_artifacts::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -628,6 +629,47 @@ fn required<'a>(
         .ok_or_else(|| format!("calibration requires --{name}").into())
 }
 
+fn canonical_projection_bytes(serialized_json: &str) -> Vec<u8> {
+    let normalized = serialized_json.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = normalized.trim_end_matches(['\r', '\n']);
+    let mut bytes = normalized.as_bytes().to_vec();
+    bytes.push(b'\n');
+    bytes
+}
+
+fn sidecar_path(path: &Path) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_owned();
+    sidecar.push(".sha256");
+    PathBuf::from(sidecar)
+}
+
+fn write_projection(serialized_json: &str, output: &Path) -> Result<String> {
+    if serialized_json.is_empty() {
+        return Err("startup calibration projection input must not be empty".into());
+    }
+    let file_name = output
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or("startup calibration output path must name a file")?;
+    let bytes = canonical_projection_bytes(serialized_json);
+    let digest = crate::repo::hex_digest(Sha256::digest(&bytes));
+    let mut sidecar = digest.clone().into_bytes();
+    sidecar.extend_from_slice(b"  ");
+    sidecar.extend_from_slice(file_name.to_string_lossy().as_bytes());
+    sidecar.push(b'\n');
+    fs::write(output, &bytes)?;
+    fs::write(sidecar_path(output), sidecar)?;
+    Ok(digest)
+}
+
+fn project_evidence(input: &Path, output: &Path) -> Result<()> {
+    let serialized = fs::read_to_string(input)
+        .map_err(|error| format!("could not read startup calibration JSON input: {error}"))?;
+    let digest = write_projection(&serialized, output)?;
+    println!("SHA256 {digest}");
+    Ok(())
+}
+
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("build") => {
@@ -655,6 +697,13 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
                 expected_size,
                 required(&options, "expected-sha256")?,
                 evidence,
+            )
+        }
+        Some("project-evidence") => {
+            let options = parse_options(&args[1..], &["input", "output"])?;
+            project_evidence(
+                Path::new(required(&options, "input")?),
+                Path::new(required(&options, "output")?),
             )
         }
         Some(operation) => Err(format!("unknown calibration operation: {operation}").into()),
@@ -737,6 +786,50 @@ mod tests {
         ));
         assert!(!usage_line_matches("Usage: another_program --help"));
         assert!(!usage_line_matches("native_calibration command"));
+    }
+
+    #[test]
+    fn startup_projection_normalizes_all_line_endings_and_hashes_exact_utf8_bytes() {
+        let output = temp_dir("sky-xtask-startup-projection");
+        let lf_path = output.join("wake-calibration-qualification-lf.json");
+        let crlf_path = output.join("wake-calibration-qualification-crlf.json");
+        let lf = "{\n  \"label\": \"Māori 🎵\"\n}\n\n";
+        let crlf = lf.replace('\n', "\r\n");
+        let lf_digest = write_projection(lf, &lf_path).unwrap();
+        let crlf_digest = write_projection(&crlf, &crlf_path).unwrap();
+        let lf_bytes = fs::read(&lf_path).unwrap();
+        let crlf_bytes = fs::read(&crlf_path).unwrap();
+
+        assert_eq!(lf_bytes, crlf_bytes);
+        assert!(!lf_bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+        assert!(!lf_bytes.contains(&b'\r'));
+        assert_eq!(lf_bytes.last(), Some(&b'\n'));
+        assert_ne!(lf_bytes.get(lf_bytes.len() - 2), Some(&b'\n'));
+        assert!(String::from_utf8_lossy(&lf_bytes).contains("Māori 🎵"));
+        assert_eq!(
+            lf_digest,
+            crate::repo::hex_digest(Sha256::digest(&lf_bytes))
+        );
+        assert_eq!(lf_digest, crlf_digest);
+
+        let sidecar = fs::read(sidecar_path(&lf_path)).unwrap();
+        assert_eq!(
+            sidecar,
+            format!("{lf_digest}  wake-calibration-qualification-lf.json\n").as_bytes()
+        );
+        assert!(!sidecar.starts_with(&[0xef, 0xbb, 0xbf]));
+        assert_eq!(sidecar.last(), Some(&b'\n'));
+        assert_ne!(sidecar.get(sidecar.len() - 2), Some(&b'\n'));
+
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    #[test]
+    fn startup_projection_rejects_empty_input_and_paths_without_a_file_name() {
+        let output = temp_dir("sky-xtask-startup-projection-negative");
+        assert!(write_projection("", &output.join("evidence.json")).is_err());
+        assert!(write_projection("{}", &output).is_err());
+        fs::remove_dir_all(output).unwrap();
     }
 
     #[cfg(windows)]

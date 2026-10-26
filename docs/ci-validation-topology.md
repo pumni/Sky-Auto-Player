@@ -172,3 +172,25 @@ respond.
 
 The documented GitHub Actions job default is described in the
 [workflow syntax reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).
+
+## Wave E deterministic evidence tools
+
+`rust/xtask/src/assembly_audit.rs` now owns the deterministic parsing and
+assertions for the dispatch, prepared-normal, and modifier-guard optimized
+assembly audits. The existing `scripts/audit_*_assembly.ps1` names remain as
+thin command adapters because the retained RT evidence runner calls them.
+Their Rust fixtures cover both accepted and rejected assembly shapes.
+
+`cargo xtask calibration project-evidence` owns startup calibration JSON
+projection bytes and SHA-256 sidecars. It normalizes CRLF and CR to LF, writes
+UTF-8 without a BOM, and emits exactly one trailing LF. The startup export
+PowerShell entrypoint still validates the 120-run manifests and assembles the
+sanitized paired-run report; its projection helper delegates to Rust. The
+existing self-test checks that adapter against LF/CRLF fixtures and Git
+checkout behavior with `core.autocrlf=true`.
+
+Wave E did not change the native acceptance runner, WinForms ReceiveOnly sink,
+startup qualification orchestration, Defender evidence capture, or GitHub
+evidence publisher. It ran no physical input acceptance. The full startup
+report builder remains PowerShell until a complete golden export fixture can
+prove output parity.
