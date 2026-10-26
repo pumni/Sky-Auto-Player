@@ -588,6 +588,7 @@ fn process_tree_boundary_contract(source: &str) -> Result<()> {
 
 const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/ci.yml",
+    ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/pages.yml",
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4.yml",

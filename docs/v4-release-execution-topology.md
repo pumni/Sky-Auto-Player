@@ -80,6 +80,11 @@ A maintainer workstation may run Rust validation and fake-transport tests. It is
 release runner and has no supported local publication entry point. Authenticode and updater
 signatures establish artifact integrity; production provenance comes from the protected workflow
 and its exact source identity and OIDC attestations.
+
+Wave A adds `.github/workflows/hosted-v4-signing-proof.yml`, a separate read-only proof route for
+feature-branch pull requests and manual test runs. It builds one unsigned NSIS installer, creates asynthetic key only after the build, and verifies the standalone version-bound signature with Rust.
+This route has no production environment or release/metadata permissions; it is not a productionqualification run and does not change the current production runner path. Its evidence and activedependency ledger are recorded in [v4-hosted-signing-proof.md](v4-hosted-signing-proof.md).
+
 ### 2.3 Self-Hosted Runner Hygiene Preconditions
 
 Dedicated self-hosted Windows runners executing production releases must satisfy strict hygiene preconditions:

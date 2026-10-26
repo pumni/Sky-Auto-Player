@@ -1083,6 +1083,8 @@ fn build_candidate(root: &Path, options: &Options) -> Result<()> {
             frozen_installer.to_str().ok_or("invalid installer path")?,
             "--signature",
             frozen_signature.to_str().ok_or("invalid signature path")?,
+            "--expected-version",
+            &context.version,
         ],
     )?;
     run_xtask(

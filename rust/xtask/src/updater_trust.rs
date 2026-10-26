@@ -1,13 +1,35 @@
 use crate::Result;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use minisign_verify::{PublicKey, Signature};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
 const MAX_PUBLIC_KEY_BYTES: usize = 4096;
-#[cfg(windows)]
 const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
+const MAX_UPDATER_INSTALLER_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+struct HostedUpdaterSignatureProof {
+    schema_version: u32,
+    evidence_type: &'static str,
+    status: &'static str,
+    source_sha: String,
+    version: String,
+    installer: String,
+    installer_size: u64,
+    installer_sha256: String,
+    updater_signature: String,
+    updater_signature_size: u64,
+    updater_signature_sha256: String,
+    updater_public_key_sha256: String,
+    updater_key_id: String,
+    signed_file: String,
+    signed_version: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdaterTrustInventory {
@@ -238,32 +260,202 @@ pub fn verify_local_private_key(
 }
 
 /// Verify a Tauri updater signature against an installer file using the canonical v4 public root.
+#[cfg(test)]
 pub fn verify_updater_signature(installer_path: &Path, signature_path: &Path) -> Result<()> {
-    if !installer_path.is_file() {
-        return Err(format!(
-            "installer file does not exist: {}",
-            installer_path.display()
-        )
-        .into());
-    }
-    if !signature_path.is_file() {
-        return Err(format!(
-            "updater signature file does not exist: {}",
-            signature_path.display()
-        )
-        .into());
-    }
-    let installer_bytes = fs::read(installer_path)?;
-    if installer_bytes.is_empty() {
-        return Err("installer file is empty".into());
-    }
-    let signature = decode_signature(signature_path)?;
     let public_key = decode_public_key(crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY)?;
-    public_key
-        .verify(&installer_bytes, &signature, false)
-        .map_err(|_| "updater signature does not match the canonical production v4 public root")?;
+    verify_updater_signature_with_key(installer_path, signature_path, &public_key, None)?;
     let key_id = canonical_key_id()?;
     println!("[xtask] V4 Updater Signature Verification: PASS (Key ID: {key_id})");
+    Ok(())
+}
+
+/// Verify production updater bytes and require the version embedded in the
+/// signed Minisign trusted comment to match the release context.
+pub fn verify_updater_signature_for_version(
+    installer_path: &Path,
+    signature_path: &Path,
+    expected_version: &str,
+) -> Result<()> {
+    crate::ci_artifacts::validate_semver(expected_version, "expected updater version")?;
+    let public_key = decode_public_key(crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY)?;
+    verify_updater_signature_with_key(
+        installer_path,
+        signature_path,
+        &public_key,
+        Some(expected_version),
+    )?;
+    let key_id = canonical_key_id()?;
+    println!(
+        "[xtask] V4 Updater Signature Verification: PASS (version={expected_version}; Key ID: {key_id})"
+    );
+    Ok(())
+}
+
+fn verify_updater_signature_with_key(
+    installer_path: &Path,
+    signature_path: &Path,
+    public_key: &PublicKey,
+    expected_version: Option<&str>,
+) -> Result<()> {
+    let installer_metadata =
+        crate::ci_artifacts::require_regular_file(installer_path, "updater installer")?;
+    if installer_metadata.len() == 0 || installer_metadata.len() > MAX_UPDATER_INSTALLER_BYTES {
+        return Err("updater installer is empty or exceeds the verification bound".into());
+    }
+    let installer_bytes = fs::read(installer_path)?;
+    if installer_bytes.len() as u64 != installer_metadata.len() {
+        return Err("updater installer changed while it was being read".into());
+    }
+    let signature = decode_signature(signature_path)?;
+    public_key
+        .verify(&installer_bytes, &signature, false)
+        .map_err(|_| "updater signature does not match the supplied public root")?;
+    if let Some(expected_version) = expected_version {
+        let installer_name = installer_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("updater installer filename is not valid Unicode")?;
+        validate_signed_artifact_identity(&signature, installer_name, expected_version)?;
+    }
+    Ok(())
+}
+
+fn trusted_comment_field<'a>(signature: &'a Signature, name: &str) -> Result<&'a str> {
+    let prefix = format!("{name}:");
+    let mut matches = signature
+        .trusted_comment()
+        .split('\t')
+        .filter_map(|field| field.strip_prefix(&prefix));
+    let value = matches
+        .next()
+        .ok_or_else(|| format!("updater signature trusted comment is missing {name}"))?;
+    if value.is_empty() || matches.next().is_some() {
+        return Err(format!("updater signature trusted comment has invalid {name}").into());
+    }
+    Ok(value)
+}
+
+fn validate_signed_artifact_identity(
+    signature: &Signature,
+    expected_file: &str,
+    expected_version: &str,
+) -> Result<()> {
+    let signed_version = trusted_comment_field(signature, "version")?;
+    if signed_version != expected_version {
+        return Err(format!(
+            "updater signature version does not match the candidate: expected {expected_version}, observed {signed_version}"
+        )
+        .into());
+    }
+    let signed_file = trusted_comment_field(signature, "file")?;
+    if signed_file != expected_file {
+        return Err(format!(
+            "updater signature filename does not match the candidate: expected {expected_file}, observed {signed_file}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Verify the isolated hosted proof artifact with a synthetic test key. This
+/// path explicitly refuses the production public root and never loads private
+/// material.
+pub fn verify_test_updater_signature(
+    installer_path: &Path,
+    signature_path: &Path,
+    public_key_path: &Path,
+    expected_version: &str,
+    expected_sha256: &str,
+    source_sha: &str,
+    evidence_path: Option<&Path>,
+) -> Result<()> {
+    crate::ci_artifacts::validate_semver(expected_version, "expected updater version")?;
+    let source_sha = crate::ci_artifacts::validate_commit_sha(source_sha, "source SHA")?;
+    let expected_sha256 =
+        crate::ci_artifacts::validate_digest(expected_sha256, "expected installer SHA-256")?;
+    let expected_installer = crate::release_metadata::canonical_installer_name(expected_version);
+    let observed_installer = installer_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("updater installer filename is not valid Unicode")?;
+    if observed_installer != expected_installer {
+        return Err(format!(
+            "updater installer filename does not match expected version: expected {expected_installer}, observed {observed_installer}"
+        )
+        .into());
+    }
+    let expected_signature = format!("{expected_installer}.sig");
+    let observed_signature = signature_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("updater signature filename is not valid Unicode")?;
+    if observed_signature != expected_signature
+        || signature_path != installer_path.with_file_name(&expected_signature)
+    {
+        return Err("updater signature is not the exact installer sidecar".into());
+    }
+
+    let public_key_text = read_public_key(public_key_path)?;
+    if public_key_text == crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY {
+        return Err("hosted proof verifier refuses the canonical production updater root".into());
+    }
+    let public_key = decode_public_key(&public_key_text)?;
+    let key_id = extract_key_id_from_public_key(&public_key_text)?;
+
+    let installer_metadata =
+        crate::ci_artifacts::require_regular_file(installer_path, "hosted proof installer")?;
+    if installer_metadata.len() == 0 || installer_metadata.len() > MAX_UPDATER_INSTALLER_BYTES {
+        return Err("hosted proof installer is empty or exceeds the verification bound".into());
+    }
+    let signature_metadata = crate::ci_artifacts::require_regular_file(
+        signature_path,
+        "hosted proof updater signature",
+    )?;
+    let installer_bytes = fs::read(installer_path)?;
+    if installer_bytes.len() as u64 != installer_metadata.len() {
+        return Err("hosted proof installer changed while it was being read".into());
+    }
+    let installer_sha256 = crate::repo::hex_digest(Sha256::digest(&installer_bytes));
+    if installer_sha256 != expected_sha256 {
+        return Err("hosted proof installer SHA-256 does not match the pre-sign digest".into());
+    }
+    let signature = decode_signature(signature_path)?;
+    public_key
+        .verify(&installer_bytes, &signature, false)
+        .map_err(|_| "hosted proof signature does not match the supplied test public key")?;
+    validate_signed_artifact_identity(&signature, &expected_installer, expected_version)?;
+
+    let proof = HostedUpdaterSignatureProof {
+        schema_version: 1,
+        evidence_type: "tauri-hosted-test-key-signature-proof",
+        status: "PASS",
+        source_sha,
+        version: expected_version.to_owned(),
+        installer: expected_installer.clone(),
+        installer_size: installer_metadata.len(),
+        installer_sha256,
+        updater_signature: expected_signature,
+        updater_signature_size: signature_metadata.len(),
+        updater_signature_sha256: crate::ci_artifacts::sha256_file(signature_path)?,
+        updater_public_key_sha256: crate::ci_artifacts::sha256_file(public_key_path)?,
+        updater_key_id: key_id.clone(),
+        signed_file: trusted_comment_field(&signature, "file")?.to_owned(),
+        signed_version: trusted_comment_field(&signature, "version")?.to_owned(),
+    };
+    if let Some(path) = evidence_path {
+        let bytes = serde_json::to_vec_pretty(&proof)?;
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        output.write_all(&bytes)?;
+        output.write_all(b"\n")?;
+        output.sync_all()?;
+    }
+    println!(
+        "[xtask] Hosted Tauri updater signature proof: PASS (source={}; version={}; installer_sha256={}; test_key_id={})",
+        proof.source_sha, proof.version, proof.installer_sha256, proof.updater_key_id
+    );
     Ok(())
 }
 
@@ -400,20 +592,23 @@ fn decode_public_key(value: &str) -> Result<PublicKey> {
 }
 
 fn decode_signature(path: &Path) -> Result<Signature> {
+    let metadata = crate::ci_artifacts::require_regular_file(path, "updater signature")?;
+    if metadata.len() == 0 || metadata.len() > MAX_SIGNATURE_BYTES as u64 {
+        return Err("updater signature is empty or unbounded".into());
+    }
     let encoded = fs::read_to_string(path)?.trim().to_owned();
+    if encoded.len() > MAX_SIGNATURE_BYTES {
+        return Err("updater signature is unbounded".into());
+    }
     let decoded = STANDARD.decode(encoded)?;
     let decoded = String::from_utf8(decoded)?;
     Ok(Signature::decode(&decoded)?)
 }
 
 fn read_public_key(path: &Path) -> Result<String> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "updater public-key fixture is not a regular file: {}",
-            path.display()
-        )
-        .into());
+    let metadata = crate::ci_artifacts::require_regular_file(path, "updater public-key fixture")?;
+    if metadata.len() > MAX_PUBLIC_KEY_BYTES as u64 {
+        return Err("updater public-key fixture is unbounded".into());
     }
     let value = String::from_utf8(fs::read(path)?)?.trim().to_owned();
     if value.is_empty() || value.len() > MAX_PUBLIC_KEY_BYTES {
@@ -435,12 +630,38 @@ fn read_public_key(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    const HOSTED_PROOF_BYTES: &[u8] = b"synthetic NSIS installer fixture bytes";
+    const HOSTED_PROOF_SOURCE_SHA: &str = "1111111111111111111111111111111111111111";
+    const HOSTED_PROOF_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGRTM5NkQyNDI3RTUwQzcKUldUSFVINUMwcGJqendvZC84ajliU2dpdDFreG1ESkRPK1BqaWxwQjJIZXhRM01KUDNxMTVMR0gK";
+    const HOSTED_PROOF_OTHER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1NjM3MkE4NzJGM0JENkUKUldSdXZmTnlxSEpqRmZUcWx4NWV4NGpFK1A0eDlHaEpZRzJjQzFTZDB1L3M4WU5ON2UzTGIxemIK";
+    const HOSTED_PROOF_ALTERNATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzNkNBMzdDQzBDM0IyREQKUldUZHNzUEFmS05zWXpKMjRqcnRlR3FFY0pVMFVybEsydlhmdDhWV0RGYWYxc01wNlJSZ3dJWmQK";
+    const HOSTED_PROOF_SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUSFVINUMwcGJqendNRFQ0ZmxqNyt4YUhjTUxwQktGLzFXbDRqTk82NEVPVDdlZjBnZ3dPeG1ZTFNNVU8wUGNtYmYrZXJsRUkvOWlVTWtSeVJnTExrUmhXTGcrSzRvVFFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTkzMjAzCWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMi4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjIuMAp2d2s5MTdmN0QybkVDWlgwQk1haGlCT3ZGQ0xqUUxsTG5YLzlJQ3plM0Z4TEJqdTlpdzZEUTV0UmQ3cHpwRmZXUmVteGEvNU8vS3Q4aFdiNnRDbDFEdz09Cg==";
+    const HOSTED_PROOF_WRONG_VERSION_SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHNzUEFmS05zWTFNVEE2Wm5UdzJjNmZlZkpoSVJ3TlBCZEJSVS9lQ0FzMllGb0U1MkxvbGZSditkTyt4cFRVdVRWbEVJeWJpb2JiRkVQbXEzRTh5K2dFaEpPUXpPZHdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTkzNzMxCWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMi4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjIuMApRRDZyd3AvYkh0eTNaZUlML3hTNkZBcllBN0I0MWZIRER1TWJPUkNKVVNBOTdoanJTSUdUeGlRUE9sRjlZQW9Obzd3VW83SU50T3dwUVBrL3JpUlZEUT09Cg==";
+
     fn fixture_root() -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "sky-xtask-updater-trust-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ))
+    }
+
+    fn write_hosted_proof_fixture(
+        root: &Path,
+        version: &str,
+        public_key: &str,
+        signature: &str,
+        payload: &[u8],
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        fs::create_dir_all(root).unwrap();
+        let installer_name = crate::release_metadata::canonical_installer_name(version);
+        let installer = root.join(&installer_name);
+        let signature_path = root.join(format!("{installer_name}.sig"));
+        let public_key_path = root.join("synthetic-updater.pub");
+        fs::write(&installer, payload).unwrap();
+        fs::write(&signature_path, signature).unwrap();
+        fs::write(&public_key_path, public_key).unwrap();
+        (installer, signature_path, public_key_path)
     }
 
     #[test]
@@ -534,6 +755,217 @@ mod tests {
         .unwrap();
         assert!(verify_updater_signature(&dummy_exe, &dummy_sig).is_err());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hosted_signature_proof_verifies_exact_bytes_version_and_typed_evidence() {
+        let root = fixture_root().join("hosted-proof-valid");
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &root,
+            "4.2.0",
+            HOSTED_PROOF_PUBLIC_KEY,
+            HOSTED_PROOF_SIGNATURE,
+            HOSTED_PROOF_BYTES,
+        );
+        let expected_sha256 = crate::repo::hex_digest(Sha256::digest(HOSTED_PROOF_BYTES));
+        let evidence = root.join("proof.json");
+        verify_test_updater_signature(
+            &installer,
+            &signature,
+            &public_key,
+            "4.2.0",
+            &expected_sha256,
+            HOSTED_PROOF_SOURCE_SHA,
+            Some(&evidence),
+        )
+        .unwrap();
+        let evidence: serde_json::Value =
+            serde_json::from_slice(&fs::read(evidence).unwrap()).unwrap();
+        assert_eq!(evidence["status"], "PASS");
+        assert_eq!(evidence["source_sha"], HOSTED_PROOF_SOURCE_SHA);
+        assert_eq!(evidence["version"], "4.2.0");
+        assert_eq!(evidence["signed_version"], "4.2.0");
+        assert_eq!(
+            evidence["signed_file"],
+            "Sky Auto Player_4.2.0_x64-setup.exe"
+        );
+        assert_eq!(evidence["installer_sha256"], expected_sha256);
+        assert!(!evidence.to_string().contains("PRIVATE KEY"));
+
+        let relocated = root.join("relocated");
+        fs::create_dir_all(&relocated).unwrap();
+        let relocated_signature = relocated.join(signature.file_name().unwrap());
+        fs::copy(&signature, &relocated_signature).unwrap();
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &relocated_signature,
+                &public_key,
+                "4.2.0",
+                &expected_sha256,
+                HOSTED_PROOF_SOURCE_SHA,
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("exact installer sidecar")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hosted_signature_proof_rejects_wrong_key_version_tamper_partial_and_sha() {
+        let root = fixture_root().join("hosted-proof-negative");
+        let wrong_key = root.join("wrong-key");
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &wrong_key,
+            "4.2.0",
+            HOSTED_PROOF_OTHER_PUBLIC_KEY,
+            HOSTED_PROOF_SIGNATURE,
+            HOSTED_PROOF_BYTES,
+        );
+        let expected_sha256 = crate::repo::hex_digest(Sha256::digest(HOSTED_PROOF_BYTES));
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &signature,
+                &public_key,
+                "4.2.0",
+                &expected_sha256,
+                HOSTED_PROOF_SOURCE_SHA,
+                None,
+            )
+            .is_err()
+        );
+
+        let wrong_version = root.join("wrong-version");
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &wrong_version,
+            "4.2.1",
+            HOSTED_PROOF_ALTERNATE_PUBLIC_KEY,
+            HOSTED_PROOF_WRONG_VERSION_SIGNATURE,
+            HOSTED_PROOF_BYTES,
+        );
+        let error = verify_test_updater_signature(
+            &installer,
+            &signature,
+            &public_key,
+            "4.2.1",
+            &expected_sha256,
+            HOSTED_PROOF_SOURCE_SHA,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("version does not match"),
+            "unexpected version-negative result: {error}"
+        );
+
+        let modified = root.join("modified-bytes");
+        let mut modified_payload = HOSTED_PROOF_BYTES.to_vec();
+        modified_payload.push(b'!');
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &modified,
+            "4.2.0",
+            HOSTED_PROOF_PUBLIC_KEY,
+            HOSTED_PROOF_SIGNATURE,
+            &modified_payload,
+        );
+        let modified_sha256 = crate::repo::hex_digest(Sha256::digest(&modified_payload));
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &signature,
+                &public_key,
+                "4.2.0",
+                &modified_sha256,
+                HOSTED_PROOF_SOURCE_SHA,
+                None,
+            )
+            .is_err()
+        );
+
+        let partial = root.join("partial-signature");
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &partial,
+            "4.2.0",
+            HOSTED_PROOF_PUBLIC_KEY,
+            "AAAA",
+            HOSTED_PROOF_BYTES,
+        );
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &signature,
+                &public_key,
+                "4.2.0",
+                &expected_sha256,
+                HOSTED_PROOF_SOURCE_SHA,
+                None,
+            )
+            .is_err()
+        );
+
+        let mismatched_sha = root.join("mismatched-sha");
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &mismatched_sha,
+            "4.2.0",
+            HOSTED_PROOF_PUBLIC_KEY,
+            HOSTED_PROOF_SIGNATURE,
+            HOSTED_PROOF_BYTES,
+        );
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &signature,
+                &public_key,
+                "4.2.0",
+                &"0".repeat(64),
+                HOSTED_PROOF_SOURCE_SHA,
+                None,
+            )
+            .is_err()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hosted_signature_proof_refuses_the_production_public_root_and_bad_identity() {
+        let root = fixture_root().join("hosted-proof-boundary");
+        let (installer, signature, public_key) = write_hosted_proof_fixture(
+            &root,
+            "4.2.0",
+            crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY,
+            HOSTED_PROOF_SIGNATURE,
+            HOSTED_PROOF_BYTES,
+        );
+        let expected_sha256 = crate::repo::hex_digest(Sha256::digest(HOSTED_PROOF_BYTES));
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &signature,
+                &public_key,
+                "4.2.0",
+                &expected_sha256,
+                HOSTED_PROOF_SOURCE_SHA,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_test_updater_signature(
+                &installer,
+                &signature,
+                &public_key,
+                "4.2.0",
+                &expected_sha256,
+                &"0".repeat(40),
+                None,
+            )
+            .is_err()
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

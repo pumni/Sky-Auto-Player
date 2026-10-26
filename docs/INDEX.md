@@ -21,7 +21,8 @@ revision-scoped; their presence here or in the repository does not make them cur
   [v4-tauri-packaging.md](v4-tauri-packaging.md),
   [v4-updater-key-custody.md](v4-updater-key-custody.md),
   [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md), and
-  [v4-release-execution-topology.md](v4-release-execution-topology.md).
+  [v4-release-execution-topology.md](v4-release-execution-topology.md), and
+  [v4-hosted-signing-proof.md](v4-hosted-signing-proof.md).
 - **CI lanes and artifact tooling:** [ci-validation-topology.md](ci-validation-topology.md)
   covers Rust-owned classification, candidate/bridge artifacts, calibration packaging, and
   installer/updater qualification. [powershell-dependency-ledger.md](powershell-dependency-ledger.md)

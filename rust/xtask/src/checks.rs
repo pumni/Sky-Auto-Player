@@ -1,5 +1,6 @@
 mod bindings;
 mod ci_contracts;
+mod hosted_signing;
 mod release_pipeline;
 mod release_runner;
 mod tauri_metadata;
@@ -131,6 +132,7 @@ fn run_with_session(
             ci_contracts::ci_control_plane_contract(&root)?;
             tauri_metadata::release_metadata_contract(&root)?;
             release_runner::release_runner_contract(&root)?;
+            hosted_signing::hosted_v4_signing_workflow_contract(&root)?;
             release_pipeline::v4_release_pipeline_contract(&root)?;
             ci_contracts::packaged_ci_contract(&root)?;
             tauri_metadata::v4_legacy_updater_retirement(&root)?;

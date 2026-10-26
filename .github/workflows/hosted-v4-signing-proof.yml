@@ -1,0 +1,174 @@
+name: Hosted V4 Test-Key Signing Proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/hosted-v4-signing-proof.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/release-v4.yml"
+      - ".github/workflows/rehearse-v4.yml"
+      - "desktop/**"
+      - "rust/**"
+      - "scripts/**"
+      - "docs/v4-hosted-signing-proof.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  proof:
+    name: Build unsigned NSIS then sign exact bytes with a disposable key
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+      SKY_AUTHENTICODE_MODE: unsigned-zero-budget
+      SKY_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Initialize isolated proof directory
+        run: |
+          $proofRoot = Join-Path $env:RUNNER_TEMP "sky-v4-hosted-signing-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $proofRoot) { throw "Hosted proof directory already exists" }
+          New-Item -ItemType Directory -Path $proofRoot | Out-Null
+          Set-Content -LiteralPath (Join-Path $proofRoot "owner") -Value $env:GITHUB_RUN_ID -Encoding ascii
+          $targetRoot = Join-Path $proofRoot "cargo-target"
+          "SKY_HOSTED_PROOF_ROOT=$proofRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "CARGO_TARGET_DIR=$targetRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Check out exact proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Install locked desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Verify source identity and pinned Tauri CLI
+        run: |
+          $manifest = Get-Content -LiteralPath desktop/src-tauri/Cargo.toml -Raw
+          $package = [regex]::Match($manifest, '(?s)\[package\]\s*(.*?)(?=\r?\n\[|$)').Groups[1].Value
+          $versionMatch = [regex]::Match($package, '(?m)^version\s*=\s*"([^"]+)"\s*$')
+          if (-not $versionMatch.Success) { throw "Could not read the canonical desktop package version" }
+          $version = $versionMatch.Groups[1].Value
+          cargo xtask ci source-identity `
+            --candidate-version $version `
+            --source-sha $env:SKY_PROOF_SOURCE_SHA `
+            --require-worktree-version
+          if ($LASTEXITCODE -ne 0) { throw "Hosted proof source identity check failed with exit code $LASTEXITCODE" }
+          Push-Location desktop
+          try { $tauriVersion = (& bun run tauri --version 2>&1 | Select-Object -Last 1).ToString().Trim() } finally { Pop-Location }
+          if ($LASTEXITCODE -ne 0) { throw "Tauri CLI version check failed with exit code $LASTEXITCODE" }
+          if ($tauriVersion -cne "tauri-cli 2.12.3") { throw "Expected pinned Tauri CLI 2.12.3, got $tauriVersion" }
+          $dirty = git status --porcelain
+          if (-not [string]::IsNullOrWhiteSpace($dirty)) { throw "Hosted proof checkout is not clean: $dirty" }
+          "SKY_PROOF_VERSION=$version" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Run Tauri signature proof positive and negative tests
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_trust::tests::hosted_signature_proof -- --test-threads=1
+
+      - name: Build one unsigned NSIS installer without signing credentials
+        working-directory: desktop
+        run: |
+          foreach ($name in @("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PATH", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $configPath = Join-Path $env:SKY_HOSTED_PROOF_ROOT "unsigned-build-config.json"
+          [System.IO.File]::WriteAllText($configPath, '{"bundle":{"createUpdaterArtifacts":false}}', [System.Text.UTF8Encoding]::new($false))
+          bun run tauri build --ci --bundles nsis --config $configPath -- --profile dist
+          if ($LASTEXITCODE -ne 0) { throw "Unsigned hosted NSIS build failed with exit code $LASTEXITCODE" }
+          $bundleDir = Join-Path $env:CARGO_TARGET_DIR "dist\bundle\nsis"
+          $files = @(Get-ChildItem -LiteralPath $bundleDir -File)
+          $installers = @($files | Where-Object { $_.Name -like "*-setup.exe" })
+          if ($files.Count -ne 1 -or $installers.Count -ne 1) { throw "Unsigned NSIS output must contain exactly one installer and no signature or extra files" }
+          $installer = $installers[0].FullName
+          $installerSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SKY_PROOF_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_PROOF_INSTALLER_SHA256=$installerSha" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          @"
+          ## Hosted unsigned NSIS build
+          - Tauri CLI: tauri-cli 2.12.3
+          - version: $env:SKY_PROOF_VERSION
+          - installer: $([IO.Path]::GetFileName($installer))
+          - installer SHA-256 before signing: $installerSha
+          - updater artifacts during build: disabled
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+
+      - name: Sign the unchanged installer in an isolated test-key step
+        working-directory: desktop
+        run: |
+          $signerRoot = Join-Path $env:SKY_HOSTED_PROOF_ROOT "signer"
+          New-Item -ItemType Directory -Path $signerRoot | Out-Null
+          $testKeyPath = Join-Path $signerRoot "synthetic-updater.key"
+          bun run tauri signer generate --ci --password "" --force -w $testKeyPath *> $null
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic updater test-key generation failed with exit code $LASTEXITCODE" }
+          $publicKeyPath = "$testKeyPath.pub"
+          if (-not (Test-Path -LiteralPath $publicKeyPath -PathType Leaf)) { throw "Synthetic updater public key was not produced" }
+          bun run tauri signer sign --private-key-path $testKeyPath --app-version $env:SKY_PROOF_VERSION $env:SKY_PROOF_INSTALLER *> $null
+          if ($LASTEXITCODE -ne 0) { throw "Standalone Tauri updater signing failed with exit code $LASTEXITCODE" }
+          $signaturePath = "$env:SKY_PROOF_INSTALLER.sig"
+          if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) { throw "Standalone updater signature was not produced" }
+          if ((Get-FileHash -LiteralPath $env:SKY_PROOF_INSTALLER -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:SKY_PROOF_INSTALLER_SHA256) {
+            throw "Standalone signing changed the exact installer bytes"
+          }
+          "SKY_PROOF_SIGNATURE=$signaturePath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_PROOF_PUBLIC_KEY=$publicKeyPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Verify exact test-key signature, version, digest, and source binding
+        run: |
+          $evidencePath = Join-Path $env:SKY_HOSTED_PROOF_ROOT "hosted-signing-proof.json"
+          cargo xtask updater-trust verify-test-signature `
+            --installer $env:SKY_PROOF_INSTALLER `
+            --signature $env:SKY_PROOF_SIGNATURE `
+            --public-key $env:SKY_PROOF_PUBLIC_KEY `
+            --expected-version $env:SKY_PROOF_VERSION `
+            --expected-sha256 $env:SKY_PROOF_INSTALLER_SHA256 `
+            --source-sha $env:SKY_PROOF_SOURCE_SHA `
+            --evidence $evidencePath
+          if ($LASTEXITCODE -ne 0) { throw "Rust hosted updater signature verification failed with exit code $LASTEXITCODE" }
+          $evidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+          if ($evidence.status -cne "PASS" -or $evidence.version -cne $env:SKY_PROOF_VERSION -or $evidence.installer_sha256 -cne $env:SKY_PROOF_INSTALLER_SHA256) {
+            throw "Hosted updater signature evidence does not match the exact build inputs"
+          }
+          @"
+          ## Hosted test-key updater signature proof
+          - source SHA: $($evidence.source_sha)
+          - version: $($evidence.version)
+          - installer SHA-256: $($evidence.installer_sha256)
+          - signature SHA-256: $($evidence.updater_signature_sha256)
+          - synthetic test key ID: $($evidence.updater_key_id)
+          - signed version: $($evidence.signed_version)
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+
+      - name: Remove synthetic key and hosted proof workspace
+        if: always()
+        run: |
+          foreach ($name in @("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PATH", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
+          $proofRoot = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "sky-v4-hosted-signing-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          if (-not $proofRoot.StartsWith("$tempRoot\", [StringComparison]::OrdinalIgnoreCase)) { throw "Hosted proof cleanup path escaped RUNNER_TEMP" }
+          $ownerPath = Join-Path $proofRoot "owner"
+          if ((Test-Path -LiteralPath $ownerPath -PathType Leaf) -and (Get-Content -LiteralPath $ownerPath -Raw).Trim() -ceq $env:GITHUB_RUN_ID) {
+            Remove-Item -LiteralPath $proofRoot -Recurse -Force
+          }
