@@ -8,7 +8,176 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
     if source.replace("\r\n", "\n").contains("\n  candidate:\n") {
         return packaged_ci_build_once_contract_source(source);
     }
-    packaged_ci_contract_source_legacy(source)
+    Err("CI workflow must use the Rust candidate producer and build-once topology".into())
+}
+
+fn packaged_sccache_precedes_cargo_contract(packaged: &str) -> Result<()> {
+    let setup_count = packaged.matches("name: Set up sccache").count();
+    let setup_position = packaged
+        .find("name: Set up sccache")
+        .ok_or("packaged consumer must install sccache before invoking Cargo")?;
+    let dependency_check_position = packaged
+        .find("name: Fail fast on package qualification dependencies")
+        .ok_or("packaged consumer must verify sccache before invoking Cargo")?;
+    let first_cargo_position = packaged
+        .find("cargo xtask ci candidate validate")
+        .ok_or("packaged consumer must validate the exact candidate with Cargo")?;
+    if setup_count != 1
+        || setup_position >= dependency_check_position
+        || dependency_check_position >= first_cargo_position
+        || !packaged.contains("version: \"v0.17.0\"")
+    {
+        return Err(
+            "packaged consumer must install and verify pinned sccache before its first Cargo command".into(),
+        );
+    }
+    if packaged[..setup_position].contains("cargo ") {
+        return Err("packaged consumer invoked Cargo before setting up sccache".into());
+    }
+    Ok(())
+}
+
+fn updater_sccache_precedes_cargo_contract(updater: &str) -> Result<()> {
+    let setup_count = updater.matches("name: Set up sccache").count();
+    let setup_position = updater
+        .find("name: Set up sccache")
+        .ok_or("updater consumer must install sccache before invoking Cargo")?;
+    let dependency_check_position = updater
+        .find("name: Fail fast on updater fixture dependencies")
+        .ok_or("updater consumer must verify sccache before invoking Cargo")?;
+    let setup_step = workflow_named_step(updater, "Set up sccache")?;
+    let dependency_check =
+        workflow_named_step(updater, "Fail fast on updater fixture dependencies")?;
+    let first_cargo_position = updater
+        .find("cargo ")
+        .ok_or("updater consumer must run Cargo to validate frozen artifacts")?;
+    if setup_count != 1
+        || setup_position >= dependency_check_position
+        || dependency_check_position >= first_cargo_position
+        || !updater.contains("version: \"v0.17.0\"")
+        || !setup_step.contains(
+            "uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
+        )
+        || !dependency_check.contains(
+            "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe",
+        )
+        || !updater
+            .lines()
+            .any(|line| line == "      RUSTC_WRAPPER: sccache")
+    {
+        return Err(
+            "updater consumer must install and verify pinned sccache before its first Cargo command"
+                .into(),
+        );
+    }
+    if updater[..setup_position].contains("cargo ") {
+        return Err("updater consumer invoked Cargo before setting up sccache".into());
+    }
+    Ok(())
+}
+
+fn workflow_named_step<'a>(workflow: &'a str, name: &str) -> Result<&'a str> {
+    let marker = format!("      - name: {name}");
+    let start = workflow
+        .find(&marker)
+        .ok_or_else(|| format!("workflow is missing step `{name}`"))?;
+    let tail = &workflow[start..];
+    let end = tail[marker.len()..]
+        .find("\n      - name:")
+        .map_or(tail.len(), |offset| marker.len() + offset);
+    Ok(&tail[..end])
+}
+
+fn updater_e2e_bindings_contract(updater: &str) -> Result<()> {
+    let normalized = updater.replace("\r\n", "\n").replace('\r', "\n");
+    let source_sha =
+        "      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}";
+    if normalized.matches(source_sha).count() != 1 {
+        return Err(
+            "updater consumer must bind its own exact workflow source SHA at job scope".into(),
+        );
+    }
+
+    let candidate = workflow_named_step(&normalized, "Validate and bind exact current candidate")?;
+    if !candidate.contains(
+        "$candidateRoot = Join-Path $env:RUNNER_TEMP \"sky-auto-player-current-candidate\"",
+    ) {
+        return Err(
+            "candidate validation must use its downloaded runner-local artifact root".into(),
+        );
+    }
+    let candidate_validation = candidate
+        .find("cargo xtask ci candidate validate")
+        .ok_or("updater consumer must validate the downloaded candidate before binding its root")?;
+    let candidate_source = candidate
+        .find("--source-sha $env:SKY_CI_SOURCE_SHA")
+        .ok_or("candidate validation must bind the exact updater consumer source SHA")?;
+    let candidate_success = candidate
+        .find("if ($LASTEXITCODE -ne 0)")
+        .ok_or("candidate validation must fail before exporting its root")?;
+    let candidate_root = candidate
+        .find("\"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV")
+        .ok_or("validated candidate root must be exported to the later updater step")?;
+    if candidate
+        .matches("SKY_CANDIDATE_ROOT=$candidateRoot")
+        .count()
+        != 1
+        || candidate_validation >= candidate_source
+        || candidate_source >= candidate_success
+        || candidate_success >= candidate_root
+    {
+        return Err(
+            "candidate root may be exported only after exact source validation succeeds".into(),
+        );
+    }
+
+    let bridge = workflow_named_step(&normalized, "Validate and bind exact updater bridge")?;
+    if !bridge.contains("cargo xtask ci bridge validate")
+        || !bridge.contains("--source-sha $env:SKY_CI_SOURCE_SHA")
+    {
+        return Err("bridge validation must bind the updater consumer's exact source SHA".into());
+    }
+
+    let runtime = workflow_named_step(
+        &normalized,
+        "Install provided bridge and qualify packaged Tauri updater rotation",
+    )?;
+    for marker in [
+        "cargo xtask ci updater-fixture run",
+        "--candidate-root $env:SKY_CANDIDATE_ROOT",
+        "--bridge-root $env:SKY_BRIDGE_ROOT",
+        "--source-sha $env:SKY_CI_SOURCE_SHA",
+    ] {
+        if !runtime.contains(marker) {
+            return Err(format!(
+                "updater runtime qualification is missing its validated job-local binding: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn isolated_xtask_rust_runner_step_contract(step: &str) -> Result<()> {
+    let copy_position = step
+        .find("Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\"")
+        .ok_or("Rust verification must copy the built xtask executable to an isolated path")?;
+    let run_position = step
+        .find("& $isolatedXtask check rust")
+        .ok_or("Rust verification must invoke the isolated xtask executable")?;
+    let cleanup_position = step
+        .find("Remove-Item -LiteralPath $isolatedXtask")
+        .ok_or("Rust verification must remove its isolated xtask executable")?;
+    if copy_position >= run_position
+        || run_position >= cleanup_position
+        || !step.contains("finally {")
+        || step.contains("cargo xtask check rust")
+    {
+        return Err(
+            "Rust verification must run and clean up a copied xtask without holding Cargo's target executable".into(),
+        );
+    }
+    Ok(())
 }
 
 fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
@@ -40,13 +209,12 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "bun run tauri build --ci --config",
         "dev:build-info",
         "--profile dist",
-        "scripts/ci_validate_candidate.ps1",
-        "-Mode Create",
-        "-BundleDir",
-        "-PublicKeyPath",
-        "-CalibrationBinaryPath",
-        "-OutputRoot",
-        "-SourceSha",
+        "cargo xtask ci candidate create",
+        "--bundle-dir",
+        "--public-key",
+        "--calibration-binary",
+        "--output-root",
+        "--source-sha",
         "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
         "path: ${{ runner.temp }}/sky-auto-player-current-candidate",
     ] {
@@ -73,21 +241,19 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         .map(|offset| updater_start + offset)
         .ok_or("CI workflow updater consumer must precede the packaged consumer")?;
     let updater = &normalized[updater_start..updater_end];
+    updater_sccache_precedes_cargo_contract(updater)?;
+    updater_e2e_bindings_contract(updater)?;
     for marker in [
         "name: Updater fixture qualification",
         "needs: [changes, static, candidate, updater_bridge]",
         "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
-        "scripts/ci_validate_candidate.ps1",
-        "scripts/ci_validate_bridge.ps1",
-        "-Mode Validate",
-        "-CandidateInstallerPath",
-        "-CandidateSignaturePath",
-        "-CandidateVersion",
-        "-CandidatePublicKeyPath",
+        "cargo xtask ci candidate validate",
+        "cargo xtask ci bridge validate",
+        "--candidate-root",
+        "--bridge-root",
         "Download updater bridge from this workflow run",
-        "-BridgeRootPath",
-        "-BridgeInstallerPath",
-        "scripts/ci_tauri_update_e2e.ps1",
+        "cargo xtask ci updater-fixture run",
+        "--allow-hosted-disposable-runner",
     ] {
         if !updater.contains(marker) {
             return Err(
@@ -109,20 +275,19 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "name: Packaged v4 Tauri NSIS qualification",
         "needs: [changes, static, candidate]",
         "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
-        "scripts/ci_validate_candidate.ps1",
-        "-Mode Validate",
+        "cargo xtask ci candidate validate",
         "cargo xtask verify-tauri-bundle",
         "cargo xtask sbom generate",
         "cargo xtask sbom verify",
-        "-Mode unsigned-zero-budget",
+        "--mode unsigned-zero-budget",
         "current-user install, launch, and uninstall",
-        "cargo xtask builtin-catalog verify-installed",
+        "cargo xtask ci nsis smoke",
+        "--allow-hosted-disposable-runner",
+        "--registry-mode fresh-install",
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
-        "verify_installed_calibration.ps1",
         "INSTALLED_CALIBRATION_EVIDENCE.json",
-        "calibration_binary_sha256",
         "actions/upload-artifact@",
     ] {
         if !packaged.contains(marker) {
@@ -164,6 +329,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     let validate_position = packaged
         .find("name: Validate exact current candidate contract")
         .ok_or("packaged consumer must validate candidate.json before qualification")?;
+    packaged_sccache_precedes_cargo_contract(packaged)?;
     let cache_position = packaged
         .find("name: Rust cache")
         .ok_or("packaged consumer must restore Rust cache before staging")?;
@@ -189,20 +355,41 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
             .into());
         }
     }
+
+    let nsis_harness = include_str!("../nsis_harness.rs");
+    for marker in [
+        "verify_calibration_artifact(",
+        "INSTALLED_CALIBRATION_EVIDENCE.json",
+        "INSTALLED_AUTHENTICODE_EVIDENCE.json",
+        "candidate.manifest.calibration_binary_sha256",
+        "installed Tauri tree contains no project PE files",
+        "--selftest-update-active-playback",
+        "assert_uninstall_registration_absent()",
+        "fn uninstaller_working_directory(",
+        "fn finish_uninstall(",
+        "wait_tree_timeout(std::time::Duration::from_secs(30))",
+        "bounded_install_root_inventory(",
+    ] {
+        if !nsis_harness.contains(marker) {
+            return Err(format!(
+                "Rust packaged NSIS owner is missing its required qualification marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if nsis_harness.contains("uninstaller.parent().ok_or(\"uninstaller has no parent directory\")")
+        || !nsis_harness.contains("cwd.starts_with(&install_root)")
+    {
+        return Err("NSIS uninstaller must run outside the exact install root".into());
+    }
     let install_position = packaged
-        .find("installerRun = Start-Process")
-        .ok_or("packaged consumer must execute the exact NSIS installer")?;
-    let calibration_position = packaged
-        .find("verify_installed_calibration.ps1")
-        .ok_or("packaged consumer must verify installed native calibration")?;
-    let launch_position = packaged
-        .find("Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru")
-        .ok_or("packaged consumer must launch the installed application")?;
-    if calibration_position <= install_position || calibration_position >= launch_position {
-        return Err(
-            "installed calibration verification must follow installation and precede app launch"
-                .into(),
-        );
+        .find("cargo xtask ci nsis smoke")
+        .ok_or("packaged consumer must invoke the Rust-owned NSIS qualification")?;
+    let evidence_position = packaged
+        .find("name: Emit exact Tauri qualification evidence")
+        .ok_or("packaged consumer must emit qualification evidence after NSIS smoke")?;
+    if install_position >= evidence_position {
+        return Err("Rust NSIS qualification must precede packaging evidence emission".into());
     }
 
     for marker in [
@@ -238,240 +425,11 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     Ok(())
 }
 
-fn packaged_ci_contract_source_legacy(source: &str) -> Result<()> {
-    let normalized = source.replace("\r\n", "\n");
-    let package_needs = "needs: [changes, static]";
-    let fixture_start = normalized
-        .find("  updater_e2e:\n")
-        .ok_or("CI workflow is missing the isolated updater fixture job")?;
-    let fixture_end = normalized[fixture_start..]
-        .find("\n  packaged:\n")
-        .map(|offset| fixture_start + offset)
-        .ok_or("CI workflow updater fixture job must precede the canonical packaged job")?;
-    let fixture = &normalized[fixture_start..fixture_end];
-    let required_needs_line = format!("    {package_needs}");
-    if !fixture.lines().any(|line| line == required_needs_line) {
-        return Err(format!(
-            "updater fixture job must declare the required dependency topology: {package_needs}"
-        )
-        .into());
-    }
-    for marker in [
-        "name: Updater fixture qualification",
-        "if: needs.changes.outputs.updater_required == 'true'",
-        "tauri-update-fixture",
-        "dangerousInsecureTransportProtocol",
-        "scripts/ci_tauri_update_e2e.ps1",
-        "FixtureTargetDir",
-        "RUNNER_TEMP",
-    ] {
-        if !fixture.contains(marker) {
-            return Err(format!(
-                "isolated updater fixture CI is missing its required marker: {marker}"
-            )
-            .into());
-        }
-    }
-
-    let start = normalized
-        .find("  packaged:\n")
-        .ok_or("CI workflow is missing the packaged job")?;
-    let end = normalized[start..]
-        .find("\n  status:\n")
-        .map(|offset| start + offset)
-        .ok_or("CI workflow packaged job is missing the status boundary")?;
-    let packaged = &normalized[start..end];
-    if !packaged.lines().any(|line| line == required_needs_line) {
-        return Err(format!(
-            "packaged job must declare the required dependency topology: {package_needs}"
-        )
-        .into());
-    }
-
-    for marker in [
-        "name: Packaged v4 Tauri NSIS qualification",
-        "Build and sign canonical Tauri NSIS artifact",
-        "bun install --frozen-lockfile",
-        "bun run build",
-        "bun run tauri signer generate",
-        "TAURI_SIGNING_PRIVATE_KEY",
-        "bun run tauri build --ci --config",
-        "name: Resolve GitHub CLI for artifact attestation verification",
-        "Get-Command gh.exe -CommandType Application",
-        "SKY_GH_PATH=$ghPath",
-        "- name: Run Authenticode tamper regression",
-        "scripts/test_v4_authenticode_integrity.ps1",
-        "- name: Run V4 production signing contract test",
-        "scripts/test_v4_production_signing_contract.ps1",
-        "V4 production signing contract test failed with exit code",
-        "- name: Verify Tauri Authenticode signature",
-        "-Mode unsigned-zero-budget",
-        "- name: Generate Tauri SPDX SBOM",
-        "- name: Verify Tauri SPDX SBOM",
-        "- name: Verify exact Tauri NSIS bundle",
-        "Authenticode verification failed with exit code",
-        "SBOM generation failed with exit code",
-        "SBOM verification failed with exit code",
-        "Tauri bundle verification failed with exit code",
-        "& scripts/verify_v4_authenticode.ps1",
-        "-Artifact $installedPe.FullName",
-        "Installed Authenticode verification failed:",
-        "scripts/test_installed_calibration.ps1",
-        "verify_installed_calibration.ps1",
-        "INSTALLED_CALIBRATION_EVIDENCE.json",
-        "cargo xtask builtin-catalog verify-installed",
-        "CI self-signed credentials remain test-only",
-        "Tauri updater signer generation failed with exit code",
-        "Tauri build failed with exit code",
-        "Installer attestation verification failed with exit code",
-        "Updater signature attestation verification failed with exit code",
-        "SBOM attestation verification failed with exit code",
-        "GH_TOKEN: ${{ github.token }}",
-        "attestation verify --help",
-        "--source-digest $env:GITHUB_SHA",
-        "--signer-workflow $signerWorkflow",
-        "& $env:SKY_GH_PATH attestation verify",
-        "--predicate-type https://spdx.dev/Document/v2.3",
-        "GitHub CLI absolute path is unavailable for attestation verification",
-        "GH_TOKEN is unavailable for attestation verification",
-        "Installed GitHub CLI lacks the required exact-source attestation options",
-        "current-user install, launch, and uninstall",
-        "sky_desktop_shell.exe",
-        "uninstall.exe",
-        "scripts/cleanup_v4_test_signing.ps1",
-        "rust/target/dist/bundle/nsis",
-        "actions/upload-artifact@",
-    ] {
-        if !packaged.contains(marker) {
-            return Err(format!(
-                "canonical v4 packaged CI is missing the Tauri qualification marker: {marker}"
-            )
-            .into());
-        }
-    }
-    let test_signing_setup_marker =
-        "      - name: Prepare bounded ephemeral Authenticode test certificate\n";
-    let tamper_regression_marker = "      - name: Run Authenticode tamper regression\n";
-    let test_signing_setup_position = packaged
-        .find(test_signing_setup_marker)
-        .ok_or("canonical v4 packaged CI is missing the isolated test-signing setup step")?;
-    let tamper_regression_position = packaged
-        .find(tamper_regression_marker)
-        .ok_or("canonical v4 packaged CI is missing the Authenticode tamper regression step")?;
-    if test_signing_setup_position >= tamper_regression_position {
-        return Err(
-            "canonical v4 packaged CI must prepare test signing credentials in a prior step".into(),
-        );
-    }
-    let test_signing_setup = &packaged[test_signing_setup_position..tamper_regression_position];
-    for marker in [
-        "timeout-minutes: 2",
-        "pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30",
-    ] {
-        if !test_signing_setup.contains(marker) {
-            return Err(format!(
-                "canonical v4 packaged CI test-signing setup is missing its required marker: {marker}"
-            )
-            .into());
-        }
-    }
-    let tamper_regression_end = packaged[tamper_regression_position..]
-        .find("\n      - name: Run V4 production signing contract test\n")
-        .map(|offset| tamper_regression_position + offset)
-        .ok_or("canonical v4 packaged CI tamper regression step has no bounded end")?;
-    let tamper_regression = &packaged[tamper_regression_position..tamper_regression_end];
-    if tamper_regression.contains("setup_v4_test_signing.ps1") {
-        return Err(
-            "canonical v4 packaged CI must not configure test signing in the tamper regression step"
-                .into(),
-        );
-    }
-    let attestation_start = packaged
-        .find("      - name: Verify exact GitHub artifact attestations\n")
-        .ok_or("canonical v4 packaged CI is missing the attestation verification step")?;
-    let attestation_end = packaged[attestation_start..]
-        .find("\n      - name: Upload exact Tauri NSIS release candidate\n")
-        .map(|offset| attestation_start + offset)
-        .ok_or("canonical v4 packaged CI attestation step has no bounded end")?;
-    let attestation = &packaged[attestation_start..attestation_end];
-    if attestation
-        .matches("--source-digest $env:GITHUB_SHA")
-        .count()
-        != 3
-        || attestation
-            .matches("--signer-workflow $signerWorkflow")
-            .count()
-            != 3
-        || attestation.matches("-R $env:GITHUB_REPOSITORY").count() != 3
-        || attestation
-            .lines()
-            .any(|line| line.trim_start().starts_with("gh attestation verify"))
-    {
-        return Err(
-            "canonical v4 packaged CI attestation verification must use absolute gh, exact source digest, signer workflow, and repository binding for all three checks".into(),
-        );
-    }
-    let validate_start = normalized
-        .find("  validate:\n")
-        .ok_or("CI workflow is missing the validate job")?;
-    let validate_end = normalized[validate_start..]
-        .find("\n  updater_e2e:\n")
-        .map(|offset| validate_start + offset)
-        .ok_or("CI workflow validate job must precede the updater fixture job")?;
-    if normalized[validate_start..validate_end].contains("certutil.exe") {
-        return Err("ordinary Windows validation must not require certutil.exe".into());
-    }
-
-    for forbidden in [
-        "tauri-update-fixture",
-        "dangerousInsecureTransportProtocol",
-        "127.0.0.1:17845",
-        "CARGO_TARGET_DIR",
-        "--features",
-        "cargo xtask dist",
-        "verify-dist",
-        "Sky-Auto-Player-v",
-        "Sky-Auto-Player-Updater.exe",
-        "MANIFEST.json",
-        "PORTABLE_ARTIFACT",
-        "portable",
-        "scripts/test_v4_production_orchestrator.ps1",
-        "scripts/test_v4_updater_private_key.ps1",
-    ] {
-        if packaged.contains(forbidden) {
-            return Err(format!(
-                "canonical v4 packaged CI must not contain the legacy v3 artifact marker: {forbidden}"
-            )
-            .into());
-        }
-    }
-
-    for marker in [
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
-        "UPDATER_REQUIRED",
-        "UPDATER_BRIDGE_REQUIRED",
-        "UPDATER_CONTRACT_REQUIRED",
-        "DESKTOP_WEB_REQUIRED",
-        "RELEASE_REQUIRED",
-        "SUPPLY_CHAIN_REQUIRED",
-        "UPDATER_CONTRACT_RESULT",
-        "UPDATER_E2E_RESULT",
-    ] {
-        if !normalized.contains(marker) {
-            return Err(format!(
-                "CI required gate is missing updater fixture integration marker: {marker}"
-            )
-            .into());
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
     let path = root.join(".github/workflows/ci.yml");
     packaged_ci_contract_source(&fs::read_to_string(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
-    let validator = fs::read_to_string(root.join("scripts/ci_validate_candidate.ps1"))?;
+    let candidate = fs::read_to_string(root.join("rust/xtask/src/ci_candidate.rs"))?;
     for marker in [
         "schema_version",
         "source_sha",
@@ -481,55 +439,150 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
-        "Get-FileHash",
-        "updater-public-key.pub",
-        "PRIVATE KEY",
+        "deny_unknown_fields",
+        "direct_files",
+        "sha256_file",
+        "validate_public_key",
+        "validate_safe_filename",
         "candidate artifact must contain exactly four files",
+        "create_and_validate_preserve_candidate_v2_schema_and_exact_inventory",
+        "rejects_tampered_installer_signature_public_key_and_source_identity",
+        "rejects_wrong_machine_malformed_pe_traversal_and_unexpected_inventory",
+        "rejects_unknown_candidate_manifest_fields",
+        "public_key_and_safe_filename_rules_reject_private_material_and_paths",
     ] {
-        if !validator.contains(marker) {
+        if !candidate.contains(marker) {
             return Err(format!(
-                "current-candidate validator is missing its fail-closed marker: {marker}"
+                "Rust current-candidate contract is missing its fail-closed marker: {marker}"
             )
             .into());
         }
     }
-    let validator_test = root.join("scripts/test_ci_validate_candidate.ps1");
-    if !validator_test.exists() {
-        return Err("current-candidate validator self-test is missing".into());
-    }
-    for script in [
-        "scripts/build_native_calibration.ps1",
-        "scripts/verify_installed_calibration.ps1",
-        "scripts/test_installed_calibration.ps1",
-    ] {
-        if !root.join(script).exists() {
-            return Err(
-                format!("native calibration package contract script is missing: {script}").into(),
-            );
-        }
-    }
-    let bridge_validator = fs::read_to_string(root.join("scripts/ci_validate_bridge.ps1"))?;
+    let bridge = fs::read_to_string(root.join("rust/xtask/src/ci_bridge.rs"))?;
     for marker in [
         "schema_version",
         "source_sha",
         "installer_sha256",
         "sentinel_id",
         "sentinel_content_sha256",
-        "bridge artifact must contain exactly two files",
-        "Get-FileHash",
+        "deny_unknown_fields",
+        "direct_files",
         "PRIVATE KEY",
+        "bridge artifact must contain exactly two files",
+        "create_and_validate_preserve_bridge_v1_schema_and_exact_files",
+        "rejects_tampered_installer_wrong_source_and_expected_binding_mismatch",
+        "rejects_extra_private_material_signature_paths_and_unknown_json_fields",
+        "operation_options_reject_unknown_names_and_duplicates",
     ] {
-        if !bridge_validator.contains(marker) {
+        if !bridge.contains(marker) {
             return Err(format!(
-                "updater-bridge validator is missing its fail-closed marker: {marker}"
+                "Rust updater-bridge contract is missing its fail-closed marker: {marker}"
             )
             .into());
         }
     }
-    if !root.join("scripts/test_ci_validate_bridge.ps1").exists() {
-        return Err("updater-bridge validator self-test is missing".into());
+    let artifacts = fs::read_to_string(root.join("rust/xtask/src/ci_artifacts.rs"))?;
+    for marker in [
+        "validate_commit_sha",
+        "validate_digest",
+        "validate_safe_filename",
+        "is_reparse_point",
+        "direct_files",
+        "pe_machine",
+        "replace_file_with_rollback",
+        "replacement_restores_the_original_when_staging_rename_fails",
+        "staging_directory_is_removed_after_an_error",
+    ] {
+        if !artifacts.contains(marker) {
+            return Err(format!(
+                "Rust artifact primitives are missing their fail-closed marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let calibration = fs::read_to_string(root.join("rust/xtask/src/calibration.rs"))?;
+    for marker in [
+        "x86_64-pc-windows-msvc",
+        "--profile",
+        "dist",
+        "replace_file_with_rollback",
+        "ProcessTree::attach",
+        "owner.terminate()",
+        "cleanup_timed_out_process",
+        "wait_reader_until",
+        "installed_calibration_timeout_kills_descendants_and_bounds_pipe_readers",
+        "installed_calibration_early_exit_kills_descendant_holding_output_pipes",
+        "calibration_process_tree_probe",
+        "calibration_process_tree_helper",
+        "separate 5-second startup deadline",
+        "installed calibration --help exceeded the 5-second smoke bound",
+        "installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe",
+        "successful_evidence_keeps_the_installed_calibration_schema",
+        "installed_calibration_cli_rejects_unknown_and_duplicate_options",
+    ] {
+        if !calibration.contains(marker) {
+            return Err(format!(
+                "Rust native calibration integration is missing its fail-closed marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let classifier = fs::read_to_string(root.join("rust/xtask/src/ci_classifier.rs"))?;
+    for marker in [
+        "rust_required",
+        "desktop_e2e_required",
+        "classification_reason",
+        "changed_paths_from_git",
+        "classify_git_paths",
+        "decode_git_paths",
+        "git_paths_are_exact_and_malformed_names_fail_closed",
+        "git_path_decoding_preserves_trailing_space_and_rejects_invalid_utf8",
+        "--depth=1",
+        "preserves_exact_lane_output_shape_and_reason_golden",
+        "matches_positive_and_union_classifier_matrix",
+        "unknown_or_malformed_paths_fail_closed_and_workflow_dispatch_is_full",
+        "explicit_base_head_works_in_detached_shallow_checkout_and_fetches_missing_base",
+    ] {
+        if !classifier.contains(marker) {
+            return Err(format!(
+                "Rust CI classifier is missing its compatibility marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let process_tree =
+        fs::read_to_string(root.join("rust/crates/sky_windows_security/src/process_tree.rs"))?;
+    process_tree_boundary_contract(&process_tree)?;
+    for script in [
+        "scripts/ci_classify.ps1",
+        "scripts/test_ci_classify.ps1",
+        "scripts/ci_validate_candidate.ps1",
+        "scripts/test_ci_validate_candidate.ps1",
+        "scripts/ci_validate_bridge.ps1",
+        "scripts/test_ci_validate_bridge.ps1",
+        "scripts/build_native_calibration.ps1",
+        "scripts/verify_installed_calibration.ps1",
+        "scripts/test_installed_calibration.ps1",
+    ] {
+        if root.join(script).exists() {
+            return Err(
+                format!("migrated PowerShell CI implementation remains present: {script}").into(),
+            );
+        }
     }
     println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
+    Ok(())
+}
+
+fn process_tree_boundary_contract(source: &str) -> Result<()> {
+    let source = super::normalize_source_line_endings(source);
+    if !source.contains("#[cfg(not(windows))]\n    pub fn terminate")
+        || !source.contains("Windows process-tree termination is unavailable")
+    {
+        return Err(
+            "Windows process-tree boundary must expose a fail-closed cross-platform API".into(),
+        );
+    }
     Ok(())
 }
 
@@ -615,13 +668,13 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         }
     }
     for marker in [
-        "scripts/ci_classify.ps1",
-        "scripts/test_ci_classify.ps1",
+        "cargo xtask ci classify",
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml",
         "github.event.pull_request.base.sha",
         "github.event.pull_request.head.sha",
         "github.event.before",
-        "classifier_args+=(-Full)",
-        "classifier_args+=(-BaseSha",
+        "classifier_args+=(--full)",
+        "classifier_args+=(--base-sha",
         "static_required:",
         "contains(steps.classify.outputs.classification_reason, 'static-only')",
         "desktop_e2e_required == 'true'",
@@ -667,8 +720,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "if: needs.changes.outputs.updater_required == 'true'",
         "runs-on: windows-latest",
         "Build exactly one updater bridge fixture",
-        "scripts/ci_build_updater_bridge.ps1",
-        "scripts/ci_validate_bridge.ps1",
+        "cargo xtask ci bridge build-fixture",
+        "cargo xtask ci bridge validate",
         "bridge.json",
         "actions/upload-artifact@",
     ] {
@@ -681,21 +734,53 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             "updater_bridge workflow must delegate its single build to the producer script".into(),
         );
     }
-    let bridge_script = fs::read_to_string(root.join("scripts/ci_build_updater_bridge.ps1"))?;
-    if bridge_script.matches("bun run tauri build").count() != 1
-        || !bridge_script.contains("tauri-update-fixture")
-        || !bridge_script.contains("RUNNER_TEMP")
-        || !bridge_script.contains("ci_validate_bridge.ps1")
-        || !bridge_script.contains("WriteAllBytes($cargoPath, $cargoSource)")
-        || !bridge_script.contains("WriteAllBytes($lockPath, $lockSource)")
-    {
-        return Err("updater bridge producer must have one fixture build, bounded contract validation, and exact source restoration".into());
+    let updater_fixture = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))?;
+    updater_bridge_feature_contract(&updater_fixture)?;
+    updater_bridge_configuration_contract(&updater_fixture)?;
+    for marker in [
+        "fn build_bridge_internal(",
+        "git",
+        "worktree",
+        "--detach",
+        "RUNNER_TEMP",
+        "tauri-update-fixture",
+        "run_bun(",
+        "crate::ci_bridge::create_bridge",
+        "crate::ci_bridge::read_bridge",
+        "source SHA must match the checked-out Git HEAD",
+        "BRIDGE_SIGNER_CHALLENGE",
+        "verify_signature_text_with_public_key",
+        "bridge Tauri signer key pair failed Rust Minisign verification",
+        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+        "prepare_bridge_tauri_config",
+        "persist_bridge_tauri_config",
+        "bridge_tauri_config_persists_historical_identity_and_removes_nested_migration_hook",
+        "bridge_tauri_config_preserves_current_candidate_migration_hook",
+        "bridge_tauri_config_rejects_wrong_hook_path_and_mismatched_manifest_identity",
+        "validate_historical_bridge_manifest_identity",
+        "parse_windows_install_location",
+        "validate_registry_install_location",
+        "windows_install_location_parser_accepts_absolute_nsis_paths_with_optional_quotes",
+        "windows_install_location_parser_rejects_relative_or_malformed_paths",
+        "registry_install_location_quotes_resolve_only_to_managed_fixture_root",
+    ] {
+        if !updater_fixture.contains(marker) {
+            return Err(format!(
+                "Rust updater bridge owner is missing its required marker: {marker}"
+            )
+            .into());
+        }
     }
-    if bridge_script.contains("upload-artifact") || bridge_script.contains("bridge.json.sig") {
+    if updater_fixture.contains("!private_key.contains(\"PRIVATE KEY\")") {
         return Err(
-            "updater bridge producer must not upload signing material or extra artifact files"
+            "Rust updater bridge must validate the generated Tauri key through signing, not a PEM marker"
                 .into(),
         );
+    }
+    if updater_fixture.matches("bun run tauri build").count() != 0
+        || !updater_fixture.contains("\"tauri\".to_owned(),\n            \"build\".to_owned()")
+    {
+        return Err("Rust updater bridge producer must own one isolated tauri-update-fixture build and typed contract validation".into());
     }
     let updater_contract = &ci[updater_contract_start..static_start];
     for marker in [
@@ -706,6 +791,9 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "rustup toolchain install 1.99.1",
         "bun-version: 1.4.3",
         "bun install --frozen-lockfile",
+        "Test Tauri signer key pair interoperability",
+        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_fixture::tests::tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair -- --ignored --exact",
         "scripts/test_v4_updater_key_rotation.ps1",
         "contents: read",
     ] {
@@ -761,14 +849,13 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "needs: [changes, static, candidate, updater_bridge]",
         "Download current candidate from this workflow run",
         "Validate and bind exact current candidate",
-        "-CandidateInstallerPath $env:SKY_CANDIDATE_INSTALLER",
+        "cargo xtask ci candidate validate",
         "Download updater bridge from this workflow run",
-        "scripts/ci_validate_bridge.ps1",
-        "-BridgeRootPath $env:SKY_BRIDGE_ROOT",
-        "-BridgeInstallerPath $env:SKY_BRIDGE_INSTALLER",
-        "-BridgeSourceSha $env:SKY_BRIDGE_SOURCE_SHA",
-        "-BridgeSentinelSha256 $env:SKY_BRIDGE_SENTINEL_SHA256",
-        "zero bridge or candidate tauri build",
+        "cargo xtask ci bridge validate",
+        "cargo xtask ci updater-fixture run",
+        "--candidate-root $env:SKY_CANDIDATE_ROOT",
+        "--bridge-root $env:SKY_BRIDGE_ROOT",
+        "--allow-hosted-disposable-runner",
     ] {
         if !updater.contains(marker) {
             return Err(format!(
@@ -837,6 +924,13 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             "Windows validation must consolidate its shared dependency check exactly once".into(),
         );
     }
+    let rust_check_position = validate
+        .find("name: Repository verification — Rust")
+        .ok_or("Windows validation is missing its Rust repository verification step")?;
+    let rust_check_step_end = validate[rust_check_position..]
+        .find("\n      - name:")
+        .map_or(validate.len(), |offset| rust_check_position + offset);
+    isolated_xtask_rust_runner_step_contract(&validate[rust_check_position..rust_check_step_end])?;
     let rust_cache_position = validate
         .find("name: Rust cache")
         .ok_or("Windows validation is missing its Rust cache step")?;
@@ -857,10 +951,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             "Windows validation must cache dependencies, stage the calibration resource, then run repository checks".into(),
         );
     }
-    if validate.matches("scripts/build_native_calibration.ps1").count() != 1
-        || !validate.contains(
-            "run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build_native_calibration.ps1",
-        )
+    if validate.matches("cargo xtask calibration build").count() != 1
+        || !validate.contains("run: cargo xtask calibration build")
     {
         return Err(
             "Windows validation must stage the locked calibration resource exactly once".into(),
@@ -1134,9 +1226,220 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn updater_bridge_feature_contract(source: &str) -> Result<()> {
+    let normalized_source = super::normalize_source_line_endings(source);
+    let source = normalized_source.as_str();
+    if !source.contains("let target = ordinary_fixture_root.join(\"target\");")
+        || source.contains("let target = fixture_root.join(\"target\");")
+    {
+        return Err(
+            "updater bridge Cargo target must use the verified ordinary Windows fixture path"
+                .into(),
+        );
+    }
+    let build_args = source
+        .split_once("let build_args = vec![")
+        .and_then(|(_, remaining)| remaining.split_once("];"))
+        .map(|(args, _)| args)
+        .ok_or("Rust updater bridge build arguments are not bounded")?;
+    let feature_args = build_args.matches("\"--features\".to_owned()").count();
+    let product_features = "\"--features\".to_owned(),\n            \"desktop-runtime,packaged-assets,tauri-update-fixture\".to_owned(),";
+    if feature_args != 1
+        || !build_args.contains(product_features)
+        || build_args.contains("\"tauri-update-fixture\".to_owned()")
+    {
+        return Err("updater bridge build must explicitly enable the normal Tauri product features and its fixture feature".into());
+    }
+    Ok(())
+}
+
+fn updater_bridge_configuration_contract(source: &str) -> Result<()> {
+    let normalized_source = super::normalize_source_line_endings(source);
+    let source = normalized_source.as_str();
+    let builder = source
+        .split_once("fn build_bridge_internal(")
+        .and_then(|(_, remaining)| {
+            remaining.split_once("\n#[cfg(windows)]\nfn verified_ordinary_windows_path(")
+        })
+        .map(|(body, _)| body)
+        .ok_or("Rust updater bridge builder boundary is missing")?;
+    let prepare = builder
+        .find("prepare_bridge_tauri_config(&mut config, publisher)?;")
+        .ok_or("updater bridge must prepare its isolated Tauri bundle identity")?;
+    let persist = builder
+        .find("persist_bridge_tauri_config(&worktree, &config_source_path, &config, publisher)?;")
+        .ok_or(
+            "updater bridge must persist the validated config into its temporary Git worktree",
+        )?;
+    let build_args = builder
+        .find("let build_args = vec![")
+        .ok_or("updater bridge Tauri build arguments are missing")?;
+    let build = builder
+        .find("run_bun(\n            &desktop,\n            &build_args,")
+        .ok_or("updater bridge must run its bounded Tauri build")?;
+    if !(prepare < persist && persist < build_args && build_args < build) {
+        return Err(
+            "updater bridge must prepare and persist its scoped identity before invoking Tauri build"
+                .into(),
+        );
+    }
+
+    let preparation = source
+        .split_once("fn prepare_bridge_tauri_config(")
+        .and_then(|(_, remaining)| remaining.split_once("\nfn persist_bridge_tauri_config("))
+        .map(|(body, _)| body)
+        .ok_or("bridge Tauri configuration preparation helper is missing")?;
+    for marker in [
+        "get(\"windows\")",
+        "get(\"nsis\")",
+        "get(\"installerHooks\")",
+        "remove(\"installerHooks\")",
+        "CURRENT_NSIS_INSTALLER_HOOK",
+        "validate_bridge_tauri_config(config, publisher)",
+    ] {
+        if !preparation.contains(marker) {
+            return Err(format!(
+                "bridge config must validate the exact nested NSIS hook path: missing {marker}"
+            )
+            .into());
+        }
+    }
+
+    for marker in [
+        "assert_publisher_state(\n        &bridge.manifest.publisher,\n        &bridge.manifest.version,\n        &install_root,",
+        "details.bridge = serde_json::json!",
+        "\"installer_sha256\": &bridge.installer_sha256",
+        "\"Publisher\": &bridge_registry.publisher",
+        "\"DisplayVersion\": &bridge_registry.version",
+        "\"InstallLocation\": &bridge_registry.install_location_raw",
+        "\"InstallLocationNormalized\": &bridge_registry.install_root",
+        "\"UninstallString\": &bridge_registry.uninstall_string",
+    ] {
+        if !source.contains(marker) {
+            return Err(format!(
+                "hosted updater fixture must prove installed bridge identity from bridge.json: missing {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_bridge_feature_contract_requires_candidate_feature_set() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))
+            .expect("updater fixture source must exist");
+        let lf = super::super::normalize_source_line_endings(&source);
+        let crlf = lf.replace('\n', "\r\n");
+
+        for source in [&lf, &crlf] {
+            updater_bridge_feature_contract(source)
+                .expect("LF and CRLF bridge sources must use normal product features");
+
+            for feature in ["desktop-runtime,", ",packaged-assets"] {
+                let missing_feature = source.replace(feature, "");
+                assert_ne!(missing_feature, *source, "{feature} must be present");
+                assert!(
+                    updater_bridge_feature_contract(&missing_feature).is_err(),
+                    "bridge contract must reject omission of {feature} for either newline style"
+                );
+            }
+
+            let extended_target = source.replace(
+                "let target = ordinary_fixture_root.join(\"target\");",
+                "let target = fixture_root.join(\"target\");",
+            );
+            assert_ne!(extended_target, *source);
+            assert!(
+                updater_bridge_feature_contract(&extended_target).is_err(),
+                "bridge contract must reject Cargo target paths derived from canonical extended paths"
+            );
+
+            let reordered_features = source.replace(
+                "desktop-runtime,packaged-assets,tauri-update-fixture",
+                "packaged-assets,desktop-runtime,tauri-update-fixture",
+            );
+            assert_ne!(reordered_features, *source);
+            assert!(
+                updater_bridge_feature_contract(&reordered_features).is_err(),
+                "bridge contract must retain exact feature ordering"
+            );
+
+            let fixture_only = source.replace(
+                "desktop-runtime,packaged-assets,tauri-update-fixture",
+                "tauri-update-fixture",
+            );
+            assert!(
+                updater_bridge_feature_contract(&fixture_only).is_err(),
+                "bridge contract must reject fixture-only feature activation"
+            );
+        }
+    }
+
+    #[test]
+    fn updater_bridge_configuration_contract_normalizes_newlines_and_rejects_missing_or_wrong_scope()
+     {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))
+            .expect("updater fixture source must exist");
+        let lf = super::super::normalize_source_line_endings(&source);
+        let crlf = lf.replace('\n', "\r\n");
+
+        for source in [&lf, &crlf] {
+            updater_bridge_configuration_contract(source)
+                .expect("LF and CRLF sources must persist bridge-only identity before build");
+
+            let invalid_sources = [
+                lf.replace(
+                    "persist_bridge_tauri_config(&worktree, &config_source_path, &config, publisher)?;",
+                    "validate_bridge_tauri_config(&config, publisher)?;",
+                ),
+                lf.replace(
+                ".remove(\"installerHooks\")",
+                ".remove(\"bundleInstallerHooks\")",
+                ),
+                lf.replace(
+                    "&bridge.manifest.publisher,\n        &bridge.manifest.version,",
+                    "\"github\",\n        &bridge.manifest.version,",
+                ),
+                lf.replace(
+                    "\"InstallLocation\": &bridge_registry.install_location_raw",
+                    "\"InstallLocation\": &bridge_registry.install_root",
+                ),
+            ];
+            for (index, invalid) in invalid_sources.iter().enumerate() {
+                assert_ne!(invalid, &lf, "negative source mutation {index} must apply");
+                assert!(
+                    updater_bridge_configuration_contract(invalid).is_err(),
+                    "static bridge contract must reject negative source mutation {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn process_tree_boundary_contract_normalizes_line_endings_and_keeps_negative_checks() {
+        let lf = "#[cfg(not(windows))]\n    pub fn terminate() {}\nWindows process-tree termination is unavailable\n";
+        let crlf = lf.replace('\n', "\r\n");
+        process_tree_boundary_contract(lf).expect("LF source must satisfy the boundary contract");
+        process_tree_boundary_contract(&crlf)
+            .expect("CRLF source must satisfy the same boundary contract");
+
+        for invalid in [
+            lf.replace("Windows process-tree termination is unavailable", "removed"),
+            crlf.replace("pub fn terminate", "pub fn removed"),
+        ] {
+            assert!(
+                process_tree_boundary_contract(&invalid).is_err(),
+                "line-ending normalization must not weaken fail-closed markers"
+            );
+        }
+    }
 
     #[test]
     fn active_github_hosted_ubuntu_contract_accepts_latest() {
@@ -1185,124 +1488,24 @@ mod tests {
 
     #[test]
     fn packaged_ci_contract_requires_tauri_and_rejects_v3_artifacts() {
-        let source = r#"
-  updater_bridge:
-    name: Build updater bridge fixture
-    needs: changes
-    if: needs.changes.outputs.updater_required == 'true'
-    steps:
-      - run: scripts/ci_build_updater_bridge.ps1
-      - run: scripts/ci_validate_bridge.ps1
-      - uses: actions/upload-artifact@v7
-  desktop_web:
-    name: Desktop web and browser validation
-    needs: changes
-    if: needs.changes.outputs.desktop_required == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - run: bun install --frozen-lockfile
-      - run: bun run check
-      - run: bun node_modules/playwright/cli.js --version
-      - run: bun node_modules/playwright/cli.js install chromium
-      - run: bun run test:e2e
-  validate:
-    name: Windows compatibility and unit tests
-    steps:
-      - run: cargo xtask check rust
-  candidate:
-    name: Build current Tauri candidate
-    needs: changes
-    if: needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true'
-    steps:
-      - run: bun install --frozen-lockfile
-      - run: bun run tauri build --ci --config candidate.json -- --profile dist
-      - run: bun run dev:build-info -- --exe ..\\rust\\target\\dist\\sky_desktop_shell.exe
-      - run: Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath
-      - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -CalibrationBinaryPath desktop/src-tauri/resources/native_calibration.exe -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        path: ${{ runner.temp }}/sky-auto-player-current-candidate
-  updater_contract:
-    name: Updater key-rotation contract
-    needs: changes
-    if: needs.changes.outputs.updater_required == 'true'
-    runs-on: windows-latest
-    steps:
-      - run: rustup toolchain install 1.99.1
-      - run: bun install --frozen-lockfile
-      - run: scripts/test_v4_updater_key_rotation.ps1
-  updater_e2e:
-    name: Updater fixture qualification
-    needs: [changes, static, candidate, updater_bridge]
-    if: needs.changes.outputs.updater_required == 'true'
-    steps:
-      - name: Download updater bridge from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-      - run: scripts/ci_validate_candidate.ps1 -Mode Validate -CandidateInstallerPath candidate.exe -CandidateSignaturePath candidate.sig -CandidateVersion 4.0.0-alpha.2 -CandidatePublicKeyPath candidate.pub
-      - run: scripts/ci_validate_bridge.ps1 -Mode Validate -BridgeRoot bridge
-      - run: dangerousInsecureTransportProtocol = true
-      - run: $fixtureTarget = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-updater-fixture-target"; pwsh scripts/ci_tauri_update_e2e.ps1 -FixtureTargetDir $fixtureTarget -BridgeRootPath bridge -BridgeInstallerPath bridge.exe -BridgeSourceSha 1234567890abcdef1234567890abcdef12345678 -BridgeVersion 4.0.0-alpha.1 -BridgeSentinelId sentinel -BridgeSentinelSha256 abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd
-  packaged:
-    name: Packaged v4 Tauri NSIS qualification
-    needs: [changes, static, candidate]
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-      - run: scripts/ci_validate_candidate.ps1 -Mode Validate
-      - name: Build and sign canonical Tauri NSIS artifact
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-      - run: bun run tauri signer generate
-        # Tauri updater signer generation failed with exit code
-      - name: Validate exact current candidate contract
-        run: scripts/ci_validate_candidate.ps1 -Mode Validate
-      - name: Rust cache
-      - name: Stage and re-hash exact current candidate after Rust cache restore
-        run: Get-FileHash -LiteralPath $stagedInstaller -Algorithm SHA256; Get-FileHash -LiteralPath $stagedSignature -Algorithm SHA256; Get-FileHash -LiteralPath $env:SKY_CANDIDATE_PUBLIC_KEY -Algorithm SHA256
-        # Staged candidate hashes do not match the validated candidate contract
-        # installer_sha256 updater_signature_sha256 updater_public_key_sha256
-      - name: Verify Tauri Authenticode signature
-        run: pwsh scripts/verify_v4_authenticode.ps1 -Mode unsigned-zero-budget
-        # Authenticode verification failed with exit code
-        # Installed Authenticode verification failed with exit code
-        # CI self-signed credentials remain test-only
-      - name: Generate Tauri SPDX SBOM
-        run: cargo xtask sbom generate
-        # SBOM generation failed with exit code
-      - name: Verify Tauri SPDX SBOM
-        run: cargo xtask sbom verify
-        # SBOM verification failed with exit code
-      - name: Verify exact Tauri NSIS bundle
-        run: cargo xtask verify-tauri-bundle
-        # Tauri bundle verification failed with exit code
-      - name: Qualify current-user install, launch, and uninstall
-        run: installerRun = Start-Process -FilePath $installer -ArgumentList @('/S', '/NS') -Wait -PassThru
-      - run: pwsh scripts/verify_installed_calibration.ps1 -InstallRoot $installRoot -ExpectedSha256 $candidate.calibration_binary_sha256 -Evidence rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
-      - run: Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
-      - run: check sky_desktop_shell.exe uninstall.exe
-      - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
-      - name: Upload exact Tauri NSIS release candidate
-        uses: actions/upload-artifact@v7
-        path: rust/target/dist/bundle/nsis
-  site:
-    name: Website validation
-  status:
-    name: Sky Auto Player — required CI gate
-    # Build bounded unsigned Authenticode PE fixture
-    # rustc --edition 2021 --target x86_64-pc-windows-msvc
-    # Get-AuthenticodeSignature SKY_AUTHENTICODE_FIXTURE
-    # Run Authenticode tamper regression on controlled unsigned PE fixture
-    # scripts/test_v4_authenticode_integrity.ps1
-    # scripts/test_v4_production_signing_contract.ps1
-    # scripts/setup_v4_test_signing.ps1
-    # scripts/cleanup_v4_test_signing.ps1
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
-    env: { UPDATER_REQUIRED: true, RELEASE_REQUIRED: false, SUPPLY_CHAIN_REQUIRED: false, UPDATER_BRIDGE_REQUIRED: true, UPDATER_CONTRACT_REQUIRED: true, DESKTOP_WEB_REQUIRED: true, CANDIDATE_REQUIRED: true, CANDIDATE_RESULT: success, UPDATER_CONTRACT_RESULT: success, UPDATER_E2E_RESULT: success }
-        "#;
-        assert!(packaged_ci_contract_source(source).is_ok());
-        let crlf_source = source.replace('\n', "\r\n");
-        assert!(packaged_ci_contract_source(&crlf_source).is_ok());
-        let unblocked_package_jobs =
-            source.replace("needs: [changes, static, candidate]", "needs: changes");
-        assert!(packaged_ci_contract_source(&unblocked_package_jobs).is_err());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("locked CI workflow fixture must exist");
+        packaged_ci_contract_source(&source).expect("locked Rust-owned CI workflow must pass");
+
+        for retired in [
+            "cargo xtask ci candidate create",
+            "cargo xtask ci candidate validate",
+            "cargo xtask ci bridge validate",
+        ] {
+            let without_rust_consumer = source.replace(retired, "retired consumer removed");
+            assert_ne!(without_rust_consumer, source, "{retired} must be present");
+            assert!(
+                packaged_ci_contract_source(&without_rust_consumer).is_err(),
+                "CI contract must reject removing {retired}"
+            );
+        }
+
         for forbidden in [
             "tauri-update-fixture",
             "dangerousInsecureTransportProtocol",
@@ -1319,7 +1522,7 @@ mod tests {
         ] {
             let source_with_legacy_marker = source.replace(
                 "    name: Packaged v4 Tauri NSIS qualification",
-                &format!("    # {forbidden}\n    name: Packaged v4 Tauri NSIS qualification"),
+                &format!("    # {forbidden}\\n    name: Packaged v4 Tauri NSIS qualification"),
             );
             assert!(
                 packaged_ci_contract_source(&source_with_legacy_marker).is_err(),
@@ -1327,30 +1530,245 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn packaged_ci_contract_requires_the_isolated_fixture_job() {
         let source = r#"
-  validate:
-    name: Windows compatibility and unit tests
-    steps:
-      - run: cargo xtask check rust
+  candidate:
+    name: Build current Tauri candidate
+    needs: changes
   packaged:
     name: Packaged v4 Tauri NSIS qualification
-    needs: [changes, static]
-    steps:
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-      - run: bun run tauri signer generate
-      - run: bun run tauri build --ci --config test.json
-      - run: cargo xtask verify-tauri-bundle
-      - name: Qualify current-user install, launch, and uninstall
-        run: check sky_desktop_shell.exe uninstall.exe
-      - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
-      - uses: actions/upload-artifact@v7
-  status:
-    needs: [changes, static, supply_chain, validate, packaged]
-        "#;
+    needs: [changes, static, candidate]
+"#;
         assert!(packaged_ci_contract_source(source).is_err());
+    }
+
+    #[test]
+    fn packaged_candidate_contract_requires_verified_sccache_before_cargo() {
+        let valid = r#"
+      - name: Set up sccache
+        with:
+          version: "v0.17.0"
+      - name: Fail fast on package qualification dependencies
+      - name: Validate exact current candidate contract
+        run: cargo xtask ci candidate validate
+"#;
+        packaged_sccache_precedes_cargo_contract(valid)
+            .expect("pinned sccache setup and verification must precede Cargo");
+
+        let missing_setup = valid.replace("name: Set up sccache", "name: missing sccache");
+        assert!(
+            packaged_sccache_precedes_cargo_contract(&missing_setup).is_err(),
+            "packaged contract must reject a missing sccache setup"
+        );
+
+        let late_setup = r#"
+      - name: Validate exact current candidate contract
+        run: cargo xtask ci candidate validate
+      - name: Set up sccache
+        with:
+          version: "v0.17.0"
+      - name: Fail fast on package qualification dependencies
+"#;
+        assert!(
+            packaged_sccache_precedes_cargo_contract(late_setup).is_err(),
+            "packaged contract must reject Cargo before sccache setup"
+        );
+
+        let early_cargo = valid.replace(
+            "      - name: Set up sccache",
+            "      - name: Earlier Cargo command\n        run: cargo metadata\n      - name: Set up sccache",
+        );
+        assert!(
+            packaged_sccache_precedes_cargo_contract(&early_cargo).is_err(),
+            "packaged contract must reject any Cargo command before sccache"
+        );
+    }
+
+    #[test]
+    fn updater_consumer_requires_verified_sccache_before_cargo() {
+        let valid = r#"
+      RUSTC_WRAPPER: sccache
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: "v0.17.0"
+      - name: Set up Bun for updater fixture frontend
+      - name: Fail fast on updater fixture dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
+      - name: Rust cache
+      - name: Validate and bind exact current candidate
+        run: cargo xtask ci candidate validate
+"#;
+        updater_sccache_precedes_cargo_contract(valid)
+            .expect("pinned sccache setup and tool verification must precede Cargo");
+
+        let missing_setup = valid.replace("name: Set up sccache", "name: missing sccache");
+        assert!(
+            updater_sccache_precedes_cargo_contract(&missing_setup).is_err(),
+            "updater contract must reject a missing sccache setup"
+        );
+
+        let missing_verification = valid.replace(
+            "name: Fail fast on updater fixture dependencies",
+            "name: missing updater dependency verification",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&missing_verification).is_err(),
+            "updater contract must reject missing pre-Cargo tool verification"
+        );
+
+        let late_setup = valid.replace(
+            "      - name: Set up sccache",
+            "      - name: Earlier Cargo validation\n        run: cargo metadata\n      - name: Set up sccache",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&late_setup).is_err(),
+            "updater contract must reject Cargo before sccache setup"
+        );
+
+        let wrong_pin = valid.replace("version: \"v0.17.0\"", "version: \"v0.18.0\"");
+        assert!(
+            updater_sccache_precedes_cargo_contract(&wrong_pin).is_err(),
+            "updater contract must retain the pinned sccache version"
+        );
+
+        let wrong_action = valid.replace(
+            "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
+            "mozilla-actions/sccache-action@unreviewed",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&wrong_action).is_err(),
+            "updater contract must retain the pinned sccache action"
+        );
+
+        let missing_tool_check = valid.replace(
+            "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe",
+            "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx",
+        );
+        assert!(
+            updater_sccache_precedes_cargo_contract(&missing_tool_check).is_err(),
+            "updater contract must require sccache in the pre-Cargo tool verification"
+        );
+    }
+
+    #[test]
+    fn updater_consumer_binds_exact_source_and_validated_candidate_root() {
+        let valid = r#"
+      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate and bind exact current candidate
+        run: |
+          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
+          cargo xtask ci candidate validate `
+            --candidate-root $candidateRoot `
+            --source-sha $env:SKY_CI_SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "candidate validation failed" }
+          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+      - name: Validate and bind exact updater bridge
+        run: |
+          cargo xtask ci bridge validate `
+            --source-sha $env:SKY_CI_SOURCE_SHA `
+            --version $metadata.version
+      - name: Install provided bridge and qualify packaged Tauri updater rotation
+        run: |
+          cargo xtask ci updater-fixture run `
+            --candidate-root $env:SKY_CANDIDATE_ROOT `
+            --bridge-root $env:SKY_BRIDGE_ROOT `
+            --source-sha $env:SKY_CI_SOURCE_SHA
+"#;
+        updater_e2e_bindings_contract(valid)
+            .expect("updater consumer must bind validated job-local inputs");
+        let crlf = valid.replace('\n', "\r\n");
+        updater_e2e_bindings_contract(&crlf)
+            .expect("updater input contract must accept LF and CRLF source");
+
+        let missing_source = valid.replace(
+            "      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n",
+            "",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&missing_source).is_err(),
+            "updater contract must reject a missing job-local source SHA"
+        );
+
+        let changed_source = valid.replace(
+            "      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            "      SKY_CI_SOURCE_SHA: ${{ github.sha }}",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&changed_source).is_err(),
+            "updater contract must bind the PR head SHA for pull requests"
+        );
+
+        let missing_candidate_root = valid.replace(
+            "          \"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV -Encoding UTF8\n",
+            "",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&missing_candidate_root).is_err(),
+            "updater contract must reject a missing validated candidate-root export"
+        );
+
+        let wrong_candidate_path = valid.replace(
+            "$candidateRoot = Join-Path $env:RUNNER_TEMP \"sky-auto-player-current-candidate\"",
+            "$candidateRoot = Join-Path $env:GITHUB_WORKSPACE \"candidate\"",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&wrong_candidate_path).is_err(),
+            "updater contract must retain the exact runner-local downloaded candidate root"
+        );
+
+        let candidate_root_before_validation = valid.replace(
+            "          if ($LASTEXITCODE -ne 0) { throw \"candidate validation failed\" }\n          \"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV -Encoding UTF8",
+            "          \"SKY_CANDIDATE_ROOT=$candidateRoot\" | Add-Content $env:GITHUB_ENV -Encoding UTF8\n          if ($LASTEXITCODE -ne 0) { throw \"candidate validation failed\" }",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&candidate_root_before_validation).is_err(),
+            "updater contract must reject exporting a candidate root before validation succeeds"
+        );
+
+        let changed_runtime_source = valid.replace(
+            "            --bridge-root $env:SKY_BRIDGE_ROOT `\n            --source-sha $env:SKY_CI_SOURCE_SHA",
+            "            --bridge-root $env:SKY_BRIDGE_ROOT `\n            --source-sha ${{ github.sha }}",
+        );
+        assert!(
+            updater_e2e_bindings_contract(&changed_runtime_source).is_err(),
+            "updater runtime must use the validated source binding"
+        );
+    }
+
+    #[test]
+    fn windows_rust_ci_invokes_an_isolated_xtask_copy() {
+        let valid = r#"
+          Copy-Item -LiteralPath "rust/target/debug/xtask.exe" -Destination $isolatedXtask
+          try {
+            & $isolatedXtask check rust
+          } finally {
+            Remove-Item -LiteralPath $isolatedXtask -Force
+          }
+"#;
+        isolated_xtask_rust_runner_step_contract(valid)
+            .expect("the copied xtask must run and clean up outside Cargo's target path");
+
+        let missing_copy = valid.replace(
+            "Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\" -Destination $isolatedXtask",
+            "# copy removed",
+        );
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&missing_copy).is_err(),
+            "Rust CI contract must reject removal of the isolated copy"
+        );
+
+        let cargo_alias = valid.replace("& $isolatedXtask check rust", "cargo xtask check rust");
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&cargo_alias).is_err(),
+            "Rust CI contract must reject the self-locking cargo alias"
+        );
+
+        let no_finally = valid.replace("} finally {", "} else {");
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&no_finally).is_err(),
+            "Rust CI contract must require cleanup on every exit path"
+        );
     }
 }

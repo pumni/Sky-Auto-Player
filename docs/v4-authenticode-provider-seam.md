@@ -29,7 +29,8 @@ root, and exact artifact digests, SBOM, provenance, and install qualification re
 
 ## SignCommand boundary
 
-The Tauri configuration retains one bounded hook:
+The Tauri configuration retains one bounded PowerShell hook. It remains a bundler adapter because
+running `cargo xtask` from Tauri's `signCommand` would recurse into Cargo during bundling:
 
 ```text
 scripts/sign_v4_authenticode.ps1 <Path>
@@ -39,8 +40,8 @@ scripts/sign_v4_authenticode.ps1 <Path>
 "signCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/sign_v4_authenticode.ps1 %1"
 ```
 
-The default mode is `unsigned-zero-budget`. The hook is intentionally auditable and deterministic;
-its successful no-op is followed by explicit unsigned-state verification.
+The hook performs the platform signing operation for Tauri. Rust validates its result after bundling;
+the hook does not create canonical qualification evidence.
 
 ## Modes
 
@@ -55,12 +56,31 @@ not invoked by the canonical project release path until provider onboarding is c
 particular, the current release orchestrator sets
 `SKY_AUTHENTICODE_MODE=unsigned-zero-budget` and does not require provider inputs.
 
-## Verification contract
+## Rust policy and Windows inspection adapter
 
-`scripts/verify_v4_authenticode.ps1 -Mode unsigned-zero-budget` accepts only regular `.exe` and
-`.dll` project artifacts whose `Get-AuthenticodeSignature` result is exactly `NotSigned` and whose
-`SignerCertificate` is absent. It emits bounded evidence containing the file name and SHA-256,
-with null signer fields and the explicit `unsigned-zero-budget-policy` marker.
+All verification callers use `cargo xtask authenticode verify --mode <mode> --artifact <path>`.
+Rust owns mode selection, approved-thumbprint validation, provider exclusivity, ephemeral PFX
+confinement, platform-status policy, CMS/SPC result checks, artifact digests, and canonical evidence
+generation. The command accepts `--evidence <path>` when callers need a persisted evidence file.
+
+`scripts/verify_v4_authenticode.ps1` is a Windows fact adapter. It reports
+`Get-AuthenticodeSignature` status and delegates independent signed CMS/SPC PE digest verification
+to `scripts/v4_authenticode_crypto.ps1`. Rust validates those facts and creates the canonical
+evidence. The independent crypto adapter remains because its PE certificate-table and
+`SignedCms` proof is not replaced by a file hash.
+
+In `unsigned-zero-budget`, Rust accepts only a Windows `NotSigned` result with no signer and emits
+the explicit `unsigned-zero-budget-policy` evidence marker. Test mode requires the exact test
+thumbprint and a passwordless ephemeral PFX under the temporary root; signtool receives no PFX
+password on its command line.
+Production mode requires a valid 40-character approved thumbprint, a provider, and exactly one
+provider script or command; CI test signer identities and unexpected Windows statuses fail closed.
+
+Repeated artifact arguments cross the Rust-to-Windows adapter boundary in a bounded UTF-8 JSON
+manifest with schema_version 1 (at most 256 files and 1 MiB). Each record binds the resolved Unicode
+path, exact filename, and Rust-computed SHA-256. The adapter validates that inventory, checks the
+file hash before and after platform/CMS verification, and returns facts that Rust matches against
+every requested filename and digest.
 
 The bundle verifier binds the final NSIS evidence to the exact installer bytes. The installed-tree
 qualification repeats the same check for every project-owned PE; the generated `uninstall.exe` is
@@ -88,5 +108,6 @@ The focused Windows contract suite uses throwaway material only:
 pwsh scripts/test_v4_production_signing_contract.ps1
 ```
 
-It proves that the zero-budget no-op succeeds on an unsigned PE, a test-signed PE is rejected by
-the zero-budget verifier, and test evidence cannot satisfy production/promotion validation.
+It proves that unsigned-state verification rejects signed PE files, the Rust CLI and adapter verify
+two signed synthetic PE files in one request, missing and tampered artifacts fail closed, test mode
+validates the independent CMS/SPC proof, and test evidence cannot satisfy production policy.

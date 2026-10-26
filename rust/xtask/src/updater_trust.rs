@@ -6,6 +6,8 @@ use std::path::Path;
 use std::process::Command;
 
 const MAX_PUBLIC_KEY_BYTES: usize = 4096;
+#[cfg(windows)]
+const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdaterTrustInventory {
@@ -263,6 +265,40 @@ pub fn verify_updater_signature(installer_path: &Path, signature_path: &Path) ->
     let key_id = canonical_key_id()?;
     println!("[xtask] V4 Updater Signature Verification: PASS (Key ID: {key_id})");
     Ok(())
+}
+
+/// Verify a detached Minisign signature against an explicitly supplied public
+/// key. This is used for disposable fixture keys and does not alter the
+/// canonical production-root verifier above.
+#[cfg(windows)]
+pub(crate) fn verify_signature_text_with_public_key(
+    payload: &[u8],
+    signature_text: &str,
+    public_key_text: &str,
+) -> Result<()> {
+    if payload.is_empty() || payload.len() > 1024 * 1024 {
+        return Err("updater signature verification payload is empty or unbounded".into());
+    }
+    let signature_text = signature_text.trim();
+    if signature_text.is_empty() || signature_text.len() > MAX_SIGNATURE_BYTES {
+        return Err("updater signature text is empty or unbounded".into());
+    }
+    let public_key_text = public_key_text.trim();
+    if public_key_text.is_empty()
+        || public_key_text.len() > MAX_PUBLIC_KEY_BYTES
+        || public_key_text.contains("PRIVATE KEY")
+        || public_key_text.contains('\0')
+    {
+        return Err("updater public key is empty, private, or unbounded".into());
+    }
+
+    let public_key = decode_public_key(public_key_text)?;
+    let signature = STANDARD.decode(signature_text)?;
+    let signature = String::from_utf8(signature)?;
+    let signature = Signature::decode(&signature)?;
+    public_key
+        .verify(payload, &signature, false)
+        .map_err(|_| "updater signature does not match the supplied public root".into())
 }
 
 /// Return the identity parsed from the canonical compiled public root.

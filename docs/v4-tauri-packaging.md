@@ -69,25 +69,27 @@ secret output. Test authority is compiled only by the explicit
 
 ## Packaged calibration executable
 
-The Tauri beforeBuildCommand runs
-scripts/build_native_calibration.ps1 after the frontend build. That helper
-builds sky_dispatch_win32's native_calibration binary with the locked Rust
-workspace, the x86_64-pc-windows-msvc target, and the dist profile. It
-discovers Cargo's active target directory, validates the output as an x86_64
-PE executable, and stages it at
-desktop/src-tauri/resources/native_calibration.exe. Tauri bundles that
-resource at the install root, where AppPaths::calibration_binary_path()
-looks for it.
+The Tauri beforeBuildCommand runs `cargo xtask calibration build` after the
+frontend build. The Rust command builds `sky_dispatch_win32`'s
+`native_calibration` binary with the locked workspace, the
+`x86_64-pc-windows-msvc` target, and the `dist` profile. It discovers Cargo's
+active target directory, validates the output as an x86_64 PE executable, and
+stages the exact bytes at `desktop/src-tauri/resources/native_calibration.exe`
+with rollback if replacement fails. Tauri bundles that resource at the install
+root, where `AppPaths::calibration_binary_path()` looks for it. Tauri runs this
+hook before starting its application Cargo build; the Rust builder owns its
+separate, completed Cargo build and does not run from `build.rs` or the signing
+hook.
 
-The current-candidate contract records the staged executable's filename, size,
-SHA-256, and architecture. Packaged CI installs that exact candidate under
+`cargo xtask ci candidate` records the staged executable's filename, size,
+SHA-256, and architecture in the existing candidate schema. Packaged CI installs that exact candidate under
 the hermetic current-user NSIS fixture and independently verifies the
 installed file against those values, checks its x86_64 PE machine type, and
 runs only native_calibration.exe --help with a five-second bound. The
-installed evidence is retained as INSTALLED_CALIBRATION_EVIDENCE.json.
-CI also runs a negative self-test that requires verification to fail when the
-installed executable is absent. Neither check runs calibration or sends
-gameplay input.
+installed evidence is retained as `INSTALLED_CALIBRATION_EVIDENCE.json`.
+Rust-native tests cover missing files, wrong PE machine, corrupt digest, and
+restore-on-error behavior. Neither check runs calibration or sends gameplay
+input.
 
 ## Local Windows package qualification
 
@@ -143,10 +145,10 @@ self-signed certificate only for test-mode integrity coverage. See
 and runner execution topology. To create the evidence used above, run:
 
 ```powershell
-pwsh scripts/verify_v4_authenticode.ps1 `
-  -Mode test `
-  -Artifact (Get-ChildItem rust/target/dist/bundle/nsis/*-setup.exe).FullName `
-  -Evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+cargo xtask authenticode verify `
+  --mode test `
+  --artifact (Get-ChildItem rust/target/dist/bundle/nsis/*-setup.exe).FullName `
+  --evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
 cargo xtask sbom generate --artifact-dir rust/target/dist/bundle/nsis --output rust/target/dist/SBOM.spdx.json
 cargo xtask sbom verify --artifact-dir rust/target/dist/bundle/nsis --sbom rust/target/dist/SBOM.spdx.json
 pwsh scripts/cleanup_v4_test_signing.ps1
@@ -205,9 +207,10 @@ That command is the canonical package build: it uses the normal production
 feature set and the generated test updater key/example endpoint only to
 exercise updater artifact signing. The Authenticode certificate is an
 ephemeral test fixture. The setup step creates its private key and certificate
-in a password-protected PFX under `RUNNER_TEMP`; it never imports the
-certificate into a Windows trust store. The CI always deletes the PFX and its
-password environment variable after signing and installed-PE verification.
+in a passwordless PFX under `RUNNER_TEMP`; signtool receives no PFX password on
+its command line, and the certificate is never imported into a Windows trust
+store. The CI always deletes the PFX and clears its empty compatibility
+environment variable after signing and installed-PE verification.
 It does not enable the updater fixture or insecure transport. The separate
 `updater_e2e` CI job builds both previous-v4 and
 candidate-v4 into a `RUNNER_TEMP` `CARGO_TARGET_DIR` with
@@ -246,15 +249,17 @@ the bridge/cutover sequence, rotating the Authenticode provider if applicable,
 and publishing a new version; existing artifact bytes are never repaired in
 place.
 
-The isolated CI updater qualification runs
-`scripts/ci_tauri_update_e2e.ps1 -FixtureTargetDir <runner-temp-target>`. The
-script owns the fixture `CARGO_TARGET_DIR` for each throwaway build and serves
-the signed candidate from a loopback fixture, installs the previous v4 package, and verifies the official
-Tauri updater reaches the candidate version after restart. It also verifies
-the reviewed overlap `[old,new]` to cutover `[new]` updater-trust transition against real
-packaged clients. This is a signing-key rotation fixture, not a compatibility path for
-pre-release v4 builds. The same evidence records the ordered native quiesce,
-key-release, state-persistence, and resource-close phases.
+The isolated CI updater qualification invokes
+`cargo xtask ci updater-fixture run` on a disposable Windows runner with the
+exact validated candidate and bridge contracts. Rust builds the historical
+bridge in a detached worktree with an isolated target directory, serves
+byte-exact candidate data from loopback, and verifies the official Tauri
+updater's rollback and N-to-N+1 transition against packaged clients. It also
+checks old-root rejection after cutover, installed publisher/uninstall
+identity, and the reviewed trust-root behavior. This is a signing-key rotation
+fixture, not a compatibility path for pre-release v4 builds. The evidence
+records HTTP status/length/hash and ordered native quiesce, key-release,
+state-persistence, and resource-close phases.
 It additionally creates a user-owned song before update N, records its exact
 SHA-256, verifies that the SHA is unchanged after N+1, and runs the installed
 built-in catalog verifier against the N+1 resource tree. This proves that the
@@ -267,13 +272,11 @@ content hashes with the same selected stable ID.
 
 ## Acceptance boundary
 
-The local NSIS installer and updater signature require Windows packaging tools
-and a test signing key. Fresh current-user install, launch, GUI smoke, and
-uninstall remain Windows-manual acceptance evidence; the packaged update
-qualification is the deterministic previous-v4 -> candidate-v4 acceptance
-path. A full non-PR run must be dispatched from the branch so provenance and
-SPDX attestations are generated and verified before acceptance. The production
-release and `release-metadata` channel contract is documented in
-`v4-release-authority.md`. The v4 updater public trust
+The NSIS and updater E2E commands are restricted to disposable hosted Windows
+CI or the exact protected release runner. Local Windows work is limited to
+Rust tests, synthetic isolated HKCU test keys, fake files, and build-only
+fixture validation; do not run an installer or updater on an operator profile.
+The production release and `release-metadata` channel contract is documented
+in `v4-release-authority.md`. The v4 updater public trust
 root and rotation policy are implemented here; an approved Authenticode
 provider is optional future work and is not a release prerequisite.

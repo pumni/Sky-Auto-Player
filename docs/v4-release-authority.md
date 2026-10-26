@@ -237,7 +237,7 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
 During the publication of `v4.1.0` (run `35255186714`, source SHA `5e5ab9d9a89aaced2af97a32c64fff21681c4c56`),
 candidate qualification, draft asset upload, and exact-byte OIDC attestations succeeded, and the GitHub
 Release was transitioned to published (`draft = false`, making it GitHub Latest). However, a state-object
-property assignment error in `v4_release_pipeline.ps1` terminated the workflow immediately after publication,
+a release workflow error terminated the then-current PowerShell transaction immediately after publication,
 before metadata promotion could execute. As a result, GitHub Latest reached `v4.1.0` while
 `channels/stable/latest.json` remained at `4.0.1`.
 
@@ -253,7 +253,6 @@ The read-only `release-doctor` queries external truth, local state, and workflow
 
 ```powershell
 cargo xtask release-doctor --tag <tag> [--run-id <id>] [--workflow-sha <sha>] [--format <text|json>]
-pwsh scripts/release_doctor.ps1 -Tag <tag> [-RunId <id>] [-WorkflowSha <sha>] [-Format <Text|Json>]
 ```
 
 ## Release and update domain authority ownership map
@@ -262,7 +261,7 @@ To maintain single authoritative ownership and prevent duplicated domain rules a
 the v4 architecture defines exact ownership boundaries:
 
 ```text
-GitHub Actions = transaction orchestration
+GitHub Actions = protected runner lifecycle, permissions, and attestation
 cargo xtask    = deterministic release/update domain validation
 PowerShell     = Windows adapters and bounded glue
 Tauri Rust     = runtime updater authority
@@ -273,9 +272,9 @@ React          = presentation
 
 | Layer | Component / Tooling | Canonical Ownership | Non-Goals / Excluded Roles |
 |---|---|---|---|
-| **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Workflow lifecycle & environment gates; job sequencing (`Preflight` &rarr; `BuildCandidate` &rarr; `Attest` &rarr; `PublishRelease` &rarr; `PromoteMetadata` &rarr; `FinalVerify`); OIDC attestation issuance. | Does not define SemVer rules, asset naming patterns, or metadata schemas. |
-| **`cargo xtask` (Rust)** | `rust/xtask/src/` (`release_metadata.rs`, `tauri_bundle.rs`, `sbom.rs`, `version.rs`, `updater_trust.rs`) | Single canonical source of truth for deterministic release domain rules: SemVer validation and channel classification (`Stable`/`Beta`); canonical asset naming and digest verification; metadata schema generation, validation, and monotonic roll-forward checking; updater trust material inventory; SPDX SBOM generation/verification; installed catalog validation. | Does not interact with Windows Credential Manager or native OS desktop sessions directly. |
-| **PowerShell** | `scripts/` (`v4_nsis_smoke_boundary.ps1`, `v4_updater_credential_broker.ps1`, `sign_v4_authenticode.ps1`, `promote_v4_metadata.ps1`) | Thin Windows and toolchain adapters: Windows Credential Manager integration; Authenticode signing tool invocation; NSIS installer/uninstaller execution and hermetic smoke boundary isolation (registry snapshot/restore, throwaway AppData routing, fail-closed directory cleanup); GitHub CLI (`gh`) and raw HTTP transport calls. | Must not independently re-implement SemVer, asset naming, or metadata schema validation rules that are owned by `cargo xtask`. |
+| **GitHub Actions** | .github/workflows/release-v4.yml, rehearse-v4.yml, ci.yml | Protected runner lifecycle, exact source checkout, scoped token issuance, and OIDC attestations. The workflow invokes the ordered Rust release phases. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
+| **cargo xtask (Rust)** | rust/xtask/src/release_v4.rs and related release_metadata.rs, sbom.rs, version.rs, updater_trust.rs, calibration.rs, nsis_harness.rs, updater_fixture.rs | Single transaction authority for Preflight, BuildCandidate, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform and credential adapters; does not mint GitHub workflow tokens or operate the release runner. |
+| **PowerShell** | scripts/sign_v4_authenticode.ps1, verify_v4_authenticode.ps1, v4_authenticode_crypto.ps1, scan_v4_defender_exact.ps1, verify_v4_release_runner.ps1, Credential Manager operator helpers | Narrow Windows and provider adapters for Authenticode signing and facts, Defender scanning, runner boundary checks, and operator credential setup. | Does not own the release transaction, GitHub API policy, release-doctor, state transitions, evidence schemas, or SemVer. |
 | **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
 | **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 
@@ -287,10 +286,14 @@ React          = presentation
      - Channel prerelease classification (`stable` rejects prerelease versions; `beta` requires prerelease versions)
      - Release tag exactness (`v<version>`)
      - Cargo project version matching (`desktop/src-tauri/Cargo.toml`)
-   - PowerShell orchestration scripts (`scripts/v4_release_pipeline.ps1`, `scripts/orchestrate_v4_production_release.ps1`, `scripts/ci_tauri_update_e2e_core.ps1`) delegate all SemVer and channel classification directly to `cargo xtask version check`, eliminating duplicate regex and policy logic.
+   - cargo xtask release-v4 uses the canonical cargo xtask version owner; PowerShell does not implement release policy.
 
-2. **Hermetic NSIS Smoke Testing Isolation Boundary**:
-   - `scripts/v4_nsis_smoke_boundary.ps1` provides machine-protection boundary isolation across all production-identity NSIS smoke consumers (packaged CI smoke, release pipeline, release orchestrator, updater E2E).
-   - Captures registry state across all product and uninstall namespaces before smoke execution.
-   - Restores default and named registry values with exact captured `RegistryValueKind` and asserts post-restoration equivalence, failing closed on any detected residue.
-   - Enforces an **attempt-all** finalizer in `Exit-V4NsisSmokeScope` that executes process termination, registry restoration, environment restoration, throwaway AppData cleanup, and install-root cleanup before raising aggregate diagnostics, preserving original test failure context.
+2. **Isolated NSIS and Updater Qualification**:
+   - `cargo xtask ci nsis smoke` and `cargo xtask ci updater-fixture run` own real package execution, restricted to a disposable hosted Windows runner or exact protected release workflow context.
+   - The Rust registry owner snapshots only allowlisted product/uninstall HKCU roots, preserving absent/present state, recursive keys, parent presence, raw value kinds and bytes. It restores and verifies the snapshot even when setup or qualification fails.
+   - The smoke scope routes application data and install output under an owned `RUNNER_TEMP` child, tracks child process trees, snapshots product shortcuts, attempts every cleanup stage, aggregates original and cleanup failures, and refuses recursive deletion without its exact ownership sentinel.
+   - The updater fixture reuses the validated candidate and bridge bytes, serves only explicit loopback routes, verifies HTTP body length and SHA-256, checks rollback and N-to-N+1 state, and preserves a synthetic user-song sentinel through update and uninstall.
+   - Local development must use synthetic isolated registry namespaces, fake files, and process fixtures; do not run NSIS on a maintainer workstation.
+
+The script retirement and retained caller evidence is recorded in
+[`powershell-dependency-ledger.md`](powershell-dependency-ledger.md).

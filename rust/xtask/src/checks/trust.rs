@@ -6,96 +6,58 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-fn v4_production_calibration_gate_contract(orchestrator: &str) -> Result<()> {
-    let smoke_start = orchestrator
-        .find("# 10. Install / Smoke Test")
-        .ok_or("v4 production release orchestrator is missing its install smoke section")?;
-    let evidence_start = orchestrator
-        .find("# 11. Emit Deterministic Machine-Readable Evidence")
-        .ok_or("v4 production release orchestrator is missing its evidence boundary")?;
-    if evidence_start <= smoke_start {
-        return Err("v4 production calibration gate must precede qualification evidence".into());
-    }
-    let smoke = &orchestrator[smoke_start..evidence_start];
-    let staged_gate_start = smoke
-        .find("# Production-only staged calibration gate.")
-        .ok_or("production release must verify the staged calibration resource")?;
-    let install_position = smoke
-        .find("Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot")
-        .ok_or("production release smoke must install the exact NSIS candidate")?;
-    let installed_gate_start = smoke
-        .find("# Production-only installed calibration gate")
-        .ok_or("production release must verify installed native calibration")?;
-    let launch_position = smoke
-        .find("Start-Process -FilePath $appPath")
-        .ok_or("production release smoke must launch the installed application")?;
-    if staged_gate_start >= install_position
-        || install_position >= installed_gate_start
-        || installed_gate_start >= launch_position
+fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
+    let normalized_harness = super::normalize_source_line_endings(harness);
+    let harness = normalized_harness.as_str();
+    let qualification = harness
+        .split_once("fn qualify_package(")
+        .map(|(_, body)| body)
+        .ok_or("Rust NSIS owner is missing its package qualification function")?;
+    let qualification = qualification
+        .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
+        .map(|(body, _)| body)
+        .ok_or("Rust package qualification body is not bounded")?;
+    let install_position = qualification
+        .find("run_installer(\n        installer,")
+        .ok_or("Rust NSIS owner must install the exact candidate")?;
+    let installed_gate = qualification
+        .find("verify_calibration_artifact(\n        repository_root,\n        &install_root")
+        .ok_or("Rust NSIS owner must verify installed native calibration")?;
+    let launch_position = qualification
+        .find("launch_smoke(scope, &app")
+        .ok_or("Rust NSIS owner must launch the installed application")?;
+    if qualification
+        .matches("verify_calibration_artifact(")
+        .count()
+        != 1
+        || qualification.contains("staged_calibration_root")
+        || qualification.contains("desktop/src-tauri/resources")
+        || install_position >= installed_gate
+        || installed_gate >= launch_position
     {
-        return Err(
-            "production calibration verification must validate the staged child, install, verify the installed child, then launch".into(),
-        );
+        return Err("calibration qualification must install first, verify frozen candidate bytes from the installed tree, then launch without producer staging".into());
     }
 
-    let staged_gate = &smoke[staged_gate_start..install_position];
-    for marker in [
-        "if (-not $InternalTestFixture) {",
-        r#"Join-Path $repoRoot "desktop\src-tauri\resources\native_calibration.exe""#,
-        "Test-Path -LiteralPath $calibrationResourcePath -PathType Leaf",
-        "$calibrationResource.Attributes -band [IO.FileAttributes]::ReparsePoint",
-        "$calibrationResourceSize = [long]$calibrationResource.Length",
-        "Get-FileHash -LiteralPath $calibrationResourcePath -Algorithm SHA256",
-        "$calibrationResourceRoot = Split-Path -Parent $calibrationResourcePath",
-        "Invoke-CalibrationPayloadVerification",
-        "-InstallRoot $calibrationResourceRoot",
-        "-ExpectedSize $calibrationResourceSize",
-        "-ExpectedSha256 $calibrationResourceSha256",
-    ] {
-        if !staged_gate.contains(marker) {
-            return Err(format!(
-                "production staged calibration verification is missing required marker: {marker}"
-            )
-            .into());
-        }
-    }
-
-    let installed_gate = &smoke[installed_gate_start..launch_position];
-    for marker in [
-        "if (-not $InternalTestFixture) {",
-        "Invoke-CalibrationPayloadVerification",
-        "-InstallRoot $installRoot",
-        "-ExpectedSize $calibrationResourceSize",
-        "-ExpectedSha256 $calibrationResourceSha256",
-        "-Context \"Installed calibration verification\"",
-    ] {
-        if !installed_gate.contains(marker) {
-            return Err(format!(
-                "production installed calibration verification is missing required marker: {marker}"
-            )
-            .into());
-        }
-    }
-
-    let verifier = orchestrator
-        .split_once("function Invoke-CalibrationPayloadVerification")
+    let verifier = harness
+        .split_once("fn verify_calibration_artifact(")
         .map(|(_, remainder)| remainder)
-        .ok_or("production release is missing the installed calibration verifier adapter")?;
+        .ok_or("Rust NSIS owner is missing its typed calibration verifier")?;
     let verifier = verifier
-        .split_once("\nfunction ")
+        .split_once("\n#[cfg(windows)]")
         .map(|(function, _)| function)
-        .ok_or("installed calibration verifier adapter must be a bounded function")?;
+        .ok_or("Rust calibration verifier must be a bounded Windows owner function")?;
     for marker in [
-        "verify_installed_calibration.ps1",
-        "-InstallRoot $InstallRoot",
-        "-ExpectedSize $ExpectedSize",
-        "-ExpectedSha256 $ExpectedSha256",
-        "$verificationExitCode = $LASTEXITCODE",
-        "if ($verificationExitCode -ne 0)",
+        "verify-installed",
+        "--install-root",
+        "--expected-size",
+        "candidate.manifest.calibration_binary_size",
+        "--expected-sha256",
+        "candidate.manifest.calibration_binary_sha256",
+        "crate::calibration::run(repository_root, &args)",
     ] {
         if !verifier.contains(marker) {
             return Err(format!(
-                "production installed calibration verifier adapter is missing required marker: {marker}"
+                "Rust installed calibration verifier is missing required marker: {marker}"
             )
             .into());
         }
@@ -147,19 +109,23 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let ci = fs::read_to_string(&ci_path)?.replace("\r\n", "\n");
     for marker in [
         "scripts/setup_v4_test_signing.ps1",
-        "scripts/verify_v4_authenticode.ps1",
+        "cargo xtask authenticode verify",
+        "scripts/test_v4_authenticode_integrity.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
         "scripts/test_v4_updater_key_rotation.ps1",
-        "scripts/ci_tauri_update_e2e.ps1",
-        "scripts/ci_validate_bridge.ps1",
+        "cargo xtask ci updater-fixture run",
+        "cargo xtask ci nsis smoke",
+        "--allow-hosted-disposable-runner",
+        "cargo xtask ci bridge validate",
         "scripts/ci_require_windows_tools.ps1",
         "TimeoutSeconds 30",
         "qualify packaged Tauri updater rotation",
-        "scripts/ci_validate_candidate.ps1",
-        "CandidateInstallerPath",
-        "CandidateSignaturePath",
-        "CandidateVersion",
-        "CandidatePublicKeyPath",
+        "cargo xtask ci candidate validate",
+        "--candidate-root",
+        "--bridge-root",
+        "--source-sha",
+        "--fixture-root",
+        "--allow-hosted-disposable-runner",
         "cargo xtask sbom generate",
         "cargo xtask sbom verify",
         "workflow_dispatch:",
@@ -195,40 +161,40 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
+    let updater_fixture = fs::read_to_string(root.join("rust/xtask/src/updater_fixture.rs"))?;
     for marker in [
-        "Updater N-to-N+1 preservation",
-        "Updater N-to-N+1 resource replacement",
-        "catalog-sentinel",
-        "SKY_APP_DATA_ROOT",
+        "127.0.0.1",
+        "loopback fixture returned",
+        "validate_manifest_bytes",
+        "response_bytes_are_exact_source_bytes",
+        "body_sha256",
+        "content_length",
+        "application/octet-stream",
         "updater-preserved-user.json",
-        "user_song_sha256_before",
+        "user_song_sha256_unchanged",
         "built_in_manifest_sha256_before",
         "built_in_manifest_sha256_after",
         "selected_builtin_id_before",
         "selected_builtin_id_after",
         "selected_builtin_content_sha256_before",
         "selected_builtin_content_sha256_after",
-        "Restore-CanonicalBuiltinCatalog",
-        "Clear-FixtureResourceStaging",
         "source_tree_restore",
-        "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
-        "candidateInstallerSha256",
-        "oldSigningInstallerSha256",
-        "Get-HigherSemVer",
-        "preservedBridgeRoot",
-        "--selftest-update-fixture-new-only",
-        "selftest-update-fixture-port",
-        "selftest-update-fixture-public-key",
-        "negativeRequestStart",
-        "negativeManifestRequests",
-        "negativeCandidateRequests",
+        "crate::builtin_catalog::run",
+        "candidate.installer_sha256",
+        "old-root detached-signature operation changed candidate installer bytes",
+        "git",
+        "worktree",
+        "--detach",
+        "preserved_bridge_root",
         "n_to_n_plus_1_installer_sha256",
-        "old-root",
-        "old_root_rejection_copy_matches",
-        "BridgeRootPath",
-        "BridgeInstallerPath",
-        "ci_validate_bridge.ps1",
+        "old_root_rejection",
+        "assert_migration_registry_roots_absent",
+        "--selftest-update-fixture-new-only",
+        "--selftest-update-fixture-port",
+        "--selftest-update-fixture-public-key",
+        "write_http_evidence",
+        "MAX_HTTP_REQUESTS",
+        "source SHA must match the checked-out Git HEAD",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -261,25 +227,49 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
 
     let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
     for marker in [
-        "unsigned-zero-budget",
-        "NotSigned",
-        "authenticode-unsigned-zero-budget",
-        "unsigned-zero-budget-policy",
-        "SKY_AUTHENTICODE_TEST_THUMBPRINT",
-        "SKY_AUTHENTICODE_TEST_PFX_PATH",
-        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
-        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
-        "expected_signer_thumbprint",
-        "Resolve-TestPfxPath",
+        "authenticode-windows-inspection",
+        "Get-AuthenticodeSignature",
+        "ExpectedThumbprint",
         "v4_authenticode_crypto.ps1",
         "Get-AuthenticodeIntegrityProof",
+        "ArtifactManifest",
+        "maximumArtifactCount",
+        "maximumManifestBytes",
+        "Authenticode artifact manifest contains a malformed entry",
+        "inspection file does not match its manifest SHA-256",
         "platform_status",
-        "UnknownError",
-        "signer thumbprint mismatch",
+        "signed_digest_algorithm",
+        "computed_digest",
     ] {
         if !verifier.contains(marker) {
             return Err(format!(
                 "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let rust_policy = fs::read_to_string(root.join("rust/xtask/src/authenticode.rs"))?;
+    for marker in [
+        "unsigned-zero-budget",
+        "validate_thumbprint",
+        "validate_test_pfx",
+        "validate_test_pfx_password",
+        "validate_production_provider",
+        "accepted_status",
+        "test Authenticode PFX passwords are forbidden because signtool exposes argv",
+        "authenticode-verification",
+        "unsigned-zero-budget accepts only a real NotSigned PE with no signer",
+        "Authenticode signed CMS digest does not match the computed PE image digest",
+        "MAX_AUTHENTICODE_ARTIFACTS",
+        "MAX_ARTIFACT_MANIFEST_BYTES",
+        "artifact_manifest_bytes",
+        "adapter_evidence_must_cover_every_requested_file_and_exact_hash",
+        "artifact_manifest_is_bounded_and_preserves_exact_unicode_inventory",
+        "write_evidence",
+    ] {
+        if !rust_policy.contains(marker) {
+            return Err(format!(
+                "Rust Authenticode policy is missing its required marker: {marker}"
             )
             .into());
         }
@@ -309,8 +299,9 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "CertificateRequest",
         "X509ContentType]::Pfx",
         "EphemeralKeySet",
+        "Passwordless ephemeral PFX",
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
-        "::add-mask::",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD=",
         "RUNNER_TEMP",
     ] {
         if !setup.contains(marker) {
@@ -320,16 +311,11 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let mask_position = setup
-        .find("::add-mask::")
-        .ok_or("v4 Authenticode test PFX setup must mask the generated password")?;
-    let password_environment_position = setup
-        .find("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
-        .ok_or("v4 Authenticode test PFX setup must publish the generated password")?;
-    if mask_position >= password_environment_position {
+    if setup.contains("::add-mask::")
+        || setup.contains("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
+    {
         return Err(
-            "v4 Authenticode test PFX setup must mask the generated password before GITHUB_ENV"
-                .into(),
+            "ephemeral Authenticode PFX passwords must not be generated or published".into(),
         );
     }
     for forbidden in [
@@ -381,7 +367,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "SKY_AUTHENTICODE_TEST_PFX_PATH",
         "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
         "/f $pfxPath",
-        "/p $pfxPassword",
+        "test Authenticode signing rejects PFX passwords because signtool exposes argv",
+        "sign /fd SHA256 /f $pfxPath $Path",
         "EphemeralKeySet",
         "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
         "SKY_AUTHENTICODE_PROVIDER",
@@ -393,15 +380,18 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             );
         }
     }
+    if signer.contains(" /p ") {
+        return Err("signtool must never receive a PFX password on its command line".into());
+    }
     let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
     for marker in [
-        "v4_authenticode_crypto.ps1",
         "sign_v4_authenticode.ps1",
         "Get-AuthenticodeSignature",
         "clean signed PE PASS",
         "Tampered signed PE unexpectedly passed independent Authenticode verification",
         "Get-AuthenticodePeLayout",
         "WriteAllBytes",
+        "cargo xtask authenticode verify",
     ] {
         if !tamper.contains(marker) {
             return Err(format!(
@@ -418,6 +408,13 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "Production verification rejects CI test certificate",
         "unsigned-zero-budget verification rejects signed binary",
         "Production verification rejects test thumbprint",
+        "Contract Test 3b: Rust CLI passes two signed synthetic PE files through the manifest adapter",
+        "Contract Test 3c: missing artifact fails closed",
+        "Contract Test 3d: tampered signed PE fails closed through the manifest adapter",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodePeLayout",
+        "cargo @cargoArguments",
+        r#"@("xtask", "authenticode", "verify", "--mode", $Mode)"#,
         "CI test certificate cannot satisfy production mode or zero-budget unsigned state",
     ] {
         if !contract_test.contains(marker) {
@@ -459,85 +456,68 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let orchestrator =
-        fs::read_to_string(root.join("scripts/orchestrate_v4_production_release.ps1"))?;
+    let release_owner = fs::read_to_string(root.join("rust/xtask/src/release_v4.rs"))?;
     for marker in [
-        "ExpectedSourceSha",
-        "Version",
-        "Channel",
-        "UpdaterPrivateKeyPath",
-        "ApprovedSignerThumbprint",
-        "updater-trust verify-private-key",
-        "Redact-UpdaterVerifierOutput",
-        "updater-trust verify-signature",
-        "V4_QUALIFICATION_EVIDENCE.json",
-        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
-        "sign_v4_authenticode.ps1",
-        "verify_v4_authenticode.ps1",
-        "unsigned-zero-budget",
-        "Invoke-PrePackagingStaleOutputPurge",
-        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
+        "fn build_candidate",
+        "fn candidate_record",
+        "fn write_release_evidence",
+        "fn validate_candidate_evidence",
+        "fn validate_qualification_evidence",
+        "fn publish_release",
+        "fn promote_metadata",
+        "fn final_verify",
+        "fn doctor_report",
+        "capture_owned_timeout_to_file_filtered",
+        "GITHUB_RETRY_ATTEMPTS",
     ] {
-        if !orchestrator.contains(marker) {
+        if !release_owner.contains(marker) {
             return Err(format!(
-                "v4 production release orchestrator is missing its required marker: {marker}"
+                "Rust v4 release owner is missing its required boundary: {marker}"
             )
             .into());
         }
     }
-    v4_production_calibration_gate_contract(&orchestrator)?;
+    let nsis_harness = fs::read_to_string(root.join("rust/xtask/src/nsis_harness.rs"))?;
+    v4_production_calibration_gate_contract(&nsis_harness)?;
     let installed_calibration_verifier =
-        fs::read_to_string(root.join("scripts/verify_installed_calibration.ps1"))?;
+        fs::read_to_string(root.join("rust/xtask/src/calibration.rs"))?;
     for marker in [
-        "ExpectedSize -le 0",
-        "$sha256 -cne $ExpectedSha256.ToLowerInvariant()",
-        "$machine -ne 0x8664",
-        "WaitForExit(5000)",
+        "expected calibration binary size must be positive",
+        "installed calibration SHA-256 mismatch",
+        "installed calibration executable is not x86_64",
+        "Duration::from_secs(5)",
         "installed calibration --help exited with",
+        "InstalledCalibrationEvidence",
+        "successful_evidence_keeps_the_installed_calibration_schema",
+        "installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe",
     ] {
         if !installed_calibration_verifier.contains(marker) {
             return Err(format!(
-                "production calibration verifier is missing its fail-closed check: {marker}"
+                "Rust production calibration verifier is missing its fail-closed check: {marker}"
             )
             .into());
         }
     }
-    let evidence_builder = fs::read_to_string(root.join("scripts/v4_qualification_evidence.ps1"))?;
-    for marker in [
-        "New-V4CanonicalQualificationEvidence",
-        "tauri-nsis-qualified-release",
-        "install-launch-uninstall",
-    ] {
-        if !evidence_builder.contains(marker) {
-            return Err(format!(
-                "v4 qualification evidence builder is missing required marker: {marker}"
-            )
-            .into());
-        }
-    }
-    let orchestrator_test =
-        fs::read_to_string(root.join("scripts/test_v4_production_orchestrator.ps1"))?;
-    for marker in [
-        "[PASS] All V4 production orchestrator contract tests passed",
-        "Parameter validation fails closed on missing parameters",
-        "Source SHA mismatch fails closed before packaging",
-        "Channel policy validation fails closed on invalid SemVer / channel",
-        "Mutually exclusive provider configuration fails closed",
-        "Wrong updater private key fails pre-flight verification before packaging",
-        "Secret values are not emitted by expected error paths",
-        "Inherited signing key environment fails closed",
-        "Stale candidate artifacts and evidence are purged before packaging",
-        "[Pre-Packaging Purge] Stale candidate artifacts and evidence successfully purged: PASS",
-        "Stale-output purge did not execute strictly BEFORE pre-packaging updater key verification",
-        "Updater signature verification rejects corrupted signature",
-        "Tampered candidate binary is detected",
-        "Production verification rejects CI test certificate",
-    ] {
-        if !orchestrator_test.contains(marker) {
-            return Err(format!(
-                "v4 production orchestrator test is missing its required marker: {marker}"
-            )
-            .into());
+    let retired_release_scripts = [
+        "scripts/v4_release_pipeline.ps1",
+        "scripts/release_doctor.ps1",
+        "scripts/orchestrate_v4_production_release.ps1",
+        "scripts/promote_v4_metadata.ps1",
+        "scripts/v4_release_asset_upload.ps1",
+        "scripts/v4_release_draft_lookup.ps1",
+        "scripts/v4_release_latest_policy.ps1",
+        "scripts/ci_v4_release_latest_guard.ps1",
+        "scripts/probe_v4_metadata_app_access.ps1",
+        "scripts/cleanup_v4_release_state.ps1",
+        "scripts/v4_qualification_evidence.ps1",
+        "scripts/test_v4_release_pipeline.ps1",
+        "scripts/test_v4_post_publication_transaction.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+        "scripts/test_v4_production_orchestrator.ps1",
+    ];
+    for relative in retired_release_scripts {
+        if root.join(relative).exists() {
+            return Err(format!("retired PowerShell release authority remains: {relative}").into());
         }
     }
     let topology_doc = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))?;
@@ -690,16 +670,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
-        let source = include_str!("../../../../scripts/orchestrate_v4_production_release.ps1");
-        v4_production_calibration_gate_contract(source)
-            .expect("production release must verify staged and installed calibration");
+    fn production_release_calibration_gate_requires_installed_bytes_without_producer_staging() {
+        let source =
+            super::super::normalize_source_line_endings(include_str!("../nsis_harness.rs"));
+        v4_production_calibration_gate_contract(&source)
+            .expect("consumer must verify installed bytes from the frozen candidate");
 
-        let gate_start = source
-            .find("# Production-only installed calibration gate")
+        let staged_dependency = source.replace(
+            "    let install_root = scope.root.join(\"install\");",
+            "    let staged_calibration_root = repository_root.join(\"desktop/src-tauri/resources\");\n    let install_root = scope.root.join(\"install\");\n    verify_calibration_artifact(repository_root, &staged_calibration_root, candidate, None)?;",
+        );
+        assert_ne!(staged_dependency, source, "qualification insertion point");
+        assert!(
+            v4_production_calibration_gate_contract(&staged_dependency).is_err(),
+            "consumer must not depend on producer-local calibration staging"
+        );
+
+        let install_start = source
+            .find("run_installer(\n        installer,")
+            .expect("installer invocation marker");
+        let gate_start = source[install_start..]
+            .find("verify_calibration_artifact(\n        repository_root,\n        &install_root")
+            .map(|offset| install_start + offset)
             .expect("installed calibration gate marker");
         let launch_start = source[gate_start..]
-            .find("Start-Process -FilePath $appPath")
+            .find("launch_smoke(scope, &app")
             .map(|offset| gate_start + offset)
             .expect("application launch marker");
         let installed_gate = source[gate_start..launch_start].to_owned();
@@ -713,7 +708,7 @@ mod tests {
 
         let mut moved_gate = removed_gate;
         let evidence_start = moved_gate
-            .find("# 11. Emit Deterministic Machine-Readable Evidence")
+            .find("pub(crate) fn assert_uninstall_registration_absent")
             .expect("qualification evidence boundary");
         let evidence_line_end = moved_gate[evidence_start..]
             .find('\n')
@@ -723,6 +718,25 @@ mod tests {
         assert!(
             v4_production_calibration_gate_contract(&moved_gate).is_err(),
             "release contract must reject installed calibration verification moved after evidence"
+        );
+
+        let crlf_source = source.replace('\n', "\r\n");
+        v4_production_calibration_gate_contract(&crlf_source)
+            .expect("CRLF source must satisfy the same ordered calibration gate contract");
+        let crlf_without_gate = source
+            .replace(
+                "verify_calibration_artifact(\n        repository_root,\n        &install_root",
+                "removed_calibration_artifact(\n        repository_root,\n        &install_root",
+            )
+            .replace('\n', "\r\n");
+        assert!(
+            v4_production_calibration_gate_contract(&crlf_without_gate).is_err(),
+            "CRLF source must still reject removing the installed calibration gate"
+        );
+        let crlf_moved_gate = moved_gate.replace('\n', "\r\n");
+        assert!(
+            v4_production_calibration_gate_contract(&crlf_moved_gate).is_err(),
+            "CRLF source must still reject the calibration gate moved after release evidence"
         );
     }
 

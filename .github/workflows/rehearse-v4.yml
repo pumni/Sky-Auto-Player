@@ -65,17 +65,10 @@ jobs:
       - name: Run canonical production Preflight without publication
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State Preflight `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
+        run: cargo xtask release-v4 preflight --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
 
       - name: Run canonical production BuildCandidate and stop
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State BuildCandidate `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
+        run: cargo xtask release-v4 build-candidate --state-root $env:V4_RELEASE_STATE_ROOT --key-path $env:V4_UPDATER_PRIVATE_KEY_PATH --workflow-sha $env:GITHUB_SHA
 
       - name: Preserve bounded qualification evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -93,6 +86,4 @@ jobs:
 
       - name: Clean runner-local qualification state
         if: always()
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/cleanup_v4_release_state.ps1 `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
+        run: cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT

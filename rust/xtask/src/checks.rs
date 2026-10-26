@@ -11,6 +11,10 @@ use std::path::Path;
 
 pub(crate) use bindings::{bindings, bindings_generate};
 
+pub(super) fn normalize_source_line_endings(source: &str) -> String {
+    source.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 pub(crate) fn should_skip_supply_chain(flag: bool, env_val: Option<&str>) -> bool {
     flag || env_val.map(|v| v.trim()) == Some("1")
 }

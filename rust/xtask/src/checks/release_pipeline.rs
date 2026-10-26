@@ -1,659 +1,830 @@
-use super::release_runner::validate_metadata_app_token_scope;
-use super::workflow::{
-    validate_v4_release_state_invocations, workflow_declares_only_dispatch,
-    workflow_state_invocations,
-};
+use super::workflow::{workflow_declares_only_dispatch, workflow_step_blocks};
 use crate::Result;
 use std::fs;
 use std::path::Path;
 
-fn v4_release_pipeline_contract_source(
-    workflow: &str,
-    pipeline: &str,
-    regression: &str,
-) -> Result<()> {
-    let workflow = workflow.replace("\r\n", "\n");
-    for marker in [
-        "name: V4 Release Pipeline",
-        "workflow_dispatch:",
-        "runs-on: [self-hosted, windows, v4-release, single-tenant]",
-        "contents: read",
-        "id-token: write",
-        "attestations: write",
-        "contents: write",
-        "actions: read",
-        "GH_TOKEN: ${{ github.token }}",
-        "EXPECTED_WORKFLOW: rehearse-v4.yml",
-        "ref: ${{ github.sha }}",
-        "release-dispatch-boundary",
-        "Require exact-head production qualification",
-        "actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA",
-        "V4 Production Pre-Publication Qualification",
-        "github.event.repository.default_branch",
-        "refs/heads/main",
-        "environment: v4-production-release",
-        "Verify isolated production runner boundary",
-        "verify_v4_release_runner.ps1",
-        "cleanup_v4_release_state.ps1",
-        "V4_UPDATER_PRIVATE_KEY_PATH",
-        "-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH",
-        "persist-credentials: false",
-        "actions/attest@",
-        "actions/upload-artifact@",
-        "--source-digest $env:GITHUB_SHA",
+const RELEASE_COMMANDS: &[&str] = &[
+    "preflight",
+    "build-candidate",
+    "verify-attestations",
+    "probe-metadata-token",
+    "publish-release",
+    "promote-metadata",
+    "final-verify",
+    "cleanup",
+];
+const REQUIRED_RELEASE_INVOCATIONS: &[(&str, &str)] = &[
+    (
+        "Preflight release request and repository readiness",
+        "cargo xtask release-v4 preflight --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
         "Build and qualify the single production candidate",
-        "concurrency:",
-        "group: v4-release-control-plane",
-        "Mint release-metadata GitHub App token before publication",
+        "cargo xtask release-v4 build-candidate --state-root $env:V4_RELEASE_STATE_ROOT --key-path $env:V4_UPDATER_PRIVATE_KEY_PATH --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
+        "Verify exact-source OIDC attestations",
+        "cargo xtask release-v4 verify-attestations --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
         "Probe release-metadata App access before publication",
-        "probe_v4_metadata_app_access.ps1",
+        "cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
         "Publish the qualified candidate immutably",
-        "PromoteMetadata",
-        "FinalVerify",
-    ] {
-        if !workflow.contains(marker) {
-            return Err(
-                format!("v4 release workflow is missing its required marker: {marker}").into(),
-            );
-        }
-    }
-    if workflow.contains("inputs:") || workflow.contains("inputs.") {
-        return Err(
-            "production release workflow must not expose semantic workflow_dispatch inputs".into(),
-        );
-    }
-    if workflow.contains("EXPECTED_WORKFLOW: .github/workflows/") {
-        return Err(
-            "exact-head qualification must pass the workflow file name, not its path".into(),
-        );
-    }
-    let workflow_states = [
-        "-State Preflight",
-        "-State BuildCandidate",
-        "-State PublishRelease",
-        "-State PromoteMetadata",
-        "-State FinalVerify",
-    ];
-    let mut previous = 0;
-    for marker in workflow_states {
-        let position = workflow
-            .find(marker)
-            .ok_or_else(|| format!("v4 release workflow is missing state marker: {marker}"))?;
-        if position < previous {
-            return Err("v4 release workflow states are not ordered fail-closed".into());
-        }
-        previous = position;
-    }
-    validate_v4_release_state_invocations(&workflow, pipeline)
-        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
-    println!("[xtask] v4 release workflow state CLI invocation contract: PASS");
-    for forbidden in [
-        "cargo xtask dist",
-        "softprops/action-gh-release",
-        "secrets.TAURI_SIGNING_PRIVATE_KEY",
-        "secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-        "secrets.UPDATER_PRIVATE_KEY",
-        "secrets.UPDATER_PASSWORD",
-        "secrets.V4_UPDATER_PASSWORD",
-        "updater_password_env",
-        "credential_target",
-        "updater_private_key_path:",
-        "inputs.updater_private_key_path",
-        "Mask updater key path",
-        "::add-mask::",
-        "Sky-Auto-Player-Updater.exe",
-        "MANIFEST.json.sig",
-        "ci_tauri_update_e2e.ps1",
-    ] {
-        if workflow.contains(forbidden) {
-            return Err(
-                format!("v4 release workflow contains forbidden marker: {forbidden}").into(),
-            );
-        }
-    }
-    if workflow.matches("GH_TOKEN: ${{ github.token }}").count() < 1 {
-        return Err(
-            "repository GITHUB_TOKEN must be present on every GitHub-mutating/read step".into(),
-        );
-    }
-    validate_metadata_app_token_scope(&workflow)?;
+        "cargo xtask release-v4 publish-release --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
+        "Promote release metadata only after immutable publication",
+        "cargo xtask release-v4 promote-metadata --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
+        "Re-fetch and verify final public release and metadata",
+        "cargo xtask release-v4 final-verify --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+    ),
+    (
+        "Clean runner-local release state",
+        "cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT",
+    ),
+];
 
-    let publish_step = workflow
-        .find("- name: Publish the qualified candidate immutably")
-        .ok_or("v4 release workflow is missing the publication step")?;
-    let metadata_token_step = workflow
-        .find("- name: Mint release-metadata GitHub App token before publication")
-        .ok_or("v4 release workflow is missing the metadata App token step")?;
-    let probe_step = workflow
-        .find("- name: Probe release-metadata App access before publication")
-        .ok_or("v4 release workflow is missing the metadata App access probe")?;
-    if metadata_token_step >= probe_step || probe_step >= publish_step {
-        return Err(
-            "metadata App mint and read-only probe must precede immutable publication".into(),
-        );
-    }
-    let probe_end = workflow[probe_step..]
-        .find("\n      - name:")
-        .map_or(workflow.len(), |relative| probe_step + relative);
-    let probe_block = &workflow[probe_step..probe_end];
-    if !probe_block.contains("GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}")
-        || probe_block.contains("GH_TOKEN: ${{ github.token }}")
-        || !probe_block.contains("probe_v4_metadata_app_access.ps1")
-    {
-        return Err(
-            "metadata App access probe must be read-only and use only the short-lived App token"
-                .into(),
-        );
-    }
-    for forbidden in [
-        "Snapshot GitHub Latest before publication",
-        "Verify GitHub Latest channel policy before metadata promotion",
-        "-Mode Capture",
-        "-Mode Verify",
-        "release-state.json",
-    ] {
-        if workflow.contains(forbidden) {
-            return Err(format!(
-                "production workflow retains retired Latest/state handoff: {forbidden}"
-            )
-            .into());
-        }
-    }
+fn source(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
 
-    if pipeline
-        .matches("orchestrate_v4_production_release.ps1")
-        .count()
-        != 1
-    {
-        return Err("production orchestrator must have exactly one pipeline call site".into());
-    }
-    for marker in [
-        "Preflight",
-        "BuildCandidate",
-        "PublishRelease",
-        "PromoteMetadata",
-        "FinalVerify",
-        "unsigned-zero-budget",
-        "canonical repository main is not initialized",
-        "refs/heads/main",
-        "release-metadata branch is not initialized",
-        "Assert-MetadataBranchReadiness",
-        "metadataBootstrapContract",
-        "release-metadata readiness",
-        "repository already contains published release/tag",
-        "V4 unpublished draft cleanup",
-        "published tags are immutable",
-        "git/refs/tags/$Tag",
-        "GitHub's successful DELETE endpoints return an empty body",
-        "Get-FileHash",
-        "verify-signature",
-        "verify-tauri-bundle",
-        "current-user",
-        "active-playback-install-rejected",
-        "v4_release_latest_policy.ps1",
-        "Get-RemoteLatestRelease",
-        "Assert-V4GitHubLatestPolicy",
-        "Invoke-PrePublicationMetadataQualification",
-        "Assert-RawMetadataRetryConfiguration",
-        "promote_v4_metadata.ps1",
-        "release-metadata",
-        "published_at",
-        "draft = $true",
-        "draft = $false",
-        "Get-V4ReleaseMakeLatestValue",
-        "Get-V4ReleaseDraftMakeLatestValue",
-        "make_latest = Get-V4ReleaseDraftMakeLatestValue",
-        "draft false; stable publish true; beta publish false",
-        "target_commitish = $SourceSha.ToLowerInvariant()",
-        "branch = \"release-metadata\"",
-        "validate-monotonic",
-        "Write-RepositoryContentFile",
-        "New-ExpectedV4Metadata",
-        "Assert-ExactFileBytes",
-        "Assert-ExactPublishedPublicAssetRecords",
-        "Assert-RawMetadataConverges",
-        "RawMetadataRetryBudgetSeconds",
-        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
-        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
-        "AllowAutoRedirect",
-        "Headers.Authorization",
-        "ReadAsByteArrayAsync",
-        "GITHUB_REPOSITORY",
-        "Invoke-GitHubApi",
-        "v4_release_asset_upload.ps1",
-        "upload_url",
-        "Assert-ImmutableRelease",
-        "Assert-ImmutableRelease $published",
-        "repository release is not marked immutable",
-        "ci_tauri_update_e2e.ps1",
-        "CandidateInstallerPath",
-        "CandidateSignaturePath",
-        "CandidatePublicKeyPath",
-        "export-public-key",
-        "Start-MpScan",
-        "scan_performed",
-        "selftest-update-active-playback",
-        "scan_v4_defender_exact.ps1",
-        "cargo xtask builtin-catalog verify-installed",
-        "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
-        "manifest_validated",
-        "file_set_exact",
-        "sha256_verified",
-        "songs_parseable",
-        "fresh-appdata-built-in-user-composition",
-        "freshUserSongs = @(",
-        "Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue",
-        "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
-        "previousFreshSelfTest",
-        "if ($null -eq $previousAppDataRoot)",
-        "Remove-Item Env:SKY_APP_DATA_ROOT",
-        "if ($null -eq $previousFreshSelfTest)",
-        "Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
-        "v4_updater_credential_broker.ps1",
-        "v4_release_draft_lookup.ps1",
-        "Select-V4ReleaseByTag",
-        "--paginate",
-        "--slurp",
-        "releases?per_page=100",
-        "existing draft source does not match the requested source",
-        "draft release could not be removed by release id",
-    ] {
-        if !pipeline.contains(marker) {
-            return Err(
-                format!("v4 release coordinator is missing its required marker: {marker}").into(),
-            );
-        }
-    }
-    let preflight_position = pipeline
-        .find("function Invoke-Preflight")
-        .ok_or("v4 release coordinator is missing Preflight")?;
-    let build_position = pipeline
-        .find("function Invoke-BuildCandidate")
-        .ok_or("v4 release coordinator is missing BuildCandidate")?;
-    let preflight_block = &pipeline[preflight_position..build_position];
-    if preflight_block.contains("--method")
-        || preflight_block.contains("DELETE")
-        || preflight_block.contains("Invoke-DraftSelfCleanup")
-    {
-        return Err("Preflight must be externally read-only and must not delete drafts".into());
-    }
-    let publish_position = pipeline
-        .find("function Invoke-PublishRelease")
-        .ok_or("v4 release coordinator is missing PublishRelease")?;
-    if pipeline[publish_position..]
-        .find("Remove-V4StaleMatchingDraft")
-        .is_none()
-    {
-        return Err("PublishRelease must own stale matching-draft cleanup".into());
-    }
-    if pipeline.contains("repos/$repository/immutable-releases") {
-        return Err(
-            "repository policy validation must not call the administration-only immutable-releases endpoint"
-                .into(),
-        );
-    }
-    if pipeline.contains("repo\", \"clone") || pipeline.contains("release-metadata checkout") {
-        return Err("PromoteMetadata must not clone or checkout release-metadata".into());
-    }
-    if pipeline.contains("release-state.json") {
-        return Err("production release pipeline must not depend on release-state.json".into());
-    }
-    for marker in [
-        "PublishRelease",
-        "Preflight",
-        "Format-V4TransactionMarker",
-        "Get-V4TransactionMarker",
-        "Test-V4TransactionMarkerMatch",
-        "Invoke-DraftSelfCleanup",
-        "candidate-manifest.json",
-        "release-context.json",
-        "Write-V4ReleaseContext",
-        "Import-V4ReleaseContext",
-        "Get-SourceReleaseIdentity",
-        "Remove-V4StaleMatchingDraft",
-        "stale_matching_draft",
-        "V4 unpublished draft cleanup",
-    ] {
-        if !pipeline.contains(marker) {
-            return Err(
-                format!("v4 release coordinator is missing its required marker: {marker}").into(),
-            );
-        }
-    }
-    let publish_release_position = pipeline
-        .find("function Invoke-PublishRelease")
-        .ok_or("v4 release coordinator is missing the publication transaction boundary")?;
-    let promote_position = pipeline
-        .find("function Invoke-PromoteMetadata")
-        .ok_or("v4 release coordinator is missing the metadata promotion state")?;
-    if publish_release_position >= promote_position {
-        return Err("PublishRelease must precede PromoteMetadata".into());
-    }
-    let publish_block = &pipeline[publish_release_position..promote_position];
-    let draft_latest_pos = publish_block
-        .find("make_latest = Get-V4ReleaseDraftMakeLatestValue")
-        .ok_or("PublishRelease must create draft with make_latest=false helper")?;
-    let publish_latest_pos = publish_block
-        .find("make_latest = (Get-V4ReleaseMakeLatestValue $Channel)")
-        .or_else(|| publish_block.find("make_latest = Get-V4ReleaseMakeLatestValue $Channel"))
-        .ok_or("PublishRelease must publish with channel-aware make_latest helper")?;
-    let immutable_pos = publish_block
-        .find("Assert-ImmutableRelease $published")
-        .ok_or("PublishRelease must assert immutable release before metadata promotion")?;
-    if draft_latest_pos >= publish_latest_pos || publish_latest_pos >= immutable_pos {
-        return Err(
-            "PublishRelease draft creation, publication patch, and immutable check must be strictly ordered"
-                .into(),
-        );
-    }
-    if pipeline[publish_release_position..].contains("orchestrate_v4_production_release.ps1") {
-        return Err("v4 release coordinator may not rebuild after publication start".into());
-    }
-    if !regression.contains("MockReleaseApi")
-        || !regression.contains("candidate rebuilt")
-        || !regression.contains("promotion before immutable publication")
-        || !regression.contains("BuildCount -ne 1")
-        || !regression.contains("UploadedThroughReleaseUrl")
-        || !regression.contains("ExactDownloadedBytes")
-        || !regression.contains("immutable")
-    {
-        return Err(
-            "v4 release coordinator regression test is missing build-once/publication guards"
-                .into(),
-        );
-    }
-    if !regression.contains("Test-StrictModeEmptyFreshUserSongs")
-        || !regression.contains("freshUserSongs = @(")
-        || !regression.contains("$freshUserSongs.Count -ne 0")
-    {
-        return Err(
-            "v4 release coordinator regression test is missing the StrictMode empty-directory guard"
-            .into(),
-        );
-    }
-    if !regression.contains("Test-DraftLookupFallback") {
-        return Err(
-            "v4 release coordinator regression test is missing the hidden-draft collection fallback"
-                .into(),
-        );
+fn release_command_sequence(workflow: &str) -> Vec<String> {
+    workflow
+        .lines()
+        .filter_map(|line| line.split_once("cargo xtask release-v4 "))
+        .filter_map(|(_, command)| command.split_whitespace().next())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn require_step_command(
+    workflow: &str,
+    name: &str,
+    command: &str,
+) -> std::result::Result<(), String> {
+    let steps = workflow_step_blocks(workflow);
+    let block = steps
+        .iter()
+        .find(|(step_name, _)| step_name == name)
+        .map(|(_, block)| block.as_str())
+        .ok_or_else(|| format!("release workflow is missing step `{name}`"))?;
+    if !block.contains(command) {
+        return Err(format!(
+            "release workflow step `{name}` is missing its exact Rust invocation"
+        ));
     }
     Ok(())
 }
 
-fn v4_production_qualification_contract_source(workflow: &str, pipeline: &str) -> Result<()> {
-    let workflow = workflow.replace("\r\n", "\n");
+fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), String> {
+    let harness = source(harness);
     for marker in [
-        "name: V4 Production Pre-Publication Qualification",
+        "fn assert_user_songs_empty",
+        "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
+        "fn launch_smoke",
+        "--selftest-update-active-playback",
+        "assert_uninstall_registration_absent()",
+        "fn uninstaller_working_directory(",
+        "fn finish_uninstall(",
+        "wait_tree_timeout(std::time::Duration::from_secs(30))",
+        "active_processes()",
+        "uninstaller exit status:",
+        "uninstall registration:",
+        "bounded_install_root_inventory(",
+        "owned_root_cleanup_requires_exact_sentinel_and_direct_runner_temp_scope",
+        "incomplete_root_rollback_accepts_only_a_prefix_of_the_created_sentinel",
+        "install_root_absence_polling_has_a_deadline",
+        "cleanup_attempts_every_stage_and_preserves_original_failure",
+    ] {
+        if !harness.contains(marker) {
+            return Err(format!("Rust NSIS owner is missing regression `{marker}`"));
+        }
+    }
+    let qualification = harness
+        .split_once("fn qualify_package(")
+        .map(|(_, body)| body)
+        .ok_or("Rust NSIS owner is missing its package qualification function")?;
+    let qualification = qualification
+        .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
+        .map(|(body, _)| body)
+        .ok_or("Rust NSIS package qualification body is not bounded")?;
+    let install = qualification
+        .find("run_installer(\n        installer,")
+        .ok_or("Rust NSIS package qualification does not install the validated candidate")?;
+    let catalog = qualification
+        .find("crate::builtin_catalog::run(")
+        .ok_or("Rust NSIS package qualification does not verify the installed built-in catalog")?;
+    let songs_guard = qualification
+        .find("assert_user_songs_empty(&app_data.join(\"songs\"))")
+        .ok_or("Rust NSIS fresh-install qualification does not assert empty user songs")?;
+    let launch = qualification
+        .find("launch_smoke(scope, &app")
+        .ok_or("Rust NSIS package qualification does not launch the installed application")?;
+    let uninstall = qualification
+        .find("run_uninstaller(&uninstaller, &install_root, &shell_env)?")
+        .ok_or("Rust NSIS qualification does not run the installed uninstaller")?;
+    let finish_uninstall = qualification
+        .find("finish_uninstall(&install_root, &mut uninstaller)?")
+        .ok_or("Rust NSIS qualification does not await uninstall tree and root cleanup")?;
+    let registry_cleanup = qualification
+        .find("assert_uninstall_registration_absent()?")
+        .ok_or("Rust NSIS qualification must verify uninstall registration removal")?;
+    if qualification.contains("remove_dir_all(&install_root)")
+        || qualification.contains("remove_dir(&install_root)")
+    {
+        return Err("NSIS qualification must not manually delete the install root to claim uninstall success".into());
+    }
+    if install >= catalog
+        || catalog >= launch
+        || songs_guard >= launch
+        || launch >= uninstall
+        || uninstall >= finish_uninstall
+        || finish_uninstall >= registry_cleanup
+        || !qualification[catalog..launch].contains("verify-installed")
+    {
+        return Err(
+            "installed catalog and empty user-song checks must follow install and precede app launch"
+                .into(),
+        );
+    }
+    let working_directory = harness
+        .split_once("fn uninstaller_working_directory(")
+        .and_then(|(_, body)| body.split_once("\n#[cfg(windows)]\npub(crate) fn finish_uninstall("))
+        .map(|(body, _)| body)
+        .ok_or("NSIS uninstaller working-directory guard is not bounded")?;
+    if !working_directory.contains("let cwd = install_root")
+        || !working_directory.contains(".parent()")
+        || !working_directory.contains("cwd.starts_with(&install_root)")
+    {
+        return Err(
+            "NSIS uninstaller working directory must remain outside its install root".into(),
+        );
+    }
+    let completion = harness
+        .split_once("pub(crate) fn finish_uninstall(")
+        .and_then(|(_, body)| {
+            body.split_once("\n#[cfg(windows)]\nfn uninstall_registration_diagnostic(")
+        })
+        .map(|(body, _)| body)
+        .ok_or("NSIS uninstall completion guard is not bounded")?;
+    let tree_wait = completion
+        .find("wait_tree_timeout(")
+        .ok_or("NSIS uninstall must wait for the owned process tree")?;
+    let root_wait = completion
+        .find("wait_path_absent(")
+        .ok_or("NSIS uninstall must wait for install-root removal")?;
+    if tree_wait >= root_wait {
+        return Err(
+            "NSIS uninstall must drain its owned process tree before confirming root removal"
+                .into(),
+        );
+    }
+    if completion.contains("remove_dir") {
+        return Err("NSIS qualification must not manually remove the install root to claim uninstall success".into());
+    }
+    Ok(())
+}
+
+fn updater_fixture_contract(fixture: &str) -> std::result::Result<(), String> {
+    let fixture = source(fixture);
+    for marker in [
+        "failure_rollback",
+        "n_to_n_plus_1_installer_sha256",
+        "old_root_rejection",
+        "assert_migration_registry_roots_absent",
+        "user_song_sha256_after_uninstall",
+        "loopback_client_rejects_truncated_response_bodies",
+        "fixture_server_teardown_is_bounded_for_a_stalled_partial_request",
+        "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
+        "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
+        "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
+        "run_uninstaller(&uninstaller, &install_root, &env)",
+        "crate::nsis_harness::finish_uninstall",
+    ] {
+        if !fixture.contains(marker) {
+            return Err(format!(
+                "Rust updater fixture is missing regression `{marker}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn rust_release_state_machine_contract(
+    workflow: &str,
+    rehearsal: &str,
+    rust: &str,
+    main: &str,
+    ci: &str,
+) -> std::result::Result<(), String> {
+    let workflow = source(workflow);
+    let rehearsal = source(rehearsal);
+    let rust = source(rust);
+    let main = source(main);
+    let ci = source(ci);
+    if !workflow_declares_only_dispatch(&workflow) || !workflow_declares_only_dispatch(&rehearsal) {
+        return Err(
+            "production workflows must expose workflow_dispatch as their only trigger".into(),
+        );
+    }
+    for marker in [
+        "name: V4 Release Pipeline",
         "workflow_dispatch:",
-        "qualification-dispatch-boundary",
-        "github.event.repository.default_branch",
-        "refs/heads/main",
         "runs-on: [self-hosted, windows, v4-release, single-tenant]",
         "environment: v4-production-release",
+        "contents: read",
+        "contents: write",
+        "id-token: write",
+        "attestations: write",
         "ref: ${{ github.sha }}",
         "persist-credentials: false",
         "V4_UPDATER_PRIVATE_KEY_PATH",
-        "verify_v4_release_runner.ps1",
-        "-State Preflight",
-        "-State BuildCandidate",
-        "release-context.json",
-        "cleanup_v4_release_state.ps1",
+        "actions/attest@",
+        "actions/upload-artifact@",
+        "Mint release-metadata GitHub App token before publication",
+        "permission-contents: write",
         "if: always()",
+        "EXPECTED_REPOSITORY: pumni/Sky-Auto-Player",
+        "EXPECTED_WORKFLOW: rehearse-v4.yml",
+        "EXPECTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
+        "test \"$GITHUB_EVENT_NAME\" = \"workflow_dispatch\"",
+        "test \"$GITHUB_REPOSITORY\" = \"$EXPECTED_REPOSITORY\"",
+        "test \"$GITHUB_REF\" = \"refs/heads/main\"",
+        "test \"$EXPECTED_DEFAULT_BRANCH\" = \"main\"",
+        "actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA&per_page=100",
+        "V4 Production Pre-Publication Qualification",
+        "head_branch == \"main\"",
+        "conclusion == \"success\"",
     ] {
         if !workflow.contains(marker) {
-            return Err(format!(
-                "production qualification workflow is missing its required marker: {marker}"
-            )
-            .into());
+            return Err(format!("production release workflow is missing `{marker}`"));
         }
     }
-    if !workflow_declares_only_dispatch(&workflow) {
+    if workflow.contains("inputs:") || workflow.contains("inputs.") {
+        return Err("production release workflow must not expose semantic dispatch inputs".into());
+    }
+    if workflow.contains("EXPECTED_WORKFLOW: .github/workflows/") {
+        return Err("exact-head qualification must pass the workflow file name".into());
+    }
+    let command_sequence = release_command_sequence(&workflow);
+    if command_sequence
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != RELEASE_COMMANDS
+    {
+        return Err(format!(
+            "production workflow must invoke the ordered Rust release commands {RELEASE_COMMANDS:?}, got {command_sequence:?}"
+        ));
+    }
+    for (name, command) in REQUIRED_RELEASE_INVOCATIONS {
+        require_step_command(&workflow, name, command)?;
+    }
+    if !workflow.contains("gh api \\")
+        || !workflow.contains("actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch")
+    {
         return Err(
-            "production qualification must whitelist workflow_dispatch as its only trigger".into(),
+            "release dispatch boundary must query a completed exact-source qualification".into(),
         );
     }
-    let states = workflow_state_invocations(&workflow);
-    if states != ["Preflight", "BuildCandidate"] {
-        return Err(format!(
-            "production qualification must invoke exactly Preflight -> BuildCandidate, got {states:?}"
-        )
-        .into());
-    }
-    validate_v4_release_state_invocations(&workflow, pipeline)
-        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
-    for forbidden in [
+    for old in [
+        "scripts/v4_release_pipeline.ps1",
+        "scripts/release_doctor.ps1",
+        "scripts/probe_v4_metadata_app_access.ps1",
+        "scripts/cleanup_v4_release_state.ps1",
+        "-State Preflight",
+        "-State BuildCandidate",
         "-State PublishRelease",
         "-State PromoteMetadata",
         "-State FinalVerify",
-        "actions/attest@",
-        "create-github-app-token",
-        "metadata-app-token",
-        "contents: write",
-        "gh release",
-        "softprops/action-gh-release",
-        "updater_private_key_path:",
-        "inputs.updater_private_key_path",
     ] {
-        if workflow.contains(forbidden) {
+        if workflow.contains(old) || rehearsal.contains(old) {
             return Err(format!(
-                "production qualification contains a forbidden publication or legacy marker: {forbidden}"
-            )
-            .into());
+                "legacy PowerShell release authority is still called: {old}"
+            ));
+        }
+    }
+    let rehearsal_sequence = release_command_sequence(&rehearsal);
+    if rehearsal_sequence
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != ["preflight", "build-candidate", "cleanup"]
+    {
+        return Err(format!(
+            "rehearsal must invoke exactly Preflight -> BuildCandidate -> cleanup, got {rehearsal_sequence:?}"
+        ));
+    }
+    for forbidden in [
+        "cargo xtask release-v4 publish-release",
+        "cargo xtask release-v4 promote-metadata",
+        "cargo xtask release-v4 final-verify",
+        "gh release create",
+        "gh release upload",
+        "gh release delete",
+        "actions/attest@",
+        "actions/create-github-app-token@",
+        "contents: write",
+        "id-token: write",
+        "attestations: write",
+    ] {
+        if rehearsal.contains(forbidden) {
+            return Err(format!(
+                "rehearsal workflow crosses the publication boundary: {forbidden}"
+            ));
+        }
+    }
+    for marker in [
+        "trait Transport",
+        "struct GhTransport",
+        "fn publish_release",
+        "mock_non_monotonic_candidate_never_mutates",
+        "prepublication_metadata_qualification",
+        "same_github_latest",
+        "validate_monotonic",
+        "fn delete_owned_draft",
+        "mock_conflicting_draft_is_not_deleted",
+        "mock_pr_merge_sha_does_not_break_release_or_owned_cleanup",
+        "current[\"draft\"] != true",
+        "mock_upload_timeout_reconciles_exact_asset",
+        "mutation_adapter_is_at_most_once",
+        "MutationOutcomeUnknown",
+        "fn request_with_retry_policy",
+        "await_raw_metadata_convergence",
+        "raw_metadata_retry_converges_after_cache_lag",
+        "raw_metadata_retry_fails_with_bounded_diagnostics",
+        "RuntimeIdentity::from_environment",
+        "GITHUB_WORKFLOW_REF",
+        "--workflow-sha is required for Preflight",
+        "runtime_identity_fails_closed_without_exact_workflow_context",
+        "require_runtime_context(root, &options, command == \"build-candidate\")?",
+        "channels/{channel}/latest.json?ref=release-metadata",
+        "metadata_token_probe_rejects_wrong_repository_state",
+        "fn promote_metadata",
+        "fn final_verify",
+        "fn doctor",
+        "fn verify_attestations",
+        "delete_owned_draft",
+        "POST_PUBLICATION_INCIDENT",
+        "release_id",
+        "sha256:",
+        "raw.githubusercontent.com",
+        "mock_publish_succeeds",
+        "mock_draft_post_timeout_reconciles_exact_marker",
+        "mock_digest_mismatch_cleans_owned_draft",
+        "mock_patch_timeout_reconciles_exact_release_id",
+        "mock_unknown_publication_never_cleans_up",
+        "canonical_upload_url",
+        "RELEASE_BUILD_STEP_TIMEOUT",
+        "RELEASE_DEFENDER_STEP_TIMEOUT",
+        "ATTESTATION_VERIFY_TIMEOUT",
+        "mock_release_doctor_detects_metadata_endpoint_divergence",
+        "mock_metadata_promotion_is_idempotent_after_committed_timeout",
+        "mock_publication_identity_and_asset_inventory_fail_closed",
+        "metadata_token_probe_rejects_wrong_repository_state",
+        "doctor_state_input_rejects_malformed_and_oversized_files",
+        "malformed_github_api_json_fails_closed_with_endpoint_context",
+        "retry_policy_retries_only_transient_responses",
+        "env::current_exe()?",
+    ] {
+        if !rust.contains(marker) {
+            return Err(format!(
+                "Rust release authority is missing invariant `{marker}`"
+            ));
+        }
+    }
+    let context_validation = rust
+        .split_once("fn validate_context(")
+        .and_then(|(_, body)| body.split_once("\nfn preflight("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing pure transaction-context validation")?;
+    if context_validation.contains("env::var(") || context_validation.contains("GITHUB_") {
+        return Err(
+            "transaction-context validation must not depend on ambient GitHub Actions variables"
+                .into(),
+        );
+    }
+    let release_cli = rust
+        .split_once("pub(crate) fn run(")
+        .and_then(|(_, body)| body.split_once("\nfn require_runtime_context("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release CLI is missing its production runtime guard")?;
+    let runtime_guard = release_cli
+        .find("require_runtime_context(root, &options, command == \"build-candidate\")?")
+        .ok_or("release side-effect phases must require exact runtime identity")?;
+    let command_dispatch = release_cli
+        .find("match command")
+        .ok_or("release CLI phase dispatch is missing")?;
+    if runtime_guard >= command_dispatch {
+        return Err("release phases must validate runtime identity before dispatch".into());
+    }
+    let publish = rust
+        .split_once("fn publish_release(")
+        .and_then(|(_, body)| body.split_once("\nfn prepublication_metadata_qualification("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing bounded publication qualification")?;
+    let gate_positions = publish
+        .match_indices("prepublication_metadata_qualification(")
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let post = publish
+        .find("\"POST\"")
+        .ok_or("Rust release authority is missing draft creation boundary")?;
+    let patch = publish
+        .find("\"PATCH\"")
+        .ok_or("Rust release authority is missing immutable publication boundary")?;
+    if gate_positions.len() != 2
+        || gate_positions[0] >= post
+        || post >= gate_positions[1]
+        || gate_positions[1] >= patch
+    {
+        return Err(
+            "metadata monotonicity and Latest checks must run before draft creation and again before publication"
+                .into(),
+        );
+    }
+    let mutation_policy = rust
+        .split_once("fn request_with_retry_policy")
+        .and_then(|(_, body)| body.split_once("\npub(crate) fn run("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing mutation retry policy")?;
+    let read_retry = mutation_policy
+        .find("method.eq_ignore_ascii_case(\"GET\")")
+        .ok_or("GitHub retry policy does not restrict retries to GET")?;
+    let retry = mutation_policy
+        .find("retry_github(operation, sleep)")
+        .ok_or("GitHub GET retry path is missing")?;
+    let mutation = mutation_policy
+        .find("operation().map_err")
+        .ok_or("GitHub mutation path must return an uncertain outcome without retry")?;
+    if read_retry >= retry || retry >= mutation {
+        return Err("GitHub mutation retries must remain disabled".into());
+    }
+    let delete = rust
+        .split_once("fn delete_owned_draft(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_public_assets("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing owned draft deletion")?;
+    let delete_get = delete
+        .find("transport.request(\"GET\"")
+        .ok_or("owned draft deletion must re-fetch the exact release id")?;
+    let delete_mutation = delete
+        .find("transport.request(\"DELETE\"")
+        .ok_or("owned draft deletion mutation is missing")?;
+    if delete_get >= delete_mutation {
+        return Err("owned draft state must be verified immediately before deletion".into());
+    }
+    let identity = rust
+        .split_once("fn identity(")
+        .and_then(|(_, body)| body.split_once("\nfn git_text("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing exact runtime identity validation")?;
+    if !identity
+        .contains("workflow_sha\n        .ok_or(\"--workflow-sha is required for Preflight\")")
+        || !identity.contains("GITHUB_WORKFLOW_REF")
+        || !identity.contains("RELEASE_WORKFLOW_REF")
+        || !identity.contains("REHEARSE_WORKFLOW_REF")
+    {
+        return Err(
+            "Preflight must require the explicit workflow SHA and an exact canonical workflow ref"
+                .into(),
+        );
+    }
+    let metadata_probe = rust
+        .split_once("fn probe_metadata_token(")
+        .and_then(|(_, body)| body.split_once("\nfn cleanup_local_state("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing metadata token probe")?;
+    if !metadata_probe.contains("for channel in [\"stable\", \"beta\"]")
+        || !metadata_probe.contains("doctor_validate_metadata")
+    {
+        return Err(
+            "metadata token probe must read and validate both stable and beta state".into(),
+        );
+    }
+    if rust.contains("process::capture(\"cargo\"") || rust.contains("Command::new(\"cargo\"") {
+        return Err(
+            "release build adapters must invoke the current xtask binary without recursive Cargo"
+                .into(),
+        );
+    }
+    if !main.contains("\"release-v4\" => release_v4::run")
+        || !main.contains("\"release-doctor\" =>")
+        || !main.contains("release_v4::run(&repo::root(), &doctor_args)")
+        || main.contains("scripts/release_doctor.ps1")
+    {
+        return Err(
+            "xtask CLI must route release-v4 and release-doctor to the native Rust owner".into(),
+        );
+    }
+    for marker in [
+        "cargo xtask release-v4 self-test",
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!(
+                "CI release_contract must execute Rust release regressions: {marker}"
+            ));
+        }
+    }
+    let credentials = source(
+        &fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/credential_cli.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    for marker in [
+        "BUN_INSTALL_TIMEOUT",
+        "BUILD_CANDIDATE_TIMEOUT",
+        "actual_child_launcher_kills_timed_out_process_tree",
+    ] {
+        if !credentials.contains(marker) {
+            return Err(format!(
+                "Rust candidate builder is missing bounded-process contract `{marker}`"
+            ));
+        }
+    }
+    for obsolete in [
+        "scripts/test_v4_release_pipeline.ps1",
+        "scripts/test_v4_post_publication_transaction.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+    ] {
+        if ci.contains(obsolete) {
+            return Err(format!(
+                "CI still executes retired PowerShell release tests: {obsolete}"
+            ));
         }
     }
     Ok(())
 }
 
 pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
-    let workflow_path = root.join(".github/workflows/release-v4.yml");
-    let draft_workflow_path = root.join(".github/workflows/rehearse-v4.yml");
-    let pipeline_path = root.join("scripts/v4_release_pipeline.ps1");
-    let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
-    let pipeline = fs::read_to_string(&pipeline_path)?;
-    let regression = fs::read_to_string(&regression_path)?;
-    let draft_workflow = fs::read_to_string(&draft_workflow_path)?;
-    v4_release_pipeline_contract_source(
-        &fs::read_to_string(&workflow_path)?,
-        &pipeline,
-        &regression,
+    let read = |path: &str| -> Result<String> { Ok(fs::read_to_string(root.join(path))?) };
+    nsis_installed_catalog_contract(&read("rust/xtask/src/nsis_harness.rs")?)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    updater_fixture_contract(&read("rust/xtask/src/updater_fixture.rs")?)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    rust_release_state_machine_contract(
+        &read(".github/workflows/release-v4.yml")?,
+        &read(".github/workflows/rehearse-v4.yml")?,
+        &read("rust/xtask/src/release_v4.rs")?,
+        &read("rust/xtask/src/main.rs")?,
+        &read(".github/workflows/ci.yml")?,
     )
-    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
-        format!("v4 release pipeline contract: {error}").into()
-    })?;
-    v4_production_qualification_contract_source(&draft_workflow, &pipeline).map_err(
-        |error| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("production qualification contract: {error}").into()
-        },
-    )?;
-    for script_name in [
-        "scripts/v4_updater_credential_broker.ps1",
-        "scripts/set_v4_updater_session_credential.ps1",
-        "scripts/remove_v4_updater_session_credential.ps1",
-        "scripts/test_v4_updater_credential_broker.ps1",
-    ] {
-        if !root.join(script_name).exists() {
-            return Err(
-                format!("v4 release pipeline is missing required helper: {script_name}").into(),
-            );
-        }
-    }
-    let upload_helper_path = root.join("scripts/v4_release_asset_upload.ps1");
-    let upload_helper = fs::read_to_string(&upload_helper_path)?;
-    for (name, source) in [("production release pipeline", pipeline.as_str())] {
-        for forbidden in [
-            "gh @Arguments --output",
-            "gh.exe @Arguments --output",
-            "--output $OutputPath",
-            "\"$uploadUrl?name=",
-        ] {
-            if source.contains(forbidden) {
-                return Err(format!(
-                    "{name} must not use gh api --output for binary asset downloads"
-                )
-                .into());
-            }
-        }
-        for marker in [
-            "Invoke-GhBinaryOutput",
-            "Invoke-V4ReleaseAssetUpload",
-            "PSVersionTable.PSVersion",
-            "7.4.0",
-            "RedirectStandardOutput",
-            "RedirectStandardError",
-            "StandardOutput.BaseStream",
-            "ReadToEndAsync",
-            "ArgumentList",
-        ] {
-            if !source.contains(marker) {
-                return Err(
-                    format!("{name} binary download helper is missing marker: {marker}").into(),
-                );
-            }
-        }
-    }
-    for marker in [
-        "System.Net.Http.HttpClient",
-        "System.Net.Http.StreamContent",
-        "System.IO.FileStream",
-        "Headers.Authorization",
-        "UserAgent",
-        "application/vnd.github+json",
-        "X-GitHub-Api-Version",
-        "2026-03-10",
-        "uploads.github.com",
-        "ContentLength",
-        "fileLength",
-        "StatusCode",
-        "System.Net.HttpStatusCode",
-        "Created",
-        "SendAsync",
-        "ReadAsStringAsync",
-        "application/octet-stream",
-        "$client.Timeout = [TimeSpan]::FromMinutes(10)",
-    ] {
-        if !upload_helper.contains(marker) {
-            return Err(
-                format!("raw release asset upload helper is missing marker: {marker}").into(),
-            );
-        }
-    }
-    if upload_helper.contains("InfiniteTimeSpan") {
-        return Err("raw release asset upload helper must use a finite timeout".into());
-    }
-    if upload_helper.contains("gh ") || upload_helper.contains("ArgumentList") {
-        return Err("raw release asset upload helper must not invoke GitHub CLI".into());
-    }
-    if upload_helper.contains("$UploadUrl?name=") {
-        return Err(
-            "raw release asset upload helper uses ambiguous PowerShell URL interpolation".into(),
-        );
-    }
-    for marker in [
-        "UploadUrl.Contains(\"?\")",
-        "[string]::Concat($UploadUrl, \"?name=\"",
-        "escapedAssetName",
-    ] {
-        if !upload_helper.contains(marker) {
-            return Err(format!(
-                "raw release asset upload URL construction guard is missing: {marker}"
-            )
-            .into());
-        }
-    }
-    println!("[xtask] v4 release pipeline state-machine contract: PASS");
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    println!("[xtask] Rust v4 release authority contract: PASS");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::release_runner::{
-        RELEASE_RUNNER_LABEL_MARKER, validate_release_runner_workflow,
-    };
     use super::*;
 
+    fn valid() -> (String, String, String, String, String) {
+        let release_commands = [
+            (
+                "Preflight release request and repository readiness",
+                "cargo xtask release-v4 preflight --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Build and qualify the single production candidate",
+                "cargo xtask release-v4 build-candidate --state-root $env:V4_RELEASE_STATE_ROOT --key-path $env:V4_UPDATER_PRIVATE_KEY_PATH --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Verify exact-source OIDC attestations",
+                "cargo xtask release-v4 verify-attestations --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Probe release-metadata App access before publication",
+                "cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Publish the qualified candidate immutably",
+                "cargo xtask release-v4 publish-release --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Promote release metadata only after immutable publication",
+                "cargo xtask release-v4 promote-metadata --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Re-fetch and verify final public release and metadata",
+                "cargo xtask release-v4 final-verify --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA",
+            ),
+            (
+                "Clean runner-local release state",
+                "cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT",
+            ),
+        ];
+        let release_steps = release_commands
+            .iter()
+            .map(|(name, command)| format!("      - name: {name}\n        run: {command}\n"))
+            .collect::<String>();
+        let release = format!(
+            "name: V4 Release Pipeline\non:\n  workflow_dispatch:\npermissions:\n  contents: read\nEXPECTED_REPOSITORY: pumni/Sky-Auto-Player\nEXPECTED_DEFAULT_BRANCH: ${{{{ github.event.repository.default_branch }}}}\nEXPECTED_WORKFLOW: rehearse-v4.yml\ntest \"$GITHUB_EVENT_NAME\" = \"workflow_dispatch\"\ntest \"$GITHUB_REPOSITORY\" = \"$EXPECTED_REPOSITORY\"\ntest \"$GITHUB_REF\" = \"refs/heads/main\"\ntest \"$EXPECTED_DEFAULT_BRANCH\" = \"main\"\nqualified_run=\"$(gh api \\\n  \\\"repos/$GITHUB_REPOSITORY/actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA&per_page=100\\\" --jq '.workflow_runs[] | select(.status == \\\"completed\\\" and .conclusion == \\\"success\\\" and .event == \\\"workflow_dispatch\\\" and .head_branch == \\\"main\\\" and .name == \\\"V4 Production Pre-Publication Qualification\\\") | .id')\"\nhead_branch == \"main\"\nconclusion == \"success\"\nruns-on: [self-hosted, windows, v4-release, single-tenant]\nenvironment: v4-production-release\ncontents: read\ncontents: write\nid-token: write\nattestations: write\nref: ${{{{ github.sha }}}}\npersist-credentials: false\nV4_UPDATER_PRIVATE_KEY_PATH\nactions/attest@\nactions/upload-artifact@\nMint release-metadata GitHub App token before publication\npermission-contents: write\nif: always()\njobs:\n  release:\n    steps:\n{}",
+            release_steps
+        );
+        let rehearsal = "name: V4 Production Pre-Publication Qualification\non:\n  workflow_dispatch:\njobs:\n  qualification:\n    steps:\n      - name: Run Preflight\n        run: cargo xtask release-v4 preflight --state-root state --workflow-sha $env:GITHUB_SHA\n      - name: Run BuildCandidate\n        run: cargo xtask release-v4 build-candidate --state-root state --key-path key --workflow-sha $env:GITHUB_SHA\n      - name: Clean state\n        run: cargo xtask release-v4 cleanup --state-root state\n".to_owned();
+        let rust = r#"trait Transport
+struct GhTransport
+fn publish_release(
+prepublication_metadata_qualification(
+transport.request(
+"POST"
+prepublication_metadata_qualification(
+transport.request(
+"PATCH"
+}
+fn prepublication_metadata_qualification(
+validate_monotonic
+same_github_latest
+fn same_github_latest(
+fn delete_owned_draft(
+transport.request("GET"
+current["id"]
+current["draft"] != true
+matches_transaction(&current, context)
+transport.request("DELETE"
+fn verify_public_assets(
+fn request_with_retry_policy(
+method.eq_ignore_ascii_case("GET")
+retry_github(operation, sleep)
+operation().map_err
+pub(crate) fn run(
+fn identity(
+workflow_sha
+        .ok_or("--workflow-sha is required for Preflight")
+GITHUB_WORKFLOW_REF
+RELEASE_WORKFLOW_REF
+REHEARSE_WORKFLOW_REF
+fn git_text(
+fn validate_context(
+pure_context_validation
+fn preflight(
+pub(crate) fn run(
+require_runtime_context(root, &options, command == "build-candidate")?
+match command
+fn require_runtime_context(
+fn probe_metadata_token(
+for channel in ["stable", "beta"]
+doctor_validate_metadata
+channels/{channel}/latest.json?ref=release-metadata
+fn cleanup_local_state(
+mock_non_monotonic_candidate_never_mutates mock_conflicting_draft_is_not_deleted mock_pr_merge_sha_does_not_break_release_or_owned_cleanup mock_upload_timeout_reconciles_exact_asset mutation_adapter_is_at_most_once MutationOutcomeUnknown await_raw_metadata_convergence raw_metadata_retry_converges_after_cache_lag raw_metadata_retry_fails_with_bounded_diagnostics RuntimeIdentity::from_environment GITHUB_WORKFLOW_REF runtime_identity_fails_closed_without_exact_workflow_context metadata_token_probe_rejects_wrong_repository_state fn promote_metadata fn final_verify fn doctor fn verify_attestations POST_PUBLICATION_INCIDENT release_id sha256: raw.githubusercontent.com mock_publish_succeeds mock_draft_post_timeout_reconciles_exact_marker mock_digest_mismatch_cleans_owned_draft mock_patch_timeout_reconciles_exact_release_id mock_unknown_publication_never_cleans_up canonical_upload_url RELEASE_BUILD_STEP_TIMEOUT RELEASE_DEFENDER_STEP_TIMEOUT ATTESTATION_VERIFY_TIMEOUT mock_release_doctor_detects_metadata_endpoint_divergence mock_metadata_promotion_is_idempotent_after_committed_timeout mock_publication_identity_and_asset_inventory_fail_closed doctor_state_input_rejects_malformed_and_oversized_files malformed_github_api_json_fails_closed_with_endpoint_context retry_policy_retries_only_transient_responses env::current_exe()?"#
+            .to_owned();
+        let main = "\"release-v4\" => release_v4::run\n\"release-doctor\" =>\nrelease_v4::run(&repo::root(), &doctor_args)".to_owned();
+        let ci = "cargo xtask release-v4 self-test\ncargo test --locked --manifest-path rust/xtask/Cargo.toml".to_owned();
+        (release, rehearsal, rust, main, ci)
+    }
+
     #[test]
-    fn production_qualification_contract_rejects_publication_and_weak_runner_regressions() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let workflow = fs::read_to_string(root.join(".github/workflows/rehearse-v4.yml"))
-            .expect("production qualification workflow fixture must exist");
-        let pipeline = fs::read_to_string(root.join("scripts/v4_release_pipeline.ps1"))
-            .expect("release pipeline fixture must exist");
-
-        v4_production_qualification_contract_source(&workflow, &pipeline)
-            .expect("production qualification contract should pass its repository fixture");
-
-        let publication_regression = workflow.replace(
-            "-State BuildCandidate",
-            "-State BuildCandidate\n            -State PublishRelease",
+    fn release_state_machine_requires_ordered_rust_stages_and_security_boundaries() {
+        let (release, rehearsal, rust, main, ci) = valid();
+        rust_release_state_machine_contract(&release, &rehearsal, &rust, &main, &ci)
+            .expect("valid Rust release authority fixture must satisfy the contract");
+        let reordered = release.replace(
+            "cargo xtask release-v4 publish-release --state-root",
+            "cargo xtask release-v4 promote-metadata --state-root",
         );
         assert!(
-            v4_production_qualification_contract_source(&publication_regression, &pipeline)
-                .is_err(),
-            "production qualification must reject a publication state"
+            rust_release_state_machine_contract(&reordered, &rehearsal, &rust, &main, &ci).is_err()
+        );
+        let legacy = release.replace(
+            "cargo xtask release-v4 publish-release --state-root",
+            "pwsh scripts/v4_release_pipeline.ps1",
+        );
+        assert!(
+            rust_release_state_machine_contract(&legacy, &rehearsal, &rust, &main, &ci).is_err()
+        );
+        let unsafe_rehearsal = format!("{rehearsal}cargo xtask release-v4 publish-release");
+        assert!(
+            rust_release_state_machine_contract(&release, &unsafe_rehearsal, &rust, &main, &ci)
+                .is_err()
+        );
+        let no_negative_test = rust.replace("mock_digest_mismatch_cleans_owned_draft", "removed");
+        assert!(
+            rust_release_state_machine_contract(
+                &release,
+                &rehearsal,
+                &no_negative_test,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
+        let ambient_pr_sha = rust.replace(
+            "pure_context_validation\nfn preflight(",
+            "env::var(\"GITHUB_SHA\")\npure_context_validation\nfn preflight(",
+        );
+        assert!(
+            rust_release_state_machine_contract(&release, &rehearsal, &ambient_pr_sha, &main, &ci)
+                .is_err()
+        );
+        let runtime_guard_after_dispatch = rust.replace(
+            "require_runtime_context(root, &options, command == \"build-candidate\")?\nmatch command",
+            "match command\nrequire_runtime_context(root, &options, command == \"build-candidate\")?",
+        );
+        assert!(
+            rust_release_state_machine_contract(
+                &release,
+                &rehearsal,
+                &runtime_guard_after_dispatch,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
+        let recursive_cargo = rust.replace("env::current_exe()?", "process::capture(\"cargo\"");
+        assert!(
+            rust_release_state_machine_contract(&release, &rehearsal, &recursive_cargo, &main, &ci)
+                .is_err()
         );
 
-        let weak_runner = workflow.replace(
-            RELEASE_RUNNER_LABEL_MARKER,
-            "runs-on: [self-hosted, windows, v4-release]",
-        );
-        let error =
-            validate_release_runner_workflow(".github/workflows/rehearse-v4.yml", &weak_runner)
-                .expect_err("production qualification must retain the exact signing runner labels");
+        let no_exact_head = release.replace("head_sha=$GITHUB_SHA", "head_branch=main");
         assert!(
-            error
-                .to_string()
-                .contains("exact dedicated release runner labels")
+            rust_release_state_machine_contract(&no_exact_head, &rehearsal, &rust, &main, &ci)
+                .is_err()
+        );
+        let missing_workflow_sha = release.replace("--workflow-sha $env:GITHUB_SHA", "");
+        assert!(
+            rust_release_state_machine_contract(
+                &missing_workflow_sha,
+                &rehearsal,
+                &rust,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
+        for (_, command) in REQUIRED_RELEASE_INVOCATIONS {
+            let arguments = command.split_whitespace().collect::<Vec<_>>();
+            for index in 0..arguments.len().saturating_sub(1) {
+                if arguments[index].starts_with("--") {
+                    let argument = format!("{} {}", arguments[index], arguments[index + 1]);
+                    let missing = release.replacen(&argument, "", 1);
+                    assert!(
+                        rust_release_state_machine_contract(
+                            &missing, &rehearsal, &rust, &main, &ci
+                        )
+                        .is_err(),
+                        "removing `{argument}` must fail the release workflow contract"
+                    );
+                }
+            }
+        }
+
+        let crlf_release = release.replace('\n', "\r\n");
+        let crlf_rehearsal = rehearsal.replace('\n', "\r\n");
+        assert!(
+            rust_release_state_machine_contract(&crlf_release, &crlf_rehearsal, &rust, &main, &ci)
+                .is_ok()
         );
     }
 
     #[test]
-    fn v4_release_pipeline_contract_requires_single_path_order() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let workflow = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))
-            .expect("production release workflow fixture must exist");
-        let pipeline = fs::read_to_string(root.join("scripts/v4_release_pipeline.ps1"))
-            .expect("release pipeline fixture must exist");
-        let regression = fs::read_to_string(root.join("scripts/test_v4_release_pipeline.ps1"))
-            .expect("release pipeline regression fixture must exist");
+    fn installed_nsis_catalog_contract_keeps_safe_order_across_line_endings() {
+        let harness = source(include_str!("../nsis_harness.rs"));
+        let result = nsis_installed_catalog_contract(&harness);
+        assert!(result.is_ok(), "{result:?}");
+        let crlf = harness.replace('\n', "\r\n");
+        assert!(nsis_installed_catalog_contract(&crlf).is_ok());
 
-        v4_release_pipeline_contract_source(&workflow, &pipeline, &regression)
-            .expect("release pipeline contract should pass its repository fixture");
+        let missing_catalog = harness.replace("crate::builtin_catalog::run(", "");
+        assert!(nsis_installed_catalog_contract(&missing_catalog).is_err());
+        let launch_before_catalog = harness.replace(
+            "crate::builtin_catalog::run(",
+            "launch_smoke(scope, &app)?; crate::builtin_catalog::run(",
+        );
+        assert!(nsis_installed_catalog_contract(&launch_before_catalog).is_err());
+        let cwd_inside_install = harness.replace(
+            "let cwd = install_root\n        .parent()",
+            "let cwd = &install_root",
+        );
+        assert!(nsis_installed_catalog_contract(&cwd_inside_install).is_err());
+        let root_before_tree = harness.replace(
+            "if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {",
+            "if let Err(error) = wait_path_absent(install_root, std::time::Duration::from_secs(30)) { if let Err(error) = uninstaller.wait_tree_timeout(std::time::Duration::from_secs(30)) {",
+        );
+        assert!(nsis_installed_catalog_contract(&root_before_tree).is_err());
+        let manual_root_delete = harness.replace(
+            "finish_uninstall(&install_root, &mut uninstaller)?;",
+            "std::fs::remove_dir_all(&install_root)?; finish_uninstall(&install_root, &mut uninstaller)?;",
+        );
+        assert!(nsis_installed_catalog_contract(&manual_root_delete).is_err());
+    }
 
-        let reordered = workflow.replacen("-State Preflight `", "-State BuildCandidate `", 1);
-        assert!(v4_release_pipeline_contract_source(&reordered, &pipeline, &regression).is_err());
-
-        let duplicated_build = pipeline.replace(
-            "function Invoke-PublishRelease",
-            "orchestrate_v4_production_release.ps1\nfunction Invoke-PublishRelease",
+    #[test]
+    fn updater_fixture_static_contract_keeps_required_negative_regressions() {
+        let fixture = include_str!("../updater_fixture.rs");
+        assert!(updater_fixture_contract(fixture).is_ok());
+        let crlf = fixture.replace('\n', "\r\n");
+        assert!(updater_fixture_contract(&crlf).is_ok());
+        let missing_worktree_test = fixture.replace(
+            "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
+            "removed_test_name",
         );
-        assert!(
-            v4_release_pipeline_contract_source(&workflow, &duplicated_build, &regression).is_err()
-        );
-
-        let missing_builtin_qualification =
-            pipeline.replace("cargo xtask builtin-catalog verify-installed", "");
-        assert!(
-            v4_release_pipeline_contract_source(
-                &workflow,
-                &missing_builtin_qualification,
-                &regression,
-            )
-            .is_err(),
-            "production qualification must retain installed built-in catalog verification"
-        );
-
-        let missing_empty_directory_regression = regression.replace(
-            "Test-StrictModeEmptyFreshUserSongs",
-            "Test-MissingRegression",
-        );
-        assert!(
-            v4_release_pipeline_contract_source(
-                &workflow,
-                &pipeline,
-                &missing_empty_directory_regression,
-            )
-            .is_err(),
-            "production qualification must retain the executable StrictMode empty-directory regression"
-        );
+        assert!(updater_fixture_contract(&missing_worktree_test).is_err());
     }
 }

@@ -45,6 +45,8 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::System::LibraryLoader",
     "Win32::System::SystemInformation",
     "Win32::System::Threading",
+    "Win32::System::JobObjects",
+    "Win32::System::Registry",
     "Win32::Security",
     "Win32::UI::Input::KeyboardAndMouse",
     "Win32::UI::Controls",
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn security_allows_sendinput_and_approved_windows_modules() {
-        let source = "unsafe { SendInput(1, inputs, size); }\nuse windows_sys::Win32::Foundation::HANDLE;\nuse windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\nuse windows_sys::Win32::System::Threading::CloseHandle;\n";
+        let source = "unsafe { SendInput(1, inputs, size); }\nuse windows_sys::Win32::Foundation::HANDLE;\nuse windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\nuse windows_sys::Win32::System::Threading::CloseHandle;\nuse windows_sys::Win32::System::Registry::RegOpenKeyExW;\n";
         assert!(scan_rust_text(Path::new("fixture.rs"), source).is_empty());
     }
 

@@ -1,16 +1,28 @@
 #![forbid(unsafe_code)]
 
+mod assembly_audit;
 mod audits;
+mod authenticode;
 mod branding;
 mod builtin_catalog;
+mod calibration;
 mod checks;
+mod ci;
+mod ci_artifacts;
+mod ci_bridge;
+mod ci_candidate;
+mod ci_classifier;
+mod credential_cli;
 mod hash;
+mod nsis_harness;
 mod process;
 mod release_metadata;
+mod release_v4;
 mod repo;
 mod sbom;
 mod supply_chain;
 mod tauri_bundle;
+mod updater_fixture;
 mod updater_trust;
 mod version;
 
@@ -20,7 +32,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
+    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask ci classify [--full | --paths-file <path> | --base-sha <sha> --head-sha <sha>] [--github-output <path>]\n  cargo xtask ci candidate <create|validate> [options]\n  cargo xtask ci bridge <create|validate|build-fixture> [options]\n  cargo xtask ci nsis smoke --installer <path> --candidate-root <dir> --source-sha <sha> --fixture-root <new-path> --registry-mode <fresh-install|preserve-existing-state> [--evidence-root <dir>] (--allow-hosted-disposable-runner|--allow-protected-release-runner)\n  cargo xtask ci updater-fixture run --candidate-root <dir> --bridge-root <dir> --source-sha <sha> --fixture-root <new-path> (--allow-hosted-disposable-runner|--allow-protected-release-runner) [--evidence <path>]\n  cargo xtask ci source-identity --candidate-version <semver> [--source-sha <sha>] [--require-worktree-version] [--format <text|json>]\n  cargo xtask calibration build\n  cargo xtask calibration verify-installed --install-root <dir> --expected-size <bytes> --expected-sha256 <digest> [--evidence <path>]\n  cargo xtask calibration project-evidence --input <json> --output <path>\n  cargo xtask credential <status|read-check|write-stdin|delete|run-action> [options]\n  cargo xtask authenticode verify --mode <unsigned-zero-budget|test|production> --artifact <path> [--artifact <path>] [--evidence <path>]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask audit assembly <dispatch|prepared-normal|modifier-guard> [options]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-v4 <preflight|build-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify|cleanup|self-test> --state-root <dir> [--key-path <path>] [--workflow-sha <sha>]\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -37,10 +49,17 @@ fn main() -> Result<()> {
         return Err("a command is required".into());
     }
     match args[0].as_str() {
+        "ci" => ci::run(&repo::root(), &args[1..]),
+        "authenticode" => authenticode::run(&repo::root(), &args[1..]),
+        "calibration" => calibration::run(&repo::root(), &args[1..]),
+        "credential" => credential_cli::run(&repo::root(), &args[1..]),
         "check" => {
             let group = args.get(1).map(String::as_str).unwrap_or("all");
             let skip_supply_chain = args.iter().any(|a| a == "--skip-supply-chain");
             checks::run(group, skip_supply_chain)
+        }
+        "audit" if args.get(1).map(String::as_str) == Some("assembly") => {
+            assembly_audit::run(&repo::root(), &args[2..])
         }
         "audit" if args.get(1).map(String::as_str) == Some("supply-chain") => {
             let mut attestation = None;
@@ -469,76 +488,11 @@ fn main() -> Result<()> {
             _ => Err("release-metadata requires generate, validate, or validate-monotonic".into()),
         },
         "release-doctor" => {
-            let mut tag = None;
-            let mut version = None;
-            let mut channel = None;
-            let mut state_root = None;
-            let mut run_id = None;
-            let mut workflow_sha = None;
-            let mut format = None;
-            let mut i = 1;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--tag" => tag = Some(required_value(&args, &mut i, "--tag")?),
-                    "--version" => version = Some(required_value(&args, &mut i, "--version")?),
-                    "--channel" => channel = Some(required_value(&args, &mut i, "--channel")?),
-                    "--state-root" => {
-                        state_root = Some(required_value(&args, &mut i, "--state-root")?)
-                    }
-                    "--run-id" => run_id = Some(required_value(&args, &mut i, "--run-id")?),
-                    "--workflow-sha" => {
-                        workflow_sha = Some(required_value(&args, &mut i, "--workflow-sha")?)
-                    }
-                    "--format" => format = Some(required_value(&args, &mut i, "--format")?),
-                    option => return Err(format!("unknown release-doctor option: {option}").into()),
-                }
-                i += 1;
-            }
-            let script_path = repo::root().join("scripts/release_doctor.ps1");
-            let mut pwsh_args = vec![
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-File".to_string(),
-                script_path
-                    .to_str()
-                    .ok_or("invalid release_doctor.ps1 path")?
-                    .to_string(),
-            ];
-            if let Some(ref t) = tag {
-                pwsh_args.push("-Tag".to_string());
-                pwsh_args.push(t.clone());
-            }
-            if let Some(ref v) = version {
-                pwsh_args.push("-Version".to_string());
-                pwsh_args.push(v.clone());
-            }
-            if let Some(ref c) = channel {
-                pwsh_args.push("-Channel".to_string());
-                pwsh_args.push(c.clone());
-            }
-            if let Some(ref sr) = state_root {
-                pwsh_args.push("-StateRoot".to_string());
-                pwsh_args.push(sr.clone());
-            }
-            if let Some(ref r) = run_id {
-                pwsh_args.push("-RunId".to_string());
-                pwsh_args.push(r.clone());
-            }
-            if let Some(ref ws) = workflow_sha {
-                pwsh_args.push("-WorkflowSha".to_string());
-                pwsh_args.push(ws.clone());
-            }
-            if let Some(ref f) = format {
-                pwsh_args.push("-Format".to_string());
-                pwsh_args.push(f.clone());
-            }
-            let pwsh_args_refs: Vec<&str> = pwsh_args.iter().map(String::as_str).collect();
-            let output = process::capture_text("pwsh", &pwsh_args_refs, &repo::root(), &[])?;
-            println!("{output}");
-            Ok(())
+            let mut doctor_args = vec!["doctor".to_owned()];
+            doctor_args.extend_from_slice(&args[1..]);
+            release_v4::run(&repo::root(), &doctor_args)
         }
+        "release-v4" => release_v4::run(&repo::root(), &args[1..]),
         _ => {
             eprintln!("{}", usage());
             Err(format!("unknown command: {}", args[0]).into())

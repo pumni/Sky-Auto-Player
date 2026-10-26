@@ -73,14 +73,18 @@ cargo xtask updater-trust inventory
      on dedicated runner hosts (incident #140). It is explicitly **not** the production transport.
    - For production release dispatch, the Release Operator provisions a generic session credential
      in Windows Credential Manager using `scripts/set_v4_updater_session_credential.ps1`.
-   - The provisioning script uses `Read-Host -AsSecureString` and writes the credential via
-     `CredWriteW` with `CRED_TYPE_GENERIC` and `CRED_PERSIST_SESSION`.
+   - The provisioning adapter uses `Read-Host -AsSecureString` and sends the passphrase only over
+     redirected stdin to Rust. Rust owns `CredWriteW` with `CRED_TYPE_GENERIC` and
+     `CRED_PERSIST_SESSION`.
    - The credential target name is fixed public metadata: `SkyAutoPlayer/V4UpdaterProduction`.
-   - The production workflow (`release-v4.yml`) `BuildCandidate` step calls the broker
-     (`scripts/v4_updater_credential_broker.ps1`) using `CredReadW`, injects the passphrase
-     strictly into process-scoped `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, invokes the release
-     orchestrator, and automatically deletes the credential in `finally` via `CredDeleteW`.
+   - The production workflow (`release-v4.yml`) `BuildCandidate` step calls
+     `cargo xtask credential run-action`. Rust reads the credential, gives it only to the
+     allowlisted child process environment, redacts child output, and deletes the entry after
+     success or failure. The caller process environment is not modified.
    - The updater private key remains stored outside the repository and workspace.
+   - Rust requires the exact session persistence class when checking presence or consuming the
+     credential. A same-name local-machine or enterprise credential is rejected, and one-shot
+     handling still attempts idempotent deletion of that target.
    - Passphrases **never** go into GitHub Secrets, runner `.env` files, command-line arguments,
      GitHub issues/chat/PRs, or repository files.
 
@@ -110,7 +114,7 @@ logs or history files:
 pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key"
 ```
 
-### Verification via Windows Credential Manager Broker (Pre-Release / Non-Release Proof)
+### Verification via Rust Credential Manager Owner (Pre-Release / Non-Release Proof)
 
 To verify the private key against the provisioned session credential without interactive prompts:
 
@@ -118,7 +122,7 @@ To verify the private key against the provisioned session credential without int
 # 1. Provision session credential as operator:
 pwsh scripts/set_v4_updater_session_credential.ps1
 
-# 2. Verify private key through the credential broker:
+# 2. Verify private key through the Rust one-shot action boundary:
 pwsh scripts/verify_v4_updater_private_key.ps1 -KeyPath "E:\secure\v4-updater.key" -UseCredentialBroker
 
 # 3. Clean up session credential when finished (if not consumed by BuildCandidate):
@@ -259,10 +263,18 @@ the two-phase Bridge/Cutover model:
 
 ### Rehearsal and Evidence
 
-Rotation procedures are validated automatically using:
+Rotation procedures are validated by the disposable Windows updater job in
+`.github/workflows/ci.yml`. The Rust harness consumes the exact current
+candidate and bridge artifacts; local development uses synthetic tests and
+does not install packages into the workstation profile. The former PowerShell
+entrypoint was retired after its CI/release callers moved to Rust.
 
 ```powershell
-pwsh scripts/test_v4_updater_key_rotation.ps1
-$fixtureTarget = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-updater-fixture-target"
-pwsh scripts/ci_tauri_update_e2e.ps1 -FixtureTargetDir $fixtureTarget
+cargo xtask ci candidate validate --candidate-root $env:SKY_CANDIDATE_ROOT --source-sha $env:GITHUB_SHA
+cargo xtask ci bridge validate --bridge-root $env:SKY_BRIDGE_ROOT --source-sha $env:GITHUB_SHA
+cargo xtask ci updater-fixture run --candidate-root $env:SKY_CANDIDATE_ROOT --bridge-root $env:SKY_BRIDGE_ROOT --source-sha $env:GITHUB_SHA --fixture-root (Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))) --allow-hosted-disposable-runner
 ```
+
+These commands perform real install/update operations and must run only in the
+guarded disposable CI job or the exact protected release workflow. They are
+not workstation acceptance commands.

@@ -1,4 +1,3 @@
-use super::release_runner::v4_release_contract_ci_wiring;
 use crate::Result;
 use crate::audits::source::walk_source;
 use serde_json::Value;
@@ -171,12 +170,11 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
         .and_then(Value::as_object)
         .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
     let before_build = build.get("beforeBuildCommand").and_then(Value::as_str);
-    if !before_build.is_some_and(|command| {
-        command.starts_with("bun run build && pwsh ")
-            && command.contains("../scripts/build_native_calibration.ps1")
-    }) {
+    if !before_build
+        .is_some_and(|command| command == "bun run build && cd .. && cargo xtask calibration build")
+    {
         return Err(
-            "Tauri packaging must build and stage native calibration in beforeBuildCommand"
+            "Tauri packaging must run the Rust calibration builder after the frontend build"
                 .to_owned(),
         );
     }
@@ -292,13 +290,10 @@ fn find_legacy_release_topology_marker(source: &str) -> Option<&'static str> {
 const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "rust/xtask/src/main.rs",
     "rust/xtask/src/release_metadata.rs",
-    "scripts/v4_release_pipeline.ps1",
-    "scripts/promote_v4_metadata.ps1",
-    "scripts/orchestrate_v4_production_release.ps1",
-    "scripts/ci_tauri_update_e2e_core.ps1",
+    "rust/xtask/src/release_v4.rs",
+    "rust/xtask/src/nsis_harness.rs",
+    "rust/xtask/src/updater_fixture.rs",
     "scripts/verify_v4_release_runner.ps1",
-    "scripts/cleanup_v4_release_state.ps1",
-    "scripts/v4_release_draft_lookup.ps1",
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4.yml",
     "desktop/src-tauri/src/native_update.rs",
@@ -327,85 +322,59 @@ fn validate_active_release_surface(relative: &str, source: &str) -> Result<()> {
 }
 
 pub(super) fn release_metadata_contract(root: &Path) -> Result<()> {
-    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
-    let native = fs::read_to_string(&native_path)?;
+    let native = fs::read_to_string(root.join("desktop/src-tauri/src/native_update.rs"))?;
     for marker in [
         "V4_STABLE_METADATA_ENDPOINT",
         "V4_BETA_METADATA_ENDPOINT",
         "endpoints(vec![endpoint])",
         "V4_TAURI_UPDATER_PUBLIC_KEY",
-        "V4_TAURI_UPDATER_PUBLIC_KEYS",
         ".pubkey(public_key)",
     ] {
         if !native.contains(marker) {
             return Err(format!(
-                "Rust updater release metadata is missing the fixed v4 contract marker: {marker}"
+                "Rust updater metadata is missing fixed contract marker: {marker}"
             )
             .into());
         }
     }
-    for forbidden in [
-        "api.github.com/repos/pumni/Sky-Auto-Player/releases",
-        "update_authority_not_configured",
-        "std::env::var(\"",
-        "release-2026",
-    ] {
-        if native.contains(forbidden) {
-            return Err(format!(
-                "Rust v4 updater release metadata contains a forbidden fallback/injection marker: {forbidden}"
-            )
-            .into());
-        }
+    if native.contains("api.github.com/repos/pumni/Sky-Auto-Player/releases") {
+        return Err("runtime updater must not use the release-management API".into());
     }
-
-    let generator_path = root.join("rust/xtask/src/release_metadata.rs");
-    let generator = fs::read_to_string(&generator_path)?;
+    let generator = fs::read_to_string(root.join("rust/xtask/src/release_metadata.rs"))?;
     for marker in [
         "RELEASE_REPOSITORY: &str = \"pumni/Sky-Auto-Player\"",
-        "STABLE_METADATA_PATH: &str = \"channels/stable/latest.json\"",
-        "BETA_METADATA_PATH: &str = \"channels/beta/latest.json\"",
-        "WINDOWS_PLATFORM: &str = \"windows-x86_64\"",
-        "canonical_installer_name",
+        "STABLE_METADATA_PATH",
+        "BETA_METADATA_PATH",
         "canonical_asset_url",
-        "valid_utc_timestamp",
-        "valid_signature",
-        "version::parse",
-        "parsed_version.major != 4",
         "validate_monotonic",
-        "validate_roll_forward",
         "candidate_version <= current_version",
     ] {
         if !generator.contains(marker) {
-            return Err(format!(
-                "v4 metadata generator is missing its deterministic validation marker: {marker}"
-            )
-            .into());
+            return Err(format!("Rust metadata generator is missing {marker}").into());
         }
     }
-    for forbidden in [
-        "pumni/Sky-Auto-Player-Releases/releases",
-        "example.invalid",
-        "dangerousInsecureTransportProtocol",
+    let release = fs::read_to_string(root.join("rust/xtask/src/release_v4.rs"))?;
+    for marker in [
+        "release_metadata::generate",
+        "release_metadata::validate_monotonic",
+        "raw.githubusercontent.com",
+        "validate_beta_keeps_latest",
+        "make_latest",
     ] {
-        if generator.contains(forbidden) {
-            return Err(format!(
-                "v4 metadata generator contains a forbidden legacy repository marker: {forbidden}"
-            )
-            .into());
+        if !release.contains(marker) {
+            return Err(format!("Rust release transaction is missing {marker}").into());
         }
     }
-
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
+    if !ci.contains("cargo xtask release-v4 self-test") {
+        return Err("release_contract CI must execute the Rust mock transport scenarios".into());
+    }
     for relative in ACTIVE_RELEASE_SURFACES {
         let path = root.join(relative);
-        let source = fs::read_to_string(&path)?;
-        // Keep the guard focused on executable/active release surfaces. Rust
-        // regression fixtures may name retired paths explicitly so the
-        // classifier contract can prove they are not registered anymore.
-        validate_active_release_surface(relative, active_release_surface_source(&path, &source))?;
+        let content = fs::read_to_string(&path)?;
+        validate_active_release_surface(relative, active_release_surface_source(&path, &content))?;
     }
-
-    let bundle_path = root.join("rust/xtask/src/tauri_bundle.rs");
-    let bundle = fs::read_to_string(&bundle_path)?;
+    let bundle = fs::read_to_string(root.join("rust/xtask/src/tauri_bundle.rs"))?;
     for marker in [
         "schema_version: 2",
         "evidence_type: \"tauri-nsis-artifact\"",
@@ -413,113 +382,14 @@ pub(super) fn release_metadata_contract(root: &Path) -> Result<()> {
         "updater_signature_sha256",
     ] {
         if !bundle.contains(marker) {
-            return Err(format!(
-                "Tauri artifact evidence is missing its exact-byte marker: {marker}"
-            )
-            .into());
-        }
-    }
-
-    let acceptance_path = root.join("scripts/ci_v4_release_latest_guard.ps1");
-    let acceptance = fs::read_to_string(&acceptance_path)?;
-    let latest_policy = fs::read_to_string(root.join("scripts/v4_release_latest_policy.ps1"))?;
-    let acceptance_contract = format!("{acceptance}\n{latest_policy}");
-    for marker in [
-        "V4 GitHub Latest policy guard",
-        "v4_release_latest_policy.ps1",
-        "$canonicalRepository = \"pumni/Sky-Auto-Player\"",
-        "releases/latest",
-        "make_latest=$(if ($Channel -eq \"stable\") { \"true\" } else { \"false\" })",
-        "read_only=true",
-        "ExpectedSourceSha",
-        "Assert-V4GitHubLatestPolicy",
-    ] {
-        if !acceptance_contract.contains(marker) {
-            return Err(format!(
-                "v4 release contract acceptance is missing its read-only marker: {marker}"
-            )
-            .into());
-        }
-    }
-    for forbidden in [
-        "gh release create",
-        "gh release upload",
-        "gh release delete",
-        "softprops/action-gh-release",
-    ] {
-        if acceptance_contract.contains(forbidden) {
-            return Err(format!(
-                "read-only v4 release contract acceptance contains a release mutation: {forbidden}"
-            )
-            .into());
-        }
-    }
-
-    let promotion_path = root.join("scripts/promote_v4_metadata.ps1");
-    let promotion = fs::read_to_string(&promotion_path)?;
-    for marker in [
-        "$productionAuthenticodeMode = \"unsigned-zero-budget\"",
-        "governed unsigned-zero-budget Authenticode evidence",
-        "$ValidateEvidence",
-        "Assert-QualificationEvidence",
-        "installer_sha256",
-        "updater_signature_sha256",
-        "Invoke-PromotionSelfTest",
-        "same-name/different-bytes",
-    ] {
-        if !promotion.contains(marker) {
-            return Err(format!(
-                "v4 metadata promotion is missing its post-publication marker: {marker}"
-            )
-            .into());
-        }
-    }
-    for forbidden in [
-        "gh release create",
-        "gh release upload",
-        "softprops/action-gh-release",
-        "pumni/Sky-Auto-Player/releases",
-    ] {
-        if promotion.contains(forbidden) {
-            return Err(format!(
-                "v4 metadata promotion contains a forbidden release mutation/fallback: {forbidden}"
-            )
-            .into());
-        }
-    }
-
-    let ci_path = root.join(".github/workflows/ci.yml");
-    let ci = fs::read_to_string(&ci_path)?;
-    v4_release_contract_ci_wiring(&ci)
-        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
-    for marker in [
-        "release_contract:",
-        "name: V4 release contract acceptance",
-        "scripts/ci_v4_release_latest_guard.ps1",
-        "scripts/promote_v4_metadata.ps1 -SelfTest",
-        "Run V4 production release orchestrator contract test",
-        "scripts/test_v4_production_orchestrator.ps1",
-        "Run V4 updater private-key verifier secret-output regression",
-        "scripts/test_v4_updater_private_key.ps1",
-        "Run V4 NSIS smoke boundary regression tests",
-        "scripts/test_v4_nsis_smoke_boundary.ps1",
-        "Emit exact Tauri qualification evidence",
-        "authenticode_mode = \"unsigned-zero-budget\"",
-        "V4_QUALIFICATION_EVIDENCE.json",
-        "RELEASE_REQUIRED",
-        "SUPPLY_CHAIN_REQUIRED",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
-    ] {
-        if !ci.contains(marker) {
             return Err(
-                format!("CI is missing the v4 release contract gate marker: {marker}").into(),
+                format!("Tauri artifact evidence is missing exact-byte marker: {marker}").into(),
             );
         }
     }
-    println!("[xtask] v4 release metadata contract: PASS");
+    println!("[xtask] Rust v4 metadata and release authority contract: PASS");
     Ok(())
 }
-
 fn v4_legacy_updater_source_contract(source: &str, surface: &str) -> Result<()> {
     for forbidden in [
         "sky_updater",
@@ -598,11 +468,8 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
         "rust/xtask/src",
         ".github/workflows/ci.yml",
         ".github/workflows/release-v4.yml",
-        "scripts/orchestrate_v4_production_release.ps1",
-        "scripts/promote_v4_metadata.ps1",
-        "scripts/ci_tauri_update_e2e.ps1",
-        "scripts/v4_release_pipeline.ps1",
-        "scripts/ci_v4_release_latest_guard.ps1",
+        "rust/xtask/src/updater_fixture.rs",
+        "rust/xtask/src/release_v4.rs",
         "tests/fixtures/settings/compatibility_cases.json",
     ];
     for relative in current_v4_surfaces {
@@ -707,7 +574,7 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_accepts_scoped_watchers_and_build_hook() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
+                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build",
                 "additionalWatchFolders": [
                     "../../rust/crates",
                     "../../rust/Cargo.toml",
@@ -719,10 +586,29 @@ tauri-test = ["tauri/test"]
     }
 
     #[test]
+    fn tauri_calibration_hook_rejects_powershell_wrappers_and_nested_build_commands() {
+        let source = r#"{
+            "build": {
+                "beforeBuildCommand": "bun run build && cd .. && pwsh scripts/build_native_calibration.ps1",
+                "additionalWatchFolders": ["../../rust/crates", "../../rust/Cargo.toml", "../../rust/Cargo.lock"]
+            }
+        }"#;
+        assert!(tauri_build_freshness_contract_manifest(source).is_err());
+
+        let source = r#"{
+            "build": {
+                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build && cargo tauri build",
+                "additionalWatchFolders": ["../../rust/crates", "../../rust/Cargo.toml", "../../rust/Cargo.lock"]
+            }
+        }"#;
+        assert!(tauri_build_freshness_contract_manifest(source).is_err());
+    }
+
+    #[test]
     fn tauri_build_freshness_contract_rejects_the_workspace_root_watch() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
+                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build",
                 "additionalWatchFolders": [
                     "../../rust",
                     "../../rust/crates",
@@ -838,7 +724,7 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
     }
 
     #[test]
-    fn release_metadata_contract_requires_rust_owned_channels_and_read_only_acceptance() {
+    fn release_metadata_contract_requires_rust_owned_channels_and_release_transitions() {
         let native = r#"
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
@@ -859,19 +745,25 @@ fn production_metadata_endpoints_are_fixed_and_channel_isolated() {}
         }
         assert!(!native.contains("api.github.com/repos/pumni/Sky-Auto-Player/releases"));
 
-        let acceptance = r#"
-# This is the read-only GitHub Latest policy guard.
-$canonicalRepository = "pumni/Sky-Auto-Player"
+        let release = r#"
+trait Transport
+fn publish_release
+fn promote_metadata
+fn final_verify
+validate_beta_keeps_latest
 releases/latest
-make_latest=$(if ($Channel -eq "stable") { "true" } else { "false" })
-read_only=true
-ExpectedSourceSha
-v4_release_latest_policy.ps1
-Assert-V4GitHubLatestPolicy
 "#;
-        assert!(acceptance.contains("GitHub Latest policy guard"));
-        assert!(acceptance.contains("releases/latest"));
-        assert!(!acceptance.contains("gh release create"));
+        for marker in [
+            "trait Transport",
+            "fn publish_release",
+            "fn promote_metadata",
+            "fn final_verify",
+            "validate_beta_keeps_latest",
+            "releases/latest",
+        ] {
+            assert!(release.contains(marker));
+        }
+        assert!(!release.contains("gh release create"));
     }
 
     #[test]

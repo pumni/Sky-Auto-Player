@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 Write-Host "Starting V4 production Authenticode contract tests..."
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'v4_authenticode_crypto.ps1')
 $temporaryRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     [IO.Path]::GetTempPath()
 } else {
@@ -13,6 +14,8 @@ $temporaryRoot = [IO.Path]::GetFullPath($temporaryRoot)
 $fixtureRoot = Join-Path $temporaryRoot ('sky-v4-prod-signing-contract-' + [guid]::NewGuid().ToString('N'))
 $envFile = Join-Path $fixtureRoot 'test-signing.env'
 $targetExe = Join-Path $fixtureRoot 'target.exe'
+$secondTargetExe = Join-Path $fixtureRoot 'target-second.exe'
+$tamperedTargetExe = Join-Path $fixtureRoot 'target-tampered.exe'
 
 # Find a valid PE file to use as target
 $sourcePe = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'rust\target') -Filter '*.exe' -Recurse -File -ErrorAction SilentlyContinue |
@@ -46,9 +49,29 @@ function Restore-SavedEnvironment {
     }
 }
 
+function Invoke-RustAuthenticodeVerify {
+    param([string]$Mode, [string[]]$Artifacts)
+    Push-Location $repoRoot
+    try {
+        $cargoArguments = @("xtask", "authenticode", "verify", "--mode", $Mode)
+        foreach ($artifact in $Artifacts) {
+            $cargoArguments += @("--artifact", $artifact)
+        }
+        $output = (& cargo @cargoArguments 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($output)) {
+            Write-Host "Rust Authenticode verification diagnostic: $($output.Trim())"
+        }
+        return $exitCode
+    } finally {
+        Pop-Location
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
     Copy-Item -LiteralPath $sourcePe.FullName -Destination $targetExe -Force
+    Copy-Item -LiteralPath $sourcePe.FullName -Destination $secondTargetExe -Force
 
     # Remove any existing signature on target
     $signToolCandidate = $null
@@ -61,6 +84,7 @@ try {
     }
     if ($null -ne $signToolCandidate) {
         & $signToolCandidate remove /s $targetExe 2>$null | Out-Null
+        & $signToolCandidate remove /s $secondTargetExe 2>$null | Out-Null
     }
 
     # Clear all outer Authenticode environment variables so Test 1 runs in truly unconfigured production mode
@@ -161,25 +185,54 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Test-mode signing failed"
     }
+    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'sign_v4_authenticode.ps1') -Path $secondTargetExe
+    if ($LASTEXITCODE -ne 0) {
+        throw "Test-mode signing failed for the second synthetic PE"
+    }
 
     # Verify test mode succeeds
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-        -Mode test `
-        -Artifact $targetExe
-    if ($LASTEXITCODE -ne 0) {
+    $testVerificationExitCode = Invoke-RustAuthenticodeVerify -Mode "test" -Artifacts @($targetExe)
+    if ($testVerificationExitCode -ne 0) {
         throw "Test-mode verification failed on signed target"
     }
+    Write-Host "Contract Test 3b: Rust CLI passes two signed synthetic PE files through the manifest adapter..."
+    $multiArtifactExitCode = Invoke-RustAuthenticodeVerify -Mode "test" -Artifacts @($targetExe, $secondTargetExe)
+    if ($multiArtifactExitCode -ne 0) {
+        throw "Two-file Rust Authenticode verification failed"
+    }
+    Write-Host "Contract Test 3b: PASS"
+
+    Write-Host "Contract Test 3c: missing artifact fails closed..."
+    $missingArtifact = Join-Path $fixtureRoot 'missing.exe'
+    $missingArtifactExitCode = Invoke-RustAuthenticodeVerify -Mode "test" -Artifacts @($targetExe, $missingArtifact)
+    if ($missingArtifactExitCode -eq 0) {
+        throw "Missing Authenticode artifact unexpectedly passed verification"
+    }
+    Write-Host "Contract Test 3c: PASS"
+
+    Write-Host "Contract Test 3d: tampered signed PE fails closed through the manifest adapter..."
+    Copy-Item -LiteralPath $targetExe -Destination $tamperedTargetExe -Force
+    $tamperedBytes = [IO.File]::ReadAllBytes($tamperedTargetExe)
+    $layout = Get-AuthenticodePeLayout $tamperedBytes
+    $firstSection = $layout.Sections | Sort-Object VirtualAddress, PointerToRawData | Select-Object -First 1
+    if ($null -eq $firstSection -or $firstSection.SizeOfRawData -le 0) {
+        throw "Could not select a PE section for the synthetic tamper regression"
+    }
+    $mutationOffset = [int]($firstSection.PointerToRawData + [Math]::Min(128, $firstSection.SizeOfRawData - 1))
+    $tamperedBytes[$mutationOffset] = $tamperedBytes[$mutationOffset] -bxor 1
+    [IO.File]::WriteAllBytes($tamperedTargetExe, $tamperedBytes)
+    $tamperedExitCode = Invoke-RustAuthenticodeVerify -Mode "test" -Artifacts @($targetExe, $tamperedTargetExe)
+    if ($tamperedExitCode -eq 0) {
+        throw "Tampered signed PE unexpectedly passed multi-file verification"
+    }
+    Write-Host "Contract Test 3d: PASS"
 
     # Verify the project production policy rejects the signed test target.
     Write-Host "Contract Test 3a: unsigned-zero-budget verification rejects signed binary..."
     $rejectedInZeroBudget = $false
     try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-            -Mode unsigned-zero-budget `
-            -Artifact $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedInZeroBudget = $true }
+        $exitCode = Invoke-RustAuthenticodeVerify -Mode "unsigned-zero-budget" -Artifacts @($targetExe)
+        if ($exitCode -ne 0) { $rejectedInZeroBudget = $true }
     } catch {
         $rejectedInZeroBudget = $true
     }
@@ -192,11 +245,8 @@ try {
     $rejectedInProduction = $false
     $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = "0123456789ABCDEF0123456789ABCDEF01234567"
     try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-            -Mode production `
-            -Artifact $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedInProduction = $true }
+        $exitCode = Invoke-RustAuthenticodeVerify -Mode "production" -Artifacts @($targetExe)
+        if ($exitCode -ne 0) { $rejectedInProduction = $true }
     } catch {
         $rejectedInProduction = $true
     }
@@ -210,11 +260,8 @@ try {
     $env:SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT = $testThumbprint
     $rejectedThumbprint = $false
     try {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-            -Mode production `
-            -Artifact $targetExe 2>$null
-        if ($LASTEXITCODE -ne 0) { $rejectedThumbprint = $true }
+        $exitCode = Invoke-RustAuthenticodeVerify -Mode "production" -Artifacts @($targetExe)
+        if ($exitCode -ne 0) { $rejectedThumbprint = $true }
     } catch {
         $rejectedThumbprint = $true
     }

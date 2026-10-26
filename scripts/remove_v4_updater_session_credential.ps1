@@ -22,14 +22,12 @@ $explicitTarget = $InternalTestTarget
 . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
 
 try {
-    $targetToUse = if (-not [string]::IsNullOrWhiteSpace($explicitTarget)) {
-        $explicitTarget
+    if (-not [string]::IsNullOrWhiteSpace($explicitTarget)) {
+        Remove-V4UpdaterProductionCredential -InternalTestTarget $explicitTarget
     } else {
-        $script:CanonicalCredentialTarget
+        Remove-V4UpdaterProductionCredential
     }
-
-    Remove-V4UpdaterProductionCredential -InternalTestTarget $targetToUse
-    Write-Host "[PASS] V4 updater session credential removed for target: $targetToUse"
+    Write-Host "[PASS] V4 updater session credential removed"
     exit 0
 } catch {
     Write-Host "[FAIL] Failed to remove session credential: $($_.Exception.Message)"

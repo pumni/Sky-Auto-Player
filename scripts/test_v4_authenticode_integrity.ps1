@@ -61,10 +61,7 @@ try {
         throw "Ephemeral Authenticode signing failed for tamper regression (exit $LASTEXITCODE)"
     }
 
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-        -Mode test `
-        -Artifact $cleanPath
+    & cargo xtask authenticode verify --mode test --artifact $cleanPath
     if ($LASTEXITCODE -ne 0) {
         throw "Clean signed PE failed independent Authenticode verification (exit $LASTEXITCODE)"
     }
@@ -78,10 +75,7 @@ try {
     $tamperedBytes[$mutationOffset] = $tamperedBytes[$mutationOffset] -bxor 1
     [IO.File]::WriteAllBytes($tamperedPath, $tamperedBytes)
 
-    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot 'verify_v4_authenticode.ps1') `
-        -Mode test `
-        -Artifact $tamperedPath
+    & cargo xtask authenticode verify --mode test --artifact $tamperedPath
     $tamperedExitCode = $LASTEXITCODE
     if ($tamperedExitCode -eq 0) {
         throw 'Tampered signed PE unexpectedly passed independent Authenticode verification'

@@ -24,70 +24,103 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
     let jobs = workflow_job_blocks(source);
     let static_job = jobs
         .iter()
-        .find(|(job_id, _)| job_id == "static")
+        .find(|(id, _)| id == "static")
         .map(|(_, block)| block)
         .ok_or_else(|| "CI is missing the static job block".to_owned())?;
-    let release_contract = jobs
+    let release = jobs
         .iter()
-        .find(|(job_id, _)| job_id == "release_contract")
+        .find(|(id, _)| id == "release_contract")
         .map(|(_, block)| block)
         .ok_or_else(|| "CI is missing the release_contract job block".to_owned())?;
     let status = jobs
         .iter()
-        .find(|(job_id, _)| job_id == "status")
+        .find(|(id, _)| id == "status")
         .map(|(_, block)| block)
         .ok_or_else(|| "CI is missing the status job block".to_owned())?;
     const FULL_STATIC_CHECK: &str = "cargo xtask check static --skip-supply-chain";
-    if static_job.matches(FULL_STATIC_CHECK).count() != 1 {
+    if static_job.matches(FULL_STATIC_CHECK).count() != 1 || release.contains(FULL_STATIC_CHECK) {
+        return Err("the independent static check must run exactly once".to_owned());
+    }
+    if !release.lines().any(|line| line.trim() == "needs: changes")
+        || release
+            .lines()
+            .any(|line| line.trim().starts_with("needs:") && line.contains("static"))
+    {
+        return Err("release_contract must remain parallel with static".to_owned());
+    }
+    let windows_owner_tests = workflow_step_blocks(release)
+        .into_iter()
+        .find(|(name, _)| name == "Run Rust NSIS and registry owner regression tests")
+        .map(|(_, block)| block)
+        .ok_or_else(|| {
+            "release_contract is missing Rust NSIS and registry owner regression tests".to_owned()
+        })?;
+    for marker in [
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml || {",
+        "cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {",
+        "Rust NSIS/updater harness tests failed with exit code ${exit_code}",
+        "Rust Windows registry/process ownership tests failed with exit code ${exit_code}",
+    ] {
+        if !windows_owner_tests.contains(marker) {
+            return Err(format!(
+                "Windows Rust owner test step is missing Bash failure handling `{marker}`"
+            ));
+        }
+    }
+    if windows_owner_tests.matches("exit_code=$?").count() != 2
+        || windows_owner_tests.matches("exit \"$exit_code\"").count() != 2
+        || windows_owner_tests.contains("$LASTEXITCODE")
+        || !release.lines().any(|line| line.trim() == "shell: bash")
+    {
         return Err(
-            "static job must contain exactly one full static verification invocation".to_owned(),
+            "Windows Rust owner test step must use the release job's Bash shell and status semantics"
+                .to_owned(),
         );
     }
-    if release_contract.contains(FULL_STATIC_CHECK) {
-        return Err("release_contract must not repeat the full static verification".to_owned());
-    }
-    if !release_contract
-        .lines()
-        .any(|line| line.trim() == "needs: changes")
-    {
-        return Err("release_contract must remain directly parallel with static".to_owned());
-    }
-    if release_contract.lines().any(|line| {
-        let trimmed = line.trim();
-        trimmed.starts_with("needs:") && trimmed.contains("static")
-    }) {
-        return Err("release_contract must not depend on static".to_owned());
-    }
+    let static_result_marker = ["STATIC_RESULT: $", "{{ needs.static.result }}"].concat();
+    let release_result_marker = [
+        "RELEASE_CONTRACT_RESULT: $",
+        "{{ needs.release_contract.result }}",
+    ]
+    .concat();
     for marker in [
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
-        "STATIC_RESULT: ${{ needs.static.result }}",
-        "RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}",
+        "cargo xtask release-v4 self-test",
+        "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests",
+        static_result_marker.as_str(),
+        release_result_marker.as_str(),
         r#"if [[ "$STATIC_REQUIRED" == "true" ]]; then"#,
         r#"[[ "$STATIC_RESULT" == "success" ]]"#,
         r#"if [[ "$RELEASE_REQUIRED" == "true" ]]; then"#,
         r#"[[ "$RELEASE_CONTRACT_RESULT" == "success" ]]"#,
     ] {
-        if !status.contains(marker) {
+        if !source.contains(marker) {
             return Err(format!(
-                "status gate is missing its independent static/release assertion: {marker}"
+                "CI is missing Rust release regression or status marker: {marker}"
             ));
         }
     }
-    for marker in [
-        "name: Run V4 release Latest guard behavioral test",
-        "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1",
-        "name: Run V4 post-publication transaction behavioral test",
-        "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1",
+    let marker = "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]";
+    if !status.contains(marker) {
+        return Err(format!(
+            "status gate is missing independent assertion: {marker}"
+        ));
+    }
+    for forbidden in [
+        "GH_TOKEN:",
+        "scripts/test_v4_release_pipeline.ps1",
+        "scripts/test_v4_post_publication_transaction.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+        "scripts/ci_v4_release_latest_guard.ps1",
+        "https://api.github.com/repos/pumni/Sky-Auto-Player/releases",
     ] {
-        if !release_contract.contains(marker) {
+        if release.contains(forbidden) {
             return Err(format!(
-                "release_contract job is missing the behavioral regression marker: {marker}"
+                "release_contract must not call production release APIs or retired PowerShell tests: {forbidden}"
             ));
         }
     }
     Ok(())
 }
-
 pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     const MINT_STEP: &str = "Mint release-metadata GitHub App token before publication";
     const PROBE_STEP: &str = "Probe release-metadata App access before publication";
@@ -160,6 +193,11 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
     if probe.contains("GH_TOKEN: ${{ github.token }}") {
         return Err("metadata App access probe must not use the repository GITHUB_TOKEN".into());
+    }
+    if !probe.contains("cargo xtask release-v4 probe-metadata-token")
+        || probe.contains("probe_v4_metadata_app_access.ps1")
+    {
+        return Err("metadata App access probe must use the Rust read-only token probe".into());
     }
     if promote.contains("GH_TOKEN: ${{ github.token }}") {
         return Err("PromoteMetadata must not use the repository GITHUB_TOKEN".into());
@@ -307,7 +345,7 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
         "V4_UPDATER_PRIVATE_KEY_PATH",
         "RUNNER_TEMP",
         "verify_v4_release_runner.ps1",
-        "cleanup_v4_release_state.ps1",
+        "cargo xtask release-v4 cleanup",
         "persist-credentials: false",
     ] {
         if !source.contains(marker) {
@@ -332,6 +370,12 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
 }
 
 pub(super) fn release_runner_contract(root: &Path) -> Result<()> {
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
+    v4_release_contract_ci_wiring(&ci)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    let release = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?;
+    validate_metadata_app_token_scope(&release)?;
+
     let workflows_root = root.join(".github/workflows");
     let mut observed = BTreeSet::new();
     for entry in WalkDir::new(&workflows_root) {
@@ -506,7 +550,7 @@ jobs:
       - name: Probe release-metadata App access before publication
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-        run: scripts/probe_v4_metadata_app_access.ps1
+        run: cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT
       - name: Publish the qualified candidate immutably
         env:
           GH_TOKEN: ${{ github.token }}
@@ -576,8 +620,9 @@ jobs:
     }
 
     #[test]
-    fn release_contract_ci_wiring_requires_both_behavioral_regressions() {
-        let source = r#"
+    fn release_contract_ci_wiring_requires_rust_mock_tests_and_independent_static_gate() {
+        let source = format!(
+            r#"
 jobs:
   static:
     needs: changes
@@ -586,16 +631,30 @@ jobs:
   release_contract:
     name: V4 release contract acceptance
     needs: changes
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Run V4 release Latest guard behavioral test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1
-      - name: Run V4 post-publication transaction behavioral test
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1
+      - name: Rust v4 release transaction mock tests
+        run: cargo xtask release-v4 self-test
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests
+      - name: Run Rust NSIS and registry owner regression tests
+        run: |
+          cargo test --locked --manifest-path rust/xtask/Cargo.toml || {{
+            exit_code=$?
+            echo "Rust NSIS/updater harness tests failed with exit code ${{exit_code}}" >&2
+            exit "$exit_code"
+          }}
+          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {{
+            exit_code=$?
+            echo "Rust Windows registry/process ownership tests failed with exit code ${{exit_code}}" >&2
+            exit "$exit_code"
+          }}
   status:
     needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
     env:
-      STATIC_RESULT: ${{ needs.static.result }}
-      RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
+      STATIC_RESULT: {dollar}{{{{ needs.static.result }}}}
+      RELEASE_CONTRACT_RESULT: {dollar}{{{{ needs.release_contract.result }}}}
     run: |
       if [[ "$STATIC_REQUIRED" == "true" ]]; then
         [[ "$STATIC_RESULT" == "success" ]]
@@ -603,37 +662,39 @@ jobs:
       if [[ "$RELEASE_REQUIRED" == "true" ]]; then
         [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
       fi
-"#;
-        assert!(v4_release_contract_ci_wiring(source).is_ok());
-        let without_static_check = source.replace(
+"#,
+            dollar = '$'
+        );
+        assert!(v4_release_contract_ci_wiring(&source).is_ok());
+        for marker in [
+            "cargo xtask release-v4 self-test",
+            "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests",
+        ] {
+            let without = source.replace(marker, "removed");
+            assert!(v4_release_contract_ci_wiring(&without).is_err());
+        }
+        let powershell_status = source.replace(
+            "exit_code=$?",
+            "if ($LASTEXITCODE -ne 0) { throw \"test failed\" }",
+        );
+        assert!(v4_release_contract_ci_wiring(&powershell_status).is_err());
+        let swallowed_failure =
+            source.replace("exit \"$exit_code\"", "echo \"failure was ignored\"");
+        assert!(v4_release_contract_ci_wiring(&swallowed_failure).is_err());
+        let serialized = source.replace(
+            "  release_contract:\n    name: V4 release contract acceptance\n    needs: changes",
+            "  release_contract:\n    name: V4 release contract acceptance\n    needs: static",
+        );
+        assert!(v4_release_contract_ci_wiring(&serialized).is_err());
+        let no_static = source.replace(
             "cargo xtask check static --skip-supply-chain",
             "cargo xtask check static",
         );
-        assert!(v4_release_contract_ci_wiring(&without_static_check).is_err());
-        let duplicated_release_check = source.replace(
-            "      - name: Run V4 release Latest guard behavioral test",
-            "      - run: cargo xtask check static --skip-supply-chain\n      - name: Run V4 release Latest guard behavioral test",
+        assert!(v4_release_contract_ci_wiring(&no_static).is_err());
+        let production_api = source.replace(
+            "cargo xtask release-v4 self-test",
+            "gh api repos/pumni/Sky-Auto-Player/releases",
         );
-        assert!(v4_release_contract_ci_wiring(&duplicated_release_check).is_err());
-        let serialized_release_contract = source.replace(
-            "    needs: changes\n    steps:\n      - name: Run V4 release Latest guard behavioral test",
-            "    needs: static\n    steps:\n      - name: Run V4 release Latest guard behavioral test",
-        );
-        assert!(v4_release_contract_ci_wiring(&serialized_release_contract).is_err());
-        let without_static_status_assertion = source.replace(
-            "STATIC_RESULT: ${{ needs.static.result }}",
-            "STATIC_RESULT: ${{ needs.other.result }}",
-        );
-        assert!(v4_release_contract_ci_wiring(&without_static_status_assertion).is_err());
-        for marker in [
-            "scripts/test_ci_v4_release_latest_guard.ps1",
-            "scripts/test_v4_post_publication_transaction.ps1",
-        ] {
-            let without_marker = source.replace(marker, "scripts/removed_behavioral_test.ps1");
-            assert!(
-                v4_release_contract_ci_wiring(&without_marker).is_err(),
-                "removing {marker} must fail the release contract wiring"
-            );
-        }
+        assert!(v4_release_contract_ci_wiring(&production_api).is_err());
     }
 }
