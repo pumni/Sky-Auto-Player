@@ -3344,6 +3344,7 @@ dependencies = [
  "ico 0.6.0",
  "minisign-verify",
  "roxmltree",
+ "rustix",
  "semver",
  "serde",
  "serde_json",

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{Result, credential_cli, process, release_metadata, repo, version};
+use crate::{Result, process, release_handoff, release_metadata, release_signing, repo, version};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,11 +10,11 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod recovery;
+
 pub const REPOSITORY: &str = "pumni/Sky-Auto-Player";
 const RELEASE_WORKFLOW_REF: &str =
     "pumni/Sky-Auto-Player/.github/workflows/release-v4.yml@refs/heads/main";
-const REHEARSE_WORKFLOW_REF: &str =
-    "pumni/Sky-Auto-Player/.github/workflows/rehearse-v4.yml@refs/heads/main";
 const BOOTSTRAP_PATH: &str = ".release-metadata/README.md";
 const BOOTSTRAP_CONTENT: &str = "# Sky Auto Player v4 release metadata\n\nbootstrap_contract: sky-auto-player-v4-release-metadata-v1\nThis orphan branch contains deployment-state metadata only.\nThe channel latest.json files are created only by qualified immutable release promotion.";
 const EVIDENCE_NAMES: [&str; 6] = [
@@ -26,10 +26,15 @@ const EVIDENCE_NAMES: [&str; 6] = [
     "SBOM.spdx.json",
 ];
 const RELEASE_BUILD_STEP_TIMEOUT: Duration = Duration::from_secs(90 * 60);
+const RELEASE_DEPENDENCY_STEP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const RELEASE_DEFENDER_STEP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const ATTESTATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const RAW_METADATA_RETRY_BUDGET: Duration = Duration::from_secs(60);
 const RAW_METADATA_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+pub(crate) fn linux_process_smoke(args: &[String]) -> Result<()> {
+    recovery::linux_process_smoke(args)
+}
 
 fn decode_api_response(method: &str, endpoint: &str, bytes: &[u8]) -> Result<Option<Value>> {
     if bytes.is_empty() {
@@ -62,6 +67,7 @@ struct Context {
     source_sha: String,
     workflow_sha: String,
     run_id: String,
+    run_attempt: u32,
     created_at: String,
 }
 
@@ -70,6 +76,7 @@ struct RuntimeIdentity {
     github_sha: String,
     github_repository: String,
     github_run_id: String,
+    github_run_attempt: String,
     github_event_name: String,
     github_ref: String,
     github_workflow_ref: String,
@@ -81,6 +88,7 @@ impl RuntimeIdentity {
             env::var("GITHUB_SHA").ok(),
             env::var("GITHUB_REPOSITORY").ok(),
             env::var("GITHUB_RUN_ID").ok(),
+            env::var("GITHUB_RUN_ATTEMPT").ok(),
             env::var("GITHUB_EVENT_NAME").ok(),
             env::var("GITHUB_REF").ok(),
             env::var("GITHUB_WORKFLOW_REF").ok(),
@@ -91,6 +99,7 @@ impl RuntimeIdentity {
         github_sha: Option<String>,
         github_repository: Option<String>,
         github_run_id: Option<String>,
+        github_run_attempt: Option<String>,
         github_event_name: Option<String>,
         github_ref: Option<String>,
         github_workflow_ref: Option<String>,
@@ -99,6 +108,7 @@ impl RuntimeIdentity {
             github_sha: github_sha.ok_or("GITHUB_SHA is required")?,
             github_repository: github_repository.ok_or("GITHUB_REPOSITORY is required")?,
             github_run_id: github_run_id.ok_or("GITHUB_RUN_ID is required")?,
+            github_run_attempt: github_run_attempt.ok_or("GITHUB_RUN_ATTEMPT is required")?,
             github_event_name: github_event_name.ok_or("GITHUB_EVENT_NAME is required")?,
             github_ref: github_ref.ok_or("GITHUB_REF is required")?,
             github_workflow_ref: github_workflow_ref.ok_or("GITHUB_WORKFLOW_REF is required")?,
@@ -110,17 +120,21 @@ fn validate_runtime_identity(
     context: &Context,
     workflow_sha_arg: Option<&str>,
     runtime: &RuntimeIdentity,
-    allow_rehearsal: bool,
 ) -> Result<()> {
     let workflow_sha_arg =
         workflow_sha_arg.ok_or("--workflow-sha is required for this release phase")?;
-    let workflow_ref_valid = runtime.github_workflow_ref == RELEASE_WORKFLOW_REF
-        || (allow_rehearsal && runtime.github_workflow_ref == REHEARSE_WORKFLOW_REF);
+    let run_attempt = runtime
+        .github_run_attempt
+        .parse::<u32>()
+        .map_err(|_| "GITHUB_RUN_ATTEMPT must be a positive decimal integer")?;
     if runtime.github_repository != context.repository
         || runtime.github_event_name != "workflow_dispatch"
         || runtime.github_ref != "refs/heads/main"
-        || !workflow_ref_valid
+        || runtime.github_workflow_ref != RELEASE_WORKFLOW_REF
         || runtime.github_run_id != context.run_id
+        || run_attempt != context.run_attempt
+        || run_attempt == 0
+        || run_attempt > 100
         || !runtime
             .github_sha
             .eq_ignore_ascii_case(&context.workflow_sha)
@@ -148,7 +162,6 @@ struct CandidateRecord {
     role: String,
     size: u64,
     sha256: String,
-    source_path: String,
     state_path: String,
 }
 
@@ -156,10 +169,15 @@ struct CandidateRecord {
 #[serde(deny_unknown_fields)]
 struct CandidateManifest {
     schema_version: u32,
+    repository: String,
     source_sha: String,
+    workflow_sha: String,
+    run_id: String,
+    run_attempt: u32,
     version: String,
     channel: String,
     tag: String,
+    unsigned_handoff: release_handoff::UnsignedArtifactManifest,
     qualification_assets: Vec<CandidateRecord>,
     public_assets: Vec<CandidateRecord>,
 }
@@ -175,6 +193,7 @@ struct ReleaseState {
     source_sha: String,
     workflow_sha: String,
     run_id: String,
+    run_attempt: u32,
     phase: Phase,
     attested: bool,
     qualified_after_download: bool,
@@ -187,7 +206,6 @@ struct ReleaseState {
 #[derive(Clone, Debug)]
 struct Options {
     state_root: PathBuf,
-    key_path: Option<PathBuf>,
     workflow_sha: Option<String>,
 }
 
@@ -240,7 +258,71 @@ trait Transport {
     fn raw_get(&mut self, endpoint: &str) -> Result<Option<Vec<u8>>>;
 }
 
-struct GhTransport;
+const METADATA_WRITE_TOKEN_ENV: &str = "V4_METADATA_WRITE_TOKEN";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryTokenClass {
+    ReadOnly,
+    MetadataWrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SelectedRecoveryToken<'a> {
+    class: RecoveryTokenClass,
+    value: &'a str,
+}
+
+struct RecoveryCredentials {
+    read_only_token: String,
+    metadata_write_token: Option<String>,
+}
+
+impl RecoveryCredentials {
+    fn new(read_only_token: String, metadata_write_token: Option<String>) -> Result<Self> {
+        let valid_token = |token: &str| {
+            !token.is_empty() && !token.bytes().any(|byte| byte.is_ascii_whitespace())
+        };
+        if !valid_token(&read_only_token)
+            || metadata_write_token
+                .as_deref()
+                .is_some_and(|token| !valid_token(token))
+        {
+            return Err("metadata recovery GitHub credentials are malformed".into());
+        }
+        Ok(Self {
+            read_only_token,
+            metadata_write_token,
+        })
+    }
+
+    fn select(&self, method: &str, endpoint: &str) -> Result<SelectedRecoveryToken<'_>> {
+        if method.eq_ignore_ascii_case("GET") {
+            return Ok(SelectedRecoveryToken {
+                class: RecoveryTokenClass::ReadOnly,
+                value: &self.read_only_token,
+            });
+        }
+        let stable_contents_endpoint =
+            format!("repos/{REPOSITORY}/contents/channels/stable/latest.json");
+        if method.eq_ignore_ascii_case("PUT") && endpoint == stable_contents_endpoint {
+            return Ok(SelectedRecoveryToken {
+                class: RecoveryTokenClass::MetadataWrite,
+                value: self
+                    .metadata_write_token
+                    .as_deref()
+                    .ok_or("metadata recovery stable write token is unavailable")?,
+            });
+        }
+        Err(
+            "metadata recovery transport permits only GitHub reads and one stable metadata PUT"
+                .into(),
+        )
+    }
+}
+
+struct GhTransport {
+    recovery_credentials: Option<RecoveryCredentials>,
+}
 
 fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
     let endpoint = endpoint.strip_suffix("{?name,label}").unwrap_or(endpoint);
@@ -287,17 +369,39 @@ fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
 
 impl GhTransport {
     fn new() -> Self {
-        Self
+        Self {
+            recovery_credentials: None,
+        }
     }
 
-    fn invoke(&self, args: &[String], payload: Option<&[u8]>) -> Result<Vec<u8>> {
-        self.invoke_with_timeout(args, payload, Duration::from_secs(60))
+    fn for_metadata_recovery(
+        read_only_token: String,
+        metadata_write_token: Option<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            recovery_credentials: Some(RecoveryCredentials::new(
+                read_only_token,
+                metadata_write_token,
+            )?),
+        })
+    }
+
+    fn selected_recovery_token(
+        &self,
+        method: &str,
+        endpoint: &str,
+    ) -> Result<Option<SelectedRecoveryToken<'_>>> {
+        self.recovery_credentials
+            .as_ref()
+            .map(|credentials| credentials.select(method, endpoint))
+            .transpose()
     }
 
     fn invoke_with_timeout(
         &self,
         args: &[String],
         payload: Option<&[u8]>,
+        selected_token: Option<&str>,
         timeout: Duration,
     ) -> Result<Vec<u8>> {
         let input_path = if let Some(input) = payload {
@@ -319,17 +423,33 @@ impl GhTransport {
         ) {
             *input_arg = path.to_string_lossy().into_owned();
         }
-        let output = process::capture_owned_timeout_filtered(
-            std::ffi::OsStr::new("gh"),
-            &args,
-            &repo::root(),
-            &[
-                ("GH_PAGER".to_owned(), "cat".to_owned()),
-                ("PAGER".to_owned(), "cat".to_owned()),
-            ],
-            &[],
-            timeout,
-        );
+        let output = if self.recovery_credentials.is_some() {
+            let token = selected_token
+                .ok_or("metadata recovery GitHub child requires an operation-selected token")?;
+            process::capture_owned_timeout_runtime_only(
+                std::ffi::OsStr::new("gh"),
+                &args,
+                &repo::root(),
+                &[
+                    ("GH_TOKEN".to_owned(), token.to_owned()),
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                timeout,
+            )
+        } else {
+            process::capture_owned_timeout_filtered(
+                std::ffi::OsStr::new("gh"),
+                &args,
+                &repo::root(),
+                &[
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                &[],
+                timeout,
+            )
+        };
         let cleanup = input_path.map(fs::remove_file).transpose();
         let output = match (output, cleanup) {
             (Ok(output), Ok(_)) => output,
@@ -361,19 +481,41 @@ impl GhTransport {
         Ok(output.stdout)
     }
 
-    fn invoke_to_file(&self, args: &[String], destination: &Path) -> Result<()> {
-        let output = process::capture_owned_timeout_to_file_filtered(
-            std::ffi::OsStr::new("gh"),
-            args,
-            &repo::root(),
-            &[
-                ("GH_PAGER".to_owned(), "cat".to_owned()),
-                ("PAGER".to_owned(), "cat".to_owned()),
-            ],
-            &[],
-            destination,
-            Duration::from_secs(10 * 60),
-        )?;
+    fn invoke_to_file(
+        &self,
+        args: &[String],
+        destination: &Path,
+        selected_token: Option<&str>,
+    ) -> Result<()> {
+        let output = if self.recovery_credentials.is_some() {
+            let token = selected_token
+                .ok_or("metadata recovery asset download requires its read-only GitHub token")?;
+            process::capture_owned_timeout_to_file_runtime_only(
+                std::ffi::OsStr::new("gh"),
+                args,
+                &repo::root(),
+                &[
+                    ("GH_TOKEN".to_owned(), token.to_owned()),
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                destination,
+                Duration::from_secs(10 * 60),
+            )?
+        } else {
+            process::capture_owned_timeout_to_file_filtered(
+                std::ffi::OsStr::new("gh"),
+                args,
+                &repo::root(),
+                &[
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                &[],
+                destination,
+                Duration::from_secs(10 * 60),
+            )?
+        };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Box::new(HttpFailure {
@@ -404,7 +546,13 @@ impl GhTransport {
             args.extend(["--input".to_owned(), "-".to_owned()]);
         }
         let payload = body.map(serde_json::to_vec).transpose()?;
-        match self.invoke(&args, payload.as_deref()) {
+        let selected = self.selected_recovery_token(method, endpoint)?;
+        match self.invoke_with_timeout(
+            &args,
+            payload.as_deref(),
+            selected.map(|credential| credential.value),
+            Duration::from_secs(60),
+        ) {
             Ok(bytes) => decode_api_response(method, endpoint, &bytes),
             Err(error)
                 if error
@@ -434,6 +582,9 @@ impl Transport for GhTransport {
     }
 
     fn upload(&mut self, endpoint: &str, name: &str, path: &Path) -> Result<()> {
+        if self.recovery_credentials.is_some() {
+            return Err("metadata recovery transport cannot upload release assets".into());
+        }
         if !path.is_file() {
             return Err("release upload source is not a regular file".into());
         }
@@ -460,7 +611,7 @@ impl Transport for GhTransport {
                 if let Some(input) = request.iter_mut().find(|arg| arg.as_str() == "-") {
                     *input = path.to_string_lossy().into_owned();
                 }
-                self.invoke_with_timeout(&request, None, Duration::from_secs(10 * 60))
+                self.invoke_with_timeout(&request, None, None, Duration::from_secs(10 * 60))
                     .map(|_| ())
             },
             std::thread::sleep,
@@ -468,6 +619,7 @@ impl Transport for GhTransport {
     }
 
     fn download(&mut self, endpoint: &str, destination: &Path) -> Result<()> {
+        let selected = self.selected_recovery_token("GET", endpoint)?;
         let args = vec![
             "api".to_owned(),
             "--hostname".to_owned(),
@@ -481,7 +633,11 @@ impl Transport for GhTransport {
                 if destination.exists() {
                     fs::remove_file(destination)?;
                 }
-                match self.invoke_to_file(&args, destination) {
+                match self.invoke_to_file(
+                    &args,
+                    destination,
+                    selected.map(|credential| credential.value),
+                ) {
                     Ok(()) => Ok(()),
                     Err(error) => {
                         let cleanup_error = if destination.exists() {
@@ -538,14 +694,24 @@ impl Transport for GhTransport {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-        let output = process::capture_owned_timeout_filtered(
-            std::ffi::OsStr::new(curl),
-            &args,
-            &repo::root(),
-            &[],
-            &[],
-            Duration::from_secs(15),
-        )?;
+        let output = if self.recovery_credentials.is_some() {
+            process::capture_owned_timeout_runtime_only(
+                std::ffi::OsStr::new(curl),
+                &args,
+                &repo::root(),
+                &[],
+                Duration::from_secs(15),
+            )?
+        } else {
+            process::capture_owned_timeout_filtered(
+                std::ffi::OsStr::new(curl),
+                &args,
+                &repo::root(),
+                &[],
+                &[],
+                Duration::from_secs(15),
+            )?
+        };
         let split = output
             .stdout
             .windows(4)
@@ -580,7 +746,7 @@ fn extract_http_status(stderr: &str) -> Option<u16> {
 
 fn safe_cli_error(stderr: &str) -> String {
     let mut result = stderr.trim().to_owned();
-    for secret_name in ["GH_TOKEN", "GITHUB_TOKEN"] {
+    for secret_name in ["GH_TOKEN", "GITHUB_TOKEN", METADATA_WRITE_TOKEN_ENV] {
         if let Ok(secret) = env::var(secret_name)
             && secret.len() > 4
         {
@@ -642,20 +808,25 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     if command == "self-test" {
         return self_test();
     }
+    if command == "cleanup-signing-material" {
+        return release_signing::cleanup_run_material();
+    }
     if command == "doctor" {
         return doctor(root, &args[1..]);
     }
+    if matches!(
+        command,
+        "metadata-recovery-plan" | "metadata-recovery-apply"
+    ) {
+        return recovery::run(root, command, &args[1..]);
+    }
     let mut state_root = None;
-    let mut key_path = None;
     let mut workflow_sha = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
             "--state-root" => {
                 state_root = Some(PathBuf::from(next_value(args, &mut index, "--state-root")?))
-            }
-            "--key-path" => {
-                key_path = Some(PathBuf::from(next_value(args, &mut index, "--key-path")?))
             }
             "--workflow-sha" => {
                 workflow_sha = Some(next_value(args, &mut index, "--workflow-sha")?)
@@ -668,43 +839,56 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     ensure_state_root(root, &state_root)?;
     let options = Options {
         state_root,
-        key_path,
         workflow_sha,
     };
-    if matches!(
-        command,
-        "build-candidate"
-            | "verify-attestations"
-            | "probe-metadata-token"
-            | "publish-release"
-            | "promote-metadata"
-            | "final-verify"
-    ) {
-        require_runtime_context(root, &options, command == "build-candidate")?;
+    let expected_job = match command {
+        "build-unsigned" => Some("build_unsigned"),
+        "sign-candidate" | "qualify-candidate" => Some("sign_qualify"),
+        "verify-candidate" => Some("attest"),
+        "verify-attestations" | "publish-release" => Some("publish"),
+        "probe-metadata-token" => Some("metadata_probe"),
+        "promote-metadata" => Some("metadata_promote"),
+        "final-verify" => Some("final_verify"),
+        _ => None,
+    };
+    if let Some(expected_job) = expected_job {
+        require_runtime_context(root, &options, expected_job)?;
     }
     let mut transport = GhTransport::new();
     match command {
         "preflight" => preflight(root, &options, &mut transport),
-        "build-candidate" => build_candidate(root, &options),
+        "build-unsigned" => build_unsigned(root, &options),
+        "sign-candidate" => sign_candidate(root, &options),
+        "qualify-candidate" => qualify_candidate(root, &options),
+        "verify-candidate" => verify_candidate_handoff(root, &options),
         "verify-attestations" => verify_attestations(root, &options),
         "publish-release" => publish_release(root, &options, &mut transport),
         "promote-metadata" => promote_metadata(root, &options, &mut transport),
         "final-verify" => final_verify(root, &options, &mut transport),
         "cleanup" => cleanup_local_state(root, &options),
-        "probe-metadata-token" => probe_metadata_token(&mut transport),
+        "probe-metadata-token" => {
+            let contents_permission =
+                env::var("V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION")
+                    .map_err(|_| "pre-publication metadata App permission evidence is required")?;
+            probe_metadata_token(&contents_permission, &mut transport)
+        }
         _ => Err(format!("unknown release-v4 phase: {command}").into()),
     }
 }
 
-fn require_runtime_context(root: &Path, options: &Options, allow_rehearsal: bool) -> Result<()> {
+fn require_runtime_context(root: &Path, options: &Options, expected_job: &str) -> Result<()> {
     let context = read_context(root, options)?;
+    let head = repo::git_head(root, true)?;
+    if !head.eq_ignore_ascii_case(&context.source_sha) {
+        return Err("release phase checkout is not the exact clean source SHA".into());
+    }
     let runtime = RuntimeIdentity::from_environment()?;
-    validate_runtime_identity(
-        &context,
-        options.workflow_sha.as_deref(),
-        &runtime,
-        allow_rehearsal,
-    )
+    validate_runtime_identity(&context, options.workflow_sha.as_deref(), &runtime)?;
+    let job = env::var("GITHUB_JOB").map_err(|_| "GITHUB_JOB is required for release phases")?;
+    if job != expected_job {
+        return Err(format!("release phase requires canonical workflow job {expected_job}").into());
+    }
+    Ok(())
 }
 
 fn next_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -724,9 +908,23 @@ fn ensure_state_root(root: &Path, state_root: &Path) -> Result<()> {
     let runner_temp = env::var_os("RUNNER_TEMP")
         .ok_or("RUNNER_TEMP is required for release transaction state")?;
     let runner_temp = fs::canonicalize(PathBuf::from(runner_temp))?;
-    if state_root == runner_temp || !state_root.starts_with(&runner_temp) {
+    let run_id = env::var("GITHUB_RUN_ID").map_err(|_| "GITHUB_RUN_ID is required")?;
+    let run_attempt =
+        env::var("GITHUB_RUN_ATTEMPT").map_err(|_| "GITHUB_RUN_ATTEMPT is required")?;
+    if run_id.is_empty()
+        || !run_id.bytes().all(|byte| byte.is_ascii_digit())
+        || run_attempt.is_empty()
+        || !run_attempt.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("release state root run identity is malformed".into());
+    }
+    let expected = runner_temp.join(format!("sky-v4-release-{run_id}-{run_attempt}"));
+    if state_root != fs::canonicalize(expected)?
+        || state_root == runner_temp
+        || state_root.parent() != Some(runner_temp.as_path())
+    {
         return Err(
-            "release state root must remain in a dedicated RUNNER_TEMP child directory".into(),
+            "release state root must be the exact run-and-attempt child of RUNNER_TEMP".into(),
         );
     }
     Ok(())
@@ -744,13 +942,13 @@ fn identity(root: &Path, workflow_sha: Option<&str>) -> Result<Context> {
     if env::var("GITHUB_REF").ok().as_deref() != Some("refs/heads/main") {
         return Err("official v4 release must run from the canonical main ref".into());
     }
+    if env::var("GITHUB_JOB").ok().as_deref() != Some("prepare") {
+        return Err("release preflight must run from the prepare job".into());
+    }
     let workflow_ref = env::var("GITHUB_WORKFLOW_REF")
         .map_err(|_| "GITHUB_WORKFLOW_REF is required for v4 qualification")?;
-    if workflow_ref != RELEASE_WORKFLOW_REF && workflow_ref != REHEARSE_WORKFLOW_REF {
-        return Err(
-            "v4 qualification must run from the canonical release or rehearsal workflow on main"
-                .into(),
-        );
+    if workflow_ref != RELEASE_WORKFLOW_REF {
+        return Err("v4 release must run from the canonical release workflow on main".into());
     }
     let source_sha = git_text(root, &["rev-parse", "HEAD"])?.to_ascii_lowercase();
     if source_sha.len() != 40 || !source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -788,8 +986,15 @@ fn identity(root: &Path, workflow_sha: Option<&str>) -> Result<Context> {
     if run_id.is_empty() || !run_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("workflow run identity is malformed".into());
     }
+    let run_attempt = env::var("GITHUB_RUN_ATTEMPT")
+        .map_err(|_| "GITHUB_RUN_ATTEMPT is required for a production release")?
+        .parse::<u32>()
+        .map_err(|_| "workflow run attempt is malformed")?;
+    if run_attempt == 0 || run_attempt > 100 {
+        return Err("workflow run attempt is outside the supported bound".into());
+    }
     Ok(Context {
-        schema_version: 1,
+        schema_version: 2,
         repository: repository.to_owned(),
         version: version_text,
         channel: channel.to_owned(),
@@ -798,6 +1003,7 @@ fn identity(root: &Path, workflow_sha: Option<&str>) -> Result<Context> {
         source_sha,
         workflow_sha,
         run_id,
+        run_attempt,
         created_at: utc_now(),
     })
 }
@@ -859,7 +1065,7 @@ fn read_context(root: &Path, options: &Options) -> Result<Context> {
 }
 
 fn validate_context(root: &Path, options: &Options, context: &Context) -> Result<()> {
-    if context.schema_version != 1 || context.repository != REPOSITORY {
+    if context.schema_version != 2 || context.repository != REPOSITORY {
         return Err("release context has an unsupported schema or repository".into());
     }
     if context.tag != format!("v{}", context.version)
@@ -888,7 +1094,12 @@ fn validate_context(root: &Path, options: &Options, context: &Context) -> Result
     {
         return Err("release workflow SHA differs from release-context.json".into());
     }
-    if context.run_id.is_empty() || !context.run_id.bytes().all(|byte| byte.is_ascii_digit()) {
+    if context.run_id.is_empty()
+        || context.run_id.len() > 20
+        || !context.run_id.bytes().all(|byte| byte.is_ascii_digit())
+        || context.run_attempt == 0
+        || context.run_attempt > 100
+    {
         return Err("release context run ID must contain decimal digits only".into());
     }
     Ok(())
@@ -972,8 +1183,8 @@ fn preflight(root: &Path, options: &Options, transport: &mut dyn Transport) -> R
     validate_stable_latest(&latest)?;
     let context_path = options.state_root.join("release-context.json");
     write_json_atomic(&context_path, &context)?;
-    let sentinel = json!({"schema_version":1,"repository":REPOSITORY,"run_id":context.run_id,"source_sha":context.source_sha});
-    write_json_atomic(&options.state_root.join(".release-owner.json"), &sentinel)?;
+    let sentinel = json!({"schema_version":1,"repository":REPOSITORY,"run_id":context.run_id,"run_attempt":context.run_attempt,"source_sha":context.source_sha});
+    write_json_atomic(&options.state_root.join("release-owner.json"), &sentinel)?;
     write_json_atomic(
         &options.state_root.join("preflight-evidence.json"),
         &json!({
@@ -990,72 +1201,228 @@ fn preflight(root: &Path, options: &Options, transport: &mut dyn Transport) -> R
     Ok(())
 }
 
-fn build_candidate(root: &Path, options: &Options) -> Result<()> {
+fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let context = read_context(root, options)?;
-    let key_path = options
-        .key_path
-        .as_ref()
-        .ok_or("BuildCandidate requires --key-path")?;
-    let key_path =
-        fs::canonicalize(key_path).map_err(|_| "updater private key path is not a file")?;
-    let workspace = fs::canonicalize(root)?;
-    if key_path.starts_with(&workspace) || !key_path.is_file() {
-        return Err("updater private key must be a file outside the workspace".into());
+    if env::var_os("V4_TAURI_UPDATER_PRIVATE_KEY").is_some()
+        || env::var_os("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD").is_some()
+    {
+        return Err("unsigned build job must not receive production signing secrets".into());
     }
-    for name in [
-        "TAURI_SIGNING_PRIVATE_KEY",
-        "TAURI_SIGNING_PRIVATE_KEY_PATH",
-        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-    ] {
-        if env::var_os(name).is_some_and(|value| !value.is_empty()) {
-            return Err("ambient Tauri updater signing environment is forbidden".into());
-        }
+    let head = repo::git_head(root, true)?;
+    if !head.eq_ignore_ascii_case(&context.source_sha) {
+        return Err("unsigned build checkout differs from the preflight source SHA".into());
     }
     let source_installer = release_metadata::canonical_installer_name(&context.version);
     let source_signature = format!("{source_installer}.sig");
     let dist = root.join("rust/target/dist");
     let bundle = dist.join("bundle/nsis");
     purge_build_outputs(root, &dist, &bundle, &source_installer, &source_signature)?;
-    let credential_args = vec![
-        "run-action".to_owned(),
-        "--action".to_owned(),
-        "build-candidate".to_owned(),
-        "--expected-source-sha".to_owned(),
-        context.source_sha.clone(),
-        "--version".to_owned(),
-        context.version.clone(),
-        "--channel".to_owned(),
-        context.channel.clone(),
-        "--key-path".to_owned(),
-        key_path.to_string_lossy().into_owned(),
+    let desktop = root.join("desktop");
+    let remove_env = [
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "TAURI_SIGNING_PRIVATE_KEY_PATH",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "SKY_AUTHENTICODE_PROVIDER",
+        "SKY_AUTHENTICODE_PROVIDER_SCRIPT",
+        "SKY_AUTHENTICODE_PROVIDER_COMMAND",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "SKY_AUTHENTICODE_TEST_THUMBPRINT",
+    ]
+    .map(str::to_owned);
+    let install = process::capture_owned_timeout_filtered(
+        std::ffi::OsStr::new("bun"),
+        &["install".to_owned(), "--frozen-lockfile".to_owned()],
+        &desktop,
+        &[],
+        &remove_env,
+        RELEASE_DEPENDENCY_STEP_TIMEOUT,
+    )?;
+    if !install.status.success() {
+        return Err(format!(
+            "pinned desktop dependency installation failed with {}",
+            install.status
+        )
+        .into());
+    }
+    let config_path = options.state_root.join("unsigned-build-config.json");
+    fs::write(
+        &config_path,
+        br#"{"bundle":{"createUpdaterArtifacts":false}}"#,
+    )?;
+    let build_args = vec![
+        "run".to_owned(),
+        "tauri".to_owned(),
+        "build".to_owned(),
+        "--ci".to_owned(),
+        "--bundles".to_owned(),
+        "nsis".to_owned(),
+        "--config".to_owned(),
+        config_path.to_string_lossy().into_owned(),
+        "--".to_owned(),
+        "--profile".to_owned(),
+        "dist".to_owned(),
     ];
-    credential_cli::run(root, &credential_args)?;
-
-    let candidate_bundle = options.state_root.join("candidate-bundle");
-    let candidate_evidence = options.state_root.join("candidate-evidence");
-    fs::create_dir_all(&candidate_bundle)?;
-    fs::create_dir_all(&candidate_evidence)?;
+    let build_env = vec![(
+        "SKY_AUTHENTICODE_MODE".to_owned(),
+        "unsigned-zero-budget".to_owned(),
+    )];
+    let build = process::capture_owned_timeout_filtered(
+        std::ffi::OsStr::new("bun"),
+        &build_args,
+        &desktop,
+        &build_env,
+        &remove_env,
+        RELEASE_BUILD_STEP_TIMEOUT,
+    )?;
+    if !build.status.success() {
+        return Err(format!(
+            "unsigned Tauri NSIS build failed with {}: {}",
+            build.status,
+            String::from_utf8_lossy(&build.stderr).trim()
+        )
+        .into());
+    }
     let mut actual_bundle = fs::read_dir(&bundle)?
         .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().to_string()))
         .collect::<std::io::Result<Vec<_>>>()?;
     actual_bundle.sort();
-    let mut expected_bundle = vec![source_installer.clone(), source_signature.clone()];
-    expected_bundle.sort();
-    if actual_bundle != expected_bundle {
+    if actual_bundle != [source_installer.clone()] {
         return Err(
-            "Tauri build output must contain exactly the canonical installer and signature".into(),
+            "unsigned Tauri output must contain exactly the canonical installer and no updater sidecar".into(),
         );
     }
-    for name in [&source_installer, &source_signature] {
-        let source = bundle.join(name);
-        let file_type = fs::symlink_metadata(&source)?.file_type();
-        if !file_type.is_file() {
-            return Err(format!("Tauri build output is not a regular file: {name}").into());
-        }
-        fs::copy(source, candidate_bundle.join(name))?;
+    let installer = bundle.join(&source_installer);
+    if !fs::symlink_metadata(&installer)?.file_type().is_file() {
+        return Err("unsigned Tauri installer is not a regular file".into());
+    }
+    let after = repo::git_head(root, true)?;
+    if !after.eq_ignore_ascii_case(&context.source_sha) {
+        return Err(
+            "unsigned candidate build changed the checked-out release source identity".into(),
+        );
+    }
+    let manifest = release_handoff::create_unsigned_handoff(
+        &options.state_root,
+        &installer,
+        &context.version,
+        &context.source_sha,
+        &context.workflow_sha,
+        &context.run_id,
+        context.run_attempt,
+    )?;
+    println!(
+        "V4 Rust unsigned build handoff: PASS (installer={}, size={}, sha256={}, run={} attempt={})",
+        manifest.installer_name,
+        manifest.installer_size,
+        manifest.installer_sha256,
+        manifest.run_id,
+        manifest.run_attempt
+    );
+    Ok(())
+}
+
+fn sign_candidate(root: &Path, options: &Options) -> Result<()> {
+    let context = read_context(root, options)?;
+    let runtime = release_handoff::WorkflowIdentity::from_environment()?;
+    let incoming = options.state_root.join("incoming-unsigned");
+    let expected = release_handoff::ExpectedHandoffIdentity {
+        repository: &context.repository,
+        source_sha: &context.source_sha,
+        workflow_sha: &context.workflow_sha,
+        run_id: &context.run_id,
+        run_attempt: context.run_attempt,
+        version: &context.version,
+    };
+    let (handoff, input_installer) =
+        release_handoff::validate_unsigned_handoff(root, &incoming, &expected, &runtime)?;
+    let input_signature = release_signing::sign_installer(
+        root,
+        &input_installer,
+        &context.version,
+        handoff.installer_size,
+        &handoff.installer_sha256,
+        &context.run_id,
+        context.run_attempt,
+    )?;
+
+    let candidate_bundle = options.state_root.join("candidate-bundle");
+    fs::create_dir(&candidate_bundle)?;
+    let source_installer = handoff.installer_name.clone();
+    let source_signature = format!("{source_installer}.sig");
+    let signature_sha256 = crate::hash::sha256(&input_signature)?;
+    let installer_metadata = fs::symlink_metadata(&input_installer)?;
+    if !installer_metadata.file_type().is_file() {
+        return Err("unsigned handoff installer is not a regular file".into());
     }
     let frozen_installer = candidate_bundle.join(&source_installer);
     let frozen_signature = candidate_bundle.join(&source_signature);
+    fs::copy(&input_installer, &frozen_installer)?;
+    fs::copy(&input_signature, &frozen_signature)?;
+    fs::remove_file(input_signature)?;
+    if crate::hash::sha256(&frozen_installer)? != handoff.installer_sha256 {
+        return Err("frozen installer changed while entering the signing output state".into());
+    }
+    if crate::hash::sha256(&frozen_signature)? != signature_sha256 {
+        return Err(
+            "frozen updater signature changed while entering the signing output state".into(),
+        );
+    }
+    println!(
+        "V4 Rust protected signing phase: PASS (signature verified; unsigned installer SHA-256 preserved)"
+    );
+    Ok(())
+}
+
+fn qualify_candidate(root: &Path, options: &Options) -> Result<()> {
+    let context = read_context(root, options)?;
+    let runtime = release_handoff::WorkflowIdentity::from_environment()?;
+    let incoming = options.state_root.join("incoming-unsigned");
+    let expected = release_handoff::ExpectedHandoffIdentity {
+        repository: &context.repository,
+        source_sha: &context.source_sha,
+        workflow_sha: &context.workflow_sha,
+        run_id: &context.run_id,
+        run_attempt: context.run_attempt,
+        version: &context.version,
+    };
+    let (handoff, _input_installer) =
+        release_handoff::validate_unsigned_handoff(root, &incoming, &expected, &runtime)?;
+    let candidate_bundle = options.state_root.join("candidate-bundle");
+    let candidate_evidence = options.state_root.join("candidate-evidence");
+    let source_installer = handoff.installer_name.clone();
+    let source_signature = format!("{source_installer}.sig");
+    let mut bundle_names = fs::read_dir(&candidate_bundle)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    bundle_names.sort();
+    let mut expected_names = vec![source_installer.clone(), source_signature.clone()];
+    expected_names.sort();
+    if bundle_names != expected_names {
+        return Err(
+            "signed candidate bundle must contain exactly the canonical installer and signature"
+                .into(),
+        );
+    }
+    fs::create_dir(&candidate_evidence)?;
+    let frozen_installer = candidate_bundle.join(&source_installer);
+    let frozen_signature = candidate_bundle.join(&source_signature);
+    let signature_metadata = crate::ci_artifacts::require_regular_file(
+        &frozen_signature,
+        "signed candidate updater signature",
+    )?;
+    if signature_metadata.len() == 0 || signature_metadata.len() > 16 * 1024 {
+        return Err("signed candidate signature is empty or exceeds its size bound".into());
+    }
+    if crate::hash::sha256(&frozen_installer)? != handoff.installer_sha256 {
+        return Err("signed installer differs from the original unsigned build handoff".into());
+    }
+    crate::updater_trust::verify_updater_signature_for_version(
+        &frozen_installer,
+        &frozen_signature,
+        &context.version,
+    )?;
     let frozen_sbom = candidate_evidence.join(EVIDENCE_NAMES[5]);
     let frozen_summary = candidate_evidence.join(EVIDENCE_NAMES[4]);
     let frozen_authenticode = candidate_evidence.join(EVIDENCE_NAMES[2]);
@@ -1083,6 +1450,8 @@ fn build_candidate(root: &Path, options: &Options) -> Result<()> {
             frozen_installer.to_str().ok_or("invalid installer path")?,
             "--signature",
             frozen_signature.to_str().ok_or("invalid signature path")?,
+            "--expected-version",
+            &context.version,
         ],
     )?;
     run_xtask(
@@ -1324,11 +1693,16 @@ fn build_candidate(root: &Path, options: &Options) -> Result<()> {
         );
     }
     let manifest = CandidateManifest {
-        schema_version: 1,
+        schema_version: 2,
+        repository: context.repository.clone(),
         source_sha: context.source_sha.clone(),
+        workflow_sha: context.workflow_sha.clone(),
+        run_id: context.run_id.clone(),
+        run_attempt: context.run_attempt,
         version: context.version.clone(),
         channel: context.channel.clone(),
         tag: context.tag.clone(),
+        unsigned_handoff: handoff,
         qualification_assets: records,
         public_assets,
     };
@@ -1337,7 +1711,7 @@ fn build_candidate(root: &Path, options: &Options) -> Result<()> {
         &manifest,
     )?;
     let state = ReleaseState {
-        schema_version: 1,
+        schema_version: 2,
         repository: context.repository,
         version: context.version,
         channel: context.channel,
@@ -1345,6 +1719,7 @@ fn build_candidate(root: &Path, options: &Options) -> Result<()> {
         source_sha: context.source_sha,
         workflow_sha: context.workflow_sha,
         run_id: context.run_id,
+        run_attempt: context.run_attempt,
         phase: Phase::Ready,
         attested: false,
         qualified_after_download: false,
@@ -1356,6 +1731,46 @@ fn build_candidate(root: &Path, options: &Options) -> Result<()> {
     write_json_atomic(&options.state_root.join("release-state.json"), &state)?;
     println!(
         "V4 Rust candidate qualification: PASS (frozen candidate, exact evidence, updater fixture, Defender, NSIS smoke)"
+    );
+    Ok(())
+}
+
+fn verify_candidate_handoff(root: &Path, options: &Options) -> Result<()> {
+    let context = read_context(root, options)?;
+    let head = repo::git_head(root, true)?;
+    if !head.eq_ignore_ascii_case(&context.source_sha) {
+        return Err("attestation checkout is not the exact clean release source SHA".into());
+    }
+    let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
+    validate_state(&state, &context)?;
+    if state.phase != Phase::Ready
+        || state.attested
+        || state.release_id.is_some()
+        || state.published_at.is_some()
+        || state.promoted_at.is_some()
+        || state.final_verified
+    {
+        return Err("candidate handoff is not an unpublished, unattested READY state".into());
+    }
+    let manifest = read_manifest(root, options, &context)?;
+    let installer = manifest
+        .public_assets
+        .iter()
+        .find(|record| record.role == "installer")
+        .ok_or("candidate handoff has no installer")?;
+    let signature = manifest
+        .public_assets
+        .iter()
+        .find(|record| record.role == "updater-signature")
+        .ok_or("candidate handoff has no updater signature")?;
+    crate::updater_trust::verify_updater_signature_for_version(
+        &safe_state_asset_path(&options.state_root, installer)?,
+        &safe_state_asset_path(&options.state_root, signature)?,
+        &context.version,
+    )?;
+    println!(
+        "V4 Rust qualified artifact handoff: PASS (source={}, run={} attempt={}, installer and signature rehashed against the typed manifest)",
+        context.source_sha, context.run_id, context.run_attempt
     );
     Ok(())
 }
@@ -1428,7 +1843,10 @@ fn run_xtask(root: &Path, args: &[&str]) -> Result<()> {
         &args,
         root,
         &[],
-        &[],
+        &[
+            "V4_TAURI_UPDATER_PRIVATE_KEY".to_owned(),
+            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD".to_owned(),
+        ],
         RELEASE_BUILD_STEP_TIMEOUT,
     )?;
     if !output.status.success() {
@@ -1451,7 +1869,10 @@ fn run_pwsh(root: &Path, args: &[&str]) -> Result<()> {
         &args,
         root,
         &[],
-        &[],
+        &[
+            "V4_TAURI_UPDATER_PRIVATE_KEY".to_owned(),
+            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD".to_owned(),
+        ],
         RELEASE_DEFENDER_STEP_TIMEOUT,
     )?;
     if !output.status.success() {
@@ -1501,7 +1922,6 @@ fn candidate_record(root: &Path, name: &str, role: &str, folder: &str) -> Result
             role: role.to_owned(),
             size: 0,
             sha256: String::new(),
-            source_path: String::new(),
             state_path: state_relative.to_string_lossy().replace('\\', "/"),
         },
     )?;
@@ -1521,7 +1941,6 @@ fn candidate_record(root: &Path, name: &str, role: &str, folder: &str) -> Result
         role: role.to_owned(),
         size: bytes.len() as u64,
         sha256: sha256_hex(&bytes),
-        source_path: path.to_string_lossy().into_owned(),
         state_path: state_relative.to_string_lossy().replace('\\', "/"),
     })
 }
@@ -1560,6 +1979,11 @@ fn write_release_evidence(
     let qualification = json!({
         "schema_version":1,
         "evidence_type":"tauri-nsis-qualified-release",
+        "repository":context.repository,
+        "source_sha":context.source_sha,
+        "workflow_sha":context.workflow_sha,
+        "run_id":context.run_id,
+        "run_attempt":context.run_attempt,
         "qualified":true,
         "qualification":"install-launch-uninstall",
         "product_name":"Sky Auto Player",
@@ -1582,7 +2006,11 @@ fn write_release_evidence(
     let production = json!({
         "schema_version":1,
         "evidence_type":"v4-production-release-qualification",
+        "repository":context.repository,
         "source_sha":context.source_sha,
+        "workflow_sha":context.workflow_sha,
+        "run_id":context.run_id,
+        "run_attempt":context.run_attempt,
         "version":context.version,
         "channel":context.channel,
         "product_name":"Sky Auto Player",
@@ -1703,6 +2131,10 @@ fn validate_candidate_evidence(
     let production: Value = read_json(&safe_state_asset_path(root, production_record)?)?;
     let qualification: Value = read_json(&safe_state_asset_path(root, qualification_record)?)?;
     if production["source_sha"] != context.source_sha
+        || production["repository"] != context.repository
+        || production["workflow_sha"] != context.workflow_sha
+        || production["run_id"] != context.run_id
+        || production["run_attempt"].as_u64() != Some(u64::from(context.run_attempt))
         || production["version"] != context.version
         || production["channel"] != context.channel
         || production["authenticode_mode"] != "unsigned-zero-budget"
@@ -1711,6 +2143,7 @@ fn validate_candidate_evidence(
         || !production["approved_signer_thumbprint"].is_null()
         || !production["observed_signer_thumbprint"].is_null()
         || production["updater_signature_status"] != "valid"
+        || production["updater_key_id"] != crate::updater_trust::canonical_key_id()?
         || production["qualification_status"] != "PASS"
     {
         return Err("production evidence does not match release identity or unsigned-zero-budget trust state".into());
@@ -1767,6 +2200,11 @@ fn validate_qualification_evidence(
     let required = [
         "schema_version",
         "evidence_type",
+        "repository",
+        "source_sha",
+        "workflow_sha",
+        "run_id",
+        "run_attempt",
         "qualified",
         "qualification",
         "product_name",
@@ -1799,6 +2237,11 @@ fn validate_qualification_evidence(
         || evidence["evidence_type"] != "tauri-nsis-qualified-release"
         || evidence["qualification"] != "install-launch-uninstall"
         || evidence["qualified"] != true
+        || evidence["repository"] != context.repository
+        || evidence["source_sha"] != context.source_sha
+        || evidence["workflow_sha"] != context.workflow_sha
+        || evidence["run_id"] != context.run_id
+        || evidence["run_attempt"].as_u64() != Some(u64::from(context.run_attempt))
         || evidence["authenticode_mode"] != "unsigned-zero-budget"
         || evidence["product_name"] != "Sky Auto Player"
         || evidence["identifier"] != "io.github.pumni.skyautoplayer"
@@ -1893,7 +2336,14 @@ fn matches_transaction(release: &Value, context: &Context) -> bool {
         return false;
     };
     let raw = body[start + marker.len()..start + end_relative].trim();
-    for key in ["repository", "run_id", "source_sha", "version", "tag"] {
+    for key in [
+        "repository",
+        "run_id",
+        "run_attempt",
+        "source_sha",
+        "version",
+        "tag",
+    ] {
         if raw.matches(&format!("\"{key}\"")).count() != 1 {
             return false;
         }
@@ -1908,6 +2358,7 @@ fn matches_transaction(release: &Value, context: &Context) -> bool {
             .eq_ignore_ascii_case(&context.source_sha)
         && value["version"] == context.version
         && value["tag"] == context.tag
+        && value["run_attempt"].as_u64() == Some(u64::from(context.run_attempt))
         && value["run_id"]
             .as_str()
             .is_some_and(|run| !run.is_empty() && run == context.run_id)
@@ -1967,7 +2418,7 @@ fn validate_beta_keeps_latest(
 fn read_manifest(root: &Path, options: &Options, context: &Context) -> Result<CandidateManifest> {
     let manifest: CandidateManifest =
         read_json(&options.state_root.join("candidate-manifest.json"))?;
-    if manifest.schema_version != 1 || manifest.repository_mismatch(context) {
+    if manifest.schema_version != 2 || manifest.repository_mismatch(context) {
         return Err("candidate manifest release identity differs from release context".into());
     }
     if manifest.qualification_assets.len() != 8 || manifest.public_assets.len() != 2 {
@@ -1975,6 +2426,26 @@ fn read_manifest(root: &Path, options: &Options, context: &Context) -> Result<Ca
             "candidate manifest must contain eight qualification files and two public assets"
                 .into(),
         );
+    }
+    let expected_handoff = release_handoff::ExpectedHandoffIdentity {
+        repository: &context.repository,
+        source_sha: &context.source_sha,
+        workflow_sha: &context.workflow_sha,
+        run_id: &context.run_id,
+        run_attempt: context.run_attempt,
+        version: &context.version,
+    };
+    release_handoff::validate_manifest_identity(&manifest.unsigned_handoff, &expected_handoff)?;
+    let signed_installer = manifest
+        .public_assets
+        .iter()
+        .find(|record| record.role == "installer")
+        .ok_or("candidate manifest has no signed installer")?;
+    if signed_installer.size != manifest.unsigned_handoff.installer_size
+        || signed_installer.sha256 != manifest.unsigned_handoff.installer_sha256
+        || signed_installer.source_name != manifest.unsigned_handoff.installer_name
+    {
+        return Err("signed installer does not preserve the build-job handoff bytes".into());
     }
     let expected_installer = release_metadata::canonical_release_installer_name(&context.version);
     let expected_public = [
@@ -2099,7 +2570,11 @@ fn verify_attestations(root: &Path, options: &Options) -> Result<()> {
 
 impl CandidateManifest {
     fn repository_mismatch(&self, context: &Context) -> bool {
-        self.source_sha != context.source_sha
+        self.repository != context.repository
+            || self.source_sha != context.source_sha
+            || self.workflow_sha != context.workflow_sha
+            || self.run_id != context.run_id
+            || self.run_attempt != context.run_attempt
             || self.version != context.version
             || self.channel != context.channel
             || self.tag != context.tag
@@ -2129,7 +2604,7 @@ fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport
         "<!-- v4-release-tx: {} -->",
         serde_json::to_string(&json!({
             "repository":context.repository,"run_id":context.run_id,"source_sha":context.source_sha,
-            "version":context.version,"tag":context.tag
+            "run_attempt":context.run_attempt,"version":context.version,"tag":context.tag
         }))?
     );
     let body = format!("{}\n\n{marker}", notes.trim());
@@ -2447,7 +2922,7 @@ fn reconcile_uncertain_upload(
 }
 
 fn validate_state(state: &ReleaseState, context: &Context) -> Result<()> {
-    if state.schema_version != 1
+    if state.schema_version != 2
         || state.repository != context.repository
         || state.version != context.version
         || state.channel != context.channel
@@ -2455,6 +2930,7 @@ fn validate_state(state: &ReleaseState, context: &Context) -> Result<()> {
         || state.source_sha != context.source_sha
         || state.workflow_sha != context.workflow_sha
         || state.run_id != context.run_id
+        || state.run_attempt != context.run_attempt
     {
         return Err("persisted release state identity differs from the current transaction".into());
     }
@@ -3073,7 +3549,19 @@ fn generate_expected_metadata(
     Ok(fs::read(output)?)
 }
 
-fn probe_metadata_token(transport: &mut dyn Transport) -> Result<()> {
+fn probe_metadata_token(contents_permission: &str, transport: &mut dyn Transport) -> Result<()> {
+    if contents_permission != "write" {
+        return Err(
+            "pre-publication metadata App token was not minted with contents: write".into(),
+        );
+    }
+    let repository = required_api(transport, "GET", &format!("repos/{REPOSITORY}"), None)?;
+    if !repository["full_name"]
+        .as_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case(REPOSITORY))
+    {
+        return Err("metadata App token returned the wrong canonical repository identity".into());
+    }
     let branch = required_api(
         transport,
         "GET",
@@ -3105,7 +3593,7 @@ fn probe_metadata_token(transport: &mut dyn Transport) -> Result<()> {
         }
     }
     println!(
-        "V4 Rust metadata App token probe: PASS (read-only branch, bootstrap, stable, and beta access)"
+        "V4 Rust metadata App token probe: PASS (contents:write mint succeeded; exact repository scope; GET-only branch, bootstrap, stable, and beta access)"
     );
     Ok(())
 }
@@ -3114,7 +3602,7 @@ fn cleanup_local_state(root: &Path, options: &Options) -> Result<()> {
     if !options.state_root.exists() {
         return Ok(());
     }
-    let marker_path = options.state_root.join(".release-owner.json");
+    let marker_path = options.state_root.join("release-owner.json");
     if !marker_path.exists() {
         println!("V4 Rust runner-local state cleanup: skipped (no Rust ownership marker)");
         return Ok(());
@@ -3124,6 +3612,7 @@ fn cleanup_local_state(root: &Path, options: &Options) -> Result<()> {
     if context.repository != REPOSITORY
         || marker["repository"] != REPOSITORY
         || marker["run_id"] != context.run_id
+        || marker["run_attempt"].as_u64() != Some(u64::from(context.run_attempt))
         || marker["source_sha"] != context.source_sha
         || options.state_root == root
         || options.state_root.starts_with(root)
@@ -3136,7 +3625,11 @@ fn cleanup_local_state(root: &Path, options: &Options) -> Result<()> {
         .ok_or("release state cleanup requires RUNNER_TEMP ownership boundary")?;
     let temp = fs::canonicalize(PathBuf::from(temp))?;
     let state = fs::canonicalize(&options.state_root)?;
-    if state == temp || !state.starts_with(temp) {
+    let expected_state = temp.join(format!(
+        "sky-v4-release-{}-{}",
+        context.run_id, context.run_attempt
+    ));
+    if state != fs::canonicalize(expected_state)? || state.parent() != Some(temp.as_path()) {
         return Err(
             "release state cleanup refused outside a dedicated RUNNER_TEMP child directory".into(),
         );
@@ -3291,7 +3784,7 @@ fn doctor_report(
         if local
             .get("schema_version")
             .and_then(Value::as_u64)
-            .is_some_and(|schema| schema != 1)
+            .is_some_and(|schema| !matches!(schema, 1 | 2))
         {
             return Err("release-doctor local state schema version is unsupported".into());
         }
@@ -4504,18 +4997,27 @@ fn raw_metadata_retry_fails_with_bounded_diagnostics() -> Result<()> {
 }
 
 fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
-    for (bad_ref, bad_bootstrap) in [(true, false), (false, true)] {
+    let mut read_only = FakeTransport::new();
+    assert!(probe_metadata_token("read", &mut read_only).is_err());
+    assert!(read_only.events.is_empty());
+
+    for (bad_ref, bad_bootstrap, bad_target) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
         let mut github = FakeTransport::new();
         github.bad_metadata_ref = bad_ref;
         github.bad_metadata_bootstrap = bad_bootstrap;
-        assert!(probe_metadata_token(&mut github).is_err());
+        github.bad_metadata_target = bad_target;
+        assert!(probe_metadata_token("write", &mut github).is_err());
         assert!(github.events.iter().all(|event| event.starts_with("GET ")));
         assert!(!github.events.iter().any(|event| {
             event.starts_with("PUT ") || event.starts_with("POST ") || event.starts_with("DELETE ")
         }));
     }
     let mut readable = FakeTransport::new();
-    probe_metadata_token(&mut readable)?;
+    probe_metadata_token("write", &mut readable)?;
     for channel in ["stable", "beta"] {
         assert!(readable.events.iter().any(|event| {
             event == &format!(
@@ -4532,7 +5034,7 @@ fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
     for channel in ["stable", "beta"] {
         let mut invalid = FakeTransport::new();
         invalid.bad_channel_metadata = Some(channel.to_owned());
-        assert!(probe_metadata_token(&mut invalid).is_err());
+        assert!(probe_metadata_token("write", &mut invalid).is_err());
         assert!(invalid.events.iter().all(|event| event.starts_with("GET ")));
     }
     Ok(())
@@ -4544,6 +5046,7 @@ fn mock_pr_merge_sha_does_not_break_release_or_owned_cleanup() -> Result<()> {
         Some(context.workflow_sha.clone()),
         Some(context.repository.clone()),
         Some(context.run_id.clone()),
+        Some(context.run_attempt.to_string()),
         Some("workflow_dispatch".to_owned()),
         Some("refs/heads/main".to_owned()),
         Some(RELEASE_WORKFLOW_REF.to_owned()),
@@ -4553,13 +5056,8 @@ fn mock_pr_merge_sha_does_not_break_release_or_owned_cleanup() -> Result<()> {
         ..runtime
     };
     assert!(
-        validate_runtime_identity(
-            &context,
-            Some(&context.workflow_sha),
-            &pr_merge_runtime,
-            false
-        )
-        .is_err()
+        validate_runtime_identity(&context, Some(&context.workflow_sha), &pr_merge_runtime,)
+            .is_err()
     );
     validate_context(&root, &options, &context)?;
 
@@ -4569,7 +5067,7 @@ fn mock_pr_merge_sha_does_not_break_release_or_owned_cleanup() -> Result<()> {
         "<!-- v4-release-tx: {} -->",
         serde_json::to_string(&json!({
             "repository":context.repository,"run_id":context.run_id,"source_sha":context.source_sha,
-            "version":context.version,"tag":context.tag
+            "run_attempt":context.run_attempt,"version":context.version,"tag":context.tag
         }))?
     );
     let mut stale = fake_release(12, &context.tag, &context.source_sha, true, false, false);
@@ -4755,7 +5253,6 @@ fn mock_manifest_path_traversal_fails_closed() -> Result<()> {
         role: "installer".to_owned(),
         size: 1,
         sha256: "0".repeat(64),
-        source_path: String::new(),
         state_path: "../outside.bin".to_owned(),
     };
     assert!(safe_state_asset_path(&options.state_root, &record).is_err());
@@ -4797,23 +5294,25 @@ fn workflow_run_identity_fails_closed() -> Result<()> {
 
 fn runtime_identity_fails_closed_without_exact_workflow_context() -> Result<()> {
     let (_, options, context, _) = fixture()?;
+    let alternate_run_id = format!("{}0", context.run_id);
+    let alternate_attempt = if context.run_attempt == 1 { "2" } else { "1" };
     let valid = RuntimeIdentity::from_values(
         Some(context.workflow_sha.clone()),
         Some(context.repository.clone()),
         Some(context.run_id.clone()),
+        Some(context.run_attempt.to_string()),
         Some("workflow_dispatch".to_owned()),
         Some("refs/heads/main".to_owned()),
         Some(RELEASE_WORKFLOW_REF.to_owned()),
     )?;
-    assert!(
-        validate_runtime_identity(&context, Some(&context.workflow_sha), &valid, false).is_ok()
-    );
-    assert!(validate_runtime_identity(&context, None, &valid, false).is_err());
+    assert!(validate_runtime_identity(&context, Some(&context.workflow_sha), &valid).is_ok());
+    assert!(validate_runtime_identity(&context, None, &valid).is_err());
     assert!(
         RuntimeIdentity::from_values(
             None,
             Some(context.repository.clone()),
             Some(context.run_id.clone()),
+            Some(context.run_attempt.to_string()),
             Some("workflow_dispatch".to_owned()),
             Some("refs/heads/main".to_owned()),
             Some(RELEASE_WORKFLOW_REF.to_owned()),
@@ -4830,7 +5329,11 @@ fn runtime_identity_fails_closed_without_exact_workflow_context() -> Result<()> 
             ..valid.clone()
         },
         RuntimeIdentity {
-            github_run_id: "9002".to_owned(),
+            github_run_id: alternate_run_id,
+            ..valid.clone()
+        },
+        RuntimeIdentity {
+            github_run_attempt: alternate_attempt.to_owned(),
             ..valid.clone()
         },
         RuntimeIdentity {
@@ -4842,22 +5345,14 @@ fn runtime_identity_fails_closed_without_exact_workflow_context() -> Result<()> 
             ..valid.clone()
         },
         RuntimeIdentity {
-            github_workflow_ref: REHEARSE_WORKFLOW_REF.to_owned(),
+            github_workflow_ref: format!("{RELEASE_WORKFLOW_REF}@refs/heads/feature"),
             ..valid.clone()
         },
     ] {
         assert!(
-            validate_runtime_identity(&context, Some(&context.workflow_sha), &invalid, false)
-                .is_err()
+            validate_runtime_identity(&context, Some(&context.workflow_sha), &invalid).is_err()
         );
     }
-    let rehearsal = RuntimeIdentity {
-        github_workflow_ref: REHEARSE_WORKFLOW_REF.to_owned(),
-        ..valid.clone()
-    };
-    assert!(
-        validate_runtime_identity(&context, Some(&context.workflow_sha), &rehearsal, true).is_ok()
-    );
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -4892,13 +5387,16 @@ struct FakeTransport {
     fail_delete: bool,
     post_created_then_timeout: bool,
     fail_metadata_put_after_write: bool,
+    fail_metadata_put_without_write: bool,
     bad_metadata_ref: bool,
     bad_metadata_bootstrap: bool,
+    bad_metadata_target: bool,
     bad_channel_metadata: Option<String>,
     metadata: Vec<u8>,
     metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
     raw_metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
     workflow_runs: std::collections::BTreeMap<String, Value>,
+    workflow_jobs: std::collections::BTreeMap<(String, u32), Vec<Value>>,
 }
 
 impl FakeTransport {
@@ -4919,8 +5417,47 @@ impl Transport for FakeTransport {
     ) -> Result<Option<Value>> {
         self.events.push(format!("{method} {endpoint}"));
         if method == "GET" && endpoint.starts_with("repos/pumni/Sky-Auto-Player/actions/runs/") {
-            let id = endpoint.rsplit('/').next().unwrap_or_default();
+            let path = endpoint
+                .strip_prefix("repos/pumni/Sky-Auto-Player/actions/runs/")
+                .unwrap_or_default();
+            if let Some((run_id, attempt_query)) = path.split_once("/attempts/") {
+                let Some((attempt, query)) = attempt_query.split_once("/jobs?") else {
+                    return Err("fake workflow job endpoint omitted attempt jobs path".into());
+                };
+                let run_attempt = attempt.parse::<u32>()?;
+                let query_value = |name: &str| {
+                    query
+                        .split('&')
+                        .find_map(|part| part.strip_prefix(&format!("{name}=")))
+                        .and_then(|value| value.parse::<usize>().ok())
+                };
+                let per_page = query_value("per_page").ok_or("fake jobs page size missing")?;
+                let page = query_value("page").ok_or("fake jobs page number missing")?;
+                if per_page == 0 || page == 0 {
+                    return Err("fake jobs pagination is invalid".into());
+                }
+                let Some(jobs) = self.workflow_jobs.get(&(run_id.to_owned(), run_attempt)) else {
+                    return Ok(None);
+                };
+                let start = (page - 1).saturating_mul(per_page);
+                let items = jobs
+                    .iter()
+                    .skip(start)
+                    .take(per_page)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                return Ok(Some(json!({"total_count":jobs.len(),"jobs":items})));
+            }
+            let id = path.split('?').next().unwrap_or_default();
             return Ok(self.workflow_runs.get(id).cloned());
+        }
+        if method == "GET" && endpoint == "repos/pumni/Sky-Auto-Player" {
+            let target = if self.bad_metadata_target {
+                "pumni/Other-Repository"
+            } else {
+                REPOSITORY
+            };
+            return Ok(Some(json!({"full_name":target})));
         }
         if method == "GET" && endpoint == "repos/pumni/Sky-Auto-Player/releases/latest" {
             return Ok(Some(self.latest.clone()));
@@ -4972,6 +5509,13 @@ impl Transport for FakeTransport {
                     }));
                 }
                 "PUT" => {
+                    if self.fail_metadata_put_without_write {
+                        self.fail_metadata_put_without_write = false;
+                        return Err(Box::new(HttpFailure {
+                            status: Some(504),
+                            detail: "injected metadata write timeout before commit".to_owned(),
+                        }));
+                    }
                     let payload = body.ok_or("fake metadata PUT body missing")?;
                     let encoded = payload["content"]
                         .as_str()
@@ -5172,7 +5716,7 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
     let source_sha = git_text(&root, &["rev-parse", "HEAD"])?;
     let tag = format!("v{version}");
     let context = Context {
-        schema_version: 1,
+        schema_version: 2,
         repository: REPOSITORY.to_owned(),
         version: version.clone(),
         channel: channel.to_owned(),
@@ -5181,6 +5725,11 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         source_sha: source_sha.clone(),
         workflow_sha: source_sha.clone(),
         run_id: env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "9001".to_owned()),
+        run_attempt: env::var("GITHUB_RUN_ATTEMPT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0 && *value <= 100)
+            .unwrap_or(1),
         created_at: "2026-10-25T00:00:00Z".to_owned(),
     };
     static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -5193,7 +5742,6 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
     fs::create_dir_all(state_root.join("candidate-evidence"))?;
     let options = Options {
         state_root: state_root.clone(),
-        key_path: None,
         workflow_sha: None,
     };
     let installer_name = release_metadata::canonical_installer_name(&version);
@@ -5234,7 +5782,6 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
             role: role.to_owned(),
             size: bytes.len() as u64,
             sha256: sha256_hex(bytes),
-            source_path: path.to_string_lossy().into_owned(),
             state_path: Path::new(dir)
                 .join(name)
                 .to_string_lossy()
@@ -5261,10 +5808,10 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         .find(|record| record.role == "sbom")
         .unwrap()
         .clone();
-    let production = json!({"source_sha":source_sha,"version":version,"channel":channel,"authenticode_mode":"unsigned-zero-budget","authenticode_state":"unsigned","authenticode_provider":"none","approved_signer_thumbprint":null,"observed_signer_thumbprint":null,
-        "updater_signature_status":"valid","qualification_status":"PASS","installer":installer.source_name,"installer_size":installer.size,"installer_sha256":installer.sha256,
+    let production = json!({"repository":context.repository,"source_sha":source_sha,"workflow_sha":context.workflow_sha,"run_id":context.run_id,"run_attempt":context.run_attempt,"version":version,"channel":channel,"authenticode_mode":"unsigned-zero-budget","authenticode_state":"unsigned","authenticode_provider":"none","approved_signer_thumbprint":null,"observed_signer_thumbprint":null,
+        "updater_signature_status":"valid","updater_key_id":crate::updater_trust::canonical_key_id()?,"qualification_status":"PASS","installer":installer.source_name,"installer_size":installer.size,"installer_sha256":installer.sha256,
         "updater_signature":signature.source_name,"signature_size":signature.size,"updater_signature_sha256":signature.sha256,"authenticode_evidence":auth.source_name,"authenticode_evidence_sha256":auth.sha256,"sbom":sbom.source_name,"sbom_sha256":sbom.sha256});
-    let qualification = json!({"schema_version":1,"evidence_type":"tauri-nsis-qualified-release","qualified":true,"qualification":"install-launch-uninstall","product_name":"Sky Auto Player","identifier":"io.github.pumni.skyautoplayer","version":version,"target":"nsis","install_mode":"currentUser","installer":installer.source_name,"updater_signature":signature.source_name,"installer_size":installer.size,"signature_size":signature.size,"installer_sha256":installer.sha256,"updater_signature_sha256":signature.sha256,"authenticode_mode":"unsigned-zero-budget","authenticode_evidence":auth.source_name,"authenticode_evidence_sha256":auth.sha256,"sbom":sbom.source_name,"sbom_sha256":sbom.sha256});
+    let qualification = json!({"schema_version":1,"evidence_type":"tauri-nsis-qualified-release","repository":context.repository,"source_sha":context.source_sha,"workflow_sha":context.workflow_sha,"run_id":context.run_id,"run_attempt":context.run_attempt,"qualified":true,"qualification":"install-launch-uninstall","product_name":"Sky Auto Player","identifier":"io.github.pumni.skyautoplayer","version":version,"target":"nsis","install_mode":"currentUser","installer":installer.source_name,"updater_signature":signature.source_name,"installer_size":installer.size,"signature_size":signature.size,"installer_sha256":installer.sha256,"updater_signature_sha256":signature.sha256,"authenticode_mode":"unsigned-zero-budget","authenticode_evidence":auth.source_name,"authenticode_evidence_sha256":auth.sha256,"sbom":sbom.source_name,"sbom_sha256":sbom.sha256});
     for (name, value) in [
         (EVIDENCE_NAMES[0], &production),
         (EVIDENCE_NAMES[1], &qualification),
@@ -5284,7 +5831,6 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
             .to_owned(),
             size: bytes.len() as u64,
             sha256: sha256_hex(&bytes),
-            source_path: path.to_string_lossy().into_owned(),
             state_path: format!("candidate-evidence/{name}"),
         });
     }
@@ -5304,7 +5850,6 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
             .to_owned(),
             size: bytes.len() as u64,
             sha256: sha256_hex(&bytes),
-            source_path: path.to_string_lossy().into_owned(),
             state_path: format!("candidate-evidence/{name}"),
         });
     }
@@ -5322,16 +5867,39 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         .filter(|record| public_names.contains(&record.release_name))
         .cloned()
         .collect();
+    let installer_record = base
+        .iter()
+        .find(|record| record.role == "installer")
+        .ok_or("mock fixture installer record missing")?;
+    let unsigned_handoff = release_handoff::UnsignedArtifactManifest {
+        schema_version: 1,
+        repository: context.repository.clone(),
+        source_sha: context.source_sha.clone(),
+        workflow_sha: context.workflow_sha.clone(),
+        run_id: context.run_id.clone(),
+        run_attempt: context.run_attempt,
+        version: context.version.clone(),
+        installer_name: installer_record.source_name.clone(),
+        installer_size: installer_record.size,
+        installer_sha256: installer_record.sha256.clone(),
+        producer_job: "build_unsigned".to_owned(),
+        artifact_name: release_handoff::artifact_name(&context.run_id, context.run_attempt)?,
+    };
     Ok((
         root,
         options,
         context.clone(),
         CandidateManifest {
-            schema_version: 1,
-            source_sha,
+            schema_version: 2,
+            repository: context.repository.clone(),
+            source_sha: context.source_sha.clone(),
+            workflow_sha: context.workflow_sha.clone(),
+            run_id: context.run_id.clone(),
+            run_attempt: context.run_attempt,
             version,
             channel: channel.to_owned(),
             tag,
+            unsigned_handoff,
             qualification_assets: base,
             public_assets,
         },
@@ -5340,7 +5908,7 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
 
 fn fixture_state(context: &Context) -> ReleaseState {
     ReleaseState {
-        schema_version: 1,
+        schema_version: 2,
         repository: context.repository.clone(),
         version: context.version.clone(),
         channel: context.channel.clone(),
@@ -5348,6 +5916,7 @@ fn fixture_state(context: &Context) -> ReleaseState {
         source_sha: context.source_sha.clone(),
         workflow_sha: context.workflow_sha.clone(),
         run_id: context.run_id.clone(),
+        run_attempt: context.run_attempt,
         phase: Phase::Ready,
         // Publish tests begin after the separately guarded exact-source attestation phase.
         attested: true,
@@ -5384,6 +5953,69 @@ fn prepare_publish_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens() {
+        let transport = GhTransport::for_metadata_recovery(
+            "synthetic-read-only-token".to_owned(),
+            Some("synthetic-metadata-write-token".to_owned()),
+        )
+        .unwrap();
+        for endpoint in [
+            "repos/pumni/Sky-Auto-Player/actions/runs/7001",
+            "repos/pumni/Sky-Auto-Player/actions/runs/7001/attempts/1/jobs",
+            "repos/pumni/Sky-Auto-Player/releases/latest",
+            "repos/pumni/Sky-Auto-Player/releases/assets/42",
+        ] {
+            let selected = transport
+                .selected_recovery_token("GET", endpoint)
+                .unwrap()
+                .expect("recovery reads require an explicit credential");
+            assert_eq!(selected.class, RecoveryTokenClass::ReadOnly);
+            assert_eq!(selected.value, "synthetic-read-only-token");
+        }
+        let stable_put = transport
+            .selected_recovery_token(
+                "PUT",
+                "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json",
+            )
+            .unwrap()
+            .expect("the canonical stable metadata write selects the App token");
+        assert_eq!(stable_put.class, RecoveryTokenClass::MetadataWrite);
+        assert_eq!(stable_put.value, "synthetic-metadata-write-token");
+        for (method, endpoint) in [
+            (
+                "PUT",
+                "repos/pumni/Sky-Auto-Player/contents/channels/beta/latest.json",
+            ),
+            (
+                "PUT",
+                "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json?ref=main",
+            ),
+            (
+                "POST",
+                "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json",
+            ),
+            ("DELETE", "repos/pumni/Sky-Auto-Player/releases/42"),
+        ] {
+            assert!(
+                transport.selected_recovery_token(method, endpoint).is_err(),
+                "recovery must reject {method} {endpoint}"
+            );
+        }
+        let read_only =
+            GhTransport::for_metadata_recovery("synthetic-read-only-token".to_owned(), None)
+                .unwrap();
+        assert!(
+            read_only
+                .selected_recovery_token(
+                    "PUT",
+                    "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json",
+                )
+                .is_err(),
+            "a read-only plan cannot synthesize metadata write authority"
+        );
+    }
 
     #[test]
     fn malformed_github_api_json_fails_closed_with_endpoint_context() {

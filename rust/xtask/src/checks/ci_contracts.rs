@@ -402,7 +402,11 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "scripts/test_v4_production_signing_contract.ps1",
         "scripts/setup_v4_test_signing.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
+        "linux_process_runtime:",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]",
+        "LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
         "CANDIDATE_REQUIRED",
         "CANDIDATE_RESULT",
         "name: Sky Auto Player — required CI gate",
@@ -588,9 +592,10 @@ fn process_tree_boundary_contract(source: &str) -> Result<()> {
 
 const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/ci.yml",
+    ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/pages.yml",
     ".github/workflows/release-v4.yml",
-    ".github/workflows/rehearse-v4.yml",
+    ".github/workflows/v4-metadata-recovery.yml",
 ];
 
 fn validate_active_github_hosted_ubuntu_labels(source: &str) -> Result<()> {
@@ -681,7 +686,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "name: Website validation",
         "if: needs.changes.outputs.site_required == 'true'",
         "name: Sky Auto Player — required CI gate",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -1010,6 +1015,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     for marker in [
         "UPDATER_BRIDGE_REQUIRED",
         "UPDATER_BRIDGE_RESULT",
+        "LINUX_PROCESS_RESULT",
+        "needs.linux_process_runtime.result",
         "UPDATER_CONTRACT_REQUIRED",
         "UPDATER_CONTRACT_RESULT",
         "DESKTOP_WEB_REQUIRED",
@@ -1017,6 +1024,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "if [[ \"$UPDATER_BRIDGE_REQUIRED\" == \"true\" ]]",
         "if [[ \"$UPDATER_CONTRACT_REQUIRED\" == \"true\" ]]",
         "if [[ \"$DESKTOP_WEB_REQUIRED\" == \"true\" ]]",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
         "Sky Auto Player — required CI gate",
     ] {
         if !status.contains(marker) {
@@ -1217,9 +1226,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     if release.contains("inputs:") || release.contains("inputs.") {
         return Err("production release workflow must have zero semantic dispatch inputs".into());
     }
-    let rehearsal = fs::read_to_string(root.join(".github/workflows/rehearse-v4.yml"))?;
-    if rehearsal.contains("mode: topology") || rehearsal.contains("mode: draft") {
-        return Err("rehearsal workflow must not expose a topology/draft mode input".into());
+    if root.join(".github/workflows/rehearse-v4.yml").exists() {
+        return Err("duplicate production rehearsal workflow must be retired".into());
     }
 
     println!("[xtask] CI/release control-plane contract: PASS");

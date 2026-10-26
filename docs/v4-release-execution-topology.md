@@ -17,223 +17,349 @@ Governed by:
 
 ## 1. Core Release Principle: Build Once, Qualify Exact Bytes
 
-Every release candidate is subject to an immutable invariant:
+Every production release follows one transaction from the exact clean commit selected by a
+human-controlled `workflow_dispatch` on canonical `main`:
 
 ```text
-[Verified Clean Source Commit]
-              |
-              v
-     (1) BUILD ONCE  ---> Single NSIS Installer Candidate (.exe) + Updater Signature (.sig)
-              |
-              v
-     (2) QUALIFY     ---> Authenticode Unsigned-State Verification + Ed25519 Minisign Verification
-              |           + SPDX SBOM Generation & Verification + Bundle Verification
-              |           + Install/Launch/Uninstall Smoke Test
-              v
-     (3) ATTEST      ---> Cryptographic Qualification Evidence + GitHub OIDC SLSA Attestation (Topology A)
-              |
-              v
-     (4) PROMOTE     ---> Static Metadata Generation + GitHub Releases / CDN Deployment
+prepare (main + exact-head CI + Rust preflight)
+    -> build_unsigned (one unsigned NSIS installer, no updater sidecar)
+    -> sign_qualify / sign-candidate (protected environment, key secrets on this step only)
+    -> sign_qualify / qualify-candidate (no key secrets; qualify those same bytes)
+    -> attest (OIDC attest installer, signature, and SPDX SBOM)
+    -> metadata_probe (write-scoped GitHub App token, GET-only capability probe)
+    -> publish (verify attestations; publish exact immutable .exe + .sig)
+    -> metadata_promote (write-scoped GitHub App token)
+    -> final_verify (public release, digests, GitHub Latest, stable/beta metadata)
 ```
 
+The workflow uses GitHub-hosted `ubuntu-latest` and `windows-latest` runners. The one installer is
+built in `build_unsigned`, transferred as a run-and-attempt-bound artifact, signed in a separate
+protected job, and passed to qualification, attestation, and publication without rebuilding.
+
 **Invariants**:
-- **Clean Source Binding**: The Git working tree must be clean (`git status --porcelain`);
-  uncommitted source modifications fail closed before any build, signing, or provider invocation.
-- **Zero Rebuild**: Once candidate `.exe` and `.exe.sig` are produced, they are never
-  rebuilt, re-bundled, or modified.
-- **Byte-Identity**: The SHA-256 hash recorded during qualification is identical to the hash
-  in `V4_QUALIFICATION_EVIDENCE.json`, `latest.json`, `SBOM.spdx.json`, and the exact GitHub
-  Release installer/signature downloads. The public release contains only that canonical pair;
-  the evidence and SBOM remain internal CI state.
-- **Fail-Closed Verification & Candidate Purge**: If any check (Authenticode state, Ed25519 Minisign,
-  SBOM, bundle, smoke test) fails, the candidate binary, signature, and unpromoted evidence are
-  purged from the staging directory.
+- The exact clean checkout, workflow SHA, canonical repository, workflow dispatch, `main` ref,
+  run ID, run attempt, job identity, version, and canonical NSIS filename are checked by Rust and
+  the workflow.
+- The unsigned handoff manifest records installer length and SHA-256. Rust checks these before
+  signing; the signer checks the same length and digest immediately before and after signing; the
+  qualification and publication phases re-hash those exact bytes. GitHub's uploaded asset digest
+  and a read-back download must match the candidate manifest.
+- The production updater public root remains Key ID `19AABD2E7838818C`. The current encrypted
+  private key is required to match this compiled root before the signer creates a signature.
+  Test-key artifacts cannot pass the production verifier.
+- The published release contains exactly the canonical NSIS `.exe` and its `.sig`. Qualification
+  evidence, SBOM, and manifests remain internal workflow artifacts.
+- The deployed v4.2.0 client contract remains unchanged: identifier
+  `io.github.pumni.skyautoplayer`, NSIS x64/currentUser package, stable metadata endpoint
+  `https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json`,
+  existing JSON/signature contract, and public key.
+- Any failed, incomplete, mismatched, or ambiguous boundary stops the transaction. No second
+  production build is used to qualify a candidate.
 
 ---
 
-## 2. Runner Trust Boundaries and Key Custody
+## 2. Hosted Runner Trust Boundaries and Key Custody
 
-### 2.1 The Custody vs. Cloud Attestation Boundary
+### 2.1 Protected Environment and Secret Scope
 
-The production v4 updater private key must remain outside the repository/workspace, encrypted at
-rest, with one independent readable encrypted backup. It **must never be stored as plaintext in
-GitHub Actions cloud repository secrets**. The current pre-provider `unsigned-zero-budget`
-Authenticode policy is temporary; production GA should use an approved real signer when a provider
-is selected and available, while PR CI remains unsigned-fixture-only.
+The current encrypted v4 updater private key and its passphrase are supplied only as GitHub
+Environment secrets named `V4_TAURI_UPDATER_PRIVATE_KEY` and
+`V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD`, in environment `v4-production-release`. They are not
+repository or organization secrets and are absent from pull-request, fork, and general CI workflows.
+The workflow references them only in the Rust `sign-candidate` step. Rust validates bounds and the
+encrypted Minisign format, writes the encrypted key beneath a run-owned direct child of
+`RUNNER_TEMP`, verifies that key against Key ID `19AABD2E7838818C`, and removes the temporary
+material on success or in the unconditional cleanup step after failure. The passphrase is delivered
+to the bounded Tauri signer process environment, never as a command-line argument or artifact.
 
-Conversely, GitHub Artifact Attestations (`actions/attest@v4`) and GitHub-backed SLSA
-provenance rely on GitHub's OIDC minting service, which is accessible only from an active
-GitHub Actions runner environment.
+The `sign-candidate` command exits before qualification starts. Its later Rust and PowerShell helper
+processes are launched without the updater secret environment variables. The separate
+`qualify-candidate` step has no signing secrets mapped to it. The protected signing job has only
+`contents: read`; OIDC attestation and release publication permissions belong to different jobs.
+Before either updater secret is mapped, the job builds the pinned release-mode `xtask.exe`, records
+its SHA-256 and checked-out source SHA, and verifies both identities. The signing step checks the
+executable digest again and invokes that binary directly; it does not invoke Cargo while signing
+secrets are present. Rust removes inherited environment variables before starting Bun and keeps only
+the Windows runtime paths and directories needed by the Tauri signer; the signer receives the
+temporary key path and passphrase, while the original workflow secret variable names are removed.
 
-### 2.2 Release Execution Topologies and Provenance Semantics
+The GitHub App private key for release-metadata access is consumed only as an input to the App token
+mint action. Before publication, the workflow requests a short-lived token scoped to the canonical
+repository with `contents: write`. The token action fails if the App installation cannot grant that
+permission. Rust then confirms the canonical repository is accessible to the token and reads the
+metadata branch, bootstrap file, and stable/beta channel files using GET requests only; this probe
+does not write metadata. The job's `GITHUB_TOKEN` remains `contents: read`. After publication, a
+separately minted write-scoped token is used only for metadata promotion. Neither token nor its
+private key is placed in a candidate artifact.
 
-The protected GitHub Actions workflow is the only supported production release path. It runs on the
-dedicated single tenant Windows runner, checks out the exact dispatch SHA, builds one candidate,
-qualifies those exact bytes, obtains OIDC attestations, publishes the immutable release, promotes
-channel metadata, and performs final public verification.
+The current Authenticode policy remains `unsigned-zero-budget`; no Windows certificate or paid
+external signing service is introduced. Authenticode unsigned-state verification remains part of
+production qualification. Updater signing remains enabled and uses the existing Ed25519/Minisign
+trust root.
 
-The production path is workflow_dispatch from canonical main, followed by the protected runner,
-Preflight, BuildCandidate, exact-source OIDC attestation verification, PublishRelease,
-PromoteMetadata, FinalVerify, and runner-local cleanup.
+### 2.2 Readiness Gate and Hosted Release Topology
 
-A maintainer workstation may run Rust validation and fake-transport tests. It is not a production
-release runner and has no supported local publication entry point. Authenticode and updater
-signatures establish artifact integrity; production provenance comes from the protected workflow
-and its exact source identity and OIDC attestations.
-### 2.3 Self-Hosted Runner Hygiene Preconditions
+Only `.github/workflows/release-v4.yml` is the production release workflow. It declares
+`workflow_dispatch` as its only trigger and has no release-version inputs. Its first job checks the
+canonical repository, exact `refs/heads/main`, the default branch name, and the latest completed
+push CI run for the exact dispatched SHA. Rust Preflight independently checks the clean checkout,
+workflow identity, release notes, tag collisions, current GitHub Latest, and stable/beta metadata.
+A `workflow_dispatch` run does not bypass the independent CI readiness gate.
 
-Dedicated self-hosted Windows runners executing production releases must satisfy strict hygiene preconditions:
-1. **Clean Workspace Checkout**: The runner workspace must be checked out cleanly to the exact target release commit SHA with no uncommitted modifications or untracked dirty files (`git status --porcelain` is empty).
-2. **Unpolluted Environment Overrides**: The runner environment must not inherit ambient signing environment variables (such as pre-set `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PATH`, or `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). Rust Preflight rejects untrusted dispatch identity, and BuildCandidate removes inherited signing overrides before it starts the Tauri build.
-3. **Stale Output Purge**: Target bundle and evidence directories are purged of previous candidate installers, signatures, and evidence prior to building. Stale outputs from aborted or previous runs can never be reused.
-4. **Isolated Key Storage**: Private updater keys and certificate stores must reside outside the repository tree, accessible only via restricted paths or secure hardware/cloud seams.
+The `build_unsigned` job has no production secrets, environment, write permission, or OIDC grant.
+It disables Tauri build-time updater artifacts and produces exactly one canonical NSIS installer.
+The run/attempt-bound artifact contains only that installer and a strict typed manifest. The
+`sign_qualify` job downloads the named artifact and independently validates its repository, source
+and workflow SHAs, run ID/attempt, producer job, filename, size, digest, and exact file inventory
+before signing.
 
-### 2.4 GitHub Actions Runner Isolation and Operator Requirements
+After signing, the same job rechecks installer and signature bytes and performs unsigned
+Authenticode verification, updater signature/version verification, SBOM generation and validation,
+Tauri bundle checks, the updater fixture, Defender scan, and Windows NSIS install/launch/uninstall
+qualification. No production key is supplied during qualification.
 
-The labels `self-hosted, windows, v4-release, single-tenant` identify the production signing
-runner boundary. The exact approved workflow/job allowlist is:
+The `attest` job independently checks the signed candidate handoff and uses GitHub OIDC to attest the
+exact `.exe`, `.sig`, and SPDX SBOM. The `publish` job verifies those attestations against the exact
+source SHA and candidate bytes before Rust creates or publishes an immutable release. Rust checks
+asset names, sizes, GitHub SHA-256 digests and downloaded bytes. `metadata_probe` must mint a
+write-capable, repository-scoped App token and validate its read-only access before publication.
+`metadata_promote` mints a fresh token only after publication, and `final_verify` fetches the release
+and metadata again, including the stable raw endpoint.
 
-- `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.
-- `.github/workflows/rehearse-v4.yml` — job `qualification`, production pre-publication qualification only.
+### 2.3 Disposable Hosted Runner Hygiene
 
-Both workflows are `workflow_dispatch` only, require the canonical repository's
-`refs/heads/main` dispatch context, and are protected by the `v4-production-release` environment.
-The qualification workflow runs the same production `Preflight` and `BuildCandidate` states on the
-dedicated runner and stops before any GitHub Release, tag, metadata, or attestation mutation. It
-uses the same exact runner labels and source-bound checkout as the official path; it is the
-pre-publication production qualification path, not a second release state machine.
-Pull-request, fork, push, and general CI workflows must remain on ordinary hosted or non-release
-runners.
+GitHub-hosted runners provide a fresh VM per job. Each job checks out the exact dispatched SHA with
+`persist-credentials: false`, checks out the full Git history needed for clean source identity, and
+keeps Rust transaction state under a unique `RUNNER_TEMP/sky-v4-release-<run-id>-<attempt>`
+folder. Context and candidate handoffs are explicit workflow artifacts named with both run ID and
+run attempt. Rust validates ownership, bounded JSON, exact files, and SHA-256 on each handoff.
 
-The runner-local `V4_UPDATER_PRIVATE_KEY_PATH` is provisioned outside the checkout and is never a
-workflow input. Release state is created under `RUNNER_TEMP`, outside `GITHUB_WORKSPACE`, and is
-removed by an unconditional cleanup step after bounded JSON evidence is retained. Checkout keeps
-`persist-credentials: false`; no generated token, private-key copy, or credential file may be
-written into the source workspace.
+The unsigned build process removes ambient Tauri signing and Authenticode provider overrides before
+installing dependencies or building. It purges only the exact canonical stale NSIS output and
+verifies the source SHA again after the build. The signer refuses ambient Tauri signing overrides,
+checks the encrypted production key, and signs only the validated artifact. Workflow cleanup removes
+owned state after success or failure; the signing adapter also removes its secret directory when it
+returns or unwinds.
 
-The repository owner is responsible for keeping this runner dedicated to this repository's
-production release environment, applying OS/toolchain security patches, and preferring an ephemeral
-or regularly reimaged machine. The runner must never be registered for general public-repository CI.
-If compromise is suspected, disable the runner and production environment, revoke or rotate the
-updater key using [v4-updater-key-custody.md](v4-updater-key-custody.md), inspect release and
-metadata history, and reimage or replace the runner before restoring release access.
+### 2.4 Hosted Release Workflow and Operator Requirements
 
-### 2.5 Production Passphrase Transport: Rust Windows Credential Manager Owner
+The enforced production workflow list contains exactly:
 
-Incident #140 established that parent-process environment variable inheritance does not reach Actions step processes on dedicated runner hosts (such as PUMZ). Parent-process env inheritance is explicitly **not** the production transport.
+- `.github/workflows/release-v4.yml` — canonical dispatch-only release transaction.
 
-Production passphrase custody and transport is governed by the Rust Windows Credential Manager
-owner in `sky_windows_security` and its `cargo xtask credential` CLI:
+A separate manual, protected metadata-only operator workflow cannot build, sign, create or edit a
+release, upload assets, or change a tag. It does not add a production installer build path.
 
-```text
-[Secure Operator Prompt (Read-Host -AsSecureString)]
-               |
-               v
-  (1) PROVISION SESSION CREDENTIAL
-      - SecureString is sent only over child stdin to Rust
-      - CredWriteW (CRED_TYPE_GENERIC, CRED_PERSIST_SESSION)
-      - Fixed canonical target: SkyAutoPlayer/V4UpdaterProduction (public metadata)
-               |
-               v
-  (2) ACTIONS DISPATCH (release-v4.yml)
-      - Runs BuildCandidate on dedicated runner
-      - No passphrase in workflow inputs, secrets, or runner .env
-               |
-               v
-  (3) RUST ONE-SHOT ACTION (cargo xtask credential run-action)
-      - CredReadW against the fixed production target
-      - Fail-closed if absent or empty
-      - Passes TAURI_SIGNING_PRIVATE_KEY_PASSWORD only to the allowlisted child action
-      - Captures and redacts action output
-               |
-               v
-  (4) ORCHESTRATION & PRE-PACKAGING VERIFIER
-      - Pre-packaging verification: cargo xtask updater-trust verify-private-key
-      - Canonical Public Key ID: 19AABD2E7838818C
-      - Single build once and qualify exact bytes
-               |
-               v
-  (5) MANDATORY CLEANUP (Rust action boundary)
-      - Caller process environment is never modified
-      - CredDeleteW runs after success, action failure, or read failure
-      - Action and cleanup failures are both reported without the secret
-```
+The workflow jobs are `prepare`, `build_unsigned`, `sign_qualify`, `attest`, `metadata_probe`,
+`publish`, `metadata_promote`, and `final_verify`. Only `sign_qualify` may reference the updater
+signing secrets. Only `attest` receives `id-token: write` and `attestations: write`; only `publish`
+receives repository `contents: write` and `attestations: read`. Both metadata App tokens request
+`contents: write`: the pre-publication token is used only by the GET-only capability probe, and a
+fresh post-publication token is used by Rust metadata promotion. The probe job's Actions token stays
+read-only and publication depends on probe success.
 
-**Security Invariants**:
-- **No Parent-Process Inheritance**: Production does not rely on ambient shell inheritance.
-- **Fixed Canonical Target**: The Credential Manager target name is `SkyAutoPlayer/V4UpdaterProduction`. This target name is public metadata committed in source; workflow dispatch never accepts arbitrary credential targets.
-- **Zero Cloud Secret Exposure**: The passphrase is never stored in GitHub Secrets, runner `.env` files, command-line flags, GitHub issues/PRs/chat, or repository source files.
-- **Ephemeral Session Material**: Provisioned under `CRED_PERSIST_SESSION` and deterministically deleted by the Rust one-shot action boundary.
-- **Pre-Packaging Verifier**: Pre-packaging verification remains mandatory and enforces Key ID `19AABD2E7838818C`.
+Workflow YAML and Rust guards cannot establish that GitHub environment protection is configured.
+Before any production cutover, a maintainer must inspect Settings > Environments >
+`v4-production-release` and verify that deployment branches allow only `main`, protected secrets
+are configured there under the documented names, and the required human review/approval rule is
+active. Verify that no misspelled environment can be implicitly created without protection. This
+repository review does not inspect or use the secret values, environment settings, release workflow,
+release tags, or metadata branch.
+
+The run remains human controlled: there is no automatic publish on pull request, push, or merge.
+Pull-request, fork, and general CI jobs stay on ordinary unprivileged runners and never map either
+updater signing secret into their workflow definitions.
+
+Every Bun subprocess in the protected signing phase, including the Tauri CLI version probe, local
+private-key challenge, and final installer signer, starts with an environment allowlist. Rust clears
+the inherited child environment and forwards only the Windows runtime values, plus the temporary
+key path and passphrase when the Tauri signer needs them. Git identity subprocesses use the same
+runtime-only policy. A spawned-child regression records the actual environment and rejects
+synthetic updater secrets, GitHub tokens, and unrelated secrets. The signing executable is built and
+source/hash checked before updater secrets are injected; the secret-bearing step executes that
+binary directly without Cargo. This narrows child exposure while the protected hosted job and its
+ephemeral VM remain the trust boundary.
+
+### Metadata Only Recovery
+
+Use recovery only after an immutable stable release is valid and the normal transaction stopped
+after publication. First dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with
+`operation=plan`, the exact `v4.x.y` tag, and `confirm=false`. The read-only job validates the
+transaction marker and exact original release workflow attempt, GitHub Latest, exact immutable
+release ID/source/tag, the exact installer/signature inventory and API/local SHA-256 values, the
+production updater signature and signed version, installer/signature build attestations, the SPDX
+SBOM attestation, current stable/beta metadata, and the public stable endpoint. It emits a JSON plan
+artifact and SHA-256; the artifact contains the proposed metadata bytes for operator review.
+Every prepublication job through `publish` must have completed successfully. A failed overall
+release workflow is eligible only when `metadata_promote` failed or timed out after successful
+publication and `final_verify` was skipped. Failed or cancelled publication, other failed jobs,
+missing jobs, and ambiguous attempts are rejected. Apply downloads the artifact from the selected
+plan run and Rust verifies its artifact name, run ID, source SHA, attempt, and operator-reviewed
+SHA-256 before it recomputes the plan.
+
+To apply, dispatch the same workflow with `operation=apply`, the same tag, the plan run ID, the
+reviewed plan SHA-256, and `confirm=true`. The `v4-production-release` Environment approval occurs
+before the apply job runs. The job builds and hashes the Rust recovery executable before minting a
+separate repository-scoped App token with `contents: write`. Rust then rebuilds the plan from current
+GitHub state and requires the reviewed hash to match. It checks GitHub Latest, stable and beta state
+again at the write boundary, and issues at most one Contents API `PUT` for
+`channels/stable/latest.json`. It then verifies exact readback, unchanged beta state and GitHub
+Latest, and raw stable endpoint convergence. Unknown outcomes are reconciled by read-only GETs and
+never retried as a second mutation. No updater private key or passphrase is used.
+
+Both `plan` and `apply` explicitly declare `actions: read`, `attestations: read`, and `contents: read`.
+The apply job's `GH_TOKEN` is the workflow token and authenticates every Actions run/job query,
+release and asset read, Contents read, and `gh attestation verify` invocation. The App token is
+kept separately as `V4_METADATA_WRITE_TOKEN`; Rust selects it only for the canonical stable
+metadata Contents `PUT`. The post-write readback uses `GH_TOKEN`. The Rust process launches GitHub
+CLI children with a cleared runtime-only environment and supplies only the token selected for that
+operation, so the App write token is not inherited by other child commands.
+
+The shared Rust subprocess adapter has production Linux and Windows implementations. Both cap each
+captured stream at 64 KiB, enforce deadlines, drain pipes with bounded waits, and terminate owned
+process trees when a command times out or leaves captured pipes open. On Linux, children start in
+their own process group and timeout cleanup kills that group. File downloads use an exclusive new
+destination and remove partial output after a failed or timed-out command; an existing file is
+never overwritten. A descendant that deliberately creates a new session can escape the Linux
+process group, so release commands must not daemonize.
+
+The `Linux production subprocess runtime` CI job runs the xtask Rust tests on Ubuntu, builds the
+non-test release binary, then invokes `ci linux-process-smoke`. That smoke starts the same release
+binary with a temporary PATH containing fake `gh` and `curl` executables and synthetic credentials.
+It exercises recovery reads, attestation verification, asset download, the single stable metadata
+write token route, public metadata GET, token isolation, output bounds, timeout cleanup, and partial
+file cleanup. It has no production secrets and cannot reach real GitHub or curl binaries. The
+`Sky Auto Player — required CI gate` depends on this job and requires success for release changes;
+for unrelated changes it requires the job to be skipped.
+
+The recovery operation is not a second release lifecycle. It shares the Rust transport, metadata
+schema, signature verifier, provenance checks, and monotonic version policy; it has no release
+state file or release asset operation. A stale plan, Latest conflict, non-monotonic candidate,
+unknown release state, invalid signature, missing attestation, changed asset, or endpoint mismatch
+stops before a write. Beta remains unchanged and beta auto-update remains disabled. Do not roll back
+a published release, tag, or channel version. Before immutable publication, use the normal owned
+draft cleanup/re-dispatch path. After publication, either use this exact metadata-only recovery for
+a valid immutable release or issue a new, greater stable SemVer after qualification; incident
+containment outside these paths requires its own authorization.
+
+### 2.5 Credential Manager Is Not a Production Release Requirement
+
+The production hosted path does not use Windows Credential Manager, a runner-local key path, a
+persistent self-hosted runner, or a pre-publication rehearsal workflow. The prior rehearsal workflow
+was retired when the exact-head CI readiness gate and single build/sign/qualify/attest/publish
+transaction were introduced.
+
+The Rust credential CLI and Windows Credential Manager implementation remain in the repository for
+independent local maintenance consumers. Their existence does not grant the production release
+workflow a credential-manager path or alter the protected environment secret boundary. The local
+credential tools are not removed in this wave.
+
+### 2.6 Deployed v4.2.0 Compatibility Evidence
+
+Read-only verification of the current public release found immutable release ID `419433937`, tag
+`v4.2.0`, source SHA `9b4baddea9639e5c00212234c26a6b133657240d`, and exactly two public assets. The
+installer is 4,459,233 bytes with SHA-256
+`a6048bd8dc8691798ed2ec7078dd66abe57a5cedfd4d086eedb10cd185751105`; its 448-byte `.sig` has
+SHA-256 `2f1603eb7448339a4a3bd43ec892298a1d82421a38d5bf72ceb0bc4984d678ce`. Both local hashes
+matched the GitHub asset digests. Rust verified the downloaded installer signature for version
+`4.2.0` using public Key ID `19AABD2E7838818C`. Stable metadata was read on 2026-10-26, names
+version `4.2.0` and `pub_date=2026-10-21T10:39:42Z`, and its signature field exactly matches the
+public `.sig` asset. Stable metadata remains at the canonical
+`channels/stable/latest.json` endpoint with a valid `windows-x86_64` record and immutable release
+URL; its downloaded JSON SHA-256 is
+`cff4eb46c40a39ae912c53ba9f9264bbf0d1b0d008ced17025aee2868cfd6477`. The source still declares
+identifier `io.github.pumni.skyautoplayer`, NSIS x64/current-user installation, the same stable
+endpoint, and the existing compiled public key. A same-version `4.2.0 -> 4.2.0` metadata promotion
+is rejected by the strict monotonic validator. The existing Windows updater fixture exercises
+`4.1.3 -> 4.2.0`; a `4.2.0 -> newer` Windows fixture is not possible on this source version without
+creating an unauthorized next-version candidate. Synthetic-key regressions separately reject
+wrong-root, wrong-version, and tampered-byte cases.
 
 ---
 
 ## 3. Rust Release Authority
 
-The file rust/xtask/src/release_v4.rs is the single transaction authority. The production caller is
-.github/workflows/release-v4.yml; its release steps invoke Rust phase commands with one runner-local
-state root. The workflow supplies the protected runner, exact checkout, GitHub token scopes, OIDC
-attestation actions, and Windows provider adapters. It does not implement release policy or make
-release state transitions itself.
+`rust/xtask/src/release_v4.rs` remains the only release transaction state machine. The workflow owns
+runner selection, job dependencies, job-scoped GitHub permissions, artifact transfer, protected
+Environment access, and OIDC actions. Rust owns release identity, state transitions, artifact
+integrity, version/channel policy, GitHub API behavior, metadata generation, reconciliation, and
+fail-closed cleanup.
 
 The authoritative sequence is:
 
-Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
+```text
+Preflight -> BuildUnsigned -> SignCandidate -> QualifyCandidate
+          -> VerifyCandidate -> VerifyAttestations -> PublishRelease
+          -> PromoteMetadata -> FinalVerify
+```
 
-The separate exact-source attestation check must succeed after BuildCandidate and before
-PublishRelease. The rehearsal workflow runs only Preflight and BuildCandidate; it does not publish
-releases, create tags, promote metadata, or mint the metadata App token.
+`BuildUnsigned` creates the only production installer. `SignCandidate` receives the encrypted key
+and passphrase only in its own protected signing process; it verifies the key against the existing
+public root and signs the manifest-bound installer. `QualifyCandidate` runs in the next workflow
+step with no signing secret mapping. It rehashes and verifies the same installer and signature
+before running all production qualification checks. No release mutation occurs before
+`PublishRelease`, and no metadata write occurs before immutable publication.
 
-### 3.1 State and identity
+### 3.1 State and Identity
 
-Preflight derives version, channel, tag, release notes path, source SHA, workflow SHA, and run ID
-from the exact GitHub Actions context and repository contents. It requires the canonical repository,
-workflow_dispatch, refs/heads/main, matching checkout and workflow SHAs, and a numeric Actions
-run ID. It validates the release notes and reads release, tag, Latest, and metadata state before
-writing a bounded release-context.json.
+Preflight derives version, channel, tag, release notes path, source SHA, workflow SHA, repository,
+run ID, and run attempt from GitHub Actions and the exact checkout. It requires the canonical
+repository, `workflow_dispatch`, `refs/heads/main`, exact workflow/ref identity, the same clean
+checkout and workflow SHA, and bounded numeric run/attempt identifiers. GitHub runtime values are
+not accepted as workflow inputs.
 
-All phases reload and validate that context. Strict JSON structs reject unknown fields. The state
-root must be a dedicated direct child of RUNNER_TEMP, outside the workspace. Cleanup requires the
-ownership marker and refuses paths outside that boundary. No release identity or private key path is
-accepted as a workflow input.
+Each job reloads typed, size-bounded context and checks it against the current clean checkout and
+runtime job identity. Run-attempt-specific ownership markers and artifact names prevent a rerun from
+consuming a prior attempt's files. The unsigned manifest binds the source and workflow SHAs, version,
+run ID/attempt, producer job, canonical installer filename, size, and SHA-256. Later candidate records
+bind the exact signed installer, signature, and qualification evidence. SHA syntax validation alone
+is not checkout verification: Rust also compares the manifest SHA to GitHub identity and checked-out
+HEAD at each trusted boundary.
 
-### 3.2 Phase responsibilities
+The release state root is a direct child of the current runner's `RUNNER_TEMP`, outside the source
+workspace. Cleanup requires the exact run/attempt marker and refuses any path or file inventory that
+does not match its ownership boundary. Candidate files are never written into the Git checkout.
 
-- Preflight is read only against GitHub. It checks immutable release policy, stable Latest
-  monotonicity, beta Latest preservation, metadata branch/bootstrap readiness, and collision
-  identity. It does not delete a stale draft.
-- BuildCandidate runs the Rust-owned build action once from a clean exact SHA. It validates the
-  updater private key with the Rust trust owner, exposes the passphrase only to the allowlisted
-  Tauri child through the Credential Manager action, and never puts it in arguments or the caller
-  environment. Rust purges only the exact stale candidate outputs inside the canonical build
-  directories, verifies the installer/signature pair, runs Authenticode, updater signature, SBOM,
-  bundle, updater fixture, Defender, and NSIS qualification checks, then writes and validates the
-  canonical qualification and production evidence. The frozen candidate manifest binds every
-  artifact and evidence file to its exact bytes. Rust qualification adapters launch the current
-  xtask executable directly with process-tree deadlines; they do not invoke Cargo recursively while
-  the release command is running.
-- PublishRelease is the only phase that creates or publishes the GitHub release. It reconciles
-  only a draft with a matching transaction marker, never modifies a tag, uploads exactly the
-  manifest's installer and signature, checks server size and SHA-256 values, downloads both assets
-  for exact-byte comparison, and publishes only after every pre-publication check passes. After a
-  publication attempt it reconciles by the exact release ID. Unknown publication status is an
-  incident and never triggers cleanup.
-- PromoteMetadata requires an immutable published release and revalidates its exact asset pair.
-  It generates metadata in Rust, validates its schema and per-channel SemVer monotonicity, then
-  updates only the canonical channel file with the contents-scoped GitHub App token.
-- FinalVerify re-fetches the exact release, validates tag, target SHA, channel, immutable status,
-  exact asset names, sizes and digests, then compares the validated metadata branch bytes with the
-  unauthenticated raw endpoint used by the runtime updater. It records final state only after all
-  checks pass.
+### 3.2 Phase Responsibilities
 
-All release API operations go through the Transport boundary. The production GhTransport restricts
-endpoints to the canonical GitHub repository and upload/raw hosts, applies process deadlines with
-process-tree teardown, bounds captured diagnostics, and retries only HTTP 429 and selected 5xx
-responses a fixed number of times. The fake transport covers success, idempotency, conflicting
-drafts, transient/permanent errors, partial upload, digest and asset mismatch, publication
-ambiguity, cleanup refusal, metadata divergence, and workflow identity failures. The CI self-test
-uses only this fake transport and does not call the production release API.
+- **Preflight** is read only against GitHub. It verifies the exact latest successful main CI run,
+  current release and tag state, stable GitHub Latest, metadata bootstrap and both channels, version
+  monotonicity, and collision identity. It does not mutate a release or tag.
+- **BuildUnsigned** strips ambient signing overrides, installs locked Bun dependencies, disables
+  Tauri updater sidecar generation, invokes the pinned NSIS build exactly once, and exports only the
+  canonical installer with a typed run-bound digest manifest.
+- **SignCandidate** validates the downloaded manifest and exact file inventory, checks the installer
+  hash before signing, verifies that the encrypted key matches Key ID `19AABD2E7838818C`, signs with
+  the pinned Tauri CLI, verifies the detached signature and version, and confirms the installer hash
+  is unchanged after signing. It does not run qualification helpers.
+- **QualifyCandidate** revalidates the unsigned handoff and production signature, freezes the
+  installer/signature pair, verifies the unsigned Authenticode policy, generates and verifies the
+  SPDX SBOM, validates the Tauri bundle, runs the updater fixture and Defender scan, and performs
+  Windows NSIS install/launch/uninstall qualification. It writes a candidate manifest whose records
+  include exact sizes and SHA-256 values.
+- **VerifyCandidate** runs in the attestation job from the qualified artifact and a clean exact-SHA
+  checkout. It revalidates all records and the production updater signature before creating
+  attestations for the exact installer, signature, and SBOM.
+- **VerifyAttestations** runs before publication. It checks GitHub OIDC attestation signer workflow,
+  source identity, subject digest, the installer/signature, and the SPDX SBOM against the candidate
+  manifest. Failure cannot proceed to publish.
+- **PublishRelease** is the only release mutation phase. It verifies candidate bytes and current
+  metadata/Latest state again, reconciles only an exactly owned unpublished draft, refuses existing
+  tags, uploads exactly the manifest's `.exe` and `.sig`, checks GitHub's SHA-256 asset digest and
+  read-back bytes, and publishes only after checks pass. An unknown publication outcome is never
+  retried as a second mutation or automatically cleaned up.
+- **PromoteMetadata** requires the immutable release and revalidates the exact asset pair. Rust
+  generates channel JSON, verifies schema and per-channel SemVer monotonicity, and updates only the
+  canonical `release-metadata` channel file with the contents-scoped GitHub App token.
+- **FinalVerify** fetches the exact release, GitHub Latest, stable/beta metadata Contents and raw
+  endpoint, checks release identity and asset digests, and records final state only after convergence.
 
+All GitHub release calls go through the existing Rust `Transport` boundary. It restricts repository
+and upload/raw endpoints, bounds timeouts and diagnostics, retries transient GET requests only, and
+never automatically repeats a mutation whose result is unknown. Fake-transport self-tests cover
+success, idempotency, tag and draft collisions, stale CI/source identity, transient and permanent
+errors, partial upload, digest and inventory mismatch, attestation failure, metadata App failure,
+cleanup refusal, publication ambiguity, stable Latest divergence, and metadata convergence.
 ### 3.3 Read-only release doctor
 
 cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>]
@@ -316,10 +442,10 @@ Provides provenance and audit trails for release records:
 1. **Preflight failure**: Invalid dispatch identity, source SHA, SemVer/channel, release notes,
    current Latest state, or metadata readiness stops before candidate build and publication.
 
-2. **BuildCandidate failure**: No GitHub release or tag is created. The Rust owner purges only the
-   exact canonical stale installer, signature, and evidence outputs before starting the build.
-   The workflow cleanup step removes the owned RUNNER_TEMP state root even after an earlier step
-   fails. The next build cannot reuse a prior candidate.
+2. **Build/sign/qualification failure**: No GitHub release or tag is created. The Rust owner purges
+   only the exact canonical stale installer, signature, and evidence outputs before starting the
+   build. The workflow cleanup step removes the owned `RUNNER_TEMP` state root even after an earlier
+   step fails. The next run cannot reuse a prior attempt's candidate.
 
 3. **Pre-publication failure**: PublishRelease may remove only an unpublished draft whose exact
    transaction marker matches the owned transaction. It never deletes a tag. Cleanup errors are

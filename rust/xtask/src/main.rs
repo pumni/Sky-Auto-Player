@@ -16,7 +16,9 @@ mod credential_cli;
 mod hash;
 mod nsis_harness;
 mod process;
+mod release_handoff;
 mod release_metadata;
+mod release_signing;
 mod release_v4;
 mod repo;
 mod sbom;
@@ -32,7 +34,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask ci classify [--full | --paths-file <path> | --base-sha <sha> --head-sha <sha>] [--github-output <path>]\n  cargo xtask ci candidate <create|validate> [options]\n  cargo xtask ci bridge <create|validate|build-fixture> [options]\n  cargo xtask ci nsis smoke --installer <path> --candidate-root <dir> --source-sha <sha> --fixture-root <new-path> --registry-mode <fresh-install|preserve-existing-state> [--evidence-root <dir>] (--allow-hosted-disposable-runner|--allow-protected-release-runner)\n  cargo xtask ci updater-fixture run --candidate-root <dir> --bridge-root <dir> --source-sha <sha> --fixture-root <new-path> (--allow-hosted-disposable-runner|--allow-protected-release-runner) [--evidence <path>]\n  cargo xtask ci source-identity --candidate-version <semver> [--source-sha <sha>] [--require-worktree-version] [--format <text|json>]\n  cargo xtask calibration build\n  cargo xtask calibration verify-installed --install-root <dir> --expected-size <bytes> --expected-sha256 <digest> [--evidence <path>]\n  cargo xtask calibration project-evidence --input <json> --output <path>\n  cargo xtask credential <status|read-check|write-stdin|delete|run-action> [options]\n  cargo xtask authenticode verify --mode <unsigned-zero-budget|test|production> --artifact <path> [--artifact <path>] [--evidence <path>]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask audit assembly <dispatch|prepared-normal|modifier-guard> [options]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-v4 <preflight|build-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify|cleanup|self-test> --state-root <dir> [--key-path <path>] [--workflow-sha <sha>]\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
+    "Usage:\n  cargo xtask ci linux-process-smoke\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask ci classify [--full | --paths-file <path> | --base-sha <sha> --head-sha <sha>] [--github-output <path>]\n  cargo xtask ci candidate <create|validate> [options]\n  cargo xtask ci bridge <create|validate|build-fixture> [options]\n  cargo xtask ci nsis smoke --installer <path> --candidate-root <dir> --source-sha <sha> --fixture-root <new-path> --registry-mode <fresh-install|preserve-existing-state> [--evidence-root <dir>] (--allow-hosted-disposable-runner|--allow-protected-release-runner)\n  cargo xtask ci updater-fixture run --candidate-root <dir> --bridge-root <dir> --source-sha <sha> --fixture-root <new-path> (--allow-hosted-disposable-runner|--allow-protected-release-runner) [--evidence <path>]\n  cargo xtask ci source-identity --candidate-version <semver> [--source-sha <sha>] [--require-worktree-version] [--format <text|json>]\n  cargo xtask calibration build\n  cargo xtask calibration verify-installed --install-root <dir> --expected-size <bytes> --expected-sha256 <digest> [--evidence <path>]\n  cargo xtask calibration project-evidence --input <json> --output <path>\n  cargo xtask credential <status|read-check|write-stdin|delete|run-action> [options]\n  cargo xtask authenticode verify --mode <unsigned-zero-budget|test|production> --artifact <path> [--artifact <path>] [--evidence <path>]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask audit assembly <dispatch|prepared-normal|modifier-guard> [options]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|verify-signature|verify-test-signature|rotation-self-test>\n  cargo xtask updater-trust verify-signature --installer <path> --signature <path> --expected-version <semver>\n  cargo xtask updater-trust verify-test-signature --installer <path> --signature <path> --public-key <path> --expected-version <semver> --expected-sha256 <sha256> --source-sha <sha> [--evidence <path>]\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-v4 <preflight|build-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify|cleanup|self-test> --state-root <dir> [--key-path <path>] [--workflow-sha <sha>]\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -45,10 +47,16 @@ fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<St
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("{}", usage());
+        eprintln!(
+            "{}\n\nRecovery-only commands:\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan-sha256 <sha256> --confirm-metadata-only-recovery",
+            usage()
+        );
         return Err("a command is required".into());
     }
     match args[0].as_str() {
+        "ci" if args.get(1).map(String::as_str) == Some("linux-process-smoke") => {
+            release_v4::linux_process_smoke(&args[2..])
+        }
         "ci" => ci::run(&repo::root(), &args[1..]),
         "authenticode" => authenticode::run(&repo::root(), &args[1..]),
         "calibration" => calibration::run(&repo::root(), &args[1..]),
@@ -277,6 +285,7 @@ fn main() -> Result<()> {
         "updater-trust" if args.get(1).map(String::as_str) == Some("verify-signature") => {
             let mut installer = None;
             let mut signature = None;
+            let mut expected_version = None;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -285,6 +294,10 @@ fn main() -> Result<()> {
                     }
                     "--signature" => {
                         signature = Some(required_value(&args, &mut i, "--signature")?)
+                    }
+                    "--expected-version" => {
+                        expected_version =
+                            Some(required_value(&args, &mut i, "--expected-version")?)
                     }
                     option => {
                         return Err(format!(
@@ -297,8 +310,81 @@ fn main() -> Result<()> {
             }
             let installer = installer.ok_or("verify-signature requires --installer <path>")?;
             let signature = signature.ok_or("verify-signature requires --signature <path>")?;
-            updater_trust::verify_updater_signature(Path::new(&installer), Path::new(&signature))?;
-            Ok(())
+            let expected_version =
+                expected_version.ok_or("verify-signature requires --expected-version <semver>")?;
+            updater_trust::verify_updater_signature_for_version(
+                Path::new(&installer),
+                Path::new(&signature),
+                &expected_version,
+            )
+        }
+        "updater-trust" if args.get(1).map(String::as_str) == Some("verify-test-signature") => {
+            let mut installer = None;
+            let mut signature = None;
+            let mut public_key = None;
+            let mut expected_version = None;
+            let mut expected_sha256 = None;
+            let mut source_sha = None;
+            let mut evidence = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--installer" => {
+                        installer = Some(required_value(&args, &mut i, "--installer")?)
+                    }
+                    "--signature" => {
+                        signature = Some(required_value(&args, &mut i, "--signature")?)
+                    }
+                    "--public-key" => {
+                        public_key = Some(required_value(&args, &mut i, "--public-key")?)
+                    }
+                    "--expected-version" => {
+                        expected_version =
+                            Some(required_value(&args, &mut i, "--expected-version")?)
+                    }
+                    "--expected-sha256" => {
+                        expected_sha256 = Some(required_value(&args, &mut i, "--expected-sha256")?)
+                    }
+                    "--source-sha" => {
+                        source_sha = Some(required_value(&args, &mut i, "--source-sha")?)
+                    }
+                    "--evidence" => evidence = Some(required_value(&args, &mut i, "--evidence")?),
+                    option => {
+                        return Err(format!(
+                            "unknown updater-trust verify-test-signature option: {option}"
+                        )
+                        .into());
+                    }
+                }
+                i += 1;
+            }
+            updater_trust::verify_test_updater_signature(
+                Path::new(
+                    installer
+                        .as_deref()
+                        .ok_or("verify-test-signature requires --installer <path>")?,
+                ),
+                Path::new(
+                    signature
+                        .as_deref()
+                        .ok_or("verify-test-signature requires --signature <path>")?,
+                ),
+                Path::new(
+                    public_key
+                        .as_deref()
+                        .ok_or("verify-test-signature requires --public-key <path>")?,
+                ),
+                expected_version
+                    .as_deref()
+                    .ok_or("verify-test-signature requires --expected-version <semver>")?,
+                expected_sha256
+                    .as_deref()
+                    .ok_or("verify-test-signature requires --expected-sha256 <sha256>")?,
+                source_sha
+                    .as_deref()
+                    .ok_or("verify-test-signature requires --source-sha <sha>")?,
+                evidence.as_deref().map(Path::new),
+            )
         }
         "updater-trust" if args.get(1).map(String::as_str) == Some("rotation-self-test") => {
             let mut old_public = None;

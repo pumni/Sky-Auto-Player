@@ -108,7 +108,7 @@ physical-acceptance or assembly-qualification evidence.
 | scripts/verify_v4_authenticode.ps1, scripts/v4_authenticode_crypto.ps1 | Windows Authenticode and CMS facts consumed by Rust policy | ADAPTER RETAINED |
 | scripts/setup_v4_test_signing.ps1, scripts/cleanup_v4_test_signing.ps1 | Disposable Windows CI test certificate lifecycle | ADAPTER RETAINED |
 | scripts/v4_updater_credential_broker.ps1, scripts/set_v4_updater_session_credential.ps1, scripts/remove_v4_updater_session_credential.ps1, scripts/verify_v4_updater_private_key.ps1 | Operator interaction and compatibility entrypoints for Rust Credential Manager and updater trust owners | ADAPTER RETAINED |
-| scripts/verify_v4_release_runner.ps1, scripts/scan_v4_defender_exact.ps1 | Protected runner boundary and exact-candidate Defender platform checks called during release workflow | ADAPTER RETAINED |
+| scripts/scan_v4_defender_exact.ps1 | Exact-candidate Defender platform check called during Rust-owned release qualification | ADAPTER RETAINED |
 | scripts/test_v4_updater_private_key.ps1, scripts/test_v4_production_signing_contract.ps1, scripts/test_v4_authenticode_integrity.ps1 | Windows provider, key-output secrecy, and independent Authenticode/CMS regression coverage | ADAPTER RETAINED |
 | scripts/audit_dispatch_assembly.ps1, scripts/audit_prepared_normal_assembly.ps1, scripts/audit_modifier_guard_assembly.ps1 | Existing runner command lines; each forwards its current parameters to `cargo xtask audit assembly` | KEEP — thin adapters; Rust owns parsing and policy |
 | scripts/lib/startup_calibration_projection.ps1 | Existing `export_startup_calibration_evidence.ps1` entrypoint; forwards serialized JSON to `cargo xtask calibration project-evidence` | KEEP — thin adapter; Rust owns canonical LF bytes and sidecar hashing |
@@ -121,7 +121,10 @@ physical-acceptance or assembly-qualification evidence.
 | scripts/capture_defender_evidence.ps1 | Separate Defender evidence workflow/tooling; removal remains blocked by issue #521 pending owner confirmation | MANUAL KEEP |
 
 The packaged, updater_e2e, and protected release jobs retain real Windows install and update
-coverage only on their guarded runner contexts. This Wave did not run a real installer or access
-production credentials. Local and CI transaction tests use fake GitHub transport and synthetic
-artifacts. The production release and rehearsal workflows remain on their protected dedicated
-runner and existing operation deadlines.
+coverage only on their guarded runner contexts. The production transaction now uses GitHub-hosted
+Windows and Ubuntu jobs; the old `rehearse-v4.yml` is retired. `scripts/verify_v4_release_runner.ps1`
+was removed after consumer inventory found no active caller; its old path remains in the CI
+classifier only so a deletion/change to that path still selects release validation. The Defender
+scanner remains because Rust release qualification calls it. Local and CI transaction tests use
+fake GitHub transport and synthetic artifacts. Wave C read public v4.2.0 release evidence only and
+did not access production secrets or mutate any production release state.

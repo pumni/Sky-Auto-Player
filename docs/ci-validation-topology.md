@@ -51,6 +51,11 @@ Desktop web/browser meaning; native validation uses the separate
 `desktop_native_required` output. `desktop_e2e_required` remains the
 development-server E2E selector.
 
+The Linux `static` job installs Go 1.25.0 and actionlint v1.7.12 at pinned
+versions, then validates every `.github/workflows/*.yml` file before running
+the Rust static and security contracts. The Rust release-runner contract
+checks that these pins and the actionlint invocation remain in CI.
+
 Unknown paths, classifier failures, and explicit full validation set every
 lane to true. This preserves fail-closed behavior.
 
@@ -150,11 +155,13 @@ calibration verification runs only its bounded `--help` probe.
 ## Wave C execution and teardown bounds
 
 The `updater_bridge`, `updater_e2e`, and `packaged` jobs in
-`.github/workflows/ci.yml` each have a 90-minute job timeout. The protected
-`release-v4.yml` and `rehearse-v4.yml` Windows jobs do not set
-`timeout-minutes`; GitHub Actions currently applies its documented 360-minute
-job default. This records the existing outer limits without adding a shorter
-deadline to release qualification.
+`.github/workflows/ci.yml` each have a 90-minute job timeout. The hosted
+`.github/workflows/release-v4.yml` bounds its unsigned build at 120 minutes,
+sign/qualification at 180 minutes, attestation at 45 minutes, publication at
+60 minutes, and final verification at 20 minutes. Its preflight and metadata
+jobs do not set `timeout-minutes` and therefore use GitHub Actions' documented
+360-minute job default. The retired `rehearse-v4.yml` production rebuild no
+longer exists.
 
 The fixture owners also bound individual work: bridge dependency installation
 has a 45-minute deadline and bridge compilation has a 75-minute deadline;

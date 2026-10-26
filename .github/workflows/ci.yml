@@ -280,6 +280,22 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal
 
+      - name: Set up pinned Go for workflow validation
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.25.0
+          check-latest: false
+
+      - name: Validate GitHub Actions workflows with pinned actionlint
+        env:
+          GOBIN: ${{ runner.temp }}/actionlint-bin
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOBIN"
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$GOBIN/actionlint" -color
+
       - name: Run startup calibration export hash self-test
         env:
           RUSTUP_TOOLCHAIN: 1.99.1
@@ -449,6 +465,49 @@ jobs:
               echo "- Elapsed seconds: \`$elapsed\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  linux_process_runtime:
+    name: Linux production subprocess runtime
+    needs: changes
+    if: needs.changes.outputs.release_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Rust cache for Linux production binary
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: "rust -> target"
+          cache-targets: true
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Run Rust tests on Linux
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
+
+      - name: Build non-test Linux release binary
+        run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+
+      - name: Exercise production subprocess and recovery transports with fake CLIs
+        run: timeout --signal=TERM --kill-after=10s 5m rust/target/release/xtask ci linux-process-smoke
 
   supply_chain:
     name: Supply-chain and advisory security
@@ -1271,7 +1330,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -1300,6 +1359,7 @@ jobs:
           DESKTOP_WEB_REQUIRED: ${{ needs.changes.outputs.desktop_required }}
           STATIC_RESULT: ${{ needs.static.result }}
           RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
+          LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
@@ -1319,8 +1379,10 @@ jobs:
           fi
           if [[ "$RELEASE_REQUIRED" == "true" ]]; then
             [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
+            [[ "$LINUX_PROCESS_RESULT" == "success" ]]
           else
             [[ "$RELEASE_CONTRACT_RESULT" == "skipped" ]]
+            [[ "$LINUX_PROCESS_RESULT" == "skipped" ]]
           fi
           if [[ "$SUPPLY_CHAIN_REQUIRED" == "true" ]]; then
             [[ "$SUPPLY_CHAIN_RESULT" == "success" ]]

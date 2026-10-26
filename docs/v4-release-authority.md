@@ -25,8 +25,10 @@ beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata
 
 The frontend cannot provide an endpoint, key, URL, or downgrade policy. The `release-metadata`
 branch is mutable deployment state separate from immutable GitHub Release assets. Its channel files
-are created only by a successful qualified promotion; bootstrap must not create fabricated
-`latest.json` files. If a channel file is missing or invalid, updater checks fail closed.
+are created or advanced by a successful qualified promotion, or by the separately protected
+metadata-only recovery procedure for an already immutable, fully verified stable release; bootstrap
+must not create fabricated `latest.json` files. If a channel file is missing or invalid, updater
+checks fail closed.
 Branch ruleset/protection and the approved workflow/maintainer promotion path ensure only qualified
 releases update these endpoints.
 
@@ -102,12 +104,15 @@ identity, exact platform shape, signature contents, canonical URLs, and channel 
 
 ## Release transaction
 
-The production workflow `.github/workflows/release-v4.yml` is manual, runs only through the
-protected `v4-production-release` environment on the dedicated signing runner, and uses the
-canonical repository token for same-repository release operations. Its transaction is:
+The production workflow `.github/workflows/release-v4.yml` is `workflow_dispatch` only and requires
+canonical `main`, the latest exact-head successful CI run, and Rust Preflight. It uses GitHub-hosted
+Windows and Ubuntu runners. The protected `v4-production-release` environment is referenced by the
+signing and metadata jobs; updater signing secrets are mapped only into the Rust signing step. Its
+transaction is:
 
 ```text
-Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
+Preflight -> BuildUnsigned -> SignCandidate -> QualifyCandidate -> VerifyCandidate
+          -> VerifyAttestations -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
 
 The ordering is security-critical:
@@ -116,12 +121,23 @@ The ordering is security-critical:
    `release-context.json` state artifact, then validates the canonical repository, `main` source ref,
    and `release-metadata` branch readiness. It is externally read-only: collision state and any
    matching stale draft are observed and classified, but not mutated.
-2. **BuildCandidate**: Builds the exact source SHA once and completes full qualification against the
-   local candidate bundle (unsigned-zero-budget Authenticode, Tauri updater signature verification,
-   SPDX SBOM, exact bundle verification, previous-v4 E2E fixture, Defender exact scan, catalog
-   verification, and active-playback update rejection). Freezes `candidate-manifest.json` with SHA-256
-   digests and file sizes.
-3. **PublishRelease**: Executes a single cohesive publication transaction boundary:
+2. **BuildUnsigned**: Builds one unsigned canonical NSIS installer with Tauri updater sidecar
+   creation disabled. A typed run/attempt-bound manifest records its exact size and SHA-256. This job
+   has no production secrets or write permissions.
+3. **SignCandidate**: Independently verifies the downloaded artifact name, inventory, source and
+   workflow SHAs, run ID/attempt, canonical filename, size, and digest. The Rust adapter verifies the
+   encrypted updater key against Key ID `19AABD2E7838818C`, signs the same installer bytes, and
+   verifies the unchanged installer hash and version-bound signature. The key and passphrase are
+   mapped only to this signing step.
+4. **QualifyCandidate**: Runs in the next step without signing secrets. It revalidates the handoff
+   and signed installer, then completes unsigned Authenticode verification, Tauri updater signature
+   verification, SPDX SBOM, exact bundle verification, updater fixture, Defender exact scan, and
+   Windows NSIS install/launch/uninstall qualification. It freezes `candidate-manifest.json` with
+   SHA-256 digests and file sizes.
+5. **VerifyCandidate / VerifyAttestations**: Independently revalidates the candidate in the OIDC
+   attestation job, attests the exact installer, signature, and SPDX SBOM, then verifies those
+   attestations against the exact source, workflow, and candidate digests before publication.
+6. **PublishRelease**: Executes a single cohesive publication transaction boundary:
    - Reconciles and deletes only a matching unpublished stale draft immediately before creating the
      new draft; mismatched or published releases fail closed.
    - Creates a draft in the official repository (`name = $Tag`, `draft = true`, `make_latest = "false"`)
@@ -134,13 +150,15 @@ The ordering is security-critical:
    - Reconciles publication status strictly via exact `release_id` GET.
    - Fail-closed draft self-cleanup: on any failure prior to the irreversible publication PATCH,
      the transaction immediately deletes the remote draft release.
-4. **PromoteMetadata**: Mints scoped App token, generates, validates, and promotes only the selected
+7. **PromoteMetadata**: Mints a contents-scoped App token, generates, validates, and promotes only the selected
    stable/beta metadata file after the guard.
-5. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
+8. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
    `raw.githubusercontent.com` endpoint used by the client.
 
-Published release assets and tags are never repaired in place. A failed unpublished draft is
-automatically cleaned up or recreated; a published fix requires a greater SemVer release.
+Published release assets, tags, and release records are never repaired in place. A failed
+unpublished draft is automatically cleaned up or recreated. A valid immutable stable release may
+advance only `channels/stable/latest.json` through the explicit metadata-only recovery procedure
+below. A defective published artifact still requires a greater SemVer release.
 
 ## Qualification and trust properties
 
@@ -152,8 +170,9 @@ The release gate preserves these properties while using one repository:
 - SPDX SBOM and GitHub OIDC provenance/attestation;
 - immutable GitHub Release publication;
 - strict stable/beta SemVer policy and monotonic metadata promotion;
-- protected production environment and isolated signing runner;
-- runner-local updater key outside the workspace, with no key-path workflow input;
+- protected production environment and GitHub-hosted signing job;
+- encrypted updater key and passphrase are available only as Environment secrets to the signer;
+- no Windows Credential Manager or permanent self-hosted runner requirement in production;
 - least-privilege permissions and `persist-credentials: false` checkout;
 - fail-closed validation when metadata, release assets, signatures, or public endpoints differ.
 
@@ -177,12 +196,12 @@ state as authoritative, eliminating complex mutable intermediate phase files:
 
 ### Transaction marker and candidate manifest
 
-1. **`candidate-manifest.json`**: Frozen during `BuildCandidate`, recording exact file paths, roles,
+1. **`candidate-manifest.json`**: Frozen during `QualifyCandidate`, recording exact file paths, roles,
    sizes, and SHA-256 digests for all candidate assets and public release projections.
 2. **Transaction marker**: When creating the draft, the pipeline embeds a hidden HTML comment marker
    into the release body:
    ```text
-   <!-- v4-release-tx: {"repository":"...","run_id":"...","source_sha":"...","version":"...","tag":"..."} -->
+   <!-- v4-release-tx: {"repository":"...","run_id":"...","run_attempt":2,"source_sha":"...","version":"...","tag":"..."} -->
    ```
    This uniquely binds the remote draft to the specific workflow run, repository, source SHA, and tag,
    allowing deterministic reconciliation upon network timeout and safe cleanup of stale matching drafts.
@@ -213,7 +232,7 @@ run evidence to report the observed lifecycle phases and diagnostic classificati
 Dispatched manually from `refs/heads/main` via `workflow_dispatch`. Progresses through the canonical pipeline. A fresh run refuses adoption of any existing published release.
 
 #### Pre-publication failure (`RECOVERABLE_PRE_PUBLICATION_FAILURE`)
-If a failure occurs during `Preflight`, `BuildCandidate`, or before publication PATCH in `PublishRelease`:
+If a failure occurs during `Preflight`, `BuildUnsigned`, `SignCandidate`, `QualifyCandidate`, or before publication PATCH in `PublishRelease`:
 - No external release is published.
 - Any draft release on GitHub is automatically deleted by draft self-cleanup, or by `Preflight` on the next run.
 - Recovery: Safe to re-dispatch.
@@ -227,7 +246,9 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
   - **NEVER** delete, recreate, or replace the published git tag.
   - **NEVER** delete, edit, or replace the published GitHub release.
   - **NEVER** dispatch another release with the same version number.
-  - **NEVER** manually promote `release-metadata` without an explicitly authorized, reviewed recovery procedure.
+  - **NEVER** manually edit `release-metadata` or invoke the normal promotion command for incident
+    recovery. The only exception is the explicit metadata-only workflow documented below, with an
+    operator-reviewed plan and protected Environment approval.
 - **Corrective Action**:
   - The default corrective release target after engineering acceptance is a new SemVer release (`v4.1.2` for the prior v4.1.1 incident; `v4.1.3` for the current v4.1.2 incident).
   - Fix the underlying defect on a corrective branch, qualify locally, and dispatch a fresh release for the new SemVer.
@@ -246,6 +267,61 @@ Under coordinator decision for program #322 / issue #323:
 - **No immediate corrective release**: A corrective release (e.g. `v4.1.1`) is not dispatched at this time solely to reconcile metadata while v3 retirement and update UX standardization remain in flight.
 - **Immutable release preserved**: `v4.1.0` and its assets remain an immutable published incident record.
 - **Reconciliation deferred to final program release**: Stable metadata remains at `4.0.1` until the final stable release of program #322. That final release will execute through the canonical `release-v4.yml` pipeline, simultaneously becoming GitHub Latest and advancing stable metadata in a single transaction.
+
+### Metadata-only recovery for a valid immutable stable release
+
+`.github/workflows/v4-metadata-recovery.yml` supports one narrowly scoped exception when normal
+publication completed but stable metadata promotion did not. The operator first dispatches a
+read-only plan from `main`, reviews its artifact and plan SHA-256, then dispatches apply with that
+plan run ID/hash and explicit confirmation. The protected `v4-production-release` Environment
+approval is required before the write-capable App token is minted.
+
+The `plan` and `apply` jobs each declare `actions: read`, `attestations: read`, and `contents: read`.
+Apply maps the workflow token to `GH_TOKEN` for Actions run/job inspection, release and asset
+reads, Contents reads, and `gh attestation verify`. The App token remains a separate
+`V4_METADATA_WRITE_TOKEN` with only repository `contents: write`; Rust uses it solely for the
+single canonical `PUT` to `channels/stable/latest.json`. All GitHub API reads, including
+write-result readback, use the workflow token; the public stable raw endpoint is checked without
+credentials. Runtime-only child environments keep the App token out of unrelated GitHub CLI and
+helper processes.
+
+The shared process adapter is implemented for both Windows and Linux production builds. Captured
+stdout and stderr are each limited to 64 KiB, subprocesses have explicit deadlines, and timeout or
+stranded-pipe cleanup terminates the owned process tree (a Unix process group on Linux). Asset
+downloads create a new destination exclusively and remove partial bytes after command failure or
+timeout. The Linux CI lane runs the Rust tests, builds the release-mode xtask, and exercises its
+recovery transport against temporary fake `gh` and `curl` executables with disposable tokens. This
+checks the actual Linux production subprocess path without production credentials or network access.
+
+Rust revalidates the exact release ID, tag, transaction source SHA and run attempt, Latest identity,
+exact public asset inventory and digests, production signature and version-bound trusted comment,
+installer/signature provenance, SPDX SBOM provenance, stable/beta metadata, and public stable
+endpoint. Every prepublication job through the exact immutable `publish` job must have completed
+successfully. The original workflow may conclude `failure` only when `metadata_promote` failed or
+timed out and `final_verify` was skipped; cancelled runs, failed publication, other failed jobs,
+missing jobs, and ambiguous attempts fail closed. Apply binds the downloaded plan to the selected
+run ID, artifact name, source SHA, attempt, and operator-reviewed SHA-256, then recomputes the plan
+and checks state again at the write boundary. It can perform at most one Contents API write for `channels/stable/latest.json`;
+beta metadata, releases, assets and tags are never changed. Readback, GitHub Latest, beta
+immutability and public endpoint convergence must all pass. Unknown write outcomes are reconciled
+with GET only and are never retried as a second mutation.
+
+This recovery is for advancing the pointer to an already valid immutable release. It does not
+support version rollback, replacing a defective installer, repairing an asset or retagging. If a
+release is not fully valid, stop and use the approved incident containment procedure or prepare a
+new greater SemVer release after qualification. Beta remains unavailable until separately
+qualified and promoted through the normal beta release path.
+
+Operational sequence:
+
+1. Dispatch `.github/workflows/v4-metadata-recovery.yml` from `main` with `operation=plan`, the exact
+   stable tag, and `confirm=false`.
+2. Review the plan artifact and recorded `plan_sha256`. Stop if any release, Latest, digest,
+   signature, provenance, channel, or endpoint fact is unexpected.
+3. Dispatch `operation=apply` with the same tag, the plan run ID and SHA-256, and `confirm=true`.
+   Complete the protected Environment approval.
+4. Verify the successful run summary and final stable endpoint. If the run reports an unknown
+   outcome, perform read-only inspection and do not repeat the write until the exact state is known.
 
 ### Diagnostic tooling
 
@@ -272,9 +348,9 @@ React          = presentation
 
 | Layer | Component / Tooling | Canonical Ownership | Non-Goals / Excluded Roles |
 |---|---|---|---|
-| **GitHub Actions** | .github/workflows/release-v4.yml, rehearse-v4.yml, ci.yml | Protected runner lifecycle, exact source checkout, scoped token issuance, and OIDC attestations. The workflow invokes the ordered Rust release phases. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
-| **cargo xtask (Rust)** | rust/xtask/src/release_v4.rs and related release_metadata.rs, sbom.rs, version.rs, updater_trust.rs, calibration.rs, nsis_harness.rs, updater_fixture.rs | Single transaction authority for Preflight, BuildCandidate, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform and credential adapters; does not mint GitHub workflow tokens or operate the release runner. |
-| **PowerShell** | scripts/sign_v4_authenticode.ps1, verify_v4_authenticode.ps1, v4_authenticode_crypto.ps1, scan_v4_defender_exact.ps1, verify_v4_release_runner.ps1, Credential Manager operator helpers | Narrow Windows and provider adapters for Authenticode signing and facts, Defender scanning, runner boundary checks, and operator credential setup. | Does not own the release transaction, GitHub API policy, release-doctor, state transitions, evidence schemas, or SemVer. |
+| **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Hosted job lifecycle, exact source checkout, scoped permissions, protected environment references, artifact handoff, and OIDC attestations. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
+| **cargo xtask (Rust)** | `rust/xtask/src/release_v4.rs`, `release_handoff.rs`, `release_signing.rs`, and related release modules | Single transaction authority for Preflight, BuildUnsigned, SignCandidate, QualifyCandidate, VerifyCandidate, VerifyAttestations, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform adapters; does not mint GitHub workflow tokens or select the release runner. |
+| **PowerShell** | `scripts/verify_v4_authenticode.ps1`, `scripts/v4_authenticode_crypto.ps1`, `scripts/scan_v4_defender_exact.ps1`, local Credential Manager helpers | Narrow Windows and provider adapters for Authenticode facts, Defender scanning, and independent local maintenance. | Does not own the production release transaction, GitHub API policy, release-doctor, state transitions, evidence schemas, or SemVer. |
 | **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
 | **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 

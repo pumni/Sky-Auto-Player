@@ -1,5 +1,7 @@
 mod bindings;
 mod ci_contracts;
+mod hosted_signing;
+mod recovery_auth;
 mod release_pipeline;
 mod release_runner;
 mod tauri_metadata;
@@ -131,6 +133,7 @@ fn run_with_session(
             ci_contracts::ci_control_plane_contract(&root)?;
             tauri_metadata::release_metadata_contract(&root)?;
             release_runner::release_runner_contract(&root)?;
+            hosted_signing::hosted_v4_signing_workflow_contract(&root)?;
             release_pipeline::v4_release_pipeline_contract(&root)?;
             ci_contracts::packaged_ci_contract(&root)?;
             tauri_metadata::v4_legacy_updater_retirement(&root)?;
@@ -146,6 +149,8 @@ fn run_with_session(
                 .ok_or("binding export directory is not valid UTF-8")?
                 .to_owned();
             let test_env = [
+                // Cargo must not replace the running xtask.exe in the shared target directory.
+                ("CARGO_TARGET_DIR", "rust/target/check-all-rust-tests"),
                 ("RUST_TEST_THREADS", "1"),
                 ("TS_RS_EXPORT_DIR", export_dir.as_str()),
             ];

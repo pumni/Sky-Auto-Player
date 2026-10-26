@@ -105,9 +105,15 @@ const RETAINED_VERSIONED_LITERALS: &[(&str, &str)] = &[
     ),
 ];
 
-// Stable-id search cases intentionally preserve this literal Windows path.
-const RETAINED_FIXTURE_DATA_LITERALS: &[(&str, &str)] =
-    &[("tests/fixtures/catalog/search_cases.json", "Wave2")];
+// Stable fixtures may preserve identifiers that resemble implementation
+// sequence markers; each exception remains tied to one exact source literal.
+const RETAINED_FIXTURE_DATA_LITERALS: &[(&str, &str)] = &[
+    ("tests/fixtures/catalog/search_cases.json", "Wave2"),
+    (
+        "rust/xtask/src/updater_trust.rs",
+        "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzNkNBMzdDQzBDM0IyREQKUldUZHNzUEFmS05zWXpKMjRqcnRlR3FFY0pVMFVybEsydlhmdDhWV0RGYWYxc01wNlJSZ3dJWmQK",
+    ),
+];
 
 fn identifier_boundary(bytes: &[u8], index: usize) -> bool {
     index == 0
@@ -536,6 +542,16 @@ mod tests {
         assert!(!line_has_unretained_history_name(
             "scripts/lib/evidence_publication_contract.ps1",
             branch
+        ));
+
+        let fixture_key = RETAINED_FIXTURE_DATA_LITERALS[1].1;
+        assert!(!line_has_unretained_history_name(
+            "rust/xtask/src/updater_trust.rs",
+            fixture_key
+        ));
+        assert!(line_has_unretained_history_name(
+            "rust/xtask/src/updater_trust.rs",
+            &format!("{fixture_key} r3_future_probe")
         ));
     }
 

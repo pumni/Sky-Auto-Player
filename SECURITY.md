@@ -77,6 +77,47 @@ and user-triggered execution model. The current normative contract is
 Changes to updater trust, release provenance, allowed download origins, preserved user data, or
 transaction integrity are security-sensitive and require direct tests/evidence for that boundary.
 
+### Protected v4 release authority
+
+Production updater signing secrets belong only to the protected `v4-production-release`
+Environment and the `sign_qualify` job in `.github/workflows/release-v4.yml`. The pinned Rust
+control executable is built and source/hash checked before the secrets are mapped; the signing step
+invokes that executable directly and does not run Cargo. Every Bun child in the secret-bearing
+signing phase, including the Tauri CLI version probe and local-key challenge, clears inherited
+environment state and receives only the bounded Windows runtime allowlist plus the temporary key
+path/passphrase required by Tauri. Git identity subprocesses use the same runtime-only policy. A
+spawned-child regression verifies the actual environment contains no synthetic signing secrets,
+GitHub tokens, or unrelated secrets. This reduces secret propagation to children; the protected
+ephemeral hosted job remains the signing trust boundary.
+
+The production updater public root remains Key ID `19AABD2E7838818C`. Never place updater signing
+secrets in repository/organization scope, pull-request CI, test-key proof jobs, artifacts, command
+arguments, or logs. The separate metadata App private key is consumed only by its token-mint action
+in the normal release workflow or the manually dispatched metadata-recovery workflow; its token is
+scoped to this repository and `contents: write`.
+
+`.github/workflows/v4-metadata-recovery.yml` is limited to an already immutable, valid stable
+release. A read-only plan binds the original successful release run, release ID/tag/source SHA,
+asset inventory and digests, version-bound production signature, attestations, GitHub Latest,
+stable/beta metadata, and the public endpoint. Apply requires the operator-reviewed plan hash,
+explicit confirmation, and protected Environment approval. It can write only
+`channels/stable/latest.json` once, then requires exact readback, unchanged beta/Latest state, and
+public endpoint convergence. It cannot rebuild, sign, replace assets, change a release/tag, or roll
+metadata backward. Unknown write results are read back and never blindly retried. Beta auto-update
+remains disabled.
+
+The recovery `plan` and `apply` jobs explicitly grant `actions: read`, `attestations: read`, and
+`contents: read`. In apply, `GH_TOKEN` is the workflow token and is used for Actions run/job,
+release/asset, Contents readback, and attestation verification. After the recovery executable is
+built and verified and Environment approval is granted, a separate repository App token has only
+`contents: write`; Rust selects it only for the single canonical Contents `PUT` to
+`channels/stable/latest.json`. Every GitHub API GET, including post-write Contents readback, uses
+the read-only token; the public raw stable endpoint is checked without credentials. The App token
+remains in `V4_METADATA_WRITE_TOKEN` and is passed only to the selected write child; runtime-only
+child environments prevent it from reaching unrelated subprocesses. The operator procedure and
+recovery limits are in
+[`v4-release-authority.md`](docs/v4-release-authority.md).
+
 ## Reporting a Vulnerability
 
 If you discover a way to bypass these mandates or abuse Sky Auto Player through memory tampering,

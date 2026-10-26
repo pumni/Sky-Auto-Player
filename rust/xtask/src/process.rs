@@ -1,27 +1,83 @@
 use crate::Result;
-use std::ffi::OsStr;
-#[cfg(windows)]
+use std::env;
+use std::ffi::{OsStr, OsString};
+#[cfg(any(windows, unix))]
 use std::fs::OpenOptions;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::sync::mpsc;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 use std::time::Instant;
 
-#[cfg(any(test, windows))]
+#[cfg(unix)]
+mod unix;
+
+#[cfg(any(test, windows, unix))]
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 const READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 const PROCESS_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+const RUNTIME_CHILD_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "HOME",
+];
+
+fn runtime_environment_from(
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    explicit: &[(String, String)],
+) -> Result<Vec<(String, String)>> {
+    let mut environment = Vec::<(String, String)>::new();
+    for (name, value) in inherited {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !RUNTIME_CHILD_ENV_ALLOWLIST
+            .iter()
+            .any(|allowed| name.eq_ignore_ascii_case(allowed))
+        {
+            continue;
+        }
+        let value = value.into_string().map_err(|_| {
+            format!("allowlisted runtime environment variable {name} is not Unicode")
+        })?;
+        set_environment_value(&mut environment, name.to_owned(), value);
+    }
+    for (name, value) in explicit {
+        set_environment_value(&mut environment, name.clone(), value.clone());
+    }
+    Ok(environment)
+}
+
+fn set_environment_value(environment: &mut Vec<(String, String)>, name: String, value: String) {
+    if let Some((_, existing_value)) = environment
+        .iter_mut()
+        .find(|(existing_name, _)| existing_name.eq_ignore_ascii_case(&name))
+    {
+        *existing_value = value;
+    } else {
+        environment.push((name, value));
+    }
+}
 
 pub fn run(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Result<()> {
     let output = capture(program, args, cwd, env)?;
@@ -111,13 +167,13 @@ pub fn capture_owned(
         .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()).into())
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 struct BoundedReader {
     finished: mpsc::Receiver<Vec<u8>>,
     handle: JoinHandle<()>,
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 fn spawn_bounded_reader<R>(mut reader: R) -> BoundedReader
 where
     R: Read + Send + 'static,
@@ -142,7 +198,7 @@ where
     BoundedReader { finished, handle }
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(test, windows, unix))]
 fn collect_bounded_reader(
     reader: &mut Option<BoundedReader>,
     timeout: Duration,
@@ -282,23 +338,32 @@ impl OwnedChild {
 }
 
 #[cfg(windows)]
+struct ChildEnvironment<'a> {
+    values: &'a [(String, String)],
+    remove: &'a [String],
+    clear_inherited: bool,
+}
+
+#[cfg(windows)]
 fn spawn_owned(
     program: &OsStr,
     args: &[String],
     cwd: &Path,
-    env: &[(String, String)],
-    remove_env: &[String],
+    environment: ChildEnvironment<'_>,
     stdout: Stdio,
     stderr: Stdio,
 ) -> Result<OwnedChild> {
     let mut command = Command::new(program);
-    for name in remove_env {
+    if environment.clear_inherited {
+        command.env_clear();
+    }
+    for name in environment.remove {
         command.env_remove(name);
     }
     command
         .args(args)
         .current_dir(cwd)
-        .envs(env.iter().map(|(key, value)| (key, value)))
+        .envs(environment.values.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
@@ -321,8 +386,11 @@ pub(crate) fn spawn_owned_silent_filtered(
         program,
         args,
         cwd,
-        env,
-        remove_env,
+        ChildEnvironment {
+            values: env,
+            remove: remove_env,
+            clear_inherited: false,
+        },
         Stdio::null(),
         Stdio::null(),
     )
@@ -335,6 +403,7 @@ fn capture_windows_timeout(
     cwd: &Path,
     env: &[(String, String)],
     remove_env: &[String],
+    clear_environment: bool,
     timeout: Duration,
 ) -> Result<Output> {
     eprintln!(
@@ -347,8 +416,11 @@ fn capture_windows_timeout(
         program,
         args,
         cwd,
-        env,
-        remove_env,
+        ChildEnvironment {
+            values: env,
+            remove: remove_env,
+            clear_inherited: clear_environment,
+        },
         Stdio::piped(),
         Stdio::piped(),
     )?;
@@ -417,80 +489,6 @@ fn capture_windows_timeout(
     })
 }
 
-#[cfg(all(test, not(windows)))]
-fn capture_non_windows_test_timeout(
-    program: &OsStr,
-    args: &[String],
-    cwd: &Path,
-    env: &[(String, String)],
-    remove_env: &[String],
-    timeout: Duration,
-) -> Result<Output> {
-    let mut command = Command::new(program);
-    for name in remove_env {
-        command.env_remove(name);
-    }
-    command
-        .args(args)
-        .current_dir(cwd)
-        .envs(env.iter().map(|(key, value)| (key, value)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to execute {}: {error}", program.to_string_lossy()))?;
-    let mut stdout_reader = Some(spawn_bounded_reader(
-        child.stdout.take().ok_or("missing stdout pipe")?,
-    ));
-    let mut stderr_reader = Some(spawn_bounded_reader(
-        child.stderr.take().ok_or("missing stderr pipe")?,
-    ));
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if started.elapsed() >= timeout {
-            let _ = child.kill();
-            child.wait()?;
-            let stdout =
-                collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-            let stderr =
-                collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-            return Err(format!(
-                "process {} timed out after {}ms\nstdout: {}\nstderr: {}",
-                program.to_string_lossy(),
-                timeout.as_millis(),
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            )
-            .into());
-        }
-        thread::sleep(POLL_INTERVAL);
-    };
-    let stdout = collect_bounded_reader(&mut stdout_reader, READER_DRAIN_TIMEOUT, "stdout")?;
-    let stderr = collect_bounded_reader(&mut stderr_reader, READER_DRAIN_TIMEOUT, "stderr")?;
-    if stdout.is_none() || stderr.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = collect_bounded_reader(&mut stdout_reader, PROCESS_TEARDOWN_TIMEOUT, "stdout");
-        let _ = collect_bounded_reader(&mut stderr_reader, PROCESS_TEARDOWN_TIMEOUT, "stderr");
-        return Err("process exited while a descendant kept a captured pipe open".into());
-    }
-    Ok(Output {
-        status,
-        stdout: stdout.expect("stdout checked above"),
-        stderr: stderr.expect("stderr checked above"),
-    })
-}
-
 #[cfg(test)]
 fn capture_owned_timeout(
     program: &OsStr,
@@ -512,26 +510,158 @@ pub(crate) fn capture_owned_timeout_filtered(
 ) -> Result<Output> {
     #[cfg(windows)]
     {
-        capture_windows_timeout(program, args, cwd, env, remove_env, timeout)
+        capture_windows_timeout(program, args, cwd, env, remove_env, false, timeout)
     }
-    #[cfg(all(test, not(windows)))]
+    #[cfg(unix)]
     {
-        capture_non_windows_test_timeout(program, args, cwd, env, remove_env, timeout)
+        unix::capture_timeout(program, args, cwd, env, remove_env, false, timeout)
     }
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(not(windows), not(unix)))]
     {
         let _ = (program, args, cwd, env, remove_env, timeout);
-        Err("bounded Windows process-tree execution is unavailable on this platform".into())
+        Err("bounded process capture is unavailable on this platform".into())
     }
 }
 
-#[cfg(windows)]
+pub(crate) fn capture_owned_timeout_runtime_only(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    explicit_env: &[(String, String)],
+    timeout: Duration,
+) -> Result<Output> {
+    let child_env = runtime_environment_from(env::vars_os(), explicit_env)?;
+    capture_owned_timeout_isolated(program, args, cwd, &child_env, timeout)
+}
+
+fn capture_owned_timeout_isolated(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    child_env: &[(String, String)],
+    timeout: Duration,
+) -> Result<Output> {
+    #[cfg(windows)]
+    {
+        capture_windows_timeout(program, args, cwd, child_env, &[], true, timeout)
+    }
+    #[cfg(unix)]
+    {
+        unix::capture_timeout(program, args, cwd, child_env, &[], true, timeout)
+    }
+    #[cfg(all(not(windows), not(unix)))]
+    {
+        let _ = (program, args, cwd, child_env, timeout);
+        Err("bounded process capture is unavailable on this platform".into())
+    }
+}
+
+pub fn capture_text_runtime_only(program: &str, args: &[&str], cwd: &Path) -> Result<String> {
+    let child_env = runtime_environment_from(env::vars_os(), &[])?;
+    let output = capture_owned_timeout_isolated(
+        OsStr::new(program),
+        &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+        cwd,
+        &child_env,
+        Duration::from_secs(30),
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "{program} failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+}
+
+#[cfg(any(windows, unix))]
 pub(crate) fn capture_owned_timeout_to_file_filtered(
     program: &OsStr,
     args: &[String],
     cwd: &Path,
     env: &[(String, String)],
     remove_env: &[String],
+    stdout_path: &Path,
+    timeout: Duration,
+) -> Result<Output> {
+    #[cfg(windows)]
+    {
+        capture_windows_timeout_to_file(
+            program,
+            args,
+            cwd,
+            ChildEnvironment {
+                values: env,
+                remove: remove_env,
+                clear_inherited: false,
+            },
+            stdout_path,
+            timeout,
+        )
+    }
+    #[cfg(unix)]
+    {
+        unix::capture_timeout_to_file(
+            program,
+            args,
+            cwd,
+            env,
+            remove_env,
+            false,
+            stdout_path,
+            timeout,
+        )
+    }
+}
+
+#[cfg(any(windows, unix))]
+pub(crate) fn capture_owned_timeout_to_file_runtime_only(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    explicit_env: &[(String, String)],
+    stdout_path: &Path,
+    timeout: Duration,
+) -> Result<Output> {
+    let child_env = runtime_environment_from(env::vars_os(), explicit_env)?;
+    #[cfg(windows)]
+    {
+        capture_windows_timeout_to_file(
+            program,
+            args,
+            cwd,
+            ChildEnvironment {
+                values: &child_env,
+                remove: &[],
+                clear_inherited: true,
+            },
+            stdout_path,
+            timeout,
+        )
+    }
+    #[cfg(unix)]
+    {
+        unix::capture_timeout_to_file(
+            program,
+            args,
+            cwd,
+            &child_env,
+            &[],
+            true,
+            stdout_path,
+            timeout,
+        )
+    }
+}
+
+#[cfg(windows)]
+fn capture_windows_timeout_to_file(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    environment: ChildEnvironment<'_>,
     stdout_path: &Path,
     timeout: Duration,
 ) -> Result<Output> {
@@ -549,8 +679,7 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
         program,
         args,
         cwd,
-        env,
-        remove_env,
+        environment,
         Stdio::from(stdout_file),
         Stdio::piped(),
     )?;
@@ -594,7 +723,7 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(unix)))]
 pub(crate) fn capture_owned_timeout_to_file_filtered(
     _program: &OsStr,
     _args: &[String],
@@ -604,7 +733,19 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
     _stdout_path: &Path,
     _timeout: Duration,
 ) -> Result<Output> {
-    Err("bounded Windows process-tree execution is unavailable on this platform".into())
+    Err("bounded file capture is unavailable on this platform".into())
+}
+
+#[cfg(all(not(windows), not(unix)))]
+pub(crate) fn capture_owned_timeout_to_file_runtime_only(
+    _program: &OsStr,
+    _args: &[String],
+    _cwd: &Path,
+    _explicit_env: &[(String, String)],
+    _stdout_path: &Path,
+    _timeout: Duration,
+) -> Result<Output> {
+    Err("bounded file capture is unavailable on this platform".into())
 }
 
 #[cfg(windows)]
@@ -748,6 +889,160 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("before-timeout"));
+    }
+
+    #[test]
+    fn runtime_child_environment_is_captured_after_secret_isolation() {
+        let test_root = std::env::temp_dir().join(format!(
+            "sky-xtask-runtime-env-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&test_root).expect("create test directory");
+        struct RemoveTestRoot(PathBuf);
+        impl Drop for RemoveTestRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _remove_root = RemoveTestRoot(test_root.clone());
+        let capture_path = test_root.join("child-environment.txt");
+
+        let mut inherited = env::vars_os().collect::<Vec<_>>();
+        inherited.extend([
+            (
+                OsString::from("V4_TAURI_UPDATER_PRIVATE_KEY"),
+                OsString::from("synthetic-private-key"),
+            ),
+            (
+                OsString::from("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"),
+                OsString::from("synthetic-workflow-passphrase"),
+            ),
+            (
+                OsString::from("GITHUB_TOKEN"),
+                OsString::from("synthetic-github-token"),
+            ),
+            (
+                OsString::from("GH_TOKEN"),
+                OsString::from("synthetic-recovery-read-token"),
+            ),
+            (
+                OsString::from("V4_METADATA_WRITE_TOKEN"),
+                OsString::from("synthetic-recovery-write-token"),
+            ),
+            (
+                OsString::from("ACTIONS_RUNTIME_TOKEN"),
+                OsString::from("synthetic-actions-token"),
+            ),
+            (
+                OsString::from("NPM_TOKEN"),
+                OsString::from("synthetic-package-token"),
+            ),
+            (
+                OsString::from("UNRELATED_PRIVATE_VALUE"),
+                OsString::from("synthetic-unrelated-secret"),
+            ),
+        ]);
+        let explicit = [
+            (
+                "TAURI_SIGNING_PRIVATE_KEY_PATH".to_owned(),
+                test_root.join("updater.key").to_string_lossy().into_owned(),
+            ),
+            (
+                "TAURI_SIGNING_PRIVATE_KEY_PASSWORD".to_owned(),
+                "synthetic-signer-passphrase".to_owned(),
+            ),
+            (
+                "GH_TOKEN".to_owned(),
+                "synthetic-recovery-read-token".to_owned(),
+            ),
+            (
+                "SKY_XTASK_RUNTIME_CHILD_ENV_CAPTURE".to_owned(),
+                capture_path.to_string_lossy().into_owned(),
+            ),
+        ];
+        let child_env = runtime_environment_from(inherited, &explicit)
+            .expect("filter runtime context and explicit signer values");
+        let executable = std::env::current_exe().expect("test executable path");
+        let args = [
+            "--exact",
+            "process::tests::runtime_environment_probe_child",
+            "--nocapture",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        let output = capture_owned_timeout_isolated(
+            executable.as_os_str(),
+            &args,
+            &test_root,
+            &child_env,
+            Duration::from_secs(10),
+        )
+        .expect("spawn isolated environment probe");
+        assert!(output.status.success());
+
+        let observed = std::fs::read_to_string(&capture_path).expect("child environment capture");
+        let observed = observed
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let expected = child_env
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(observed, expected);
+        assert_eq!(
+            observed.get("TAURI_SIGNING_PRIVATE_KEY_PASSWORD"),
+            Some(&"synthetic-signer-passphrase".to_owned())
+        );
+        assert_eq!(
+            observed.get("GH_TOKEN"),
+            Some(&"synthetic-recovery-read-token".to_owned()),
+            "an isolated recovery CLI child receives the selected read-only token"
+        );
+        for forbidden in [
+            "V4_TAURI_UPDATER_PRIVATE_KEY",
+            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
+            "GITHUB_TOKEN",
+            "V4_METADATA_WRITE_TOKEN",
+            "ACTIONS_RUNTIME_TOKEN",
+            "NPM_TOKEN",
+            "UNRELATED_PRIVATE_VALUE",
+        ] {
+            assert!(
+                !observed.contains_key(forbidden),
+                "child received {forbidden}"
+            );
+        }
+        for fake_secret in [
+            "synthetic-private-key",
+            "synthetic-workflow-passphrase",
+            "synthetic-github-token",
+            "synthetic-recovery-write-token",
+            "synthetic-actions-token",
+            "synthetic-package-token",
+            "synthetic-unrelated-secret",
+        ] {
+            assert!(!observed.values().any(|value| value == fake_secret));
+        }
+    }
+
+    #[test]
+    fn runtime_environment_probe_child() {
+        let Some(path) = env::var_os("SKY_XTASK_RUNTIME_CHILD_ENV_CAPTURE") else {
+            return;
+        };
+        let mut values = env::vars().collect::<Vec<_>>();
+        values.sort_by(|left, right| left.0.cmp(&right.0));
+        let snapshot = values
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}\n"))
+            .collect::<String>();
+        std::fs::write(path, snapshot).expect("write child environment snapshot");
     }
 
     #[cfg(windows)]

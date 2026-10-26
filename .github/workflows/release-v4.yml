@@ -10,13 +10,12 @@ concurrency:
   group: v4-release-control-plane
   cancel-in-progress: false
 
-defaults:
-  run:
-    shell: pwsh
+env:
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
-  release-dispatch-boundary:
-    name: Validate canonical production dispatch context
+  prepare:
+    name: Validate exact main source and release readiness
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -34,97 +33,357 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main" || { echo "release must be dispatched from refs/heads/main" >&2; exit 1; }
           test "$EXPECTED_DEFAULT_BRANCH" = "main" || { echo "canonical repository default branch must be main" >&2; exit 1; }
 
-      - name: Require exact-head production qualification
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_WORKFLOW: rehearse-v4.yml
-        run: |
-          set -euo pipefail
-          qualified_run="$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA&per_page=100" \
-            --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success" and .event == "workflow_dispatch" and .head_branch == "main" and .name == "V4 Production Pre-Publication Qualification") | .id' | head -n 1)"
-          test -n "$qualified_run" || {
-            echo "no successful exact-head production qualification exists for $GITHUB_SHA" >&2
-            exit 1
-          }
-          echo "accepted exact-head production qualification run $qualified_run for $GITHUB_SHA"
-
-  release:
-    name: V4 production release state machine
-    needs: release-dispatch-boundary
-    if: needs.release-dispatch-boundary.result == 'success'
-    # This label set is intentionally narrower than a general Windows pool.
-    # It identifies the accepted dedicated/single-tenant release runner.
-    runs-on: [self-hosted, windows, v4-release, single-tenant]
-    environment: v4-production-release
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-
-    steps:
-      - name: Initialize release state root
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { throw "RUNNER_TEMP is unavailable" }
-          if ([string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { throw "GITHUB_RUN_ID is unavailable" }
-          "V4_RELEASE_STATE_ROOT=$env:RUNNER_TEMP\sky-v4-release-$env:GITHUB_RUN_ID" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Check out the exact requested source SHA
+      - name: Check out the exact dispatched source SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify isolated production runner boundary
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify_v4_release_runner.ps1 `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
 
-      - name: Preflight release request and repository readiness
+      - name: Require latest exact-head CI run to be successful
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: cargo xtask release-v4 preflight --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+        run: |
+          set -euo pipefail
+          ci_run="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=100" \
+            --jq '.workflow_runs | map(select(.event == "push" and .head_branch == "main" and .head_sha == env.GITHUB_SHA)) | max_by(.run_number) // empty')"
+          if [[ -z "$ci_run" || "$ci_run" == "null" ]]; then
+            echo "no CI run exists for exact main source $GITHUB_SHA" >&2
+            exit 1
+          fi
+          status="$(jq -r '.status // empty' <<<"$ci_run")"
+          conclusion="$(jq -r '.conclusion // empty' <<<"$ci_run")"
+          run_id="$(jq -r '.id // empty' <<<"$ci_run")"
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+            echo "latest exact-head CI run $run_id is not successful (status=$status conclusion=$conclusion)" >&2
+            exit 1
+          fi
+          echo "accepted latest successful exact-head CI run $run_id for $GITHUB_SHA"
 
-      - name: Build and qualify the single production candidate
-        run: cargo xtask release-v4 build-candidate --state-root $env:V4_RELEASE_STATE_ROOT --key-path $env:V4_UPDATER_PRIVATE_KEY_PATH --workflow-sha $env:GITHUB_SHA
+      - name: Initialize isolated release state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="$RUNNER_TEMP/sky-v4-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$state_root" || { echo "release state root already exists" >&2; exit 1; }
+          mkdir "$state_root"
+          echo "V4_RELEASE_STATE_ROOT=$state_root" >> "$GITHUB_ENV"
+          echo "path=$state_root" >> "$GITHUB_OUTPUT"
 
-      - name: Preserve bounded qualification evidence
+      - name: Run Rust Preflight against current public release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release-v4 preflight --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
+
+      - name: Hand off bounded preflight context
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: v4-qualification-evidence-${{ github.run_id }}
+          name: v4-context-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-manifest.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-evidence\*.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\fixture-http-evidence.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\defender-evidence.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\preflight-evidence.json
+            ${{ steps.state.outputs.path }}/release-context.json
+            ${{ steps.state.outputs.path }}/release-owner.json
+            ${{ steps.state.outputs.path }}/preflight-evidence.json
 
-      - name: Attest exact candidate and signature
+      - name: Clean runner-local preflight state
+        if: always() && steps.state.outputs.path != ''
+        shell: bash
+        run: cargo xtask release-v4 cleanup --state-root "$V4_RELEASE_STATE_ROOT"
+
+  build_unsigned:
+    name: Build one unsigned Windows NSIS installer
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Initialize isolated build state
+        id: state
+        run: |
+          $stateRoot = Join-Path $env:RUNNER_TEMP "sky-v4-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $stateRoot) { throw "Release build state root already exists" }
+          New-Item -ItemType Directory -Path $stateRoot | Out-Null
+          "V4_RELEASE_STATE_ROOT=$stateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "path=$stateRoot" | Add-Content $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run preflight context
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Install pinned Rust and Bun toolchains
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Build and export the unsigned handoff once
+        run: cargo xtask release-v4 build-unsigned --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+
+      - name: Upload immutable unsigned installer and typed manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.state.outputs.path }}/unsigned-handoff/manifest.json
+            ${{ steps.state.outputs.path }}/unsigned-handoff/*.exe
+
+      - name: Clean runner-local unsigned build state
+        if: always() && steps.state.outputs.path != ''
+        run: cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT
+
+  sign_qualify:
+    name: Protected production signing and exact-byte qualification
+    needs: [prepare, build_unsigned]
+    runs-on: windows-latest
+    timeout-minutes: 180
+    environment: v4-production-release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Initialize isolated signing state
+        id: state
+        run: |
+          $stateRoot = Join-Path $env:RUNNER_TEMP "sky-v4-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $stateRoot) { throw "Protected signing state root already exists" }
+          New-Item -ItemType Directory -Path $stateRoot | Out-Null
+          "V4_RELEASE_STATE_ROOT=$stateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "path=$stateRoot" | Add-Content $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run preflight context
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Download exact-run unsigned candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}/incoming-unsigned
+
+      - name: Install pinned Rust and Bun toolchains
+        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Install locked signer dependencies without building the installer
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build the pinned Rust release control executable before secrets
+        id: release-control
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sourceSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $sourceSha -ne ([string]$env:GITHUB_SHA).ToLowerInvariant()) {
+            throw "Release control source is not the exact dispatched SHA"
+          }
+          $controlPath = Join-Path $env:GITHUB_WORKSPACE "rust/target/release/xtask.exe"
+          if (-not (Test-Path -LiteralPath $controlPath -PathType Leaf)) {
+            throw "Pinned release control executable was not produced"
+          }
+          $controlSha = (Get-FileHash -LiteralPath $controlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "source_sha=$sourceSha" | Add-Content $env:GITHUB_OUTPUT -Encoding utf8
+          "sha256=$controlSha" | Add-Content $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Verify prebuilt control executable identity before secrets
+        shell: pwsh
+        env:
+          EXPECTED_RELEASE_CONTROL_SOURCE_SHA: ${{ steps.release-control.outputs.source_sha }}
+          EXPECTED_RELEASE_CONTROL_SHA256: ${{ steps.release-control.outputs.sha256 }}
+        run: |
+          $sourceSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $sourceSha -ne ([string]$env:GITHUB_SHA).ToLowerInvariant() -or
+              $sourceSha -ne $env:EXPECTED_RELEASE_CONTROL_SOURCE_SHA.ToLowerInvariant()) {
+            throw "Prebuilt release control source identity changed"
+          }
+          $controlPath = Join-Path $env:GITHUB_WORKSPACE "rust/target/release/xtask.exe"
+          $controlSha = (Get-FileHash -LiteralPath $controlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($controlSha -ne $env:EXPECTED_RELEASE_CONTROL_SHA256.ToLowerInvariant()) {
+            throw "Prebuilt release control executable digest changed"
+          }
+
+      - name: Sign the independently verified exact candidate
+        env:
+          V4_TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}
+          V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}
+          EXPECTED_RELEASE_CONTROL_SHA256: ${{ steps.release-control.outputs.sha256 }}
+        run: |
+          $controlPath = Join-Path $env:GITHUB_WORKSPACE "rust/target/release/xtask.exe"
+          $controlSha = (Get-FileHash -LiteralPath $controlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($controlSha -ne $env:EXPECTED_RELEASE_CONTROL_SHA256.ToLowerInvariant()) {
+            throw "Prebuilt release control executable digest changed before signing"
+          }
+          & $controlPath release-v4 sign-candidate --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Qualify the signed exact installer without signing secrets
+        run: cargo xtask release-v4 qualify-candidate --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+
+      - name: Upload signed candidate, handoff manifest, and qualification evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.state.outputs.path }}/release-context.json
+            ${{ steps.state.outputs.path }}/release-owner.json
+            ${{ steps.state.outputs.path }}/preflight-evidence.json
+            ${{ steps.state.outputs.path }}/candidate-bundle/*
+            ${{ steps.state.outputs.path }}/candidate-evidence/*
+            ${{ steps.state.outputs.path }}/candidate-manifest.json
+            ${{ steps.state.outputs.path }}/release-state.json
+            ${{ steps.state.outputs.path }}/fixture-http-evidence.json
+            ${{ steps.state.outputs.path }}/defender-evidence.json
+
+      - name: Remove runner-local signing material
+        if: always() && steps.state.outputs.path != ''
+        run: cargo xtask release-v4 cleanup-signing-material
+
+      - name: Clean runner-local signing state
+        if: always() && steps.state.outputs.path != ''
+        run: cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT
+
+  attest:
+    name: Verify qualified handoff and publish OIDC attestations
+    needs: [prepare, sign_qualify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Initialize isolated attestation state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="$RUNNER_TEMP/sky-v4-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$state_root" || { echo "Attestation state root already exists" >&2; exit 1; }
+          mkdir "$state_root"
+          echo "V4_RELEASE_STATE_ROOT=$state_root" >> "$GITHUB_ENV"
+          echo "path=$state_root" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run qualified candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Independently verify source, run, manifest, and production signature
+        run: cargo xtask release-v4 verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
+
+      - name: Attest exact installer and updater signature
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-bundle\*.exe
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-bundle\*.sig
+            ${{ steps.state.outputs.path }}/candidate-bundle/*.exe
+            ${{ steps.state.outputs.path }}/candidate-bundle/*.sig
 
-      - name: Attest SPDX SBOM for exact candidate
+      - name: Attest SPDX SBOM for exact installer
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-bundle\*.exe
-          sbom-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-evidence\SBOM.spdx.json
+          subject-path: ${{ steps.state.outputs.path }}/candidate-bundle/*.exe
+          sbom-path: ${{ steps.state.outputs.path }}/candidate-evidence/SBOM.spdx.json
 
-      - name: Verify exact-source OIDC attestations
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: cargo xtask release-v4 verify-attestations --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+      - name: Clean runner-local attestation state
+        if: always() && steps.state.outputs.path != ''
+        shell: bash
+        run: cargo xtask release-v4 cleanup --state-root "$V4_RELEASE_STATE_ROOT"
 
-      - name: Mint release-metadata GitHub App token before publication
+  metadata_probe:
+    name: Verify metadata App access before publication
+    needs: [prepare, attest]
+    runs-on: ubuntu-latest
+    environment: v4-production-release
+    permissions:
+      contents: read
+    steps:
+      - name: Initialize isolated metadata probe state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="$RUNNER_TEMP/sky-v4-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$state_root" || { echo "Metadata probe state root already exists" >&2; exit 1; }
+          mkdir "$state_root"
+          echo "V4_RELEASE_STATE_ROOT=$state_root" >> "$GITHUB_ENV"
+          echo "path=$state_root" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run qualified candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Revalidate qualified handoff before using metadata credentials
+        run: cargo xtask release-v4 verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
+
+      - name: Mint write-capable metadata App token before publication
         id: metadata-app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -134,26 +393,194 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
 
-      - name: Probe release-metadata App access before publication
+      - name: Probe release-metadata App write capability without mutation
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-        run: cargo xtask release-v4 probe-metadata-token --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+          V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write
+        run: cargo xtask release-v4 probe-metadata-token --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
-      - name: Publish the qualified candidate immutably
+      - name: Clean runner-local metadata probe state
+        if: always() && steps.state.outputs.path != ''
+        shell: bash
+        run: cargo xtask release-v4 cleanup --state-root "$V4_RELEASE_STATE_ROOT"
+
+  publish:
+    name: Verify attestations and publish immutable release assets
+    needs: [prepare, attest, metadata_probe]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - name: Initialize isolated publication state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="$RUNNER_TEMP/sky-v4-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$state_root" || { echo "Publication state root already exists" >&2; exit 1; }
+          mkdir "$state_root"
+          echo "V4_RELEASE_STATE_ROOT=$state_root" >> "$GITHUB_ENV"
+          echo "path=$state_root" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run qualified candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Verify OIDC attestations against exact published bytes and source
         env:
           GH_TOKEN: ${{ github.token }}
-        run: cargo xtask release-v4 publish-release --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+        run: cargo xtask release-v4 verify-attestations --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
-      - name: Promote release metadata only after immutable publication
+      - name: Publish the exact qualified candidate immutably
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release-v4 publish-release --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
+
+      - name: Hand off published release state
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-published-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.state.outputs.path }}/release-context.json
+            ${{ steps.state.outputs.path }}/release-owner.json
+            ${{ steps.state.outputs.path }}/preflight-evidence.json
+            ${{ steps.state.outputs.path }}/candidate-bundle/*
+            ${{ steps.state.outputs.path }}/candidate-evidence/*
+            ${{ steps.state.outputs.path }}/candidate-manifest.json
+            ${{ steps.state.outputs.path }}/release-state.json
+
+      - name: Clean runner-local publication state
+        if: always() && steps.state.outputs.path != ''
+        shell: bash
+        run: cargo xtask release-v4 cleanup --state-root "$V4_RELEASE_STATE_ROOT"
+
+  metadata_promote:
+    name: Promote only the qualified release channel metadata
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    environment: v4-production-release
+    permissions:
+      contents: read
+    steps:
+      - name: Initialize isolated metadata promotion state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="$RUNNER_TEMP/sky-v4-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$state_root" || { echo "Metadata promotion state root already exists" >&2; exit 1; }
+          mkdir "$state_root"
+          echo "V4_RELEASE_STATE_ROOT=$state_root" >> "$GITHUB_ENV"
+          echo "path=$state_root" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run published release state
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-published-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Mint contents-scoped metadata App token
+        id: metadata-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Promote channel metadata after immutable release publication
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-        run: cargo xtask release-v4 promote-metadata --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+        run: cargo xtask release-v4 promote-metadata --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
-      - name: Re-fetch and verify final public release and metadata
+      - name: Hand off promoted metadata state
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-promoted-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.state.outputs.path }}/release-context.json
+            ${{ steps.state.outputs.path }}/release-owner.json
+            ${{ steps.state.outputs.path }}/preflight-evidence.json
+            ${{ steps.state.outputs.path }}/candidate-bundle/*
+            ${{ steps.state.outputs.path }}/candidate-evidence/*
+            ${{ steps.state.outputs.path }}/candidate-manifest.json
+            ${{ steps.state.outputs.path }}/release-state.json
+
+      - name: Clean runner-local metadata promotion state
+        if: always() && steps.state.outputs.path != ''
+        shell: bash
+        run: cargo xtask release-v4 cleanup --state-root "$V4_RELEASE_STATE_ROOT"
+
+  final_verify:
+    name: Verify public release assets and updater metadata
+    needs: [prepare, metadata_promote]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Initialize isolated final verification state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="$RUNNER_TEMP/sky-v4-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$state_root" || { echo "Final verification state root already exists" >&2; exit 1; }
+          mkdir "$state_root"
+          echo "V4_RELEASE_STATE_ROOT=$state_root" >> "$GITHUB_ENV"
+          echo "path=$state_root" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact dispatched source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact-run promoted release state
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-promoted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Re-fetch and verify immutable assets, stable endpoint, and metadata
         env:
           GH_TOKEN: ${{ github.token }}
-        run: cargo xtask release-v4 final-verify --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+        run: cargo xtask release-v4 final-verify --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
-      - name: Clean runner-local release state
-        if: always()
-        run: cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT
+      - name: Clean runner-local final verification state
+        if: always() && steps.state.outputs.path != ''
+        shell: bash
+        run: cargo xtask release-v4 cleanup --state-root "$V4_RELEASE_STATE_ROOT"

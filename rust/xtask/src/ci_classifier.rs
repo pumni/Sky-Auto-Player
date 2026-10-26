@@ -125,7 +125,6 @@ fn classify_path(
             && ![
                 ".github/workflows/pages.yml",
                 ".github/workflows/release-v4.yml",
-                ".github/workflows/rehearse-v4.yml",
             ]
             .contains(&path))
         || (path.starts_with(".github/actions/")
@@ -135,12 +134,7 @@ fn classify_path(
         return;
     }
 
-    if [
-        ".github/workflows/release-v4.yml",
-        ".github/workflows/rehearse-v4.yml",
-    ]
-    .contains(&path)
-    {
+    if path == ".github/workflows/release-v4.yml" {
         classification.add("release_required");
         return;
     }
@@ -324,7 +318,16 @@ fn classify_path(
         ]);
         return;
     }
-    if path == "rust/xtask/src/nsis_harness.rs" || path == "rust/xtask/src/process.rs" {
+    if [
+        "rust/xtask/src/nsis_harness.rs",
+        "rust/xtask/src/process.rs",
+        "rust/xtask/src/process/unix.rs",
+        "rust/xtask/src/release_v4.rs",
+        "rust/xtask/src/release_v4/recovery.rs",
+        "rust/xtask/src/release_v4/recovery/process_smoke.rs",
+    ]
+    .contains(&path)
+    {
         classification.add_many(&[
             "rust_required",
             "desktop_native_required",
@@ -806,6 +809,23 @@ mod tests {
                 "release_required",
             ],
         );
+        for path in [
+            "rust/xtask/src/process.rs",
+            "rust/xtask/src/process/unix.rs",
+            "rust/xtask/src/release_v4.rs",
+            "rust/xtask/src/release_v4/recovery.rs",
+            "rust/xtask/src/release_v4/recovery/process_smoke.rs",
+        ] {
+            assert_lanes(
+                &classify_paths([path.to_owned()]),
+                &[
+                    "rust_required",
+                    "desktop_native_required",
+                    "package_required",
+                    "release_required",
+                ],
+            );
+        }
         let updater_owner = classify_paths(["rust/xtask/src/updater_fixture.rs".to_owned()]);
         assert_lanes(
             &updater_owner,
@@ -839,7 +859,6 @@ mod tests {
             ),
             (".github/workflows/pages.yml", &["site_required"]),
             (".github/workflows/release-v4.yml", &["release_required"]),
-            (".github/workflows/rehearse-v4.yml", &["release_required"]),
             (".github/workflows/ci.yml", &LANES),
             (
                 ".config/security_audit_baseline.json",
