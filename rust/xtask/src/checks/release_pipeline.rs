@@ -200,9 +200,10 @@ fn rust_release_state_machine_contract(
         "actions/attest@",
         "actions/upload-artifact@",
         "actions/download-artifact@",
-        "Mint read-only metadata App token",
+        "Mint write-capable metadata App token before publication",
         "Mint contents-scoped metadata App token",
-        "permission-contents: read",
+        "Probe release-metadata App write capability without mutation",
+        "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write",
         "permission-contents: write",
         "if: always()",
     ] {
@@ -297,6 +298,45 @@ fn rust_release_state_machine_contract(
         .find(|(name, _)| name == "Sign the independently verified exact candidate")
         .map(|(_, block)| block.as_str())
         .ok_or("protected signing job is missing its narrow Rust signing step")?;
+    let control_build = sign_steps
+        .iter()
+        .find(|(name, _)| name == "Build the pinned Rust release control executable before secrets")
+        .map(|(_, block)| block.as_str())
+        .ok_or("protected signing job must build its Rust control executable before secrets")?;
+    let control_verify = sign_steps
+        .iter()
+        .find(|(name, _)| name == "Verify prebuilt control executable identity before secrets")
+        .map(|(_, block)| block.as_str())
+        .ok_or("protected signing job must verify its Rust control executable before secrets")?;
+    let build_index = sign_steps
+        .iter()
+        .position(|(name, _)| {
+            name == "Build the pinned Rust release control executable before secrets"
+        })
+        .ok_or("protected signing job lost the Rust control build step")?;
+    let verify_index = sign_steps
+        .iter()
+        .position(|(name, _)| name == "Verify prebuilt control executable identity before secrets")
+        .ok_or("protected signing job lost the pre-secret executable verification step")?;
+    let signing_index = sign_steps
+        .iter()
+        .position(|(name, _)| name == "Sign the independently verified exact candidate")
+        .ok_or("protected signing job lost its secret-bearing signing step")?;
+    if build_index >= verify_index
+        || verify_index >= signing_index
+        || !control_build
+            .contains("cargo build --locked --manifest-path rust/xtask/Cargo.toml --release")
+        || !control_build.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || !control_build.contains("source_sha=$sourceSha")
+        || !control_build.contains("sha256=$controlSha")
+        || control_verify.contains("secrets.")
+        || !control_verify.contains("EXPECTED_RELEASE_CONTROL_SOURCE_SHA")
+        || !control_verify.contains("EXPECTED_RELEASE_CONTROL_SHA256")
+        || !control_verify.contains("GITHUB_SHA")
+        || !control_verify.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+    {
+        return Err("protected signing must compile and verify the exact Rust control executable before secrets are mapped".into());
+    }
     if !signer.contains("environment: v4-production-release")
         || !has_permission(signer, "contents: read")
         || has_permission(signer, "contents: write")
@@ -310,7 +350,9 @@ fn rust_release_state_machine_contract(
             .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}")
             .count()
             != 1
-        || !secret_step.contains("release-v4 sign-candidate")
+        || !secret_step.contains("rust/target/release/xtask.exe")
+        || !secret_step.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || secret_step.to_ascii_lowercase().contains("cargo")
         || !signer.contains("release-v4 qualify-candidate")
     {
         return Err("production signing must be environment-protected, read-only, and scoped to the Rust signing step".into());
@@ -360,12 +402,14 @@ fn rust_release_state_machine_contract(
             ));
         }
     }
-    if !job("metadata_probe")?.contains("permission-contents: read")
+    if !job("metadata_probe")?.contains("permission-contents: write")
+        || !job("metadata_probe")?
+            .contains("V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write")
         || has_permission(job("metadata_probe")?, "contents: write")
         || !job("metadata_promote")?.contains("permission-contents: write")
         || has_permission(job("metadata_promote")?, "contents: write")
     {
-        return Err("metadata App tokens must be read-scoped for probing and write-scoped only in the Rust promotion job".into());
+        return Err("metadata App tokens must be explicitly write-scoped for the pre-publication probe and separately minted for Rust promotion, while Actions permissions stay read-only".into());
     }
     if job("publish")?.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
         || job("publish")?.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
@@ -581,9 +625,13 @@ fn rust_release_state_machine_contract(
         .ok_or("Rust release authority is missing metadata token probe")?;
     if !metadata_probe.contains("for channel in [\"stable\", \"beta\"]")
         || !metadata_probe.contains("doctor_validate_metadata")
+        || !metadata_probe.contains("contents_permission != \"write\"")
+        || !metadata_probe.contains("repos/{REPOSITORY}")
+        || metadata_probe.contains("transport.request(\"PUT\"")
+        || metadata_probe.contains("transport.request(\"POST\"")
     {
         return Err(
-            "metadata token probe must read and validate both stable and beta state".into(),
+            "metadata token probe must require contents:write, verify the canonical repository identity, validate both channels, and use GET only".into(),
         );
     }
     if rust.contains("process::capture(\"cargo\"") || rust.contains("Command::new(\"cargo\"") {

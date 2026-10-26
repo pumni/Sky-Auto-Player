@@ -210,11 +210,54 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
+      - name: Build the pinned Rust release control executable before secrets
+        id: release-control
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sourceSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $sourceSha -ne ([string]$env:GITHUB_SHA).ToLowerInvariant()) {
+            throw "Release control source is not the exact dispatched SHA"
+          }
+          $controlPath = Join-Path $env:GITHUB_WORKSPACE "rust/target/release/xtask.exe"
+          if (-not (Test-Path -LiteralPath $controlPath -PathType Leaf)) {
+            throw "Pinned release control executable was not produced"
+          }
+          $controlSha = (Get-FileHash -LiteralPath $controlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "source_sha=$sourceSha" | Add-Content $env:GITHUB_OUTPUT -Encoding utf8
+          "sha256=$controlSha" | Add-Content $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Verify prebuilt control executable identity before secrets
+        shell: pwsh
+        env:
+          EXPECTED_RELEASE_CONTROL_SOURCE_SHA: ${{ steps.release-control.outputs.source_sha }}
+          EXPECTED_RELEASE_CONTROL_SHA256: ${{ steps.release-control.outputs.sha256 }}
+        run: |
+          $sourceSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $sourceSha -ne ([string]$env:GITHUB_SHA).ToLowerInvariant() -or
+              $sourceSha -ne $env:EXPECTED_RELEASE_CONTROL_SOURCE_SHA.ToLowerInvariant()) {
+            throw "Prebuilt release control source identity changed"
+          }
+          $controlPath = Join-Path $env:GITHUB_WORKSPACE "rust/target/release/xtask.exe"
+          $controlSha = (Get-FileHash -LiteralPath $controlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($controlSha -ne $env:EXPECTED_RELEASE_CONTROL_SHA256.ToLowerInvariant()) {
+            throw "Prebuilt release control executable digest changed"
+          }
+
       - name: Sign the independently verified exact candidate
         env:
           V4_TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}
           V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}
-        run: cargo xtask release-v4 sign-candidate --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+          EXPECTED_RELEASE_CONTROL_SHA256: ${{ steps.release-control.outputs.sha256 }}
+        run: |
+          $controlPath = Join-Path $env:GITHUB_WORKSPACE "rust/target/release/xtask.exe"
+          $controlSha = (Get-FileHash -LiteralPath $controlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($controlSha -ne $env:EXPECTED_RELEASE_CONTROL_SHA256.ToLowerInvariant()) {
+            throw "Prebuilt release control executable digest changed before signing"
+          }
+          & $controlPath release-v4 sign-candidate --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Qualify the signed exact installer without signing secrets
         run: cargo xtask release-v4 qualify-candidate --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
@@ -340,7 +383,7 @@ jobs:
       - name: Revalidate qualified handoff before using metadata credentials
         run: cargo xtask release-v4 verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
-      - name: Mint read-only metadata App token
+      - name: Mint write-capable metadata App token before publication
         id: metadata-app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -348,11 +391,12 @@ jobs:
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: read
+          permission-contents: write
 
-      - name: Probe release-metadata App access without write permission
+      - name: Probe release-metadata App write capability without mutation
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+          V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write
         run: cargo xtask release-v4 probe-metadata-token --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
       - name: Clean runner-local metadata probe state

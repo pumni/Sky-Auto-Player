@@ -114,24 +114,26 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
     Ok(())
 }
 pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
-    const READ_MINT_STEP: &str = "Mint read-only metadata App token";
-    const WRITE_MINT_STEP: &str = "Mint contents-scoped metadata App token";
-    const PROBE_STEP: &str = "Probe release-metadata App access without write permission";
+    const PROBE_MINT_STEP: &str = "Mint write-capable metadata App token before publication";
+    const PROMOTE_MINT_STEP: &str = "Mint contents-scoped metadata App token";
+    const PROBE_STEP: &str = "Probe release-metadata App write capability without mutation";
     const PROMOTE_STEP: &str = "Promote channel metadata after immutable release publication";
     const APP_TOKEN_OUTPUT: &str = "steps.metadata-app-token.outputs.token";
     const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
 
     let steps = workflow_step_blocks(workflow);
-    let read_mint = steps
+    let probe_mint = steps
         .iter()
-        .find(|(name, _)| name == READ_MINT_STEP)
+        .find(|(name, _)| name == PROBE_MINT_STEP)
         .map(|(_, block)| block.as_str())
-        .ok_or("v4 release workflow is missing the read-only metadata App token mint step")?;
-    let write_mint = steps
+        .ok_or("v4 release workflow is missing its pre-publication write-scoped App token mint")?;
+    let promote_mint = steps
         .iter()
-        .find(|(name, _)| name == WRITE_MINT_STEP)
+        .find(|(name, _)| name == PROMOTE_MINT_STEP)
         .map(|(_, block)| block.as_str())
-        .ok_or("v4 release workflow is missing the write-scoped metadata App token mint step")?;
+        .ok_or(
+            "v4 release workflow is missing the post-publication write-scoped App token mint step",
+        )?;
     let promote = steps
         .iter()
         .find(|(name, _)| name == PROMOTE_STEP)
@@ -161,8 +163,8 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
         "repositories: ${{ github.event.repository.name }}",
     ];
     for (mint, permission) in [
-        (read_mint, "permission-contents: read"),
-        (write_mint, "permission-contents: write"),
+        (probe_mint, "permission-contents: write"),
+        (promote_mint, "permission-contents: write"),
     ] {
         for marker in common_markers.into_iter().chain([permission]) {
             if !mint.contains(marker) {
@@ -192,13 +194,14 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
     if !promote.contains(APP_TOKEN_OUTPUT) || !probe.contains(APP_TOKEN_OUTPUT) {
         return Err(
-            "metadata App token must be consumed by the read-only probe and PromoteMetadata".into(),
+            "metadata App token must be consumed by the read-only capability probe and PromoteMetadata".into(),
         );
     }
     if probe.contains("GH_TOKEN: ${{ github.token }}") {
         return Err("metadata App access probe must not use the repository GITHUB_TOKEN".into());
     }
     if !probe.contains("cargo xtask release-v4 probe-metadata-token")
+        || !probe.contains("V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write")
         || probe.contains("probe_v4_metadata_app_access.ps1")
     {
         return Err("metadata App access probe must use the Rust read-only token probe".into());
@@ -208,7 +211,7 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
 
     for (name, block) in &steps {
-        if name != READ_MINT_STEP && name != WRITE_MINT_STEP && block.contains(APP_PRIVATE_KEY) {
+        if name != PROBE_MINT_STEP && name != PROMOTE_MINT_STEP && block.contains(APP_PRIVATE_KEY) {
             return Err(
                 format!("metadata App private key escaped the token-mint action: {name}").into(),
             );
@@ -250,9 +253,12 @@ pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
         .ok_or("immutable release publication job is missing")?;
     if !probe_job.contains("needs: [prepare, attest]")
         || !publish_job.contains("needs: [prepare, attest, metadata_probe]")
+        || !probe_job
+            .lines()
+            .any(|line| line.trim() == "contents: read")
     {
         return Err(
-            "metadata App read access must be proven before the publication job starts".into(),
+            "metadata App write capability must be probed with read-only Actions permissions before publication".into(),
         );
     }
 
@@ -304,6 +310,7 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
         .find(|(name, _)| name == "sign_qualify")
         .map(|(_, body)| body.as_str())
         .ok_or("canonical release workflow is missing the protected signing job")?;
+    validate_precompiled_signer(signer)?;
     if !signer.contains("runs-on: windows-latest")
         || !signer.contains("environment: v4-production-release")
         || !signer.contains("release-v4 sign-candidate")
@@ -328,6 +335,51 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
         || source.contains("pull_request_target:")
     {
         return Err("canonical production workflow must remain dispatch-only with read-only default permissions".into());
+    }
+    Ok(())
+}
+
+fn validate_precompiled_signer(signer: &str) -> Result<()> {
+    const BUILD_STEP: &str = "Build the pinned Rust release control executable before secrets";
+    const VERIFY_STEP: &str = "Verify prebuilt control executable identity before secrets";
+    const SIGN_STEP: &str = "Sign the independently verified exact candidate";
+
+    let steps = workflow_step_blocks(signer);
+    let block = |name: &str| {
+        steps
+            .iter()
+            .find(|(step_name, _)| step_name == name)
+            .map(|(_, body)| body.as_str())
+            .ok_or_else(|| format!("protected signer is missing required step: {name}"))
+    };
+    let position = |name: &str| {
+        steps
+            .iter()
+            .position(|(step_name, _)| step_name == name)
+            .ok_or_else(|| format!("protected signer is missing required step order: {name}"))
+    };
+    let build = block(BUILD_STEP)?;
+    let verify = block(VERIFY_STEP)?;
+    let sign = block(SIGN_STEP)?;
+    if position(BUILD_STEP)? >= position(VERIFY_STEP)?
+        || position(VERIFY_STEP)? >= position(SIGN_STEP)?
+        || !build.contains("cargo build --locked --manifest-path rust/xtask/Cargo.toml --release")
+        || !build.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || !build.contains("source_sha=$sourceSha")
+        || !build.contains("sha256=$controlSha")
+        || build.contains(PROTECTED_UPDATER_SECRETS[0])
+        || build.contains(PROTECTED_UPDATER_SECRETS[1])
+        || !verify.contains("EXPECTED_RELEASE_CONTROL_SOURCE_SHA")
+        || !verify.contains("EXPECTED_RELEASE_CONTROL_SHA256")
+        || !verify.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || !verify.contains("GITHUB_SHA")
+        || verify.contains(PROTECTED_UPDATER_SECRETS[0])
+        || verify.contains(PROTECTED_UPDATER_SECRETS[1])
+        || !sign.contains("rust/target/release/xtask.exe")
+        || !sign.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || sign.to_ascii_lowercase().contains("cargo")
+    {
+        return Err("protected signing must verify a precompiled, source-bound Rust executable and invoke it without Cargo while secrets are mapped".into());
     }
     Ok(())
 }
@@ -468,6 +520,24 @@ mod tests {
         assert!(
             validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &missing_secret).is_err()
         );
+
+        let cargo_with_secrets = workflow.replace(
+            "& $controlPath release-v4 sign-candidate",
+            "cargo xtask release-v4 sign-candidate",
+        );
+        assert!(
+            validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &cargo_with_secrets)
+                .is_err()
+        );
+
+        let missing_control_build = workflow.replace(
+            "- name: Build the pinned Rust release control executable before secrets",
+            "- name: Omitted Rust release control build",
+        );
+        assert!(
+            validate_release_runner_workflow(APPROVED_RELEASE_WORKFLOW, &missing_control_build)
+                .is_err()
+        );
     }
 
     #[test]
@@ -515,9 +585,15 @@ mod tests {
         );
         assert!(validate_metadata_app_token_scope(&missing_client_id).is_err());
 
-        let missing_read_scope =
-            workflow.replace("permission-contents: read", "permission-contents: write");
-        assert!(validate_metadata_app_token_scope(&missing_read_scope).is_err());
+        let read_scoped_probe =
+            workflow.replacen("permission-contents: write", "permission-contents: read", 1);
+        assert!(validate_metadata_app_token_scope(&read_scoped_probe).is_err());
+
+        let false_write_evidence = workflow.replace(
+            "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write",
+            "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: read",
+        );
+        assert!(validate_metadata_app_token_scope(&false_write_evidence).is_err());
 
         let broad_token = workflow.replace(
             "- name: Publish the exact qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ github.token }}",

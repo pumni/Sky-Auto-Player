@@ -26,7 +26,7 @@ prepare (main + exact-head CI + Rust preflight)
     -> sign_qualify / sign-candidate (protected environment, key secrets on this step only)
     -> sign_qualify / qualify-candidate (no key secrets; qualify those same bytes)
     -> attest (OIDC attest installer, signature, and SPDX SBOM)
-    -> metadata_probe (read-scoped GitHub App token)
+    -> metadata_probe (write-scoped GitHub App token, GET-only capability probe)
     -> publish (verify attestations; publish exact immutable .exe + .sig)
     -> metadata_promote (write-scoped GitHub App token)
     -> final_verify (public release, digests, GitHub Latest, stable/beta metadata)
@@ -76,11 +76,19 @@ The `sign-candidate` command exits before qualification starts. Its later Rust a
 processes are launched without the updater secret environment variables. The separate
 `qualify-candidate` step has no signing secrets mapped to it. The protected signing job has only
 `contents: read`; OIDC attestation and release publication permissions belong to different jobs.
+Before either updater secret is mapped, the job builds the pinned release-mode `xtask.exe`, records
+its SHA-256 and checked-out source SHA, and verifies both identities. The signing step checks the
+executable digest again and invokes that binary directly; it does not invoke Cargo while signing
+secrets are present.
 
 The GitHub App private key for release-metadata access is consumed only as an input to the App token
-mint action. A short-lived read-scoped token is used for the pre-publication probe and a separately
-minted contents-scoped token is used only for post-publication metadata promotion. Neither token nor
-its private key is placed in a candidate artifact.
+mint action. Before publication, the workflow requests a short-lived token scoped to the canonical
+repository with `contents: write`. The token action fails if the App installation cannot grant that
+permission. Rust then confirms the canonical repository is accessible to the token and reads the
+metadata branch, bootstrap file, and stable/beta channel files using GET requests only; this probe
+does not write metadata. The job's `GITHUB_TOKEN` remains `contents: read`. After publication, a
+separately minted write-scoped token is used only for metadata promotion. Neither token nor its
+private key is placed in a candidate artifact.
 
 The current Authenticode policy remains `unsigned-zero-budget`; no Windows certificate or paid
 external signing service is introduced. Authenticode unsigned-state verification remains part of
@@ -111,9 +119,10 @@ qualification. No production key is supplied during qualification.
 The `attest` job independently checks the signed candidate handoff and uses GitHub OIDC to attest the
 exact `.exe`, `.sig`, and SPDX SBOM. The `publish` job verifies those attestations against the exact
 source SHA and candidate bytes before Rust creates or publishes an immutable release. Rust checks
-asset names, sizes, GitHub SHA-256 digests and downloaded bytes. `metadata_probe` must validate the
-protected App's read access before publication. `metadata_promote` runs only after publication, and
-`final_verify` fetches the release and metadata again, including the stable raw endpoint.
+asset names, sizes, GitHub SHA-256 digests and downloaded bytes. `metadata_probe` must mint a
+write-capable, repository-scoped App token and validate its read-only access before publication.
+`metadata_promote` mints a fresh token only after publication, and `final_verify` fetches the release
+and metadata again, including the stable raw endpoint.
 
 ### 2.3 Disposable Hosted Runner Hygiene
 
@@ -139,8 +148,10 @@ The enforced production workflow list contains exactly:
 The workflow jobs are `prepare`, `build_unsigned`, `sign_qualify`, `attest`, `metadata_probe`,
 `publish`, `metadata_promote`, and `final_verify`. Only `sign_qualify` may reference the updater
 signing secrets. Only `attest` receives `id-token: write` and `attestations: write`; only `publish`
-receives repository `contents: write` and `attestations: read`. The metadata App's read and write
-scopes are minted in separate jobs and used only for their matching Rust operation.
+receives repository `contents: write` and `attestations: read`. Both metadata App tokens request
+`contents: write`: the pre-publication token is used only by the GET-only capability probe, and a
+fresh post-publication token is used by Rust metadata promotion. The probe job's Actions token stays
+read-only and publication depends on probe success.
 
 Workflow YAML and Rust guards cannot establish that GitHub environment protection is configured.
 Before any production cutover, a maintainer must inspect Settings > Environments >

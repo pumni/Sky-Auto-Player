@@ -77,6 +77,10 @@ cargo xtask updater-trust inventory
      both the workflow and Rust. Its `sign_qualify` job references `v4-production-release`; the
      encrypted updater key and passphrase are mapped only to the `Sign the independently verified
      exact candidate` step.
+   - Before mapping either updater secret, the job builds the pinned release-mode Rust `xtask.exe`,
+     records the exact source SHA and executable SHA-256, and verifies those identities. The secret-
+     bearing step verifies the executable digest again and invokes `xtask.exe` directly; it must not
+     invoke Cargo or compile build scripts with production signing secrets in its environment.
    - The Rust `sign-candidate` adapter bounds both values, requires encrypted Minisign material,
      materializes the encrypted key only under the run-owned direct `RUNNER_TEMP` directory, and
      verifies it against Key ID `19AABD2E7838818C` before signing.
@@ -91,6 +95,19 @@ cargo xtask updater-trust inventory
    - The Rust credential CLI and Windows Credential Manager helpers remain available to local
      maintenance consumers, but the hosted production workflow has no Credential Manager
      requirement. Their local session credentials are not a fallback for production signing.
+
+6. **Pre-publication Metadata App Capability**:
+   - Before immutable release publication, the protected metadata-probe job requests a short-lived
+     App token scoped to the canonical repository with `contents: write`, the same permission needed
+     for metadata promotion. GitHub's token-mint action must succeed; the probe fails closed if it
+     cannot mint that permission.
+   - Rust verifies that the canonical repository is accessible to the token and can read the metadata
+     branch, bootstrap contract and both channel files. Every pre-publication API request is GET-only;
+     this capability check never writes `release-metadata`. The job's `GITHUB_TOKEN` remains
+     read-only.
+   - Metadata promotion mints a fresh `contents: write` token after the release is immutable. A
+     failed mint or read-only probe blocks the dependent publication job before the release becomes
+     public.
 
 ## 3. Local Private Key Verification
 

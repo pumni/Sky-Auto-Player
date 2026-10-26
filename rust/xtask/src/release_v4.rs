@@ -706,7 +706,12 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         "promote-metadata" => promote_metadata(root, &options, &mut transport),
         "final-verify" => final_verify(root, &options, &mut transport),
         "cleanup" => cleanup_local_state(root, &options),
-        "probe-metadata-token" => probe_metadata_token(&mut transport),
+        "probe-metadata-token" => {
+            let contents_permission =
+                env::var("V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION")
+                    .map_err(|_| "pre-publication metadata App permission evidence is required")?;
+            probe_metadata_token(&contents_permission, &mut transport)
+        }
         _ => Err(format!("unknown release-v4 phase: {command}").into()),
     }
 }
@@ -3384,7 +3389,19 @@ fn generate_expected_metadata(
     Ok(fs::read(output)?)
 }
 
-fn probe_metadata_token(transport: &mut dyn Transport) -> Result<()> {
+fn probe_metadata_token(contents_permission: &str, transport: &mut dyn Transport) -> Result<()> {
+    if contents_permission != "write" {
+        return Err(
+            "pre-publication metadata App token was not minted with contents: write".into(),
+        );
+    }
+    let repository = required_api(transport, "GET", &format!("repos/{REPOSITORY}"), None)?;
+    if !repository["full_name"]
+        .as_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case(REPOSITORY))
+    {
+        return Err("metadata App token returned the wrong canonical repository identity".into());
+    }
     let branch = required_api(
         transport,
         "GET",
@@ -3416,7 +3433,7 @@ fn probe_metadata_token(transport: &mut dyn Transport) -> Result<()> {
         }
     }
     println!(
-        "V4 Rust metadata App token probe: PASS (read-only branch, bootstrap, stable, and beta access)"
+        "V4 Rust metadata App token probe: PASS (contents:write mint succeeded; exact repository scope; GET-only branch, bootstrap, stable, and beta access)"
     );
     Ok(())
 }
@@ -4820,18 +4837,27 @@ fn raw_metadata_retry_fails_with_bounded_diagnostics() -> Result<()> {
 }
 
 fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
-    for (bad_ref, bad_bootstrap) in [(true, false), (false, true)] {
+    let mut read_only = FakeTransport::new();
+    assert!(probe_metadata_token("read", &mut read_only).is_err());
+    assert!(read_only.events.is_empty());
+
+    for (bad_ref, bad_bootstrap, bad_target) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
         let mut github = FakeTransport::new();
         github.bad_metadata_ref = bad_ref;
         github.bad_metadata_bootstrap = bad_bootstrap;
-        assert!(probe_metadata_token(&mut github).is_err());
+        github.bad_metadata_target = bad_target;
+        assert!(probe_metadata_token("write", &mut github).is_err());
         assert!(github.events.iter().all(|event| event.starts_with("GET ")));
         assert!(!github.events.iter().any(|event| {
             event.starts_with("PUT ") || event.starts_with("POST ") || event.starts_with("DELETE ")
         }));
     }
     let mut readable = FakeTransport::new();
-    probe_metadata_token(&mut readable)?;
+    probe_metadata_token("write", &mut readable)?;
     for channel in ["stable", "beta"] {
         assert!(readable.events.iter().any(|event| {
             event == &format!(
@@ -4848,7 +4874,7 @@ fn metadata_token_probe_rejects_wrong_repository_state() -> Result<()> {
     for channel in ["stable", "beta"] {
         let mut invalid = FakeTransport::new();
         invalid.bad_channel_metadata = Some(channel.to_owned());
-        assert!(probe_metadata_token(&mut invalid).is_err());
+        assert!(probe_metadata_token("write", &mut invalid).is_err());
         assert!(invalid.events.iter().all(|event| event.starts_with("GET ")));
     }
     Ok(())
@@ -5203,6 +5229,7 @@ struct FakeTransport {
     fail_metadata_put_after_write: bool,
     bad_metadata_ref: bool,
     bad_metadata_bootstrap: bool,
+    bad_metadata_target: bool,
     bad_channel_metadata: Option<String>,
     metadata: Vec<u8>,
     metadata_files: std::collections::BTreeMap<String, Vec<u8>>,
@@ -5230,6 +5257,14 @@ impl Transport for FakeTransport {
         if method == "GET" && endpoint.starts_with("repos/pumni/Sky-Auto-Player/actions/runs/") {
             let id = endpoint.rsplit('/').next().unwrap_or_default();
             return Ok(self.workflow_runs.get(id).cloned());
+        }
+        if method == "GET" && endpoint == "repos/pumni/Sky-Auto-Player" {
+            let target = if self.bad_metadata_target {
+                "pumni/Other-Repository"
+            } else {
+                REPOSITORY
+            };
+            return Ok(Some(json!({"full_name":target})));
         }
         if method == "GET" && endpoint == "repos/pumni/Sky-Auto-Player/releases/latest" {
             return Ok(Some(self.latest.clone()));
