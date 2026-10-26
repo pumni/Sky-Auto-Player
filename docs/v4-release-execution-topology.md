@@ -228,7 +228,9 @@ non-test release binary, then invokes `ci linux-process-smoke`. That smoke start
 binary with a temporary PATH containing fake `gh` and `curl` executables and synthetic credentials.
 It exercises recovery reads, attestation verification, asset download, the single stable metadata
 write token route, public metadata GET, token isolation, output bounds, timeout cleanup, and partial
-file cleanup. It has no production secrets and cannot reach real GitHub or curl binaries.
+file cleanup. It has no production secrets and cannot reach real GitHub or curl binaries. The
+`Sky Auto Player — required CI gate` depends on this job and requires success for release changes;
+for unrelated changes it requires the job to be skipped.
 
 The recovery operation is not a second release lifecycle. It shares the Rust transport, metadata
 schema, signature verifier, provenance checks, and monotonic version policy; it has no release

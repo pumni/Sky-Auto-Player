@@ -402,7 +402,11 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "scripts/test_v4_production_signing_contract.ps1",
         "scripts/setup_v4_test_signing.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
+        "linux_process_runtime:",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]",
+        "LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
         "CANDIDATE_REQUIRED",
         "CANDIDATE_RESULT",
         "name: Sky Auto Player — required CI gate",
@@ -682,7 +686,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "name: Website validation",
         "if: needs.changes.outputs.site_required == 'true'",
         "name: Sky Auto Player — required CI gate",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -1011,6 +1015,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     for marker in [
         "UPDATER_BRIDGE_REQUIRED",
         "UPDATER_BRIDGE_RESULT",
+        "LINUX_PROCESS_RESULT",
+        "needs.linux_process_runtime.result",
         "UPDATER_CONTRACT_REQUIRED",
         "UPDATER_CONTRACT_RESULT",
         "DESKTOP_WEB_REQUIRED",
@@ -1018,6 +1024,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "if [[ \"$UPDATER_BRIDGE_REQUIRED\" == \"true\" ]]",
         "if [[ \"$UPDATER_CONTRACT_REQUIRED\" == \"true\" ]]",
         "if [[ \"$DESKTOP_WEB_REQUIRED\" == \"true\" ]]",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
+        "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
         "Sky Auto Player — required CI gate",
     ] {
         if !status.contains(marker) {

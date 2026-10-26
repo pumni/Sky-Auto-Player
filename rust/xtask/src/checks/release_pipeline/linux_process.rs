@@ -64,6 +64,13 @@ fn linux_process_runtime_contract(
         "let child_environment = [",
         "(\"PATH\".to_owned(), fake_bin.to_string_lossy().into_owned())",
         "process::capture_owned_timeout_runtime_only(",
+        "record_invocation gh \"$@\"",
+        "record_invocation curl \"$@\"",
+        "invocations.bin",
+        "fn parse_invocations(",
+        "argument_count > 256",
+        "invocation_log_preserves_newline_tab_and_argument_boundaries",
+        "malformed_invocation_logs_fail_closed",
         "write_executable(&fake_bin.join(\"gh\"), GH_SCRIPT)",
         "write_executable(&fake_bin.join(\"curl\"), CURL_SCRIPT)",
         "GhTransport::for_metadata_recovery(",
@@ -96,6 +103,8 @@ fn linux_process_runtime_contract(
         .map(|(job, _)| job)
         .ok_or("CI is missing the hosted Linux production subprocess job")?;
     for marker in [
+        "needs: changes",
+        "if: needs.changes.outputs.release_required == 'true'",
         "runs-on: ubuntu-latest",
         "contents: read",
         "cargo test --locked --manifest-path rust/xtask/Cargo.toml",
@@ -219,6 +228,23 @@ mod tests {
                 &unix_runtime,
                 &smoke,
                 &missing_smoke,
+                &classifier,
+                &main,
+            )
+            .is_err()
+        );
+
+        let wrongly_skipped_lane = replace_fixture(
+            &ci,
+            "if: needs.changes.outputs.release_required == 'true'",
+            "if: needs.changes.outputs.release_required == 'false'",
+        );
+        assert!(
+            linux_process_runtime_contract(
+                &process,
+                &unix_runtime,
+                &smoke,
+                &wrongly_skipped_lane,
                 &classifier,
                 &main,
             )

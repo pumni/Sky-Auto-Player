@@ -1330,7 +1330,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -1359,6 +1359,7 @@ jobs:
           DESKTOP_WEB_REQUIRED: ${{ needs.changes.outputs.desktop_required }}
           STATIC_RESULT: ${{ needs.static.result }}
           RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
+          LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
@@ -1378,8 +1379,10 @@ jobs:
           fi
           if [[ "$RELEASE_REQUIRED" == "true" ]]; then
             [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
+            [[ "$LINUX_PROCESS_RESULT" == "success" ]]
           else
             [[ "$RELEASE_CONTRACT_RESULT" == "skipped" ]]
+            [[ "$LINUX_PROCESS_RESULT" == "skipped" ]]
           fi
           if [[ "$SUPPLY_CHAIN_REQUIRED" == "true" ]]; then
             [[ "$SUPPLY_CHAIN_RESULT" == "success" ]]

@@ -16,7 +16,14 @@ const WRITE_TOKEN: &str = "synthetic-linux-stable-write-token";
 const GH_SCRIPT: &str = r#"#!/bin/sh
 set -eu
 directory=${0%/*}
-printf 'gh\t%s\t%s\t%s\t%s\t%s\n' "${GH_TOKEN-}" "${GITHUB_TOKEN-}" "${V4_METADATA_WRITE_TOKEN-}" "${NPM_TOKEN-}" "$*" >> "$directory/invocations.tsv"
+exec 3>>"$directory/invocations.bin"
+record_invocation() {
+  invocation_command=$1
+  shift
+  printf '%s\000%s\000%s\000%s\000%s\000%s\000' "$invocation_command" "${GH_TOKEN-}" "${GITHUB_TOKEN-}" "${V4_METADATA_WRITE_TOKEN-}" "${NPM_TOKEN-}" "$#" >&3
+  for invocation_argument do printf '%s\000' "$invocation_argument" >&3; done
+}
+record_invocation gh "$@"
 case " $* " in
   *process-smoke-failure*) printf 'synthetic helper failure\n' >&2; exit 23 ;;
   *process-smoke-timeout*|*process-smoke-file-timeout*)
@@ -39,7 +46,14 @@ esac
 const CURL_SCRIPT: &str = r#"#!/bin/sh
 set -eu
 directory=${0%/*}
-printf 'curl\t%s\t%s\t%s\t%s\t%s\n' "${GH_TOKEN-}" "${GITHUB_TOKEN-}" "${V4_METADATA_WRITE_TOKEN-}" "${NPM_TOKEN-}" "$*" >> "$directory/invocations.tsv"
+exec 3>>"$directory/invocations.bin"
+record_invocation() {
+  invocation_command=$1
+  shift
+  printf '%s\000%s\000%s\000%s\000%s\000%s\000' "$invocation_command" "${GH_TOKEN-}" "${GITHUB_TOKEN-}" "${V4_METADATA_WRITE_TOKEN-}" "${NPM_TOKEN-}" "$#" >&3
+  for invocation_argument do printf '%s\000' "$invocation_argument" >&3; done
+}
+record_invocation curl "$@"
 printf '{"schema":1,"channel":"stable","synthetic":true}\n200'
 "#;
 
@@ -57,7 +71,7 @@ struct Invocation {
     github_token: String,
     metadata_write_token: String,
     npm_token: String,
-    args: String,
+    args: Vec<String>,
 }
 
 pub(super) fn run(args: &[String]) -> Result<()> {
@@ -141,7 +155,7 @@ fn run_child(root: &Path) -> Result<()> {
     if env::var_os("PATH").as_deref() != Some(fake_bin.as_os_str()) {
         return Err("smoke child PATH must contain only the fake CLI directory".into());
     }
-    let log = fake_bin.join("invocations.tsv");
+    let log = fake_bin.join("invocations.bin");
     let installer = root.join("synthetic-installer.exe");
     let subject = root.join("synthetic-attestation-subject.bin");
     fs::write(&subject, b"synthetic attestation subject")?;
@@ -323,8 +337,14 @@ fn run_child(root: &Path) -> Result<()> {
         }
         if invocation.command == "gh"
             && invocation.gh_token == WRITE_TOKEN
-            && (!invocation.args.contains("--method PUT")
-                || !invocation.args.contains("channels/stable/latest.json"))
+            && (!invocation
+                .args
+                .windows(2)
+                .any(|pair| pair[0] == "--method" && pair[1] == "PUT")
+                || !invocation
+                    .args
+                    .iter()
+                    .any(|argument| argument.contains("channels/stable/latest.json")))
         {
             return Err("metadata App token reached a non-stable-write gh child".into());
         }
@@ -356,7 +376,13 @@ fn require_latest_token(
     let invocation = invocations
         .iter()
         .rev()
-        .find(|invocation| invocation.command == command && invocation.args.contains(args_marker))
+        .find(|invocation| {
+            invocation.command == command
+                && invocation
+                    .args
+                    .iter()
+                    .any(|argument| argument.contains(args_marker))
+        })
         .ok_or("expected fake CLI invocation was not recorded")?;
     if invocation.gh_token != expected
         || !invocation.github_token.is_empty()
@@ -369,25 +395,56 @@ fn require_latest_token(
 }
 
 fn read_invocations(path: &Path) -> Result<Vec<Invocation>> {
-    let Ok(log) = fs::read_to_string(path) else {
+    let Ok(log) = fs::read(path) else {
         return Ok(Vec::new());
     };
-    log.lines()
-        .map(|line| {
-            let fields = line.splitn(6, '\t').collect::<Vec<_>>();
-            if fields.len() != 6 {
-                return Err("fake CLI wrote a malformed invocation record".into());
-            }
-            Ok(Invocation {
-                command: fields[0].to_owned(),
-                gh_token: fields[1].to_owned(),
-                github_token: fields[2].to_owned(),
-                metadata_write_token: fields[3].to_owned(),
-                npm_token: fields[4].to_owned(),
-                args: fields[5].to_owned(),
-            })
-        })
-        .collect()
+    parse_invocations(&log)
+}
+
+fn parse_invocations(log: &[u8]) -> Result<Vec<Invocation>> {
+    if log.is_empty() || log.last() != Some(&0) {
+        return Err("fake CLI wrote a truncated invocation log".into());
+    }
+    let fields = log.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let field_count = fields.len() - 1;
+    let mut cursor = 0;
+    let mut invocations = Vec::new();
+    while cursor < field_count {
+        let header = fields
+            .get(cursor..cursor + 6)
+            .ok_or("fake CLI wrote a malformed invocation header")?;
+        let decode =
+            |field: &[u8]| -> Result<String> { Ok(std::str::from_utf8(field)?.to_owned()) };
+        let command = decode(header[0])?;
+        if command != "gh" && command != "curl" {
+            return Err("fake CLI wrote an unknown invocation command".into());
+        }
+        let argument_count = decode(header[5])?
+            .parse::<usize>()
+            .map_err(|_| "fake CLI wrote an invalid invocation argument count")?;
+        if argument_count > 256 {
+            return Err("fake CLI invocation argument count exceeds the smoke bound".into());
+        }
+        cursor += 6;
+        let args_end = cursor
+            .checked_add(argument_count)
+            .filter(|end| *end <= field_count)
+            .ok_or("fake CLI wrote a truncated invocation argument list")?;
+        let args = fields[cursor..args_end]
+            .iter()
+            .map(|argument| decode(argument))
+            .collect::<Result<Vec<_>>>()?;
+        invocations.push(Invocation {
+            command,
+            gh_token: decode(header[1])?,
+            github_token: decode(header[2])?,
+            metadata_write_token: decode(header[3])?,
+            npm_token: decode(header[4])?,
+            args,
+        });
+        cursor = args_end;
+    }
+    Ok(invocations)
 }
 
 fn require_descendant_stopped(pid_file: &Path) -> Result<()> {
@@ -432,4 +489,68 @@ fn write_executable(path: &Path, contents: &str) -> Result<()> {
     permissions.set_mode(0o700);
     fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode_fields(fields: &[&[u8]]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        for field in fields {
+            encoded.extend_from_slice(field);
+            encoded.push(0);
+        }
+        encoded
+    }
+
+    #[test]
+    fn invocation_log_preserves_newline_tab_and_argument_boundaries() {
+        let fixture = encode_fields(&[
+            b"curl",
+            b"read-token",
+            b"",
+            b"",
+            b"",
+            b"4",
+            b"--write-out",
+            b"\n%{http_code}\tstatus",
+            b"",
+            b"https://raw.example/metadata",
+        ]);
+        let parsed = parse_invocations(&fixture).expect("control characters are data, not rows");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].command, "curl");
+        assert_eq!(parsed[0].gh_token, "read-token");
+        assert_eq!(
+            parsed[0].args,
+            [
+                "--write-out",
+                "\n%{http_code}\tstatus",
+                "",
+                "https://raw.example/metadata",
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_invocation_logs_fail_closed() {
+        let truncated_header = encode_fields(&[b"gh", b"token"]);
+        let truncated_arguments =
+            encode_fields(&[b"gh", b"token", b"", b"", b"", b"2", b"--method"]);
+        let unknown_command = encode_fields(&[b"other", b"", b"", b"", b"", b"0"]);
+        let invalid_utf8 = encode_fields(&[b"gh", b"", b"", b"", b"", b"1", b"\xff"]);
+        let mut unterminated = encode_fields(&[b"curl", b"", b"", b"", b"", b"0"]);
+        unterminated.pop();
+
+        for fixture in [
+            truncated_header,
+            truncated_arguments,
+            unknown_command,
+            invalid_utf8,
+            unterminated,
+        ] {
+            assert!(parse_invocations(&fixture).is_err());
+        }
+    }
 }

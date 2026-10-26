@@ -88,15 +88,23 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
         "{{ needs.release_contract.result }}",
     ]
     .concat();
+    let linux_result_marker = [
+        "LINUX_PROCESS_RESULT: $",
+        "{{ needs.linux_process_runtime.result }}",
+    ]
+    .concat();
     for marker in [
         "cargo xtask release-v4 self-test",
         "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests",
         static_result_marker.as_str(),
         release_result_marker.as_str(),
+        linux_result_marker.as_str(),
         r#"if [[ "$STATIC_REQUIRED" == "true" ]]; then"#,
         r#"[[ "$STATIC_RESULT" == "success" ]]"#,
         r#"if [[ "$RELEASE_REQUIRED" == "true" ]]; then"#,
         r#"[[ "$RELEASE_CONTRACT_RESULT" == "success" ]]"#,
+        r#"[[ "$LINUX_PROCESS_RESULT" == "success" ]]"#,
+        r#"[[ "$LINUX_PROCESS_RESULT" == "skipped" ]]"#,
     ] {
         if !source.contains(marker) {
             return Err(format!(
@@ -104,11 +112,35 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
             ));
         }
     }
-    let marker = "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]";
+    let marker = "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]";
     if !status.contains(marker) {
         return Err(format!(
             "status gate is missing independent assertion: {marker}"
         ));
+    }
+    if !status.lines().any(|line| line.trim() == "if: always()") {
+        return Err(
+            "required status gate must use always() to inspect failed or skipped dependencies"
+                .into(),
+        );
+    }
+    let release_gate = status
+        .split_once(r#"if [[ "$RELEASE_REQUIRED" == "true" ]]; then"#)
+        .map(|(_, body)| body)
+        .ok_or("required status gate is missing release_required branching")?;
+    let (required_release, skipped_release) = release_gate
+        .split_once("else")
+        .ok_or("required status gate is missing the release_required=false branch")?;
+    let skipped_release = skipped_release
+        .split_once("fi")
+        .map(|(branch, _)| branch)
+        .ok_or("required status gate has an unterminated release_required branch")?;
+    if !required_release.contains(r#"[[ "$LINUX_PROCESS_RESULT" == "success" ]]"#)
+        || !skipped_release.contains(r#"[[ "$LINUX_PROCESS_RESULT" == "skipped" ]]"#)
+    {
+        return Err(
+            "required status gate must require Linux runtime success for release changes and skipped otherwise".into(),
+        );
     }
     for forbidden in [
         "GH_TOKEN:",
@@ -1103,16 +1135,22 @@ jobs:
             exit "$exit_code"
           }
   status:
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
+    if: always()
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]
     env:
       STATIC_RESULT: ${{ needs.static.result }}
       RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
+      LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}
     run: |
       if [[ "$STATIC_REQUIRED" == "true" ]]; then
         [[ "$STATIC_RESULT" == "success" ]]
       fi
       if [[ "$RELEASE_REQUIRED" == "true" ]]; then
         [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
+        [[ "$LINUX_PROCESS_RESULT" == "success" ]]
+      else
+        [[ "$RELEASE_CONTRACT_RESULT" == "skipped" ]]
+        [[ "$LINUX_PROCESS_RESULT" == "skipped" ]]
       fi
 "#.to_owned();
         v4_release_contract_ci_wiring(&source)
@@ -1132,6 +1170,29 @@ jobs:
             "cargo xtask check static",
         );
         assert!(v4_release_contract_ci_wiring(&no_static).is_err());
+        let missing_linux_dependency =
+            replace_all_fixture(&source, ", linux_process_runtime]", "]");
+        assert!(v4_release_contract_ci_wiring(&missing_linux_dependency).is_err());
+        let missing_linux_result = replace_all_fixture(
+            &source,
+            "      LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}\n",
+            "",
+        );
+        assert!(v4_release_contract_ci_wiring(&missing_linux_result).is_err());
+        let linux_success_not_required = replace_all_fixture(
+            &source,
+            "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
+            "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
+        );
+        assert!(v4_release_contract_ci_wiring(&linux_success_not_required).is_err());
+        let linux_skip_accepted_when_required = replace_all_fixture(
+            &source,
+            "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
+            "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
+        );
+        assert!(v4_release_contract_ci_wiring(&linux_skip_accepted_when_required).is_err());
+        let status_not_always = replace_all_fixture(&source, "if: always()", "if: true");
+        assert!(v4_release_contract_ci_wiring(&status_not_always).is_err());
         let production_api = replace_all_fixture(
             &source,
             "cargo xtask release-v4 self-test",
