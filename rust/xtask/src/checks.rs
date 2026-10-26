@@ -148,6 +148,8 @@ fn run_with_session(
                 .ok_or("binding export directory is not valid UTF-8")?
                 .to_owned();
             let test_env = [
+                // Cargo must not replace the running xtask.exe in the shared target directory.
+                ("CARGO_TARGET_DIR", "rust/target/check-all-rust-tests"),
                 ("RUST_TEST_THREADS", "1"),
                 ("TS_RS_EXPORT_DIR", export_dir.as_str()),
             ];
