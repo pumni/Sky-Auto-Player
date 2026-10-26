@@ -60,8 +60,10 @@ its existing subscribe, publish, queue, and fail-closed rules.
 
 Runtime unit tests now live in `native_runtime/tests.rs` with grouped suites in
 `native_runtime/tests/{catalog,calibration,event_delivery,playback_integration}.rs`.
-The move preserves all 107 test functions and all 17 `tauri-test` feature gates;
-fully qualified test IDs gain the matching suite module segment.
+Playback integration keeps its existing root and places its semantic owners in
+`native_runtime/tests/playback_integration/`. The move preserves all 107 test
+functions and all 17 `tauri-test` feature gates; fully qualified test IDs gain
+the matching suite and owner module segments.
 
 ## Owners, locks, and lifetimes
 

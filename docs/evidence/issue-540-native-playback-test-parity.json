@@ -1,0 +1,846 @@
+{
+  "assignment": 540,
+  "base_sha": "76e0de5db85256f24199435e5f457439b0ad0d02",
+  "base_tree": "56117773a1ca2875186834dd363ae89b29bd542e",
+  "baseline_source_path": "desktop/src-tauri/src/native_runtime/tests/playback_integration.rs",
+  "baseline_source_sha256": "BC1AEF9FE71A07CEFDD6C1DACF70D2B2F3811DB83F5DDD2EFCEF1DD5D687D7C7",
+  "baseline_top_level_tests": 69,
+  "head_top_level_tests": 69,
+  "baseline_tauri_test_gated_cases": 12,
+  "head_tauri_test_gated_cases": 12,
+  "nested_helpers": [
+    {
+      "name": "input",
+      "parent_test": "native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_pressure",
+      "owner": "start_prepare.rs",
+      "baseline_sha256": "759ad6cc394757acacb63a858a009b24e079299b023807aceac55b7cb7b36aea",
+      "head_sha256": "759ad6cc394757acacb63a858a009b24e079299b023807aceac55b7cb7b36aea",
+      "parity": "exact; included in parent test block"
+    }
+  ],
+  "focused_mode": "cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked native_runtime::tests::playback_integration::",
+  "baseline_focused_result": "exit 0; 69 passed; 0 failed; 0 ignored",
+  "head_focused_result": "exit 0; 69 passed; 0 failed; 0 ignored",
+  "test_list_command": "cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked native_runtime::tests::playback_integration:: -- --list",
+  "baseline_list_result": "exit 0; 69 listed",
+  "head_list_result": "exit 0; 69 listed",
+  "normalized_fq_inventory_parity": true,
+  "list_result": "baseline and head list 69 names; exact after normalizing the owner module segment",
+  "path_only_adjustments": [
+    {
+      "test": "pre_exit_release_marker_requires_verified_shutdown_result",
+      "file": "terminal_release.rs",
+      "from": "../../native_runtime.rs",
+      "to": "../../../native_runtime.rs"
+    },
+    {
+      "test": "target_integrity_admission_precedes_focus_and_session_arm",
+      "file": "start_prepare.rs",
+      "from": "../../native_runtime/playback/session.rs",
+      "to": "../../../native_runtime/playback/session.rs"
+    },
+    {
+      "test": "native_detail_matches_python_tempo_oracle_corpus",
+      "file": "start_prepare.rs",
+      "from": "../../../../../tests/fixtures/song_planning/oracle_cases.json",
+      "to": "../../../../../../tests/fixtures/song_planning/oracle_cases.json"
+    }
+  ],
+  "tests": [
+    {
+      "name": "native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it",
+      "owner": "supervisor_lease.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "87ee0b0dda4a3a4c1192d93bee1a9e51bdf017b33935f59c4529341d24e54589",
+      "head_normalized_block_sha256": "87ee0b0dda4a3a4c1192d93bee1a9e51bdf017b33935f59c4529341d24e54589",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "blocked_snapshot_projection_past_lease_keeps_supervisor_live",
+      "owner": "supervisor_lease.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "8f4f867284f0ccae946a5d6a96f628a9f36c1b57dde564535848da32aacdd06f",
+      "head_normalized_block_sha256": "8f4f867284f0ccae946a5d6a96f628a9f36c1b57dde564535848da32aacdd06f",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "blocked_diagnostics_gate_past_lease_does_not_block_safety_progress",
+      "owner": "supervisor_lease.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "3214a5bb0663cc520a5cd7946fc226a194051103026fa2e5bcaef922337116d7",
+      "head_normalized_block_sha256": "3214a5bb0663cc520a5cd7946fc226a194051103026fa2e5bcaef922337116d7",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "blocked_terminal_presentation_does_not_hold_supervisor_after_release",
+      "owner": "supervisor_lease.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "afc6dc058074e930e3e3c4c85b9900ae5e648ea4513fef7131346d19c093eb86",
+      "head_normalized_block_sha256": "afc6dc058074e930e3e3c4c85b9900ae5e648ea4513fef7131346d19c093eb86",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "presentation_critical_queue_overflow_fails_closed_and_releases",
+      "owner": "presentation_events.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "7ec619214610ab80cc2da6f866a8c22588271b0487ef33739c946618d406b793",
+      "head_normalized_block_sha256": "7ec619214610ab80cc2da6f866a8c22588271b0487ef33739c946618d406b793",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "rapid_playback_sessions_queue_terminal_before_successor_starting",
+      "owner": "presentation_events.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "6590a0d4afaf6d3f2b18f9f9f6842fcaba0d825503aca30f540aaa59ecc5105b",
+      "head_normalized_block_sha256": "6590a0d4afaf6d3f2b18f9f9f6842fcaba0d825503aca30f540aaa59ecc5105b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_startup_projection_keeps_ready_worker_starting_until_armed_publication",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "0efeeb9415e18ab73cb861e2302a67d8ab299485676351dffeba4a7b1b13608d",
+      "head_normalized_block_sha256": "0efeeb9415e18ab73cb861e2302a67d8ab299485676351dffeba4a7b1b13608d",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "panic_release_before_armed_has_no_physical_release_obligation",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "bf7ce8ebea72a1c9c2169202f025eef8f9dd6b9cc16b86222255d578d5e0ceb1",
+      "head_normalized_block_sha256": "bf7ce8ebea72a1c9c2169202f025eef8f9dd6b9cc16b86222255d578d5e0ceb1",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "terminal_outcome_health_projection_preserves_trigger_and_release_identity",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "57d90ea69ec5010a47d29e2f9ed9aca745e64def589aa316295d5109216f68c7",
+      "head_normalized_block_sha256": "57d90ea69ec5010a47d29e2f9ed9aca745e64def589aa316295d5109216f68c7",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "recovered_join_error_cannot_be_masked_by_a_requested_stop",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "f2aa663789631cf0eee09a8a150da60388558a4abb54986cde30515503aab648",
+      "head_normalized_block_sha256": "f2aa663789631cf0eee09a8a150da60388558a4abb54986cde30515503aab648",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "shutdown_timeout_keeps_the_physical_reservation_and_omits_release_proof",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "f12a2f22bad57e3787fc572ea60238f846728b56d3e19ed3fa2a24781fb7b83c",
+      "head_normalized_block_sha256": "f12a2f22bad57e3787fc572ea60238f846728b56d3e19ed3fa2a24781fb7b83c",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "pre_exit_release_marker_requires_verified_shutdown_result",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "89ecc32773c692cb39658da270950d5da0ce48a60899435387f387d12af0a0aa",
+      "head_normalized_block_sha256": "89ecc32773c692cb39658da270950d5da0ce48a60899435387f387d12af0a0aa",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "supervisor_spawn_failure_is_retired_before_physical_activation",
+      "owner": "supervisor_lease.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "dd5e18c1a83610bc0805ea3fcbeabf03f1af35dc25d0aa7409cc825df92e7795",
+      "head_normalized_block_sha256": "dd5e18c1a83610bc0805ea3fcbeabf03f1af35dc25d0aa7409cc825df92e7795",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "stop_skip_and_shutdown_cancel_the_published_pre_arm_session",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "cc08cdf0e875750b72e9c94fdbdbc7f7ae4db3bce049353cee34a461695c2682",
+      "head_normalized_block_sha256": "cc08cdf0e875750b72e9c94fdbdbc7f7ae4db3bce049353cee34a461695c2682",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_worker_cleanup_barrier_keeps_session_exclusive_until_join_and_release",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "0eac7212ff99bbd0d07a9083745a34df81f3f39bc7e22f2314beb42814dc5072",
+      "head_normalized_block_sha256": "0eac7212ff99bbd0d07a9083745a34df81f3f39bc7e22f2314beb42814dc5072",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_worker_release_error_after_stop_quarantines_successor_admission",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[cfg(feature = \"tauri-test\")]",
+        "#[test]"
+      ],
+      "feature_gates": [
+        "#[cfg(feature = \"tauri-test\")]"
+      ],
+      "baseline_block_sha256": "d4893b15b6920a9dfd62cfeeeff72dac499c00bd41aacadbcbd50dee5f1eaa78",
+      "head_normalized_block_sha256": "d4893b15b6920a9dfd62cfeeeff72dac499c00bd41aacadbcbd50dee5f1eaa78",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "physical_startup_target_failure_retires_without_reentrant_active_lock",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "448a2b60e4c0d5837efb34773e0cf45c886b38209ee57a1e58725d60d9e9fd18",
+      "head_normalized_block_sha256": "448a2b60e4c0d5837efb34773e0cf45c886b38209ee57a1e58725d60d9e9fd18",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "sender_trace_export_includes_session_identity_and_frozen_policy",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "db54ba3af7c0361d65b0c73acf15cd9ca12f551cd2ff10e3278ffdb804cb19a1",
+      "head_normalized_block_sha256": "db54ba3af7c0361d65b0c73acf15cd9ca12f551cd2ff10e3278ffdb804cb19a1",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "sender_trace_beginning_physical_session_b_clears_session_a_and_rejects_late_a_completion",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "b52fe278b43e0feff754bd69c16d7b762a08b2b361c12a9b53f84771e468ed5b",
+      "head_normalized_block_sha256": "b52fe278b43e0feff754bd69c16d7b762a08b2b361c12a9b53f84771e468ed5b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "sender_trace_failed_session_b_extraction_does_not_restore_session_a",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "45056295afdc4d18bf9cf0d437850a47120bf889ab3ec7d64a440e2fda242d4a",
+      "head_normalized_block_sha256": "45056295afdc4d18bf9cf0d437850a47120bf889ab3ec7d64a440e2fda242d4a",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "sender_trace_capture_memory_stays_under_two_mib",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "3c43cda4bc9c29a516bb2eca3f9dc88feba79c64359a9974d2df2b0bb15c2f01",
+      "head_normalized_block_sha256": "3c43cda4bc9c29a516bb2eca3f9dc88feba79c64359a9974d2df2b0bb15c2f01",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "debug_install_root_is_repository_root_not_cwd",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "b2a9ae212815c6fe2cc599d8593ba8cc0f9d87eb074ee3f74243e9d87a7b0106",
+      "head_normalized_block_sha256": "b2a9ae212815c6fe2cc599d8593ba8cc0f9d87eb074ee3f74243e9d87a7b0106",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "production_composition_has_no_environment_only_safe_bypass",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "fe09b9a2f65f7efff1e31b5a1c47e419d881e8e7c35db309f4469547c9e72ea5",
+      "head_normalized_block_sha256": "fe09b9a2f65f7efff1e31b5a1c47e419d881e8e7c35db309f4469547c9e72ea5",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_bootstrap_uses_explicit_install_root_and_returns_plain_dto",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "69d5391a4efda705f1a1bd6ec00e68a3fd05906cf4d2e7da695f369991751b5f",
+      "head_normalized_block_sha256": "69d5391a4efda705f1a1bd6ec00e68a3fd05906cf4d2e7da695f369991751b5f",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "update_check_uses_cached_settings_without_refreshing_external_file",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "e69a40f7336dcead61190520977a21a932869b99dbea6e8da3b2fa228a9d596f",
+      "head_normalized_block_sha256": "e69a40f7336dcead61190520977a21a932869b99dbea6e8da3b2fa228a9d596f",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "same_size_same_mtime_content_mutation_still_matches_clean_compose",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "b26a2da20e1c6fd785e475a1c934c232aebee000b6a15309b168fc1f6e1c151b",
+      "head_normalized_block_sha256": "b26a2da20e1c6fd785e475a1c934c232aebee000b6a15309b168fc1f6e1c151b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "corrupt_cache_falls_back_to_cold_rebuild",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "dc627cdd0dc2c46a8b6a79acd798fa89e36d14f8d9f403a9d2dbf166949ee153",
+      "head_normalized_block_sha256": "dc627cdd0dc2c46a8b6a79acd798fa89e36d14f8d9f403a9d2dbf166949ee153",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "cache_source_fingerprint_rejects_changed_user_root_before_hydration",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "84cda768d26b084d6da98e1589091e5cae49a19c86f54d370d9a44573a46d87e",
+      "head_normalized_block_sha256": "84cda768d26b084d6da98e1589091e5cae49a19c86f54d370d9a44573a46d87e",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "shutdown_fences_background_reconciliation_and_cache_write",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "c1009ddb41a895c1d35e60ce7ed8cb97ab7f8f0d7a25096bdf49b94e4638ed27",
+      "head_normalized_block_sha256": "c1009ddb41a895c1d35e60ce7ed8cb97ab7f8f0d7a25096bdf49b94e4638ed27",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "blocked_event_publisher_coalesces_snapshots_and_preserves_lifecycle_order",
+      "owner": "presentation_events.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "b88cfb28b8f7436a5eeb0399719e462b5ef918fbcacbbe8d02cddc86da45a1fb",
+      "head_normalized_block_sha256": "b88cfb28b8f7436a5eeb0399719e462b5ef918fbcacbbe8d02cddc86da45a1fb",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_statistics_match_python_rounding_and_population_sigma",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "3fbb5d4fd133823aa600d7c4bdde9bb1ffd8b785e65c4d71fb92e8bea397f351",
+      "head_normalized_block_sha256": "3fbb5d4fd133823aa600d7c4bdde9bb1ffd8b785e65c4d71fb92e8bea397f351",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_status_matches_native_observer_contract",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "c3f65f123358c475e2193a2f4390b6161875e1fae47944808b944d82c1c434e8",
+      "head_normalized_block_sha256": "c3f65f123358c475e2193a2f4390b6161875e1fae47944808b944d82c1c434e8",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_status_distinguishes_unavailable_and_inconsistent_attachment",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "e6f561a44dc9a4d104a57be83d1e93d5874dada957a36a76d6794477e596181b",
+      "head_normalized_block_sha256": "e6f561a44dc9a4d104a57be83d1e93d5874dada957a36a76d6794477e596181b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_sender_samples_distinguish_empty_zero_and_nonzero_measurements",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "1a775172607266839917185255137fd077ba530444bc980074f61658999fb88b",
+      "head_normalized_block_sha256": "1a775172607266839917185255137fd077ba530444bc980074f61658999fb88b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_gate_matches_python_rate_reset_and_sequence_contract",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "9f8e662df6485c89aef290cf7942e8189501a053e4afba87cb4dcda63a4f0877",
+      "head_normalized_block_sha256": "9f8e662df6485c89aef290cf7942e8189501a053e4afba87cb4dcda63a4f0877",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "final_diagnostics_snapshot_bypasses_sampling_interval",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "ad40c5ec4dfbe59fd9dfabeb82c579780e0e004a2b325aa10a56ecae80944ca4",
+      "head_normalized_block_sha256": "ad40c5ec4dfbe59fd9dfabeb82c579780e0e004a2b325aa10a56ecae80944ca4",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_disable_waits_for_in_flight_publication",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "514c347cf26a35a7774e08d8ae5ac777404bf0a829560c8e5b5e779b6f8673eb",
+      "head_normalized_block_sha256": "514c347cf26a35a7774e08d8ae5ac777404bf0a829560c8e5b5e779b6f8673eb",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_dry_run_publishes_unavailable_snapshot",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "4b0419782b03b03cc70dbde202f0e75a3ab052d762ce87468f5af152917b543b",
+      "head_normalized_block_sha256": "4b0419782b03b03cc70dbde202f0e75a3ab052d762ce87468f5af152917b543b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_unavailable_path_keeps_rate_gate_and_monotonic_sequence",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "66bb648a7e66c739d258459e717abb7c4b4395fe8a1a8b011df2e8bb68197f0b",
+      "head_normalized_block_sha256": "66bb648a7e66c739d258459e717abb7c4b4395fe8a1a8b011df2e8bb68197f0b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "diagnostics_physical_healthy_status_remains_healthy",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "8d4322eaf5311488de4a95463ac04ac2544414fd70e4a75706a893f44a81a337",
+      "head_normalized_block_sha256": "8d4322eaf5311488de4a95463ac04ac2544414fd70e4a75706a893f44a81a337",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "terminal_stop_returns_the_stored_terminal_state",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "402cad5cf440ba102db8ee8cf4b72a1282e64ceea29bd62984dbf679a55813dd",
+      "head_normalized_block_sha256": "402cad5cf440ba102db8ee8cf4b72a1282e64ceea29bd62984dbf679a55813dd",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "playback_status_tracks_active_ownership_through_the_retirement_barrier",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "e62a33a5e5bc56bbbf4e8c030c2dc3f4b6984a38f9b6f8c1669df1b5705c49ed",
+      "head_normalized_block_sha256": "e62a33a5e5bc56bbbf4e8c030c2dc3f4b6984a38f9b6f8c1669df1b5705c49ed",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "playback_status_preserves_prepared_identity_and_failure_details",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "f9cb91a85c495fe6057e74c5a62f85e294558aad8f25923efcb2e026d8bdf0c5",
+      "head_normalized_block_sha256": "f9cb91a85c495fe6057e74c5a62f85e294558aad8f25923efcb2e026d8bdf0c5",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "physical_startup_failures_have_actionable_classified_messages",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "3f6eb88bb6a2126a27cf8f9d6e3a98b05699111c2353778974c1894eceedb392",
+      "head_normalized_block_sha256": "3f6eb88bb6a2126a27cf8f9d6e3a98b05699111c2353778974c1894eceedb392",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "target_integrity_startup_admission_fails_only_for_mismatch",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "47143cfdc0363c9068278e983b643252d9453cc05a0b78d98fd8032dae3d228c",
+      "head_normalized_block_sha256": "47143cfdc0363c9068278e983b643252d9453cc05a0b78d98fd8032dae3d228c",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "target_integrity_admission_precedes_focus_and_session_arm",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "35a922674a6226ab2ac766d113f13f1bf58fb46ef52a2332e1f6bb17b9d2245e",
+      "head_normalized_block_sha256": "35a922674a6226ab2ac766d113f13f1bf58fb46ef52a2332e1f6bb17b9d2245e",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "terminal_player_statuses_publish_state_before_terminal_event",
+      "owner": "presentation_events.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "82aaf95bb525a6ae734eb912a31f4be1fd05324b4b7b2bd0b332475ac2f46f0c",
+      "head_normalized_block_sha256": "82aaf95bb525a6ae734eb912a31f4be1fd05324b4b7b2bd0b332475ac2f46f0c",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "terminal_handoff_uses_worker_result_and_release_evidence_after_join",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "9b2304bcac865b1fef71f90883498492947cccaafe76d290df85e7d68587a5e4",
+      "head_normalized_block_sha256": "9b2304bcac865b1fef71f90883498492947cccaafe76d290df85e7d68587a5e4",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "joined_worker_with_unverified_release_quarantines_future_physical_activity",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "c6f36770ddafb2a6b53339503298a57ad4631e70b8670ee6b3648523355e0d3b",
+      "head_normalized_block_sha256": "c6f36770ddafb2a6b53339503298a57ad4631e70b8670ee6b3648523355e0d3b",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "focus_rejection_publishes_starting_then_failed_trace",
+      "owner": "diagnostics_trace.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "b2bbb60c25ce67bddd64b1aa4531cbe7f4838a41d99f8566acf0a6803c70045a",
+      "head_normalized_block_sha256": "b2bbb60c25ce67bddd64b1aa4531cbe7f4838a41d99f8566acf0a6803c70045a",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "dry_run_completion_publishes_finished_before_terminal_event",
+      "owner": "presentation_events.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "665eec550913554d1141dbab8234483e7e2ab3ea3a68e1f6bc691de1f25ff9b5",
+      "head_normalized_block_sha256": "665eec550913554d1141dbab8234483e7e2ab3ea3a68e1f6bc691de1f25ff9b5",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup",
+      "owner": "terminal_release.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "d36757eef0d011b2fc8f36cdc0d595157395496f733402b3ca239990e7cff440",
+      "head_normalized_block_sha256": "d36757eef0d011b2fc8f36cdc0d595157395496f733402b3ca239990e7cff440",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "stop_paths_publish_stopping_finished_then_finished_event",
+      "owner": "presentation_events.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "c5ab9c366c338df81645d2989e8c0cfc38ca773e633c3fd351e446967a64751f",
+      "head_normalized_block_sha256": "c5ab9c366c338df81645d2989e8c0cfc38ca773e633c3fd351e446967a64751f",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "playback_start_validation_distinguishes_malformed_and_stale_ids",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "4bbf1ae1859c90374a1bbaf727283a1b6833e54bb445c564254e2dc01d3a584c",
+      "head_normalized_block_sha256": "4bbf1ae1859c90374a1bbaf727283a1b6833e54bb445c564254e2dc01d3a584c",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "playback_start_validation_bounds_decisions_before_admission",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "3dcf35d12747e01db5c566b7741cb61255950d29ad1be5739bafe1136030acd7",
+      "head_normalized_block_sha256": "3dcf35d12747e01db5c566b7741cb61255950d29ad1be5739bafe1136030acd7",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "routed_playback_start_validates_input_before_confirmation_and_lookup",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "bebcb79f8fc890d28fff13c7e966eb2a1e731167826d311267d83fa6c414d422",
+      "head_normalized_block_sha256": "bebcb79f8fc890d28fff13c7e966eb2a1e731167826d311267d83fa6c414d422",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "skip_is_live_only_and_clears_pending_pause_or_resume",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "4e64e0414ed7f0df269f87a971c0a3f3e4891298ecee340213183e42e95a9f23",
+      "head_normalized_block_sha256": "4e64e0414ed7f0df269f87a971c0a3f3e4891298ecee340213183e42e95a9f23",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "repeated_pending_controls_and_invalid_transitions_match_command_contract",
+      "owner": "commands_status.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "e52b2df2efcd94c85ad2f5037e92b98b2f23a1036979be2c3fea571d1465b140",
+      "head_normalized_block_sha256": "e52b2df2efcd94c85ad2f5037e92b98b2f23a1036979be2c3fea571d1465b140",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "direct_native_player_keeps_the_qualified_supervisor_lease",
+      "owner": "supervisor_lease.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "0da103ceaac3b72a87ba61c36c17fe98262a4357f425621c7838c0656ff53bb9",
+      "head_normalized_block_sha256": "0da103ceaac3b72a87ba61c36c17fe98262a4357f425621c7838c0656ff53bb9",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_prepared_ids_are_random_lowercase_hex_and_eviction_is_fifo",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "c73673bcea742cee601dd6134fc514cd019b43a6856162211cc9e8bd0a690cc2",
+      "head_normalized_block_sha256": "c73673bcea742cee601dd6134fc514cd019b43a6856162211cc9e8bd0a690cc2",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "fingerprint_serialization_matches_python_canonicalization",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "235bcdeb0554df62b2580eeff6580cfe5992204a7397e81266d96a85be75de9a",
+      "head_normalized_block_sha256": "235bcdeb0554df62b2580eeff6580cfe5992204a7397e81266d96a85be75de9a",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_detail_matches_python_tempo_oracle_corpus",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "d9cbe647835a4ce1a4aae1ecaa0c4c6500970bef8a65a1c9bfaa98424fa30655",
+      "head_normalized_block_sha256": "d9cbe647835a4ce1a4aae1ecaa0c4c6500970bef8a65a1c9bfaa98424fa30655",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_prepare_preserves_python_validation_failed_contract",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "d10c4a84e7b741b71a67f53dc164418cb1329fa410dd69c12c678a8edfbfb930",
+      "head_normalized_block_sha256": "d10c4a84e7b741b71a67f53dc164418cb1329fa410dd69c12c678a8edfbfb930",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_pressure",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "e1e95e6ce2f1dc1b033ab728e9786df7533fb20bd3c5cdc9e315fe127926d916",
+      "head_normalized_block_sha256": "e1e95e6ce2f1dc1b033ab728e9786df7533fb20bd3c5cdc9e315fe127926d916",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_analysis",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "f70b1b4276aa387b69ae944ffb514aab7061919e48441120256ba234ba94b5c7",
+      "head_normalized_block_sha256": "f70b1b4276aa387b69ae944ffb514aab7061919e48441120256ba234ba94b5c7",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "auto_play_patch_keeps_prepared_native_playback_valid",
+      "owner": "start_prepare.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "963261c9793d0fe7fb766d98f50f784cceb7b7e9595d2ab7bf3c0e42b2877247",
+      "head_normalized_block_sha256": "963261c9793d0fe7fb766d98f50f784cceb7b7e9595d2ab7bf3c0e42b2877247",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "v4_runtime_operates_with_read_only_install_root_and_separate_app_data",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "20a0a6ac3875c0fc6b5847fa388e35fd482dd89e8e99f8b55139bd4d698b8999",
+      "head_normalized_block_sha256": "20a0a6ac3875c0fc6b5847fa388e35fd482dd89e8e99f8b55139bd4d698b8999",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "persisted_beta_repair_fails_closed_and_persists_stable",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "ab32ab716d8021552b476908120d38b35ce35455addf7ed04b3b696df020d847",
+      "head_normalized_block_sha256": "ab32ab716d8021552b476908120d38b35ce35455addf7ed04b3b696df020d847",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    },
+    {
+      "name": "beta_patch_rejected",
+      "owner": "storage_bootstrap.rs",
+      "attrs": [
+        "#[test]"
+      ],
+      "feature_gates": [],
+      "baseline_block_sha256": "6f61227b908218cb744d3527b133775852a26d4d8b85137d32ca96c17435ff13",
+      "head_normalized_block_sha256": "6f61227b908218cb744d3527b133775852a26d4d8b85137d32ca96c17435ff13",
+      "parity": "exact after line-ending and documented include_str path normalization"
+    }
+  ]
+}

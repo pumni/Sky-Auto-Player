@@ -65,7 +65,29 @@ control-plane work while using the same runtime state:
 V4 update operations remain owned by the Rust `UpdateService`, which invokes
 the official Tauri updater. The native test suites are grouped under
 `native_runtime/tests/` by catalog, calibration, event delivery, and playback
-integration.
+integration. Playback integration keeps the existing `#[path]` entrypoint and
+the `playback_integration.rs` root as a thin module declaration file. Its test
+owners under `native_runtime/tests/playback_integration/` are:
+
+- `supervisor_lease.rs`: monitor progress, stalls, supervisor startup, and
+  lease expiry.
+- `terminal_release.rs`: worker retirement and join, cleanup, release proof,
+  quarantine, and physical reservation.
+- `presentation_events.rs`: lifecycle event ordering, queue behavior, and
+  critical presentation.
+- `diagnostics_trace.rs`: diagnostics status and gates, sender trace, and
+  health projection.
+- `start_prepare.rs`: startup admission, validation, prepare, IDs, fingerprints,
+  and cancellation.
+- `storage_bootstrap.rs`: install and app-data roots, cache, settings, and
+  source mutation.
+- `commands_status.rs`: status DTOs and stop, skip, pause, and command behavior.
+
+The architecture audit keeps the root at or below 500 lines, each owner at or
+below 1,600 lines, and requires the exact direct `.rs` sibling inventory.
+The 69-test baseline inventory, feature gates, nested helper, and per-test
+body hashes are recorded in
+`docs/evidence/issue-540-native-playback-test-parity.json`.
 
 The `sky_player` engine suite remains entered through `engine.rs`'s
 `#[cfg(test)] mod tests;`. Its `engine/tests.rs` root contains the shared test
@@ -88,9 +110,7 @@ and builders belong to `engine/tests/support.rs`. The semantic test owners are:
 - `timing_wait.rs`: timing policies, deadlines, wait paths, and join behavior.
 
 The architecture audit enforces the exact direct `.rs` owner inventory and a
-2,200-line ceiling for each owner. The larger
-`desktop/src-tauri/src/native_runtime/tests/playback_integration.rs` suite
-remains deferred maintenance debt at about 4,100 lines.
+2,200-line ceiling for each owner.
 
 ## Playback boundary
 
@@ -200,9 +220,8 @@ policy, and desktop/native orchestration. Focused owners contain the validators:
 
 The architecture audit budgets each owner module and requires the root
 `checks.rs` to remain at or below 1,600 lines. It also enforces the `sky_player`
-engine test root and owner budgets, plus their exact sibling inventory. The
-larger `desktop/src-tauri/src/native_runtime/tests/playback_integration.rs`
-suite remains deferred maintenance debt at about 4,100 lines.
+engine test root and owner budgets, plus their exact sibling inventory, and the
+native playback integration root, owner budgets, and exact sibling inventory.
 
 Use the Rust repository tool for current verification groups:
 
