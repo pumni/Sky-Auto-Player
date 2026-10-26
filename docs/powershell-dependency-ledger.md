@@ -34,7 +34,7 @@ retires no physical, UI, publication, or manual evidence entrypoint.
 | scripts/v4_release_asset_upload.ps1, scripts/v4_release_draft_lookup.ps1, scripts/v4_release_latest_policy.ps1, scripts/ci_v4_release_latest_guard.ps1 | rust/xtask/src/release_v4.rs | one Transport and state machine; exact asset pair, immutable release, stable Latest, beta preservation, and bounded retries are tested | MIGRATED in Wave D |
 | scripts/probe_v4_metadata_app_access.ps1, scripts/cleanup_v4_release_state.ps1 | Rust probe-metadata-token and cleanup phases | release-v4.yml uses Rust; cleanup checks RUNNER_TEMP containment and the exact ownership sentinel | MIGRATED in Wave D |
 | scripts/test_v4_release_pipeline.ps1, scripts/test_v4_post_publication_transaction.ps1, scripts/test_ci_v4_release_latest_guard.ps1, scripts/test_v4_production_orchestrator.ps1 | rust/xtask/src/release_v4.rs and checks/release_pipeline.rs | CI uses the 22-scenario fake-transport self-test and Rust regression tests; production release APIs are not called by these tests | MIGRATED in Wave D |
-| scripts/audit_dispatch_assembly.ps1, scripts/audit_prepared_normal_assembly.ps1, scripts/audit_modifier_guard_assembly.ps1 | rust/xtask/src/assembly_audit.rs | `cargo xtask audit assembly` preserves reports and pass/fail assertions; ten Rust tests cover required-clean targets, sender bounds, modifier order, PowerShell-compatible admission/prepared suffixes, fake/duplicate labels, lock-prefixed atomic metrics, and null-window queries | MIGRATED in Wave E; thin PowerShell adapters KEEP |
+| scripts/audit_dispatch_assembly.ps1, scripts/audit_prepared_normal_assembly.ps1, scripts/audit_modifier_guard_assembly.ps1 | rust/xtask/src/assembly_audit.rs | `cargo xtask audit assembly` preserves reports and pass/fail assertions; eleven Rust tests cover required-clean targets, sender bounds, modifier order, legacy observer suffix matching, strict admission/prepared suffixes, fake/duplicate/malformed labels, lock-prefixed atomic metrics, and null-window queries | MIGRATED in Wave E; thin PowerShell adapters KEEP |
 | `Write-StartupCalibrationProjection` in scripts/lib/startup_calibration_projection.ps1 | rust/xtask/src/calibration.rs, `cargo xtask calibration project-evidence` | Existing exporter self-test runs the adapter and checks LF/CRLF parity, UTF-8 without BOM, exact SHA-256 sidecars, `eol=lf`, and checkout behavior with `core.autocrlf=true` | MIGRATED in Wave E; thin PowerShell adapter KEEP |
 
 Legacy path names remain in ci_classifier.rs regression cases where deletion of an old path must
@@ -64,6 +64,21 @@ emitted policy metrics matched exactly (zero parity mismatches).
 | Modifier duplicate admission / prepared labels | FAIL / 1 each | FAIL / 1 each | Both reject two exact matches |
 | Dist dispatch: `sky_player-4c11b6fb35acee29.s` | FAIL / 1 | FAIL / 1 | `dispatch_due_from_plan`: 445 instructions, stack=1464, `memcpy=1`; caller helper=0, sender=1, atomic RMW=2, power-consume RMW=1; metrics identical |
 | Dist prepared-normal / modifier-guard | FAIL / 1 each | FAIL / 1 each | Prepared boundary absent; modifier admission exact match count=0 |
+
+Follow-up at corrective BASE `b3b9738338b53941584d742b4296665ab5a9dc5f` paired the frozen
+PowerShell modifier oracle and Rust command on four additional observer-label fixtures:
+
+| Shared observer input | PowerShell oracle | Rust audit | Matched evidence |
+| --- | --- | --- | --- |
+| Valid `modifier_guard26observe_modifier_keys_with_suffix:` | PASS / 0 | PASS / 0 | Observer=5, admission=5, prepared probe=1, sender=1; all reported counters identical |
+| Missing observer label | FAIL / 1 | FAIL / 1 | Both reject zero matches |
+| Duplicate observer suffix match | FAIL / 1 | FAIL / 1 | Both reject two matches |
+| Observer label with trailing space after `:` | FAIL / 1 | FAIL / 1 | Both preserve the `$` end anchor and reject it |
+
+The original 12 pairings remain recorded above; these four additional PowerShell/Rust comparisons
+also match verdicts, exits, and emitted metrics (16 recorded cases total, zero mismatches). The
+observer alone retains the old `prefix.*:$` suffix behavior. Admission, prepared-normal, and Win32
+query symbols still use strict suffix matching; their fake and duplicate-label negatives remain.
 
 The paired dist files were emitted while BASE was checked out, on
 `x86_64-pc-windows-msvc`, using:

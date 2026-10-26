@@ -684,7 +684,8 @@ fn modifier_guard_audit(root: &Path, sky_argument: &str, win32_argument: &str) -
     let query_range = find_unique_function_body(
         &sky_lines,
         |line| {
-            ends_with_ascii_case_insensitive(line, "modifier_guard26observe_modifier_keys_with:")
+            contains_ascii_case_insensitive(line, "modifier_guard26observe_modifier_keys_with")
+                && line.ends_with(':')
         },
         "modifier_guard26observe_modifier_keys_with.*:$",
     )?;
@@ -1255,6 +1256,45 @@ mod tests {
             ".seh_endproc".to_owned(),
         ]);
         fs::write(&sky_path, duplicate_prepared.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+    }
+
+    #[test]
+    fn modifier_guard_observer_matches_power_shell_suffix_pattern_and_rejects_invalid_sets() {
+        let directory = TempAssemblyRoot::new("sky-xtask-modifier-observer-suffix");
+        let canonical = modifier_guard_fixture();
+        let (sky_path, win32_path) = modifier_guard_paths(&directory, &canonical);
+        let mut suffixed_observer = canonical.clone();
+        *suffixed_observer
+            .iter_mut()
+            .find(|line| line.as_str() == "modifier_guard26observe_modifier_keys_with:")
+            .unwrap() = "modifier_guard26observe_modifier_keys_with_suffix:".to_owned();
+        fs::write(&sky_path, suffixed_observer.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_ok());
+
+        let mut missing_observer = canonical.clone();
+        *missing_observer
+            .iter_mut()
+            .find(|line| line.as_str() == "modifier_guard26observe_modifier_keys_with:")
+            .unwrap() = "modifier_guard26observe_current_modifier_keys_with:".to_owned();
+        fs::write(&sky_path, missing_observer.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+
+        let mut duplicate_observer = suffixed_observer.clone();
+        duplicate_observer.extend([
+            "modifier_guard26observe_modifier_keys_with_duplicate:".to_owned(),
+            "  nop".to_owned(),
+            ".seh_endproc".to_owned(),
+        ]);
+        fs::write(&sky_path, duplicate_observer.join("\n")).unwrap();
+        assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
+
+        let mut malformed_observer = suffixed_observer;
+        *malformed_observer
+            .iter_mut()
+            .find(|line| line.as_str() == "modifier_guard26observe_modifier_keys_with_suffix:")
+            .unwrap() = "modifier_guard26observe_modifier_keys_with_suffix: ".to_owned();
+        fs::write(&sky_path, malformed_observer.join("\n")).unwrap();
         assert!(modifier_guard_result(&sky_path, &win32_path).is_err());
     }
 }
