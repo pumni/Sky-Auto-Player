@@ -207,6 +207,14 @@ again at the write boundary, and issues at most one Contents API `PUT` for
 Latest, and raw stable endpoint convergence. Unknown outcomes are reconciled by read-only GETs and
 never retried as a second mutation. No updater private key or passphrase is used.
 
+Both `plan` and `apply` explicitly declare `actions: read`, `attestations: read`, and `contents: read`.
+The apply job's `GH_TOKEN` is the workflow token and authenticates every Actions run/job query,
+release and asset read, Contents read, and `gh attestation verify` invocation. The App token is
+kept separately as `V4_METADATA_WRITE_TOKEN`; Rust selects it only for the canonical stable
+metadata Contents `PUT`. The post-write readback uses `GH_TOKEN`. The Rust process launches GitHub
+CLI children with a cleared runtime-only environment and supplies only the token selected for that
+operation, so the App write token is not inherited by other child commands.
+
 The recovery operation is not a second release lifecycle. It shares the Rust transport, metadata
 schema, signature verifier, provenance checks, and monotonic version policy; it has no release
 state file or release asset operation. A stale plan, Latest conflict, non-monotonic candidate,

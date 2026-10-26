@@ -77,6 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       attestations: read
     steps:
@@ -207,7 +208,8 @@ jobs:
 
       - name: Revalidate and apply only stable metadata with prebuilt Rust control
         env:
-          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+          V4_METADATA_WRITE_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF: ${{ github.ref }}

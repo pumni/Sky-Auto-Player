@@ -685,6 +685,53 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
     stdout_path: &Path,
     timeout: Duration,
 ) -> Result<Output> {
+    capture_windows_timeout_to_file(
+        program,
+        args,
+        cwd,
+        ChildEnvironment {
+            values: env,
+            remove: remove_env,
+            clear_inherited: false,
+        },
+        stdout_path,
+        timeout,
+    )
+}
+
+#[cfg(windows)]
+pub(crate) fn capture_owned_timeout_to_file_runtime_only(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    explicit_env: &[(String, String)],
+    stdout_path: &Path,
+    timeout: Duration,
+) -> Result<Output> {
+    let child_env = runtime_environment_from(env::vars_os(), explicit_env)?;
+    capture_windows_timeout_to_file(
+        program,
+        args,
+        cwd,
+        ChildEnvironment {
+            values: &child_env,
+            remove: &[],
+            clear_inherited: true,
+        },
+        stdout_path,
+        timeout,
+    )
+}
+
+#[cfg(windows)]
+fn capture_windows_timeout_to_file(
+    program: &OsStr,
+    args: &[String],
+    cwd: &Path,
+    environment: ChildEnvironment<'_>,
+    stdout_path: &Path,
+    timeout: Duration,
+) -> Result<Output> {
     eprintln!(
         "[xtask] {} {} (timeout={}ms, stdout=file)",
         program.to_string_lossy(),
@@ -699,11 +746,7 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
         program,
         args,
         cwd,
-        ChildEnvironment {
-            values: env,
-            remove: remove_env,
-            clear_inherited: false,
-        },
+        environment,
         Stdio::from(stdout_file),
         Stdio::piped(),
     )?;
@@ -754,6 +797,18 @@ pub(crate) fn capture_owned_timeout_to_file_filtered(
     _cwd: &Path,
     _env: &[(String, String)],
     _remove_env: &[String],
+    _stdout_path: &Path,
+    _timeout: Duration,
+) -> Result<Output> {
+    Err("bounded Windows process-tree execution is unavailable on this platform".into())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn capture_owned_timeout_to_file_runtime_only(
+    _program: &OsStr,
+    _args: &[String],
+    _cwd: &Path,
+    _explicit_env: &[(String, String)],
     _stdout_path: &Path,
     _timeout: Duration,
 ) -> Result<Output> {
@@ -938,6 +993,14 @@ mod tests {
                 OsString::from("synthetic-github-token"),
             ),
             (
+                OsString::from("GH_TOKEN"),
+                OsString::from("synthetic-recovery-read-token"),
+            ),
+            (
+                OsString::from("V4_METADATA_WRITE_TOKEN"),
+                OsString::from("synthetic-recovery-write-token"),
+            ),
+            (
                 OsString::from("ACTIONS_RUNTIME_TOKEN"),
                 OsString::from("synthetic-actions-token"),
             ),
@@ -958,6 +1021,10 @@ mod tests {
             (
                 "TAURI_SIGNING_PRIVATE_KEY_PASSWORD".to_owned(),
                 "synthetic-signer-passphrase".to_owned(),
+            ),
+            (
+                "GH_TOKEN".to_owned(),
+                "synthetic-recovery-read-token".to_owned(),
             ),
             (
                 "SKY_XTASK_RUNTIME_CHILD_ENV_CAPTURE".to_owned(),
@@ -999,10 +1066,16 @@ mod tests {
             observed.get("TAURI_SIGNING_PRIVATE_KEY_PASSWORD"),
             Some(&"synthetic-signer-passphrase".to_owned())
         );
+        assert_eq!(
+            observed.get("GH_TOKEN"),
+            Some(&"synthetic-recovery-read-token".to_owned()),
+            "an isolated recovery CLI child receives the selected read-only token"
+        );
         for forbidden in [
             "V4_TAURI_UPDATER_PRIVATE_KEY",
             "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
             "GITHUB_TOKEN",
+            "V4_METADATA_WRITE_TOKEN",
             "ACTIONS_RUNTIME_TOKEN",
             "NPM_TOKEN",
             "UNRELATED_PRIVATE_VALUE",
@@ -1016,6 +1089,7 @@ mod tests {
             "synthetic-private-key",
             "synthetic-workflow-passphrase",
             "synthetic-github-token",
+            "synthetic-recovery-write-token",
             "synthetic-actions-token",
             "synthetic-package-token",
             "synthetic-unrelated-secret",

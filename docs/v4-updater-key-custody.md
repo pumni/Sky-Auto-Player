@@ -142,6 +142,12 @@ cargo xtask updater-trust inventory
      Rust verifies its run ID, attempt, source SHA, artifact name, and digest. Apply requires a
      second manual dispatch with the same tag, plan run ID and SHA-256, explicit `confirm=true`, and protected `v4-production-release`
      Environment approval. Rust recomputes the plan immediately before a single stable metadata PUT.
+   - Both jobs declare `actions: read`, `attestations: read`, and `contents: read`. Apply uses the
+     workflow token (`GH_TOKEN`) for Actions run/job queries, release and asset reads, Contents
+     reads, and attestation verification. The separate App token has only `contents: write` and is
+     passed as `V4_METADATA_WRITE_TOKEN`; Rust selects it only for the canonical stable metadata
+     PUT. Readback uses the workflow token, and runtime-only child environments keep the App token
+     out of unrelated commands.
    - Recovery cannot rebuild or resign the installer, alter the release or tag, change beta, or
      decrement the stable SemVer. Unknown outcomes require read-only reconciliation and are never
      retried blindly. A defective or unverified published installer is handled through the

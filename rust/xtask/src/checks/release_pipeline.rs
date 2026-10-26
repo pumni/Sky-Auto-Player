@@ -1,3 +1,4 @@
+use super::recovery_auth::metadata_recovery_auth_contract;
 use super::workflow::{workflow_declares_only_dispatch, workflow_job_blocks, workflow_step_blocks};
 use crate::Result;
 use std::fs;
@@ -883,6 +884,12 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     nsis_installed_catalog_contract(&read("rust/xtask/src/nsis_harness.rs")?)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     updater_fixture_contract(&read("rust/xtask/src/updater_fixture.rs")?)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    let recovery_workflow = read(".github/workflows/v4-metadata-recovery.yml")?;
+    let release = read("rust/xtask/src/release_v4.rs")?;
+    let recovery = read("rust/xtask/src/release_v4/recovery.rs")?;
+    let process = read("rust/xtask/src/process.rs")?;
+    metadata_recovery_auth_contract(&recovery_workflow, &release, &recovery, &process)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     rust_release_state_machine_contract(
         &read(".github/workflows/release-v4.yml")?,

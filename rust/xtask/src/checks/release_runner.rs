@@ -358,6 +358,8 @@ pub(super) fn validate_release_runner_workflow(relative: &str, source: &str) -> 
 fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
     const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
     const APP_TOKEN: &str = "steps.metadata-app-token.outputs.token";
+    const APP_WRITE_ENV: &str =
+        "V4_METADATA_WRITE_TOKEN: ${{ steps.metadata-app-token.outputs.token }}";
     const PLAN_UPLOAD: &str =
         "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2";
     const PLAN_DOWNLOAD: &str =
@@ -406,6 +408,7 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
     let plan = job("plan")?;
     let apply = job("apply")?;
     if !plan.contains("if: inputs.operation == 'plan'")
+        || !plan.contains("actions: read")
         || !plan.contains("contents: read")
         || !plan.contains("attestations: read")
         || plan.contains(APP_PRIVATE_KEY)
@@ -496,6 +499,10 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
         )
         || !execute.contains("--plan-run-id \"$PLAN_RUN_ID\"")
         || !execute.contains("--plan-sha256 \"$PLAN_SHA256\"")
+        || !execute.contains("GH_TOKEN: ${{ github.token }}")
+        || !execute.contains(APP_WRITE_ENV)
+        || execute.contains("GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}")
+        || source.contains("GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}")
         || execute.to_ascii_lowercase().contains("cargo")
         || !execute.contains(APP_TOKEN)
         || !execute.contains("metadata-recovery-apply")
@@ -834,6 +841,30 @@ mod tests {
             )
             .is_err(),
             "plan artifact content must bind the requested run ID"
+        );
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
+                "      actions: read\n      contents: read\n      attestations: read\n",
+                "      contents: read\n      attestations: read\n"
+            ))
+            .is_err(),
+            "plan job must declare actions:read after narrowing job permissions"
+        );
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
+                "GH_TOKEN: ${{ github.token }}",
+                "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}"
+            ))
+            .is_err(),
+            "read verification must not select the metadata App token"
+        );
+        assert!(
+            validate_metadata_recovery_workflow(&source.replace(
+                "V4_METADATA_WRITE_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
+                "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}"
+            ))
+            .is_err(),
+            "the write token must use its separate credential channel"
         );
         assert!(
             validate_metadata_recovery_workflow(&source.replace(

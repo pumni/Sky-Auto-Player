@@ -122,7 +122,22 @@ trait ArtifactVerifier {
     ) -> Result<()>;
 }
 
-struct GitHubArtifactVerifier;
+struct GitHubArtifactVerifier {
+    read_only_token: String,
+}
+
+impl GitHubArtifactVerifier {
+    fn new(read_only_token: String) -> Result<Self> {
+        if read_only_token.is_empty()
+            || read_only_token
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace())
+        {
+            return Err("metadata recovery read-only GitHub token is malformed".into());
+        }
+        Ok(Self { read_only_token })
+    }
+}
 
 impl ArtifactVerifier for GitHubArtifactVerifier {
     fn verify_signature(
@@ -158,12 +173,15 @@ impl ArtifactVerifier for GitHubArtifactVerifier {
             args.push("--predicate-type".to_owned());
             args.push(predicate_type.to_owned());
         }
-        let output = process::capture_owned_timeout_filtered(
+        let output = process::capture_owned_timeout_runtime_only(
             std::ffi::OsStr::new("gh"),
             &args,
             &repo::root(),
-            &[],
-            &[],
+            &[
+                ("GH_TOKEN".to_owned(), self.read_only_token.clone()),
+                ("GH_PAGER".to_owned(), "cat".to_owned()),
+                ("PAGER".to_owned(), "cat".to_owned()),
+            ],
             ATTESTATION_VERIFY_TIMEOUT,
         )?;
         if !output.status.success() {
@@ -179,6 +197,26 @@ impl ArtifactVerifier for GitHubArtifactVerifier {
 
 pub(super) fn run(root: &Path, command: &str, args: &[String]) -> Result<()> {
     validate_runtime(root)?;
+    let read_only_token =
+        env::var("GH_TOKEN").map_err(|_| "GH_TOKEN read credential is required")?;
+    let metadata_write_token = match command {
+        "metadata-recovery-plan" => {
+            if env::var_os(super::METADATA_WRITE_TOKEN_ENV).is_some() {
+                return Err(
+                    "read-only recovery plan must not receive a metadata write token".into(),
+                );
+            }
+            None
+        }
+        "metadata-recovery-apply" => Some(
+            env::var(super::METADATA_WRITE_TOKEN_ENV)
+                .map_err(|_| "metadata recovery apply requires its separate stable-write token")?,
+        ),
+        _ => return Err("unknown metadata recovery operation".into()),
+    };
+    let mut transport =
+        super::GhTransport::for_metadata_recovery(read_only_token.clone(), metadata_write_token)?;
+    let mut verifier = GitHubArtifactVerifier::new(read_only_token)?;
     let mut tag = None;
     let mut output = None;
     let mut plan_path = None;
@@ -211,8 +249,6 @@ pub(super) fn run(root: &Path, command: &str, args: &[String]) -> Result<()> {
         index += 1;
     }
     let tag = tag.ok_or("metadata recovery requires --tag <v4.x.y>")?;
-    let mut transport = super::GhTransport::new();
-    let mut verifier = GitHubArtifactVerifier;
     match command {
         "metadata-recovery-plan" => {
             let output = output.ok_or("metadata recovery plan requires --output <path>")?;

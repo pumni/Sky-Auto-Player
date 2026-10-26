@@ -104,7 +104,18 @@ explicit confirmation, and protected Environment approval. It can write only
 `channels/stable/latest.json` once, then requires exact readback, unchanged beta/Latest state, and
 public endpoint convergence. It cannot rebuild, sign, replace assets, change a release/tag, or roll
 metadata backward. Unknown write results are read back and never blindly retried. Beta auto-update
-remains disabled. The operator procedure and recovery limits are in
+remains disabled.
+
+The recovery `plan` and `apply` jobs explicitly grant `actions: read`, `attestations: read`, and
+`contents: read`. In apply, `GH_TOKEN` is the workflow token and is used for Actions run/job,
+release/asset, Contents readback, and attestation verification. After the recovery executable is
+built and verified and Environment approval is granted, a separate repository App token has only
+`contents: write`; Rust selects it only for the single canonical Contents `PUT` to
+`channels/stable/latest.json`. Every GitHub API GET, including post-write Contents readback, uses
+the read-only token; the public raw stable endpoint is checked without credentials. The App token
+remains in `V4_METADATA_WRITE_TOKEN` and is passed only to the selected write child; runtime-only
+child environments prevent it from reaching unrelated subprocesses. The operator procedure and
+recovery limits are in
 [`v4-release-authority.md`](docs/v4-release-authority.md).
 
 ## Reporting a Vulnerability

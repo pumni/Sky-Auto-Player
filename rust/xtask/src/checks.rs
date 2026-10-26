@@ -1,6 +1,7 @@
 mod bindings;
 mod ci_contracts;
 mod hosted_signing;
+mod recovery_auth;
 mod release_pipeline;
 mod release_runner;
 mod tauri_metadata;

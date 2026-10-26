@@ -276,6 +276,15 @@ read-only plan from `main`, reviews its artifact and plan SHA-256, then dispatch
 plan run ID/hash and explicit confirmation. The protected `v4-production-release` Environment
 approval is required before the write-capable App token is minted.
 
+The `plan` and `apply` jobs each declare `actions: read`, `attestations: read`, and `contents: read`.
+Apply maps the workflow token to `GH_TOKEN` for Actions run/job inspection, release and asset
+reads, Contents reads, and `gh attestation verify`. The App token remains a separate
+`V4_METADATA_WRITE_TOKEN` with only repository `contents: write`; Rust uses it solely for the
+single canonical `PUT` to `channels/stable/latest.json`. All GitHub API reads, including
+write-result readback, use the workflow token; the public stable raw endpoint is checked without
+credentials. Runtime-only child environments keep the App token out of unrelated GitHub CLI and
+helper processes.
+
 Rust revalidates the exact release ID, tag, transaction source SHA and run attempt, Latest identity,
 exact public asset inventory and digests, production signature and version-bound trusted comment,
 installer/signature provenance, SPDX SBOM provenance, stable/beta metadata, and public stable

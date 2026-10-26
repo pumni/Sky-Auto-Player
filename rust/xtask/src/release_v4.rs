@@ -254,7 +254,71 @@ trait Transport {
     fn raw_get(&mut self, endpoint: &str) -> Result<Option<Vec<u8>>>;
 }
 
-struct GhTransport;
+const METADATA_WRITE_TOKEN_ENV: &str = "V4_METADATA_WRITE_TOKEN";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryTokenClass {
+    ReadOnly,
+    MetadataWrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SelectedRecoveryToken<'a> {
+    class: RecoveryTokenClass,
+    value: &'a str,
+}
+
+struct RecoveryCredentials {
+    read_only_token: String,
+    metadata_write_token: Option<String>,
+}
+
+impl RecoveryCredentials {
+    fn new(read_only_token: String, metadata_write_token: Option<String>) -> Result<Self> {
+        let valid_token = |token: &str| {
+            !token.is_empty() && !token.bytes().any(|byte| byte.is_ascii_whitespace())
+        };
+        if !valid_token(&read_only_token)
+            || metadata_write_token
+                .as_deref()
+                .is_some_and(|token| !valid_token(token))
+        {
+            return Err("metadata recovery GitHub credentials are malformed".into());
+        }
+        Ok(Self {
+            read_only_token,
+            metadata_write_token,
+        })
+    }
+
+    fn select(&self, method: &str, endpoint: &str) -> Result<SelectedRecoveryToken<'_>> {
+        if method.eq_ignore_ascii_case("GET") {
+            return Ok(SelectedRecoveryToken {
+                class: RecoveryTokenClass::ReadOnly,
+                value: &self.read_only_token,
+            });
+        }
+        let stable_contents_endpoint =
+            format!("repos/{REPOSITORY}/contents/channels/stable/latest.json");
+        if method.eq_ignore_ascii_case("PUT") && endpoint == stable_contents_endpoint {
+            return Ok(SelectedRecoveryToken {
+                class: RecoveryTokenClass::MetadataWrite,
+                value: self
+                    .metadata_write_token
+                    .as_deref()
+                    .ok_or("metadata recovery stable write token is unavailable")?,
+            });
+        }
+        Err(
+            "metadata recovery transport permits only GitHub reads and one stable metadata PUT"
+                .into(),
+        )
+    }
+}
+
+struct GhTransport {
+    recovery_credentials: Option<RecoveryCredentials>,
+}
 
 fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
     let endpoint = endpoint.strip_suffix("{?name,label}").unwrap_or(endpoint);
@@ -301,17 +365,39 @@ fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
 
 impl GhTransport {
     fn new() -> Self {
-        Self
+        Self {
+            recovery_credentials: None,
+        }
     }
 
-    fn invoke(&self, args: &[String], payload: Option<&[u8]>) -> Result<Vec<u8>> {
-        self.invoke_with_timeout(args, payload, Duration::from_secs(60))
+    fn for_metadata_recovery(
+        read_only_token: String,
+        metadata_write_token: Option<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            recovery_credentials: Some(RecoveryCredentials::new(
+                read_only_token,
+                metadata_write_token,
+            )?),
+        })
+    }
+
+    fn selected_recovery_token(
+        &self,
+        method: &str,
+        endpoint: &str,
+    ) -> Result<Option<SelectedRecoveryToken<'_>>> {
+        self.recovery_credentials
+            .as_ref()
+            .map(|credentials| credentials.select(method, endpoint))
+            .transpose()
     }
 
     fn invoke_with_timeout(
         &self,
         args: &[String],
         payload: Option<&[u8]>,
+        selected_token: Option<&str>,
         timeout: Duration,
     ) -> Result<Vec<u8>> {
         let input_path = if let Some(input) = payload {
@@ -333,17 +419,33 @@ impl GhTransport {
         ) {
             *input_arg = path.to_string_lossy().into_owned();
         }
-        let output = process::capture_owned_timeout_filtered(
-            std::ffi::OsStr::new("gh"),
-            &args,
-            &repo::root(),
-            &[
-                ("GH_PAGER".to_owned(), "cat".to_owned()),
-                ("PAGER".to_owned(), "cat".to_owned()),
-            ],
-            &[],
-            timeout,
-        );
+        let output = if self.recovery_credentials.is_some() {
+            let token = selected_token
+                .ok_or("metadata recovery GitHub child requires an operation-selected token")?;
+            process::capture_owned_timeout_runtime_only(
+                std::ffi::OsStr::new("gh"),
+                &args,
+                &repo::root(),
+                &[
+                    ("GH_TOKEN".to_owned(), token.to_owned()),
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                timeout,
+            )
+        } else {
+            process::capture_owned_timeout_filtered(
+                std::ffi::OsStr::new("gh"),
+                &args,
+                &repo::root(),
+                &[
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                &[],
+                timeout,
+            )
+        };
         let cleanup = input_path.map(fs::remove_file).transpose();
         let output = match (output, cleanup) {
             (Ok(output), Ok(_)) => output,
@@ -375,19 +477,41 @@ impl GhTransport {
         Ok(output.stdout)
     }
 
-    fn invoke_to_file(&self, args: &[String], destination: &Path) -> Result<()> {
-        let output = process::capture_owned_timeout_to_file_filtered(
-            std::ffi::OsStr::new("gh"),
-            args,
-            &repo::root(),
-            &[
-                ("GH_PAGER".to_owned(), "cat".to_owned()),
-                ("PAGER".to_owned(), "cat".to_owned()),
-            ],
-            &[],
-            destination,
-            Duration::from_secs(10 * 60),
-        )?;
+    fn invoke_to_file(
+        &self,
+        args: &[String],
+        destination: &Path,
+        selected_token: Option<&str>,
+    ) -> Result<()> {
+        let output = if self.recovery_credentials.is_some() {
+            let token = selected_token
+                .ok_or("metadata recovery asset download requires its read-only GitHub token")?;
+            process::capture_owned_timeout_to_file_runtime_only(
+                std::ffi::OsStr::new("gh"),
+                args,
+                &repo::root(),
+                &[
+                    ("GH_TOKEN".to_owned(), token.to_owned()),
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                destination,
+                Duration::from_secs(10 * 60),
+            )?
+        } else {
+            process::capture_owned_timeout_to_file_filtered(
+                std::ffi::OsStr::new("gh"),
+                args,
+                &repo::root(),
+                &[
+                    ("GH_PAGER".to_owned(), "cat".to_owned()),
+                    ("PAGER".to_owned(), "cat".to_owned()),
+                ],
+                &[],
+                destination,
+                Duration::from_secs(10 * 60),
+            )?
+        };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Box::new(HttpFailure {
@@ -418,7 +542,13 @@ impl GhTransport {
             args.extend(["--input".to_owned(), "-".to_owned()]);
         }
         let payload = body.map(serde_json::to_vec).transpose()?;
-        match self.invoke(&args, payload.as_deref()) {
+        let selected = self.selected_recovery_token(method, endpoint)?;
+        match self.invoke_with_timeout(
+            &args,
+            payload.as_deref(),
+            selected.map(|credential| credential.value),
+            Duration::from_secs(60),
+        ) {
             Ok(bytes) => decode_api_response(method, endpoint, &bytes),
             Err(error)
                 if error
@@ -448,6 +578,9 @@ impl Transport for GhTransport {
     }
 
     fn upload(&mut self, endpoint: &str, name: &str, path: &Path) -> Result<()> {
+        if self.recovery_credentials.is_some() {
+            return Err("metadata recovery transport cannot upload release assets".into());
+        }
         if !path.is_file() {
             return Err("release upload source is not a regular file".into());
         }
@@ -474,7 +607,7 @@ impl Transport for GhTransport {
                 if let Some(input) = request.iter_mut().find(|arg| arg.as_str() == "-") {
                     *input = path.to_string_lossy().into_owned();
                 }
-                self.invoke_with_timeout(&request, None, Duration::from_secs(10 * 60))
+                self.invoke_with_timeout(&request, None, None, Duration::from_secs(10 * 60))
                     .map(|_| ())
             },
             std::thread::sleep,
@@ -482,6 +615,7 @@ impl Transport for GhTransport {
     }
 
     fn download(&mut self, endpoint: &str, destination: &Path) -> Result<()> {
+        let selected = self.selected_recovery_token("GET", endpoint)?;
         let args = vec![
             "api".to_owned(),
             "--hostname".to_owned(),
@@ -495,7 +629,11 @@ impl Transport for GhTransport {
                 if destination.exists() {
                     fs::remove_file(destination)?;
                 }
-                match self.invoke_to_file(&args, destination) {
+                match self.invoke_to_file(
+                    &args,
+                    destination,
+                    selected.map(|credential| credential.value),
+                ) {
                     Ok(()) => Ok(()),
                     Err(error) => {
                         let cleanup_error = if destination.exists() {
@@ -552,14 +690,24 @@ impl Transport for GhTransport {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-        let output = process::capture_owned_timeout_filtered(
-            std::ffi::OsStr::new(curl),
-            &args,
-            &repo::root(),
-            &[],
-            &[],
-            Duration::from_secs(15),
-        )?;
+        let output = if self.recovery_credentials.is_some() {
+            process::capture_owned_timeout_runtime_only(
+                std::ffi::OsStr::new(curl),
+                &args,
+                &repo::root(),
+                &[],
+                Duration::from_secs(15),
+            )?
+        } else {
+            process::capture_owned_timeout_filtered(
+                std::ffi::OsStr::new(curl),
+                &args,
+                &repo::root(),
+                &[],
+                &[],
+                Duration::from_secs(15),
+            )?
+        };
         let split = output
             .stdout
             .windows(4)
@@ -594,7 +742,7 @@ fn extract_http_status(stderr: &str) -> Option<u16> {
 
 fn safe_cli_error(stderr: &str) -> String {
     let mut result = stderr.trim().to_owned();
-    for secret_name in ["GH_TOKEN", "GITHUB_TOKEN"] {
+    for secret_name in ["GH_TOKEN", "GITHUB_TOKEN", METADATA_WRITE_TOKEN_ENV] {
         if let Ok(secret) = env::var(secret_name)
             && secret.len() > 4
         {
@@ -5801,6 +5949,69 @@ fn prepare_publish_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens() {
+        let transport = GhTransport::for_metadata_recovery(
+            "synthetic-read-only-token".to_owned(),
+            Some("synthetic-metadata-write-token".to_owned()),
+        )
+        .unwrap();
+        for endpoint in [
+            "repos/pumni/Sky-Auto-Player/actions/runs/7001",
+            "repos/pumni/Sky-Auto-Player/actions/runs/7001/attempts/1/jobs",
+            "repos/pumni/Sky-Auto-Player/releases/latest",
+            "repos/pumni/Sky-Auto-Player/releases/assets/42",
+        ] {
+            let selected = transport
+                .selected_recovery_token("GET", endpoint)
+                .unwrap()
+                .expect("recovery reads require an explicit credential");
+            assert_eq!(selected.class, RecoveryTokenClass::ReadOnly);
+            assert_eq!(selected.value, "synthetic-read-only-token");
+        }
+        let stable_put = transport
+            .selected_recovery_token(
+                "PUT",
+                "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json",
+            )
+            .unwrap()
+            .expect("the canonical stable metadata write selects the App token");
+        assert_eq!(stable_put.class, RecoveryTokenClass::MetadataWrite);
+        assert_eq!(stable_put.value, "synthetic-metadata-write-token");
+        for (method, endpoint) in [
+            (
+                "PUT",
+                "repos/pumni/Sky-Auto-Player/contents/channels/beta/latest.json",
+            ),
+            (
+                "PUT",
+                "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json?ref=main",
+            ),
+            (
+                "POST",
+                "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json",
+            ),
+            ("DELETE", "repos/pumni/Sky-Auto-Player/releases/42"),
+        ] {
+            assert!(
+                transport.selected_recovery_token(method, endpoint).is_err(),
+                "recovery must reject {method} {endpoint}"
+            );
+        }
+        let read_only =
+            GhTransport::for_metadata_recovery("synthetic-read-only-token".to_owned(), None)
+                .unwrap();
+        assert!(
+            read_only
+                .selected_recovery_token(
+                    "PUT",
+                    "repos/pumni/Sky-Auto-Player/contents/channels/stable/latest.json",
+                )
+                .is_err(),
+            "a read-only plan cannot synthesize metadata write authority"
+        );
+    }
 
     #[test]
     fn malformed_github_api_json_fails_closed_with_endpoint_context() {
