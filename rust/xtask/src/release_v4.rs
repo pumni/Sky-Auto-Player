@@ -841,18 +841,9 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         state_root,
         workflow_sha,
     };
-    let expected_job = match command {
-        "build-unsigned" => Some("build_unsigned"),
-        "sign-candidate" | "qualify-candidate" => Some("sign_qualify"),
-        "verify-candidate" => Some("attest"),
-        "verify-attestations" | "publish-release" => Some("publish"),
-        "probe-metadata-token" => Some("metadata_probe"),
-        "promote-metadata" => Some("metadata_promote"),
-        "final-verify" => Some("final_verify"),
-        _ => None,
-    };
-    if let Some(expected_job) = expected_job {
-        require_runtime_context(root, &options, expected_job)?;
+    let expected_job = expected_job_for_command(command);
+    if expected_job.is_some() {
+        require_runtime_context(root, &options, command)?;
     }
     let mut transport = GhTransport::new();
     match command {
@@ -860,7 +851,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         "build-unsigned" => build_unsigned(root, &options),
         "sign-candidate" => sign_candidate(root, &options),
         "qualify-candidate" => qualify_candidate(root, &options),
-        "verify-candidate" => verify_candidate_handoff(root, &options),
+        "verify-candidate" | "probe-verify-candidate" => verify_candidate_handoff(root, &options),
         "verify-attestations" => verify_attestations(root, &options),
         "publish-release" => publish_release(root, &options, &mut transport),
         "promote-metadata" => promote_metadata(root, &options, &mut transport),
@@ -876,7 +867,20 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     }
 }
 
-fn require_runtime_context(root: &Path, options: &Options, expected_job: &str) -> Result<()> {
+fn expected_job_for_command(command: &str) -> Option<&'static str> {
+    match command {
+        "build-unsigned" => Some("build_unsigned"),
+        "sign-candidate" | "qualify-candidate" => Some("sign_qualify"),
+        "verify-candidate" => Some("attest"),
+        "probe-verify-candidate" | "probe-metadata-token" => Some("metadata_probe"),
+        "verify-attestations" | "publish-release" => Some("publish"),
+        "promote-metadata" => Some("metadata_promote"),
+        "final-verify" => Some("final_verify"),
+        _ => None,
+    }
+}
+
+fn require_runtime_context(root: &Path, options: &Options, command: &str) -> Result<()> {
     let context = read_context(root, options)?;
     let head = repo::git_head(root, true)?;
     if !head.eq_ignore_ascii_case(&context.source_sha) {
@@ -885,10 +889,17 @@ fn require_runtime_context(root: &Path, options: &Options, expected_job: &str) -
     let runtime = RuntimeIdentity::from_environment()?;
     validate_runtime_identity(&context, options.workflow_sha.as_deref(), &runtime)?;
     let job = env::var("GITHUB_JOB").map_err(|_| "GITHUB_JOB is required for release phases")?;
-    if job != expected_job {
+    validate_dispatch_job(command, &job)?;
+    Ok(())
+}
+
+fn validate_dispatch_job(command: &str, actual_job: &str) -> Result<&'static str> {
+    let expected_job = expected_job_for_command(command)
+        .ok_or_else(|| format!("release command has no workflow job authorization: {command}"))?;
+    if actual_job != expected_job {
         return Err(format!("release phase requires canonical workflow job {expected_job}").into());
     }
-    Ok(())
+    Ok(expected_job)
 }
 
 fn next_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -1009,11 +1020,7 @@ fn identity(root: &Path, workflow_sha: Option<&str>) -> Result<Context> {
 }
 
 fn git_text(root: &Path, args: &[&str]) -> Result<String> {
-    let output = process::capture("git", args, root, &[])?;
-    if !output.status.success() {
-        return Err("git identity query failed".into());
-    }
-    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    process::capture_text_runtime_only("git", args, root)
 }
 
 fn validate_release_notes(root: &Path, relative: &str, version: &str) -> Result<PathBuf> {
@@ -1306,11 +1313,15 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let manifest = release_handoff::create_unsigned_handoff(
         &options.state_root,
         &installer,
-        &context.version,
-        &context.source_sha,
-        &context.workflow_sha,
-        &context.run_id,
-        context.run_attempt,
+        &root.join("desktop/src-tauri/resources/native_calibration.exe"),
+        &release_handoff::ExpectedHandoffIdentity {
+            repository: &context.repository,
+            source_sha: &context.source_sha,
+            workflow_sha: &context.workflow_sha,
+            run_id: &context.run_id,
+            run_attempt: context.run_attempt,
+            version: &context.version,
+        },
     )?;
     println!(
         "V4 Rust unsigned build handoff: PASS (installer={}, size={}, sha256={}, run={} attempt={})",
@@ -1538,7 +1549,8 @@ fn qualify_candidate(root: &Path, options: &Options) -> Result<()> {
             "--public-key",
             canonical_key.to_str().ok_or("invalid public key path")?,
             "--calibration-binary",
-            root.join("desktop/src-tauri/resources/native_calibration.exe")
+            incoming
+                .join(&handoff.calibration_binary)
                 .to_str()
                 .ok_or("invalid calibration path")?,
             "--output-root",
@@ -5872,7 +5884,7 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         .find(|record| record.role == "installer")
         .ok_or("mock fixture installer record missing")?;
     let unsigned_handoff = release_handoff::UnsignedArtifactManifest {
-        schema_version: 1,
+        schema_version: 2,
         repository: context.repository.clone(),
         source_sha: context.source_sha.clone(),
         workflow_sha: context.workflow_sha.clone(),
@@ -5882,6 +5894,10 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         installer_name: installer_record.source_name.clone(),
         installer_size: installer_record.size,
         installer_sha256: installer_record.sha256.clone(),
+        calibration_binary: "native_calibration.exe".to_owned(),
+        calibration_binary_size: 1,
+        calibration_binary_sha256: "c".repeat(64),
+        calibration_binary_architecture: "x86_64".to_owned(),
         producer_job: "build_unsigned".to_owned(),
         artifact_name: release_handoff::artifact_name(&context.run_id, context.run_attempt)?,
     };
@@ -5953,6 +5969,219 @@ fn prepare_publish_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn candidate_verification_dispatcher_requires_the_exact_workflow_job() {
+        assert_eq!(expected_job_for_command("verify-candidate"), Some("attest"));
+        assert_eq!(
+            expected_job_for_command("probe-verify-candidate"),
+            Some("metadata_probe")
+        );
+        assert_eq!(
+            validate_dispatch_job("probe-verify-candidate", "metadata_probe").unwrap(),
+            "metadata_probe"
+        );
+        assert!(validate_dispatch_job("probe-verify-candidate", "attest").is_err());
+        assert!(validate_dispatch_job("verify-candidate", "metadata_probe").is_err());
+        assert!(validate_dispatch_job("probe-verify-candidate", "*").is_err());
+        assert!(validate_dispatch_job("unknown", "metadata_probe").is_err());
+    }
+
+    #[test]
+    fn sign_candidate_entrypoint_does_not_leak_updater_secrets_to_git_child() {
+        const CHILD_MODE: &str = "SKY_XTASK_RELEASE_GIT_CHILD_TEST";
+        const RUNNER_TEMP: &str = "SKY_XTASK_RELEASE_GIT_CHILD_RUNNER_TEMP";
+        const SOURCE_SHA: &str = "SKY_XTASK_RELEASE_GIT_CHILD_SOURCE_SHA";
+        const CAPTURE_PATH: &str = "SKY_XTASK_RELEASE_GIT_CHILD_CAPTURE";
+        const COMMAND: &str = "SKY_XTASK_RELEASE_GIT_CHILD_COMMAND";
+
+        if env::var_os(CHILD_MODE).is_some() {
+            let root = repo::root();
+            let source_sha = env::var(SOURCE_SHA).expect("test source SHA");
+            let runner_temp = PathBuf::from(env::var_os(RUNNER_TEMP).expect("test runner temp"));
+            let state_root = runner_temp.join("sky-v4-release-123456-1");
+            fs::create_dir_all(&state_root).expect("create release state root");
+            let version = repo::project_version(&root).expect("project version");
+            let parsed = version::parse(&version).expect("parse project version");
+            let channel = if parsed.pre.is_empty() {
+                "stable"
+            } else {
+                "beta"
+            };
+            let tag = format!("v{version}");
+            let context = Context {
+                schema_version: 2,
+                repository: REPOSITORY.to_owned(),
+                version,
+                channel: channel.to_owned(),
+                tag: tag.clone(),
+                release_notes_path: format!("docs/releases/{tag}.md"),
+                source_sha: source_sha.clone(),
+                workflow_sha: source_sha.clone(),
+                run_id: "123456".to_owned(),
+                run_attempt: 1,
+                created_at: "2026-10-27T00:00:00Z".to_owned(),
+            };
+            write_json_atomic(&state_root.join("release-context.json"), &context)
+                .expect("write release context");
+            let command = env::var(COMMAND).expect("test release command");
+            let actual_job = env::var("GITHUB_JOB").expect("test GitHub job identity");
+            let args = [
+                command.clone(),
+                "--state-root".to_owned(),
+                state_root.to_string_lossy().into_owned(),
+                "--workflow-sha".to_owned(),
+                source_sha,
+            ];
+            let error =
+                run(&root, &args).expect_err("dispatcher fixture must stop before mutation");
+            let expected_error = match (command.as_str(), actual_job.as_str()) {
+                ("sign-candidate", "sign_qualify") => "unsigned handoff manifest",
+                ("verify-candidate", "attest") | ("probe-verify-candidate", "metadata_probe") => {
+                    "required release state file is missing"
+                }
+                ("verify-candidate", _) => "canonical workflow job attest",
+                ("probe-verify-candidate", _) => "canonical workflow job metadata_probe",
+                _ => panic!("unexpected dispatcher fixture command or job"),
+            };
+            assert!(
+                error.to_string().contains(expected_error),
+                "dispatcher `{command}` under `{actual_job}` stopped unexpectedly: {error}"
+            );
+            return;
+        }
+
+        let test_root = env::temp_dir().join(format!(
+            "sky-release-git-child-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_root).expect("create test root");
+        struct RemoveTestRoot(PathBuf);
+        impl Drop for RemoveTestRoot {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _remove_root = RemoveTestRoot(test_root.clone());
+        let fake_git_dir = test_root.join("fake-git");
+        fs::create_dir(&fake_git_dir).expect("create fake git directory");
+        let capture_path = test_root.join("git-child-environments.txt");
+        let source_sha = repo::git_head(&repo::root(), false).expect("read current source SHA");
+        let fake_source = format!(
+            r#"
+use std::{{env, fs::OpenOptions, io::Write}};
+const CAPTURE: &str = {capture_path:?};
+const HEAD: &str = {source_sha:?};
+fn main() {{
+    let mut file = OpenOptions::new().create(true).append(true).open(CAPTURE).unwrap();
+    writeln!(file, "--- child ---").unwrap();
+    let mut values = env::vars().collect::<Vec<_>>();
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    for (name, value) in values {{ writeln!(file, "{{name}}={{value}}").unwrap(); }}
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    if args.first().map(String::as_str) == Some("rev-parse") {{ println!("{{HEAD}}"); }}
+}}
+"#
+        );
+        let fake_source_path = test_root.join("fake-git.rs");
+        fs::write(&fake_source_path, fake_source).expect("write fake git source");
+        let fake_git_path = fake_git_dir.join(if cfg!(windows) { "git.exe" } else { "git" });
+        let compile = Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&fake_source_path)
+            .arg("-o")
+            .arg(&fake_git_path)
+            .output()
+            .expect("compile fake git child");
+        assert!(
+            compile.status.success(),
+            "fake git compilation failed: {}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&fake_git_path)
+                .expect("fake git metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&fake_git_path, permissions).expect("make fake git executable");
+        }
+        let mut search_path = vec![fake_git_dir.clone()];
+        search_path.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+        let path = env::join_paths(search_path).expect("join fake git search path");
+        let runner_temp = test_root.join("runner-temp");
+        fs::create_dir(&runner_temp).expect("create test runner temp");
+        let executable = env::current_exe().expect("test executable path");
+        for (command, job) in [
+            ("sign-candidate", "sign_qualify"),
+            ("verify-candidate", "attest"),
+            ("probe-verify-candidate", "metadata_probe"),
+            ("probe-verify-candidate", "attest"),
+            ("verify-candidate", "metadata_probe"),
+        ] {
+            let child = Command::new(&executable)
+                .args([
+                    "--exact",
+                    "release_v4::tests::sign_candidate_entrypoint_does_not_leak_updater_secrets_to_git_child",
+                    "--nocapture",
+                ])
+                .env(CHILD_MODE, "1")
+                .env("RUNNER_TEMP", &runner_temp)
+                .env(RUNNER_TEMP, &runner_temp)
+                .env(SOURCE_SHA, &source_sha)
+                .env(CAPTURE_PATH, &capture_path)
+                .env(COMMAND, command)
+                .env("PATH", &path)
+                .env("GITHUB_SHA", &source_sha)
+                .env("GITHUB_REPOSITORY", REPOSITORY)
+                .env("GITHUB_RUN_ID", "123456")
+                .env("GITHUB_RUN_ATTEMPT", "1")
+                .env("GITHUB_EVENT_NAME", "workflow_dispatch")
+                .env("GITHUB_REF", "refs/heads/main")
+                .env("GITHUB_WORKFLOW_REF", RELEASE_WORKFLOW_REF)
+                .env("GITHUB_JOB", job)
+                .env("V4_TAURI_UPDATER_PRIVATE_KEY", "synthetic-private-key")
+                .env(
+                    "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
+                    "synthetic-updater-passphrase",
+                )
+                .env("GITHUB_TOKEN", "synthetic-github-token")
+                .env("GH_TOKEN", "synthetic-gh-token")
+                .env("NPM_TOKEN", "synthetic-package-token")
+                .output()
+                .expect("run release dispatcher entrypoint test child");
+            assert!(
+                child.status.success(),
+                "dispatcher regression for `{command}` / `{job}` failed: {}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+        }
+        let observed = fs::read_to_string(&capture_path).expect("captured fake Git environments");
+        assert!(observed.matches("--- child ---").count() >= 20);
+        for forbidden in [
+            "V4_TAURI_UPDATER_PRIVATE_KEY=",
+            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD=",
+            "GITHUB_TOKEN=",
+            "GH_TOKEN=",
+            "NPM_TOKEN=",
+            "synthetic-private-key",
+            "synthetic-updater-passphrase",
+            "synthetic-github-token",
+            "synthetic-gh-token",
+            "synthetic-package-token",
+        ] {
+            assert!(
+                !observed.contains(forbidden),
+                "fake Git child observed a forbidden signing secret or token"
+            );
+        }
+    }
 
     #[test]
     fn metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens() {

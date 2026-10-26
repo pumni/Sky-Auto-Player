@@ -111,7 +111,8 @@ signing and metadata jobs; updater signing secrets are mapped only into the Rust
 transaction is:
 
 ```text
-Preflight -> BuildUnsigned -> SignCandidate -> QualifyCandidate -> VerifyCandidate
+Preflight -> BuildUnsigned -> SignCandidate -> QualifyCandidate
+          -> VerifyCandidate(attest) -> VerifyCandidate(metadata_probe)
           -> VerifyAttestations -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
 
@@ -122,8 +123,10 @@ The ordering is security-critical:
    and `release-metadata` branch readiness. It is externally read-only: collision state and any
    matching stale draft are observed and classified, but not mutated.
 2. **BuildUnsigned**: Builds one unsigned canonical NSIS installer with Tauri updater sidecar
-   creation disabled. A typed run/attempt-bound manifest records its exact size and SHA-256. This job
-   has no production secrets or write permissions.
+   creation disabled. Its typed run/attempt-bound artifact contains `manifest.json`, the installer,
+   and the `native_calibration.exe` produced by that Windows build. The manifest records exact
+   sizes and SHA-256 values for both executables and requires the calibration file to be an x64 PE.
+   This job has no production secrets or write permissions.
 3. **SignCandidate**: Independently verifies the downloaded artifact name, inventory, source and
    workflow SHAs, run ID/attempt, canonical filename, size, and digest. The Rust adapter verifies the
    encrypted updater key against Key ID `19AABD2E7838818C`, signs the same installer bytes, and
@@ -134,9 +137,11 @@ The ordering is security-critical:
    verification, SPDX SBOM, exact bundle verification, updater fixture, Defender exact scan, and
    Windows NSIS install/launch/uninstall qualification. It freezes `candidate-manifest.json` with
    SHA-256 digests and file sizes.
-5. **VerifyCandidate / VerifyAttestations**: Independently revalidates the candidate in the OIDC
-   attestation job, attests the exact installer, signature, and SPDX SBOM, then verifies those
-   attestations against the exact source, workflow, and candidate digests before publication.
+5. **VerifyCandidate / VerifyAttestations**: `verify-candidate` revalidates the candidate in the OIDC
+   attestation job; `probe-verify-candidate` calls the same verifier in `metadata_probe` through its
+   separately authorized job identity. The attestation job attests the exact installer, signature,
+   and SPDX SBOM, then publication verifies those attestations against the exact source, workflow,
+   and candidate digests.
 6. **PublishRelease**: Executes a single cohesive publication transaction boundary:
    - Reconciles and deletes only a matching unpublished stale draft immediately before creating the
      new draft; mismatched or published releases fail closed.
