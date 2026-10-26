@@ -408,8 +408,7 @@ mod tests {
             "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
             "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
         ];
-        let removed =
-            signer_child_environment_removals(inherited.iter().map(|name| OsString::from(name)));
+        let removed = signer_child_environment_removals(inherited.iter().map(OsString::from));
         assert_eq!(
             removed,
             [
