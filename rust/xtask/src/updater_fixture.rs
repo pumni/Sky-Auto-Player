@@ -1013,7 +1013,8 @@ fn prepare_and_run(
         "installed_registry": {
             "Publisher": &bridge_registry.publisher,
             "DisplayVersion": &bridge_registry.version,
-            "InstallLocation": &bridge_registry.install_root,
+            "InstallLocation": &bridge_registry.install_location_raw,
+            "InstallLocationNormalized": &bridge_registry.install_root,
             "UninstallString": &bridge_registry.uninstall_string,
             "uninstall_identity": &bridge_registry.uninstall_identity
         }
@@ -1233,6 +1234,7 @@ fn prepare_and_run(
             "publisher": bridge_registry.publisher,
             "identifier": "io.github.pumni.skyautoplayer",
             "install_root": bridge_registry.install_root,
+            "install_location_raw": bridge_registry.install_location_raw,
             "uninstall_identity": bridge_registry.uninstall_identity,
             "uninstall_string": bridge_registry.uninstall_string
         },
@@ -1241,6 +1243,7 @@ fn prepare_and_run(
             "publisher": migration.publisher,
             "identifier": "io.github.pumni.skyautoplayer",
             "install_root": migration.install_root,
+            "install_location_raw": migration.install_location_raw,
             "uninstall_identity": migration.uninstall_identity,
             "uninstall_string": migration.uninstall_string
         },
@@ -1626,6 +1629,95 @@ fn run_app_with_status(
         .wait_timeout(timeout)
 }
 
+fn parse_windows_install_location(raw: &str) -> Result<String> {
+    if raw.is_empty() || raw.trim() != raw {
+        return Err("registry InstallLocation is empty or has surrounding whitespace".into());
+    }
+    let path = match (raw.starts_with('"'), raw.ends_with('"')) {
+        (true, true) => &raw[1..raw.len() - 1],
+        (true, false) | (false, true) => {
+            return Err("registry InstallLocation has an unmatched quote".into());
+        }
+        (false, false) => raw,
+    };
+    if path.is_empty()
+        || path.trim() != path
+        || path.contains('"')
+        || path.chars().any(char::is_control)
+    {
+        return Err("registry InstallLocation has malformed quoted path syntax".into());
+    }
+    let normalized = path.replace('/', "\\");
+    if !is_absolute_windows_install_location(&normalized) {
+        return Err("registry InstallLocation must be a well-formed absolute Windows path".into());
+    }
+    Ok(normalized)
+}
+
+fn is_absolute_windows_install_location(path: &str) -> bool {
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        if rest
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\"))
+        {
+            return rest
+                .get(4..)
+                .is_some_and(|unc| valid_windows_path_components(unc, 2));
+        }
+        return valid_windows_drive_absolute(rest);
+    }
+    if let Some(unc) = path.strip_prefix(r"\\") {
+        if path.starts_with(r"\\.\") {
+            return false;
+        }
+        return valid_windows_path_components(unc, 2);
+    }
+    valid_windows_drive_absolute(path)
+}
+
+fn valid_windows_drive_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'\\'
+        && valid_windows_path_components(&path[3..], 0)
+}
+
+fn valid_windows_path_components(path: &str, minimum_components: usize) -> bool {
+    let mut components = path.split('\\').collect::<Vec<_>>();
+    if components.last() == Some(&"") {
+        components.pop();
+    }
+    if components.len() < minimum_components {
+        return false;
+    }
+    components.iter().all(|component| {
+        !component.is_empty()
+            && *component != "."
+            && *component != ".."
+            && !component.ends_with(' ')
+            && !component.ends_with('.')
+            && !component.chars().any(|character| {
+                character.is_control()
+                    || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+            })
+    })
+}
+
+#[cfg(windows)]
+fn validate_registry_install_location(raw: &str, expected_root: &Path) -> Result<PathBuf> {
+    let normalized = parse_windows_install_location(raw)?;
+    let observed_root = std::fs::canonicalize(PathBuf::from(&normalized)).map_err(|error| {
+        let path_hint = raw.chars().take(260).collect::<String>();
+        format!("registry InstallLocation {path_hint:?} cannot be resolved: {error}")
+    })?;
+    if observed_root != expected_root {
+        return Err("uninstall InstallLocation does not match the bounded fixture root".into());
+    }
+    Ok(observed_root)
+}
+
 #[cfg(windows)]
 fn assert_publisher_state(
     publisher: &str,
@@ -1656,16 +1748,7 @@ fn assert_publisher_state(
     let expected_root = std::fs::canonicalize(install_root).map_err(|error| {
         format!("could not canonicalize bounded updater fixture install root: {error}")
     })?;
-    let observed_root =
-        std::fs::canonicalize(PathBuf::from(&install_location)).map_err(|error| {
-            let path_hint = install_location.chars().take(260).collect::<String>();
-            format!(
-                "registry InstallLocation {path_hint:?} is not a valid filesystem path: {error}"
-            )
-        })?;
-    if observed_root != expected_root {
-        return Err("uninstall InstallLocation does not match the bounded fixture root".into());
-    }
+    validate_registry_install_location(&install_location, &expected_root)?;
     let expected_uninstaller = expected_root.join("uninstall.exe");
     if !uninstall_string
         .to_ascii_lowercase()
@@ -1696,6 +1779,7 @@ fn assert_publisher_state(
         publisher: publisher_value,
         version: version_value,
         install_root: expected_root.to_string_lossy().into_owned(),
+        install_location_raw: install_location,
         uninstall_identity: UNINSTALL.to_owned(),
         uninstall_string,
     })
@@ -1785,6 +1869,7 @@ struct PublisherEvidence {
     publisher: String,
     version: String,
     install_root: String,
+    install_location_raw: String,
     uninstall_identity: String,
     uninstall_string: String,
 }
@@ -2778,6 +2863,115 @@ mod tests {
             "sky-bridge-tauri-config-test-{}-{nonce:x}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn windows_install_location_parser_accepts_absolute_nsis_paths_with_optional_quotes() {
+        for (raw, expected) in [
+            (
+                r"D:\Program Files\Sky Auto Player",
+                r"D:\Program Files\Sky Auto Player",
+            ),
+            (
+                r#""D:\Program Files\Sky Auto Player""#,
+                r"D:\Program Files\Sky Auto Player",
+            ),
+            (
+                r"\\?\D:\a\_temp\fixture\install",
+                r"\\?\D:\a\_temp\fixture\install",
+            ),
+            (
+                r#""\\?\D:\a\_temp\fixture\install""#,
+                r"\\?\D:\a\_temp\fixture\install",
+            ),
+            (
+                r"\\server\share\Sky Auto Player",
+                r"\\server\share\Sky Auto Player",
+            ),
+            (
+                r"\\?\UNC\server\share\Sky Auto Player",
+                r"\\?\UNC\server\share\Sky Auto Player",
+            ),
+            ("D:/Apps/Sky", r"D:\Apps\Sky"),
+        ] {
+            assert_eq!(
+                parse_windows_install_location(raw).expect("valid absolute Windows path"),
+                expected,
+                "path syntax: {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_install_location_parser_rejects_relative_or_malformed_paths() {
+        for raw in [
+            "",
+            " relative\\install",
+            "D:\\Apps\\install ",
+            "relative\\install",
+            r"D:relative\install",
+            r"\rooted\without\drive",
+            r#""D:\install"#,
+            r#"D:\install""#,
+            r#""D:\bad"name""#,
+            r#""D:\install" suffix"#,
+            r"\\.\PhysicalDrive0",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1",
+            r"D:\Apps\..\install",
+            r"D:\Apps\\install",
+            "D:\\Apps\\install\t",
+            "D:\\Apps\\install\n",
+        ] {
+            assert!(
+                parse_windows_install_location(raw).is_err(),
+                "malformed or non-absolute path must fail closed: {raw:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn registry_install_location_quotes_resolve_only_to_managed_fixture_root() {
+        struct TestRoot(std::path::PathBuf);
+        impl Drop for TestRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let root = temporary_config_root();
+        std::fs::create_dir_all(&root).expect("create isolated InstallLocation test root");
+        let _root = TestRoot(root.clone());
+        let managed = root.join("managed");
+        let sibling = root.join("sibling");
+        std::fs::create_dir(&managed).expect("create managed fixture install root");
+        std::fs::create_dir(&sibling).expect("create sibling path for negative comparison");
+        let expected = std::fs::canonicalize(&managed).expect("canonicalize managed root");
+        let sibling = std::fs::canonicalize(&sibling).expect("canonicalize sibling path");
+
+        for raw in [
+            expected.to_string_lossy().into_owned(),
+            format!("\"{}\"", expected.display()),
+        ] {
+            assert_eq!(
+                validate_registry_install_location(&raw, &expected)
+                    .expect("valid registry path resolves to the managed root"),
+                expected
+            );
+        }
+        assert!(
+            validate_registry_install_location(&sibling.to_string_lossy(), &expected).is_err(),
+            "an absolute sibling directory must not be accepted as the fixture install root"
+        );
+        for raw in [
+            r"relative\install".to_owned(),
+            format!("\"{}", expected.display()),
+        ] {
+            assert!(
+                validate_registry_install_location(&raw, &expected).is_err(),
+                "relative and malformed quoted registry paths must be rejected"
+            );
+        }
     }
 
     #[test]

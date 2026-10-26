@@ -758,6 +758,11 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "bridge_tauri_config_preserves_current_candidate_migration_hook",
         "bridge_tauri_config_rejects_wrong_hook_path_and_mismatched_manifest_identity",
         "validate_historical_bridge_manifest_identity",
+        "parse_windows_install_location",
+        "validate_registry_install_location",
+        "windows_install_location_parser_accepts_absolute_nsis_paths_with_optional_quotes",
+        "windows_install_location_parser_rejects_relative_or_malformed_paths",
+        "registry_install_location_quotes_resolve_only_to_managed_fixture_root",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -1306,7 +1311,8 @@ fn updater_bridge_configuration_contract(source: &str) -> Result<()> {
         "\"installer_sha256\": &bridge.installer_sha256",
         "\"Publisher\": &bridge_registry.publisher",
         "\"DisplayVersion\": &bridge_registry.version",
-        "\"InstallLocation\": &bridge_registry.install_root",
+        "\"InstallLocation\": &bridge_registry.install_location_raw",
+        "\"InstallLocationNormalized\": &bridge_registry.install_root",
         "\"UninstallString\": &bridge_registry.uninstall_string",
     ] {
         if !source.contains(marker) {
@@ -1400,6 +1406,10 @@ mod tests {
                 lf.replace(
                     "&bridge.manifest.publisher,\n        &bridge.manifest.version,",
                     "\"github\",\n        &bridge.manifest.version,",
+                ),
+                lf.replace(
+                    "\"InstallLocation\": &bridge_registry.install_location_raw",
+                    "\"InstallLocation\": &bridge_registry.install_root",
                 ),
             ];
             for (index, invalid) in invalid_sources.iter().enumerate() {
