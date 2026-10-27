@@ -1,4 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
+import { mkdirSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const palettes = ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
@@ -611,6 +614,180 @@ test('Dark mode is the new-install palette and keeps the graphite setting ID', a
   const forcedSelectedRow = page.locator('.track-row.is-selected');
   await expectForcedColor(page, forcedSelectedRow, 'backgroundColor', 'Highlight');
   await expectForcedColor(page, forcedSelectedRow, 'color', 'HighlightText');
+});
+
+test('Settings modal geometry, roles, and focus order are shared across palettes', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+
+  const trigger = page.getByRole('button', { name: 'Open settings' });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(dialog).toBeVisible();
+  const navigation = dialog.getByRole('navigation', { name: 'Settings categories' });
+  await navigation.getByRole('button', { name: 'Appearance', exact: true }).click();
+  const paletteSelect = dialog.getByRole('combobox', { name: 'Color palette' });
+  const closeButton = dialog.getByRole('button', { name: 'Close settings' });
+  const focusTargets = [
+    { name: 'Close settings', locator: closeButton },
+    {
+      name: 'Playback',
+      locator: navigation.getByRole('button', { name: 'Playback', exact: true }),
+    },
+    {
+      name: 'Appearance',
+      locator: navigation.getByRole('button', { name: 'Appearance', exact: true }),
+    },
+    {
+      name: 'Diagnostics',
+      locator: navigation.getByRole('button', { name: 'Diagnostics', exact: true }),
+    },
+    { name: 'Updates', locator: navigation.getByRole('button', { name: 'Updates', exact: true }) },
+    {
+      name: 'Advanced',
+      locator: navigation.getByRole('button', { name: 'Advanced', exact: true }),
+    },
+    { name: 'About', locator: navigation.getByRole('button', { name: 'About', exact: true }) },
+    { name: 'Color palette', locator: paletteSelect },
+  ];
+  let reference:
+    | {
+        rectangles: Record<string, { x: number; y: number; width: number; height: number }>;
+        roles: unknown;
+        focusOrder: string[];
+      }
+    | undefined;
+  const dialogSurfaceColors = new Set<string>();
+  const observations: Array<{
+    palette: Palette;
+    rectangles: Record<string, { x: number; y: number; width: number; height: number }>;
+    roles: unknown;
+    focusOrder: string[];
+    dialogSurface: string;
+  }> = [];
+  const captureMatrix =
+    process.env.GRAPHITE_WORKSPACE_CAPTURE === 'candidate' &&
+    process.env.GRAPHITE_WORKSPACE_CAPTURE_VIEWS?.split(',')
+      .map((view) => view.trim())
+      .includes('modal');
+  const evidenceDirectory = resolve(process.cwd(), 'test-results/graphite-workspace-checkpoint');
+  if (captureMatrix) mkdirSync(evidenceDirectory, { recursive: true });
+
+  for (const palette of palettes) {
+    await paletteSelect.selectOption(palette);
+    await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+    await expect(dialog.getByRole('region', { name: 'Appearance' })).toBeVisible();
+
+    const snapshot = await dialog.evaluate((element) => {
+      const rect = (selector: string) => {
+        const target =
+          selector === '.settings-dialog'
+            ? (element as HTMLElement)
+            : element.querySelector<HTMLElement>(selector);
+        if (!target) throw new Error(`Settings modal is missing ${selector}`);
+        const bounds = target.getBoundingClientRect();
+        return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+      };
+      const navigationElement = element.querySelector<HTMLElement>('.settings-nav');
+      const paletteElement = element.querySelector<HTMLSelectElement>('.settings-section select');
+      const paletteLabel = paletteElement?.labels?.[0]?.textContent?.trim() ?? null;
+      return {
+        rectangles: {
+          dialog: rect('.settings-dialog'),
+          heading: rect('.dialog-heading'),
+          layout: rect('.settings-layout'),
+          navigation: rect('.settings-nav'),
+          content: rect('.settings-content'),
+          section: rect('.settings-section'),
+          palette: rect('.settings-section select'),
+        },
+        roles: {
+          dialog: { role: element.getAttribute('role'), name: element.getAttribute('aria-label') },
+          navigation: {
+            role: navigationElement?.getAttribute('role') ?? 'navigation',
+            name: navigationElement?.getAttribute('aria-label') ?? '',
+            categories: Array.from(navigationElement?.querySelectorAll('button') ?? []).map(
+              (button) => ({
+                role: button.getAttribute('role') ?? 'button',
+                name: button.textContent?.trim() ?? '',
+                current: button.getAttribute('aria-current'),
+              }),
+            ),
+          },
+          appearance: {
+            role: 'region',
+            name:
+              element.querySelector<HTMLElement>('.settings-section h3')?.textContent?.trim() ?? '',
+          },
+          palette: { role: 'combobox', name: paletteLabel },
+        },
+        dialogSurface: getComputedStyle(element).backgroundColor,
+      };
+    });
+    dialogSurfaceColors.add(snapshot.dialogSurface);
+
+    await dialog.evaluate((element) => (element as HTMLElement).focus());
+    await expect(dialog).toBeFocused();
+    const focusOrder: string[] = [];
+    for (const target of focusTargets) {
+      await page.keyboard.press('Tab');
+      await expect(target.locator).toBeFocused();
+      focusOrder.push(target.name);
+    }
+    await page.keyboard.press('Tab');
+    await expect(closeButton).toBeFocused();
+    focusOrder.push('Close settings');
+    observations.push({ palette, ...snapshot, focusOrder });
+    if (captureMatrix) {
+      await page.screenshot({
+        path: resolve(evidenceDirectory, `candidate-settings-modal-${palette}-800x560.png`),
+        animations: 'disabled',
+      });
+    }
+
+    if (reference) {
+      expect(snapshot.roles).toEqual(reference.roles);
+      expect(focusOrder).toEqual(reference.focusOrder);
+      for (const [name, rectangle] of Object.entries(snapshot.rectangles)) {
+        const referenceRectangle = reference.rectangles[name];
+        expect(referenceRectangle, `${palette} ${name} rectangle`).toBeDefined();
+        if (!referenceRectangle) throw new Error(`${name} modal rectangle has no reference`);
+        expect(Math.abs(rectangle.x - referenceRectangle.x)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(rectangle.y - referenceRectangle.y)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(rectangle.width - referenceRectangle.width)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(rectangle.height - referenceRectangle.height)).toBeLessThanOrEqual(0.5);
+      }
+    } else {
+      reference = {
+        rectangles: snapshot.rectangles,
+        roles: snapshot.roles,
+        focusOrder,
+      };
+    }
+  }
+
+  expect(dialogSurfaceColors.size).toBeGreaterThan(1);
+  if (captureMatrix) {
+    await writeFile(
+      resolve(evidenceDirectory, 'candidate-settings-modal-six-palette.json'),
+      `${JSON.stringify(
+        {
+          sourceRevision: process.env.GRAPHITE_EVIDENCE_SOURCE_SHA ?? null,
+          viewport: { width: 800, height: 560 },
+          observations,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+  await closeButton.click();
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
 });
 
 test('semantic consumers and interaction states use the locked hierarchy', async ({ page }) => {

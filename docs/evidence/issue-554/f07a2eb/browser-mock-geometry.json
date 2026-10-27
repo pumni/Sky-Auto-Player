@@ -1,0 +1,2742 @@
+{
+  "1366x768ClassicScrollbar": {
+    "viewport": {
+      "width": 1366,
+      "height": 768,
+      "dpr": 1
+    },
+    "semanticTokens": {
+      "workbenchContent": "#151618",
+      "chromeSurface": "#191a1b",
+      "paneEdge": "#313336",
+      "controlHover": "#222324",
+      "controlBorder": "#72777d",
+      "textPrimary": "#d4d4d4",
+      "textSecondary": "#a6a6a6",
+      "focusRing": "#b2a5e9"
+    },
+    "titlebar": {
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 1366,
+        "height": 40,
+        "right": 1366,
+        "bottom": 40
+      },
+      "leading": {
+        "x": 0,
+        "y": 0,
+        "width": 42,
+        "height": 40,
+        "right": 42,
+        "bottom": 40
+      },
+      "brand": {
+        "x": 10,
+        "y": 4,
+        "width": 32,
+        "height": 32,
+        "right": 42,
+        "bottom": 36
+      },
+      "search": {
+        "x": 332,
+        "y": 4,
+        "width": 480,
+        "height": 32,
+        "right": 812,
+        "bottom": 36
+      },
+      "trailingActions": {
+        "x": 1102,
+        "y": 0,
+        "width": 264,
+        "height": 40,
+        "right": 1366,
+        "bottom": 40
+      },
+      "leftDrag": {
+        "x": 42,
+        "y": 0,
+        "width": 290,
+        "height": 40,
+        "right": 332,
+        "bottom": 40
+      },
+      "rightDrag": {
+        "x": 812,
+        "y": 0,
+        "width": 290,
+        "height": 40,
+        "right": 1102,
+        "bottom": 40
+      },
+      "freeRegionMidpoint": 572,
+      "searchMidpoint": 572,
+      "searchCenterError": 0,
+      "updateAvailable": "true",
+      "searchFocused": false
+    },
+    "collapseButton": {
+      "rect": {
+        "x": 205,
+        "y": 56,
+        "width": 30,
+        "height": 30,
+        "right": 235,
+        "bottom": 86
+      },
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderWidth": "1px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "color": "rgb(166, 166, 166)",
+      "outlineWidth": "3px",
+      "outlineColor": "rgb(166, 166, 166)",
+      "outlineOffset": "0px",
+      "boxShadow": "none"
+    },
+    "inspector": {
+      "presentation": "docked",
+      "rect": {
+        "x": 1042,
+        "y": 40,
+        "width": 320,
+        "height": 632,
+        "right": 1362,
+        "bottom": 672
+      },
+      "widthStyle": null,
+      "persistedDockWidth": 320,
+      "borderColor": "rgb(49, 51, 54)",
+      "borderWidth": "1px",
+      "borderRadius": "10px"
+    },
+    "browserContainer": {
+      "x": 248,
+      "y": 40,
+      "width": 790,
+      "height": 632,
+      "right": 1038,
+      "bottom": 672
+    },
+    "browserSection": {
+      "x": 249,
+      "y": 41,
+      "width": 788,
+      "height": 630,
+      "right": 1037,
+      "bottom": 671
+    },
+    "sourceHeader": {
+      "x": 249,
+      "y": 41,
+      "width": 788,
+      "height": 40,
+      "right": 1037,
+      "bottom": 81
+    },
+    "sourceLabel": {
+      "x": 261,
+      "y": 48,
+      "width": 75.1875,
+      "height": 26,
+      "right": 336.1875,
+      "bottom": 74
+    },
+    "sourceTitle": {
+      "x": 269,
+      "y": 52,
+      "width": 59.1875,
+      "height": 18,
+      "right": 328.1875,
+      "bottom": 70
+    },
+    "count": {
+      "x": 344.1875,
+      "y": 52.296875,
+      "width": 62.375,
+      "height": 17.390625,
+      "right": 406.5625,
+      "bottom": 69.6875
+    },
+    "tableHeader": {
+      "x": 249,
+      "y": 81,
+      "width": 773,
+      "height": 32,
+      "right": 1022,
+      "bottom": 113
+    },
+    "firstSong": {
+      "x": 255,
+      "y": 113,
+      "width": 767,
+      "height": 46,
+      "right": 1022,
+      "bottom": 159
+    },
+    "trackCanvas": {
+      "pane": {
+        "x": 248,
+        "y": 40,
+        "width": 790,
+        "height": 632,
+        "right": 1038,
+        "bottom": 672
+      },
+      "scrollport": {
+        "x": 249,
+        "y": 81,
+        "width": 788,
+        "right": 1037
+      },
+      "frame": {
+        "x": 249,
+        "y": 81,
+        "width": 773,
+        "right": 1022
+      },
+      "columnHeader": {
+        "x": 249,
+        "y": 81,
+        "width": 773,
+        "right": 1022
+      },
+      "scrollportMetrics": {
+        "clientWidth": 773,
+        "offsetWidth": 788,
+        "clientHeight": 590,
+        "offsetHeight": 590,
+        "scrollHeight": 23032,
+        "scrollWidth": 773,
+        "clientLeft": 0,
+        "reservedInline": 15,
+        "computedBorderLeft": "0px",
+        "computedBorderRight": "0px",
+        "actualClassicScrollbarReservation": 15
+      },
+      "paneBorders": {
+        "left": "1px",
+        "right": "1px",
+        "boxSizing": "border-box"
+      },
+      "rows": {
+        "selected": {
+          "rect": {
+            "x": 255,
+            "y": 159,
+            "width": 767,
+            "height": 46,
+            "right": 1022,
+            "bottom": 205
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 15
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "header": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 311,
+                "width": 495,
+                "right": 806
+              },
+              "header": {
+                "x": 311,
+                "width": 495,
+                "right": 806
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 814,
+                "width": 32,
+                "right": 846
+              },
+              "header": {
+                "x": 814,
+                "width": 32,
+                "right": 846
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 854,
+                "width": 72,
+                "right": 926
+              },
+              "header": {
+                "x": 854,
+                "width": 72,
+                "right": 926
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 934,
+                "width": 76,
+                "right": 1010
+              },
+              "header": {
+                "x": 934,
+                "width": 76,
+                "right": 1010
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "playing": {
+          "rect": {
+            "x": 255,
+            "y": 205,
+            "width": 767,
+            "height": 46,
+            "right": 1022,
+            "bottom": 251
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 15
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "header": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 311,
+                "width": 495,
+                "right": 806
+              },
+              "header": {
+                "x": 311,
+                "width": 495,
+                "right": 806
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 814,
+                "width": 32,
+                "right": 846
+              },
+              "header": {
+                "x": 814,
+                "width": 32,
+                "right": 846
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 854,
+                "width": 72,
+                "right": 926
+              },
+              "header": {
+                "x": 854,
+                "width": 72,
+                "right": 926
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 934,
+                "width": 76,
+                "right": 1010
+              },
+              "header": {
+                "x": 934,
+                "width": 76,
+                "right": 1010
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "hovered": {
+          "rect": {
+            "x": 255,
+            "y": 113,
+            "width": 767,
+            "height": 46,
+            "right": 1022,
+            "bottom": 159
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 15
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "header": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 311,
+                "width": 495,
+                "right": 806
+              },
+              "header": {
+                "x": 311,
+                "width": 495,
+                "right": 806
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 814,
+                "width": 32,
+                "right": 846
+              },
+              "header": {
+                "x": 814,
+                "width": 32,
+                "right": 846
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 854,
+                "width": 72,
+                "right": 926
+              },
+              "header": {
+                "x": 854,
+                "width": 72,
+                "right": 926
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 934,
+                "width": 76,
+                "right": 1010
+              },
+              "header": {
+                "x": 934,
+                "width": 76,
+                "right": 1010
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "surfaces": {
+      "header": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "sourceLabel": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "canvas": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "1px",
+        "borderBottomColor": "rgb(49, 51, 54)"
+      },
+      "browserSection": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "table": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "tableHeader": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(146, 146, 146)",
+        "fontSize": "11px",
+        "fontWeight": "600",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(146, 146, 146)"
+      }
+    },
+    "documentWidth": 1366,
+    "bodyWidth": 1366,
+    "heading": "All Songs",
+    "headingTag": "H1",
+    "browserHeaderTablists": 0
+  },
+  "1366x768": {
+    "viewport": {
+      "width": 1366,
+      "height": 768,
+      "dpr": 1
+    },
+    "semanticTokens": {
+      "workbenchContent": "#151618",
+      "chromeSurface": "#191a1b",
+      "paneEdge": "#313336",
+      "controlHover": "#222324",
+      "controlBorder": "#72777d",
+      "textPrimary": "#d4d4d4",
+      "textSecondary": "#a6a6a6",
+      "focusRing": "#b2a5e9"
+    },
+    "titlebar": {
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 1366,
+        "height": 40,
+        "right": 1366,
+        "bottom": 40
+      },
+      "leading": {
+        "x": 0,
+        "y": 0,
+        "width": 42,
+        "height": 40,
+        "right": 42,
+        "bottom": 40
+      },
+      "brand": {
+        "x": 10,
+        "y": 4,
+        "width": 32,
+        "height": 32,
+        "right": 42,
+        "bottom": 36
+      },
+      "search": {
+        "x": 332,
+        "y": 4,
+        "width": 480,
+        "height": 32,
+        "right": 812,
+        "bottom": 36
+      },
+      "trailingActions": {
+        "x": 1102,
+        "y": 0,
+        "width": 264,
+        "height": 40,
+        "right": 1366,
+        "bottom": 40
+      },
+      "leftDrag": {
+        "x": 42,
+        "y": 0,
+        "width": 290,
+        "height": 40,
+        "right": 332,
+        "bottom": 40
+      },
+      "rightDrag": {
+        "x": 812,
+        "y": 0,
+        "width": 290,
+        "height": 40,
+        "right": 1102,
+        "bottom": 40
+      },
+      "freeRegionMidpoint": 572,
+      "searchMidpoint": 572,
+      "searchCenterError": 0,
+      "updateAvailable": "true",
+      "searchFocused": false
+    },
+    "collapseButton": {
+      "rect": {
+        "x": 205,
+        "y": 56,
+        "width": 30,
+        "height": 30,
+        "right": 235,
+        "bottom": 86
+      },
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderWidth": "1px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "color": "rgb(166, 166, 166)",
+      "outlineWidth": "3px",
+      "outlineColor": "rgb(166, 166, 166)",
+      "outlineOffset": "0px",
+      "boxShadow": "none"
+    },
+    "inspector": {
+      "presentation": "docked",
+      "rect": {
+        "x": 1042,
+        "y": 40,
+        "width": 320,
+        "height": 632,
+        "right": 1362,
+        "bottom": 672
+      },
+      "widthStyle": null,
+      "persistedDockWidth": 320,
+      "borderColor": "rgb(49, 51, 54)",
+      "borderWidth": "1px",
+      "borderRadius": "10px"
+    },
+    "browserContainer": {
+      "x": 248,
+      "y": 40,
+      "width": 790,
+      "height": 632,
+      "right": 1038,
+      "bottom": 672
+    },
+    "browserSection": {
+      "x": 249,
+      "y": 41,
+      "width": 788,
+      "height": 630,
+      "right": 1037,
+      "bottom": 671
+    },
+    "sourceHeader": {
+      "x": 249,
+      "y": 41,
+      "width": 788,
+      "height": 40,
+      "right": 1037,
+      "bottom": 81
+    },
+    "sourceLabel": {
+      "x": 261,
+      "y": 48,
+      "width": 75.1875,
+      "height": 26,
+      "right": 336.1875,
+      "bottom": 74
+    },
+    "sourceTitle": {
+      "x": 269,
+      "y": 52,
+      "width": 59.1875,
+      "height": 18,
+      "right": 328.1875,
+      "bottom": 70
+    },
+    "count": {
+      "x": 344.1875,
+      "y": 52.296875,
+      "width": 62.375,
+      "height": 17.390625,
+      "right": 406.5625,
+      "bottom": 69.6875
+    },
+    "tableHeader": {
+      "x": 249,
+      "y": 81,
+      "width": 788,
+      "height": 32,
+      "right": 1037,
+      "bottom": 113
+    },
+    "firstSong": {
+      "x": 255,
+      "y": 113,
+      "width": 782,
+      "height": 46,
+      "right": 1037,
+      "bottom": 159
+    },
+    "trackCanvas": {
+      "pane": {
+        "x": 248,
+        "y": 40,
+        "width": 790,
+        "height": 632,
+        "right": 1038,
+        "bottom": 672
+      },
+      "scrollport": {
+        "x": 249,
+        "y": 81,
+        "width": 788,
+        "right": 1037
+      },
+      "frame": {
+        "x": 249,
+        "y": 81,
+        "width": 788,
+        "right": 1037
+      },
+      "columnHeader": {
+        "x": 249,
+        "y": 81,
+        "width": 788,
+        "right": 1037
+      },
+      "scrollportMetrics": {
+        "clientWidth": 788,
+        "offsetWidth": 788,
+        "clientHeight": 590,
+        "offsetHeight": 590,
+        "scrollHeight": 23032,
+        "scrollWidth": 788,
+        "clientLeft": 0,
+        "reservedInline": 0,
+        "computedBorderLeft": "0px",
+        "computedBorderRight": "0px",
+        "actualClassicScrollbarReservation": 0
+      },
+      "paneBorders": {
+        "left": "1px",
+        "right": "1px",
+        "boxSizing": "border-box"
+      },
+      "rows": {
+        "selected": {
+          "rect": {
+            "x": 255,
+            "y": 159,
+            "width": 782,
+            "height": 46,
+            "right": 1037,
+            "bottom": 205
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "header": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 311,
+                "width": 510,
+                "right": 821
+              },
+              "header": {
+                "x": 311,
+                "width": 510,
+                "right": 821
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 829,
+                "width": 32,
+                "right": 861
+              },
+              "header": {
+                "x": 829,
+                "width": 32,
+                "right": 861
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 869,
+                "width": 72,
+                "right": 941
+              },
+              "header": {
+                "x": 869,
+                "width": 72,
+                "right": 941
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 949,
+                "width": 76,
+                "right": 1025
+              },
+              "header": {
+                "x": 949,
+                "width": 76,
+                "right": 1025
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "playing": {
+          "rect": {
+            "x": 255,
+            "y": 205,
+            "width": 782,
+            "height": 46,
+            "right": 1037,
+            "bottom": 251
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "header": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 311,
+                "width": 510,
+                "right": 821
+              },
+              "header": {
+                "x": 311,
+                "width": 510,
+                "right": 821
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 829,
+                "width": 32,
+                "right": 861
+              },
+              "header": {
+                "x": 829,
+                "width": 32,
+                "right": 861
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 869,
+                "width": 72,
+                "right": 941
+              },
+              "header": {
+                "x": 869,
+                "width": 72,
+                "right": 941
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 949,
+                "width": 76,
+                "right": 1025
+              },
+              "header": {
+                "x": 949,
+                "width": 76,
+                "right": 1025
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "hovered": {
+          "rect": {
+            "x": 255,
+            "y": 113,
+            "width": 782,
+            "height": 46,
+            "right": 1037,
+            "bottom": 159
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "header": {
+                "x": 267,
+                "width": 36,
+                "right": 303
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 311,
+                "width": 510,
+                "right": 821
+              },
+              "header": {
+                "x": 311,
+                "width": 510,
+                "right": 821
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 829,
+                "width": 32,
+                "right": 861
+              },
+              "header": {
+                "x": 829,
+                "width": 32,
+                "right": 861
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 869,
+                "width": 72,
+                "right": 941
+              },
+              "header": {
+                "x": 869,
+                "width": 72,
+                "right": 941
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 949,
+                "width": 76,
+                "right": 1025
+              },
+              "header": {
+                "x": 949,
+                "width": 76,
+                "right": 1025
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "surfaces": {
+      "header": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "sourceLabel": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "canvas": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "1px",
+        "borderBottomColor": "rgb(49, 51, 54)"
+      },
+      "browserSection": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "table": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "tableHeader": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(146, 146, 146)",
+        "fontSize": "11px",
+        "fontWeight": "600",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(146, 146, 146)"
+      }
+    },
+    "documentWidth": 1366,
+    "bodyWidth": 1366,
+    "heading": "All Songs",
+    "headingTag": "H1",
+    "browserHeaderTablists": 0
+  },
+  "800x560": {
+    "viewport": {
+      "width": 800,
+      "height": 560,
+      "dpr": 1
+    },
+    "semanticTokens": {
+      "workbenchContent": "#151618",
+      "chromeSurface": "#191a1b",
+      "paneEdge": "#313336",
+      "controlHover": "#222324",
+      "controlBorder": "#72777d",
+      "textPrimary": "#d4d4d4",
+      "textSecondary": "#a6a6a6",
+      "focusRing": "#b2a5e9"
+    },
+    "titlebar": {
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 800,
+        "height": 40,
+        "right": 800,
+        "bottom": 40
+      },
+      "leading": {
+        "x": 0,
+        "y": 0,
+        "width": 42,
+        "height": 40,
+        "right": 42,
+        "bottom": 40
+      },
+      "brand": {
+        "x": 10,
+        "y": 4,
+        "width": 32,
+        "height": 32,
+        "right": 42,
+        "bottom": 36
+      },
+      "search": {
+        "x": 123,
+        "y": 4,
+        "width": 336,
+        "height": 32,
+        "right": 459,
+        "bottom": 36
+      },
+      "trailingActions": {
+        "x": 540,
+        "y": 0,
+        "width": 260,
+        "height": 40,
+        "right": 800,
+        "bottom": 40
+      },
+      "leftDrag": {
+        "x": 42,
+        "y": 0,
+        "width": 81,
+        "height": 40,
+        "right": 123,
+        "bottom": 40
+      },
+      "rightDrag": {
+        "x": 459,
+        "y": 0,
+        "width": 81,
+        "height": 40,
+        "right": 540,
+        "bottom": 40
+      },
+      "freeRegionMidpoint": 291,
+      "searchMidpoint": 291,
+      "searchCenterError": 0,
+      "updateAvailable": "true",
+      "searchFocused": false
+    },
+    "collapseButton": {
+      "rect": {
+        "x": 8,
+        "y": 49,
+        "width": 40,
+        "height": 40,
+        "right": 48,
+        "bottom": 89
+      },
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderWidth": "1px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "color": "rgb(166, 166, 166)",
+      "outlineWidth": "3px",
+      "outlineColor": "rgb(166, 166, 166)",
+      "outlineOffset": "0px",
+      "boxShadow": "none"
+    },
+    "inspector": {
+      "presentation": "closed",
+      "rect": null,
+      "widthStyle": null,
+      "persistedDockWidth": 320,
+      "borderColor": null,
+      "borderWidth": null,
+      "borderRadius": null
+    },
+    "browserContainer": {
+      "x": 56,
+      "y": 40,
+      "width": 740,
+      "height": 424,
+      "right": 796,
+      "bottom": 464
+    },
+    "browserSection": {
+      "x": 57,
+      "y": 41,
+      "width": 738,
+      "height": 422,
+      "right": 795,
+      "bottom": 463
+    },
+    "sourceHeader": {
+      "x": 57,
+      "y": 41,
+      "width": 738,
+      "height": 32,
+      "right": 795,
+      "bottom": 73
+    },
+    "sourceLabel": {
+      "x": 65,
+      "y": 45,
+      "width": 66.96875,
+      "height": 24,
+      "right": 131.96875,
+      "bottom": 69
+    },
+    "sourceTitle": {
+      "x": 71,
+      "y": 49,
+      "width": 54.96875,
+      "height": 16,
+      "right": 125.96875,
+      "bottom": 65
+    },
+    "count": {
+      "x": 137.96875,
+      "y": 49.03125,
+      "width": 57.6875,
+      "height": 15.9375,
+      "right": 195.65625,
+      "bottom": 64.96875
+    },
+    "tableHeader": {
+      "x": 57,
+      "y": 73,
+      "width": 738,
+      "height": 32,
+      "right": 795,
+      "bottom": 105
+    },
+    "firstSong": {
+      "x": 63,
+      "y": 105,
+      "width": 732,
+      "height": 46,
+      "right": 795,
+      "bottom": 151
+    },
+    "trackCanvas": {
+      "pane": {
+        "x": 56,
+        "y": 40,
+        "width": 740,
+        "height": 424,
+        "right": 796,
+        "bottom": 464
+      },
+      "scrollport": {
+        "x": 57,
+        "y": 73,
+        "width": 738,
+        "right": 795
+      },
+      "frame": {
+        "x": 57,
+        "y": 73,
+        "width": 738,
+        "right": 795
+      },
+      "columnHeader": {
+        "x": 57,
+        "y": 73,
+        "width": 738,
+        "right": 795
+      },
+      "scrollportMetrics": {
+        "clientWidth": 738,
+        "offsetWidth": 738,
+        "clientHeight": 390,
+        "offsetHeight": 390,
+        "scrollHeight": 23032,
+        "scrollWidth": 738,
+        "clientLeft": 0,
+        "reservedInline": 0,
+        "computedBorderLeft": "0px",
+        "computedBorderRight": "0px",
+        "actualClassicScrollbarReservation": 0
+      },
+      "paneBorders": {
+        "left": "1px",
+        "right": "1px",
+        "boxSizing": "border-box"
+      },
+      "rows": {
+        "selected": {
+          "rect": {
+            "x": 63,
+            "y": 151,
+            "width": 732,
+            "height": 46,
+            "right": 795,
+            "bottom": 197
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "header": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 119,
+                "width": 460,
+                "right": 579
+              },
+              "header": {
+                "x": 119,
+                "width": 460,
+                "right": 579
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 587,
+                "width": 32,
+                "right": 619
+              },
+              "header": {
+                "x": 587,
+                "width": 32,
+                "right": 619
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 627,
+                "width": 72,
+                "right": 699
+              },
+              "header": {
+                "x": 627,
+                "width": 72,
+                "right": 699
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 707,
+                "width": 76,
+                "right": 783
+              },
+              "header": {
+                "x": 707,
+                "width": 76,
+                "right": 783
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "playing": {
+          "rect": {
+            "x": 63,
+            "y": 197,
+            "width": 732,
+            "height": 46,
+            "right": 795,
+            "bottom": 243
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "header": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 119,
+                "width": 460,
+                "right": 579
+              },
+              "header": {
+                "x": 119,
+                "width": 460,
+                "right": 579
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 587,
+                "width": 32,
+                "right": 619
+              },
+              "header": {
+                "x": 587,
+                "width": 32,
+                "right": 619
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 627,
+                "width": 72,
+                "right": 699
+              },
+              "header": {
+                "x": 627,
+                "width": 72,
+                "right": 699
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 707,
+                "width": 76,
+                "right": 783
+              },
+              "header": {
+                "x": 707,
+                "width": 76,
+                "right": 783
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "hovered": {
+          "rect": {
+            "x": 63,
+            "y": 105,
+            "width": 732,
+            "height": 46,
+            "right": 795,
+            "bottom": 151
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "header": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 119,
+                "width": 460,
+                "right": 579
+              },
+              "header": {
+                "x": 119,
+                "width": 460,
+                "right": 579
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 587,
+                "width": 32,
+                "right": 619
+              },
+              "header": {
+                "x": 587,
+                "width": 32,
+                "right": 619
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 627,
+                "width": 72,
+                "right": 699
+              },
+              "header": {
+                "x": 627,
+                "width": 72,
+                "right": 699
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 707,
+                "width": 76,
+                "right": 783
+              },
+              "header": {
+                "x": 707,
+                "width": 76,
+                "right": 783
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "surfaces": {
+      "header": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "sourceLabel": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "canvas": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "1px",
+        "borderBottomColor": "rgb(49, 51, 54)"
+      },
+      "browserSection": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "table": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "tableHeader": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(146, 146, 146)",
+        "fontSize": "11px",
+        "fontWeight": "600",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(146, 146, 146)"
+      }
+    },
+    "documentWidth": 800,
+    "bodyWidth": 800,
+    "heading": "All Songs",
+    "headingTag": "H1",
+    "browserHeaderTablists": 0
+  },
+  "640x448": {
+    "viewport": {
+      "width": 640,
+      "height": 448,
+      "dpr": 1
+    },
+    "semanticTokens": {
+      "workbenchContent": "#151618",
+      "chromeSurface": "#191a1b",
+      "paneEdge": "#313336",
+      "controlHover": "#222324",
+      "controlBorder": "#72777d",
+      "textPrimary": "#d4d4d4",
+      "textSecondary": "#a6a6a6",
+      "focusRing": "#b2a5e9"
+    },
+    "titlebar": {
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 40,
+        "right": 640,
+        "bottom": 40
+      },
+      "leading": {
+        "x": 0,
+        "y": 0,
+        "width": 42,
+        "height": 40,
+        "right": 42,
+        "bottom": 40
+      },
+      "brand": {
+        "x": 10,
+        "y": 4,
+        "width": 32,
+        "height": 32,
+        "right": 42,
+        "bottom": 36
+      },
+      "search": {
+        "x": 76.59375,
+        "y": 4,
+        "width": 268.796875,
+        "height": 32,
+        "right": 345.390625,
+        "bottom": 36
+      },
+      "trailingActions": {
+        "x": 380,
+        "y": 0,
+        "width": 260,
+        "height": 40,
+        "right": 640,
+        "bottom": 40
+      },
+      "leftDrag": {
+        "x": 42,
+        "y": 0,
+        "width": 34.59375,
+        "height": 40,
+        "right": 76.59375,
+        "bottom": 40
+      },
+      "rightDrag": {
+        "x": 345.390625,
+        "y": 0,
+        "width": 34.609375,
+        "height": 40,
+        "right": 380,
+        "bottom": 40
+      },
+      "freeRegionMidpoint": 211,
+      "searchMidpoint": 210.9921875,
+      "searchCenterError": 0.0078125,
+      "updateAvailable": "true",
+      "searchFocused": false
+    },
+    "collapseButton": {
+      "rect": {
+        "x": 8,
+        "y": 49,
+        "width": 40,
+        "height": 40,
+        "right": 48,
+        "bottom": 89
+      },
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderWidth": "1px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "color": "rgb(166, 166, 166)",
+      "outlineWidth": "3px",
+      "outlineColor": "rgb(166, 166, 166)",
+      "outlineOffset": "0px",
+      "boxShadow": "none"
+    },
+    "inspector": {
+      "presentation": "overlay",
+      "rect": {
+        "x": 348,
+        "y": 40,
+        "width": 288,
+        "height": 312,
+        "right": 636,
+        "bottom": 352
+      },
+      "widthStyle": "288px",
+      "persistedDockWidth": 320,
+      "borderColor": "rgb(114, 119, 125)",
+      "borderWidth": "1px",
+      "borderRadius": "12px"
+    },
+    "browserContainer": {
+      "x": 56,
+      "y": 40,
+      "width": 580,
+      "height": 312,
+      "right": 636,
+      "bottom": 352
+    },
+    "browserSection": {
+      "x": 57,
+      "y": 41,
+      "width": 578,
+      "height": 310,
+      "right": 635,
+      "bottom": 351
+    },
+    "sourceHeader": {
+      "x": 57,
+      "y": 41,
+      "width": 578,
+      "height": 32,
+      "right": 635,
+      "bottom": 73
+    },
+    "sourceLabel": {
+      "x": 65,
+      "y": 45,
+      "width": 66.96875,
+      "height": 24,
+      "right": 131.96875,
+      "bottom": 69
+    },
+    "sourceTitle": {
+      "x": 71,
+      "y": 49,
+      "width": 54.96875,
+      "height": 16,
+      "right": 125.96875,
+      "bottom": 65
+    },
+    "count": {
+      "x": 137.96875,
+      "y": 49.03125,
+      "width": 57.6875,
+      "height": 15.9375,
+      "right": 195.65625,
+      "bottom": 64.96875
+    },
+    "tableHeader": {
+      "x": 57,
+      "y": 73,
+      "width": 578,
+      "height": 32,
+      "right": 635,
+      "bottom": 105
+    },
+    "firstSong": {
+      "x": 63,
+      "y": 105,
+      "width": 572,
+      "height": 46,
+      "right": 635,
+      "bottom": 151
+    },
+    "trackCanvas": {
+      "pane": {
+        "x": 56,
+        "y": 40,
+        "width": 580,
+        "height": 312,
+        "right": 636,
+        "bottom": 352
+      },
+      "scrollport": {
+        "x": 57,
+        "y": 73,
+        "width": 578,
+        "right": 635
+      },
+      "frame": {
+        "x": 57,
+        "y": 73,
+        "width": 578,
+        "right": 635
+      },
+      "columnHeader": {
+        "x": 57,
+        "y": 73,
+        "width": 578,
+        "right": 635
+      },
+      "scrollportMetrics": {
+        "clientWidth": 578,
+        "offsetWidth": 578,
+        "clientHeight": 278,
+        "offsetHeight": 278,
+        "scrollHeight": 23032,
+        "scrollWidth": 578,
+        "clientLeft": 0,
+        "reservedInline": 0,
+        "computedBorderLeft": "0px",
+        "computedBorderRight": "0px",
+        "actualClassicScrollbarReservation": 0
+      },
+      "paneBorders": {
+        "left": "1px",
+        "right": "1px",
+        "boxSizing": "border-box"
+      },
+      "rows": {
+        "selected": {
+          "rect": {
+            "x": 63,
+            "y": 151,
+            "width": 572,
+            "height": 46,
+            "right": 635,
+            "bottom": 197
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "header": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 119,
+                "width": 300,
+                "right": 419
+              },
+              "header": {
+                "x": 119,
+                "width": 300,
+                "right": 419
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 427,
+                "width": 32,
+                "right": 459
+              },
+              "header": {
+                "x": 427,
+                "width": 32,
+                "right": 459
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 467,
+                "width": 72,
+                "right": 539
+              },
+              "header": {
+                "x": 467,
+                "width": 72,
+                "right": 539
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 547,
+                "width": 76,
+                "right": 623
+              },
+              "header": {
+                "x": 547,
+                "width": 76,
+                "right": 623
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "playing": {
+          "rect": {
+            "x": 63,
+            "y": 197,
+            "width": 572,
+            "height": 46,
+            "right": 635,
+            "bottom": 243
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "header": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 119,
+                "width": 300,
+                "right": 419
+              },
+              "header": {
+                "x": 119,
+                "width": 300,
+                "right": 419
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 427,
+                "width": 32,
+                "right": 459
+              },
+              "header": {
+                "x": 427,
+                "width": 32,
+                "right": 459
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 467,
+                "width": 72,
+                "right": 539
+              },
+              "header": {
+                "x": 467,
+                "width": 72,
+                "right": 539
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 547,
+                "width": 76,
+                "right": 623
+              },
+              "header": {
+                "x": 547,
+                "width": 76,
+                "right": 623
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        },
+        "hovered": {
+          "rect": {
+            "x": 63,
+            "y": 105,
+            "width": 572,
+            "height": 46,
+            "right": 635,
+            "bottom": 151
+          },
+          "paneEdgeInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "rowFillInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "scrollbarCompensatedPaneInsets": {
+            "left": 6,
+            "right": 0
+          },
+          "cells": [
+            {
+              "name": "#",
+              "row": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "header": {
+                "x": 75,
+                "width": 36,
+                "right": 111
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Title",
+              "row": {
+                "x": 119,
+                "width": 300,
+                "right": 419
+              },
+              "header": {
+                "x": 119,
+                "width": 300,
+                "right": 419
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Liked",
+              "row": {
+                "x": 427,
+                "width": 32,
+                "right": 459
+              },
+              "header": {
+                "x": 427,
+                "width": 32,
+                "right": 459
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Notes",
+              "row": {
+                "x": 467,
+                "width": 72,
+                "right": 539
+              },
+              "header": {
+                "x": 467,
+                "width": 72,
+                "right": 539
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            },
+            {
+              "name": "Duration",
+              "row": {
+                "x": 547,
+                "width": 76,
+                "right": 623
+              },
+              "header": {
+                "x": 547,
+                "width": 76,
+                "right": 623
+              },
+              "delta": {
+                "left": 0,
+                "right": 0,
+                "width": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "surfaces": {
+      "header": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "sourceLabel": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "canvas": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "1px",
+        "borderBottomColor": "rgb(49, 51, 54)"
+      },
+      "browserSection": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "table": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "tableHeader": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(146, 146, 146)",
+        "fontSize": "11px",
+        "fontWeight": "600",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(146, 146, 146)"
+      }
+    },
+    "documentWidth": 640,
+    "bodyWidth": 640,
+    "heading": "All Songs",
+    "headingTag": "H1",
+    "browserHeaderTablists": 0
+  },
+  "playlist-640x448": {
+    "viewport": {
+      "width": 640,
+      "height": 448,
+      "dpr": 1
+    },
+    "semanticTokens": {
+      "workbenchContent": "#151618",
+      "chromeSurface": "#191a1b",
+      "paneEdge": "#313336",
+      "controlHover": "#222324",
+      "controlBorder": "#72777d",
+      "textPrimary": "#d4d4d4",
+      "textSecondary": "#a6a6a6",
+      "focusRing": "#b2a5e9"
+    },
+    "titlebar": {
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 40,
+        "right": 640,
+        "bottom": 40
+      },
+      "leading": {
+        "x": 0,
+        "y": 0,
+        "width": 42,
+        "height": 40,
+        "right": 42,
+        "bottom": 40
+      },
+      "brand": {
+        "x": 10,
+        "y": 4,
+        "width": 32,
+        "height": 32,
+        "right": 42,
+        "bottom": 36
+      },
+      "search": {
+        "x": 76.59375,
+        "y": 4,
+        "width": 268.796875,
+        "height": 32,
+        "right": 345.390625,
+        "bottom": 36
+      },
+      "trailingActions": {
+        "x": 380,
+        "y": 0,
+        "width": 260,
+        "height": 40,
+        "right": 640,
+        "bottom": 40
+      },
+      "leftDrag": {
+        "x": 42,
+        "y": 0,
+        "width": 34.59375,
+        "height": 40,
+        "right": 76.59375,
+        "bottom": 40
+      },
+      "rightDrag": {
+        "x": 345.390625,
+        "y": 0,
+        "width": 34.609375,
+        "height": 40,
+        "right": 380,
+        "bottom": 40
+      },
+      "freeRegionMidpoint": 211,
+      "searchMidpoint": 210.9921875,
+      "searchCenterError": 0.0078125,
+      "updateAvailable": "true",
+      "searchFocused": false
+    },
+    "collapseButton": {
+      "rect": {
+        "x": 8,
+        "y": 49,
+        "width": 40,
+        "height": 40,
+        "right": 48,
+        "bottom": 89
+      },
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderWidth": "1px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "color": "rgb(166, 166, 166)",
+      "outlineWidth": "3px",
+      "outlineColor": "rgb(166, 166, 166)",
+      "outlineOffset": "0px",
+      "boxShadow": "none"
+    },
+    "inspector": {
+      "presentation": "closed",
+      "rect": null,
+      "widthStyle": null,
+      "persistedDockWidth": 320,
+      "borderColor": null,
+      "borderWidth": null,
+      "borderRadius": null
+    },
+    "browserContainer": {
+      "x": 56,
+      "y": 40,
+      "width": 580,
+      "height": 312,
+      "right": 636,
+      "bottom": 352
+    },
+    "browserSection": {
+      "x": 57,
+      "y": 41,
+      "width": 578,
+      "height": 310,
+      "right": 635,
+      "bottom": 351
+    },
+    "sourceHeader": {
+      "x": 57,
+      "y": 41,
+      "width": 578,
+      "height": 32,
+      "right": 635,
+      "bottom": 73
+    },
+    "sourceLabel": {
+      "x": 65,
+      "y": 45,
+      "width": 338.828125,
+      "height": 24,
+      "right": 403.828125,
+      "bottom": 69
+    },
+    "sourceTitle": {
+      "x": 71,
+      "y": 49,
+      "width": 326.828125,
+      "height": 16,
+      "right": 397.828125,
+      "bottom": 65
+    },
+    "count": {
+      "x": 409.828125,
+      "y": 49.03125,
+      "width": 45.828125,
+      "height": 15.9375,
+      "right": 455.65625,
+      "bottom": 64.96875
+    },
+    "tableHeader": null,
+    "firstSong": null,
+    "trackCanvas": {
+      "pane": {
+        "x": 56,
+        "y": 40,
+        "width": 580,
+        "height": 312,
+        "right": 636,
+        "bottom": 352
+      },
+      "scrollport": null,
+      "frame": null,
+      "columnHeader": null,
+      "scrollportMetrics": null,
+      "paneBorders": {
+        "left": "1px",
+        "right": "1px",
+        "boxSizing": "border-box"
+      },
+      "rows": {
+        "selected": {
+          "rect": null,
+          "paneEdgeInsets": null,
+          "rowFillInsets": null,
+          "scrollbarCompensatedPaneInsets": null,
+          "cells": []
+        },
+        "playing": {
+          "rect": null,
+          "paneEdgeInsets": null,
+          "rowFillInsets": null,
+          "scrollbarCompensatedPaneInsets": null,
+          "cells": []
+        },
+        "hovered": {
+          "rect": null,
+          "paneEdgeInsets": null,
+          "rowFillInsets": null,
+          "scrollbarCompensatedPaneInsets": null,
+          "cells": []
+        }
+      }
+    },
+    "surfaces": {
+      "header": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "sourceLabel": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "canvas": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "1px",
+        "borderBottomColor": "rgb(49, 51, 54)"
+      },
+      "browserSection": {
+        "backgroundColor": "rgb(21, 22, 24)",
+        "color": "rgb(212, 212, 212)",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "borderBottomWidth": "0px",
+        "borderBottomColor": "rgb(212, 212, 212)"
+      },
+      "table": null,
+      "tableHeader": null
+    },
+    "documentWidth": 640,
+    "bodyWidth": 640,
+    "heading": "Evening Practice Playlist With A Long Descriptive Name",
+    "headingTag": "H1",
+    "browserHeaderTablists": 0
+  },
+  "runtime-1366x768": {
+    "viewport": {
+      "width": 1366,
+      "height": 768
+    },
+    "inspector": {
+      "x": 1043,
+      "y": 41,
+      "width": 318,
+      "height": 630
+    },
+    "playbackSummary": "Playback status: PlayingNow Playing: Candle RunMode: Dry run · no physical input sent",
+    "senderSummary": "Sender-side status: Not measuredDry-run playback sends no physical input; sender health and timing are not measured.",
+    "senderSamples": "Sender samplesNot measured"
+  }
+}

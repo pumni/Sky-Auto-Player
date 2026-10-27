@@ -1,6 +1,9 @@
 # Wave B workbench evidence
 
-All captures in this directory were produced from source revision
+The files at this directory root are historical captures from `c96a9d9c00441a06e703bd8e37b7ff3dfe411e64`.
+For the requested source-matched B1/B2 recapture, see [f07a2eb evidence](f07a2eb/README.md).
+
+The historical captures at this directory root were produced from source revision
 `c96a9d9c00441a06e703bd8e37b7ff3dfe411e64` on branch
 `codex/ui-unification-workbench-performance-20261027`.
 
