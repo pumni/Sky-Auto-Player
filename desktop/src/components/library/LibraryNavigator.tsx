@@ -55,7 +55,6 @@ export function LibraryNavigator({
             type="button"
             aria-label={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
             title={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
-            aria-pressed={collapsed}
             onClick={onToggleCollapsed}
           >
             {collapsed ? (
@@ -92,8 +91,8 @@ export function LibraryNavigator({
       </div>
 
       {collapsed ? (
-        <div className="library-collapsed-launchers">
-          {navigation.playlistOrder.length > 0 && (
+        navigation.playlistOrder.length > 0 ? (
+          <div className="library-collapsed-launchers">
             <LibraryNavItem
               collapsed
               label="Playlists"
@@ -102,8 +101,8 @@ export function LibraryNavigator({
             >
               Playlists
             </LibraryNavItem>
-          )}
-        </div>
+          </div>
+        ) : null
       ) : (
         <div className="library-secondary-sections">
           <LibrarySection label="Playlists" showWhenEmpty>

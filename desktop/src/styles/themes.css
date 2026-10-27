@@ -91,26 +91,55 @@ html[data-palette='graphite'] {
   --workbench-source-count-size: 12px;
   --workbench-row-inset: 6px;
   --workbench-row-inset-narrow: 4px;
-  --workbench-row-radius: 4px;
+  --workbench-radius-xs: 4px;
+  --workbench-radius-sm: 6px;
+  --workbench-radius-md: 8px;
+  --workbench-radius-lg: 10px;
+  --workbench-radius-xl: 12px;
+  --workbench-radius-2xl: 14px;
+  --workbench-row-radius: var(--workbench-radius-sm);
+  --radius-control: var(--workbench-radius-md);
+  --radius-region: 0px;
+  --radius-panel: var(--workbench-radius-lg);
+  --radius-dialog: var(--workbench-radius-2xl);
   --workbench-compact-navigator-tile: 40px;
   --workbench-navigation: #191a1b;
   --workbench-inspector: #191a1b;
   --chrome-surface: #191a1b;
   --workbench-hover: #222324;
-  --workbench-pressed: #303133;
+  --workbench-pressed: #404246;
+  --workbench-control-rest: transparent;
+  --workbench-control-hover: #35363a;
+  --workbench-control-pressed: #404246;
+  --workbench-caption-hover: #3b3d41;
+  --workbench-control-disabled: #8b8c90;
+  --workbench-action-edge: #393b3e;
+  --workbench-action-hover-edge: #5b5e63;
+  --workbench-action-hover: #303135;
+  --workbench-control-danger-hover: #452d32;
+  --workbench-accent-ink: #b2a5e9;
+  --workbench-accent-ink-hover: #c0b4f1;
+  --workbench-toggle-on: #b68cff;
+  --workbench-toggle-off: #808187;
+  --workbench-accent-fill: #705eae;
+  --workbench-accent-fill-hover: #7564b4;
+  --workbench-accent-fill-pressed: #6553a0;
   --workbench-selected: #25242c;
+  --workbench-selected-control: #302d38;
+  --workbench-selected-control-hover: #3b3646;
+  --workbench-selected-control-pressed: #474151;
   --workbench-divider: #2a2b2c;
   --workbench-pane-edge: #313336;
-  --workbench-pane-radius: 6px;
+  --workbench-pane-radius: var(--workbench-radius-lg);
   --workbench-overlay-edge: #72777d;
-  --workbench-overlay-radius: 6px;
+  --workbench-overlay-radius: var(--workbench-radius-xl);
   --workbench-critical-edge: #393b3e;
   --workbench-control-boundary: #72777d;
   --workbench-text-primary: #d4d4d4;
   --workbench-text-secondary: #a6a6a6;
   --workbench-text-tertiary: #929292;
-  --workbench-accent: #8270c7;
-  --workbench-accent-hover: #9281d4;
+  --workbench-accent: var(--workbench-accent-ink);
+  --workbench-accent-hover: var(--workbench-accent-ink-hover);
   --workbench-focus: #b2a5e9;
   --workbench-search-surface: #202123;
   --workbench-search-idle-edge: #3d3f43;
@@ -133,7 +162,7 @@ html[data-palette='graphite'] {
   --text-tertiary: var(--workbench-text-tertiary);
   --accent: var(--workbench-accent);
   --accent-hover: var(--workbench-accent-hover);
-  --on-accent: #121314;
+  --on-accent: #ffffff;
   --focus-ring: var(--workbench-focus);
   --type-body: 13px;
   --type-page-heading: 18px;
@@ -142,24 +171,8 @@ html[data-palette='graphite'] {
   --type-metadata: 12px;
 }
 
-html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
-html[data-palette='graphite'] .icon-button.icon-button-boxed,
-html[data-palette='graphite'] .update-indicator {
-  border-color: var(--control-border);
-}
-
 html[data-palette='graphite'] .player-risk {
   font-size: 11px;
-}
-
-@media (forced-colors: active) {
-  html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
-  html[data-palette='graphite'] .icon-button.icon-button-boxed,
-  html[data-palette='graphite'] .update-indicator {
-    border-color: ButtonText;
-    color: ButtonText;
-    background: ButtonFace;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

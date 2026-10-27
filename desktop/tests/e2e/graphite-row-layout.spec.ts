@@ -328,7 +328,7 @@ function expectRowGeometry(
       Math.abs(paneRightInset - row.rowFillInsets!.right - scrollport.classicScrollbarReservation!),
     ).toBeLessThanOrEqual(1);
     expect(row.rect.height).toBeCloseTo(46, 0);
-    expect(row.style.borderRadius).toBe('4px');
+    expect(row.style.borderRadius).toBe('6px');
     row.cellRects.forEach((cell: { x: number; width: number } | null, index: number) => {
       const header = row.headerCellRects[index];
       if (!cell || !header) throw new Error('A row or header cell has no bounding box');

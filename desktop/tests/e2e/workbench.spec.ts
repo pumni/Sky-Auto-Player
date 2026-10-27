@@ -18,6 +18,12 @@ type InspectorHeaderElementGeometry = {
   flex: string;
   gridTemplateColumns: string;
   paddingInline: string;
+  backgroundColor: string;
+  color: string;
+  borderRadius: string;
+  borderBottomWidth: string;
+  borderBottomStyle: string;
+  borderBottomColor: string;
 };
 
 type InspectorHeaderGeometry = Record<string, InspectorHeaderElementGeometry | null>;
@@ -88,6 +94,8 @@ async function readInspectorHeaderGeometry(page: Page) {
       '.utility-close-button',
       '.utility-close-button svg',
       '.utility-view-tabs',
+      '.utility-view-tabs [role="tab"]:first-child',
+      '.utility-view-tabs [role="tab"]:last-child',
       '.utility-content',
       '.utility-empty p',
       '.song-details-heading h3',
@@ -114,11 +122,34 @@ async function readInspectorHeaderGeometry(page: Page) {
             flex: style.flex,
             gridTemplateColumns: style.gridTemplateColumns,
             paddingInline: `${style.paddingLeft} ${style.paddingRight}`,
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderRadius: style.borderRadius,
+            borderBottomWidth: style.borderBottomWidth,
+            borderBottomStyle: style.borderBottomStyle,
+            borderBottomColor: style.borderBottomColor,
           },
         ];
       }),
     ) as InspectorHeaderGeometry;
   });
+}
+
+async function readInspectorTabTextAlignment(page: Page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>('.utility-view-tabs [role="tab"]')).map(
+      (tab) => {
+        const range = document.createRange();
+        range.selectNodeContents(tab);
+        const text = range.getBoundingClientRect();
+        const button = tab.getBoundingClientRect();
+        return {
+          xOffset: text.x + text.width / 2 - (button.x + button.width / 2),
+          yOffset: text.y + text.height / 2 - (button.y + button.height / 2),
+        };
+      },
+    ),
+  );
 }
 
 async function expectInspectorGeometry(page: Page, mode: 'docked' | 'overlay') {
@@ -307,17 +338,30 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await expect(page.getByText('Select a song to view details.')).toBeVisible();
     const presentation = getUtilityPresentationMode(viewport.width, true, 'graphite');
     await expectInspectorGeometry(page, presentation);
+    await page.mouse.move(0, 0);
 
     const measurements: Partial<
       Record<'empty' | 'selected' | 'cleared' | 'runtime', InspectorHeaderGeometry>
     > = {};
+    const tabTextAlignment: Partial<
+      Record<
+        'empty' | 'selected' | 'cleared' | 'runtime',
+        Awaited<ReturnType<typeof readInspectorTabTextAlignment>>
+      >
+    > = {};
     const record = async (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
       measurements[state] = await readInspectorHeaderGeometry(page);
+      tabTextAlignment[state] = await readInspectorTabTextAlignment(page);
     };
     await record('empty');
     if (viewport.width === 1366) {
       await page.screenshot({
         path: 'test-results/final-polish-k-inspector-empty-1366x768.png',
+        animations: 'disabled',
+      });
+    } else {
+      await page.screenshot({
+        path: 'test-results/frozen-spec-inspector-compact-640x448.png',
         animations: 'disabled',
       });
     }
@@ -342,6 +386,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await inspector.getByRole('tab', { name: 'Runtime' }).click();
     await expect(page.getByRole('region', { name: 'Utility: Diagnostics' })).toBeVisible();
     await expectInspectorGeometry(page, presentation);
+    await page.mouse.move(0, 0);
     await record('runtime');
 
     const geometryFor = (state: 'empty' | 'selected' | 'cleared' | 'runtime', selector: string) => {
@@ -355,6 +400,51 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     const baselineClose = geometryFor('empty', '.utility-close-button');
     const baselineCloseIcon = geometryFor('empty', '.utility-close-button svg');
     const baselineSurface = geometryFor('empty', '.utility-surface');
+    const baselineDetailsTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:first-child');
+    const baselineRuntimeTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:last-child');
+    const expectOriginalTabs = (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
+      const tabs = geometryFor(state, '.utility-view-tabs');
+      const details = geometryFor(state, '.utility-view-tabs [role="tab"]:first-child');
+      const runtime = geometryFor(state, '.utility-view-tabs [role="tab"]:last-child');
+      expect(tabs.borderBottomWidth).toBe('1px');
+      expect(tabs.borderBottomStyle).toBe('solid');
+      expect(tabs.borderBottomColor).toBe('rgb(42, 43, 44)');
+      expect(
+        Math.abs(details.x - tabs.x),
+        `${state} first tab starts at the tablist left edge`,
+      ).toBeLessThanOrEqual(1);
+      expect(details.x).toBeLessThan(runtime.x);
+      expect(details.flex).toBe('0 0 auto');
+      expect(runtime.flex).toBe('0 0 auto');
+      expect(Math.abs(details.width - baselineDetailsTab.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(runtime.width - baselineRuntimeTab.width)).toBeLessThanOrEqual(1);
+      expect(runtime.right).toBeLessThanOrEqual(tabs.right);
+      expect(Math.abs(details.y - runtime.y)).toBeLessThanOrEqual(1);
+      const selectedTab = state === 'runtime' ? runtime : details;
+      const inactiveTab = state === 'runtime' ? details : runtime;
+      for (const tab of [selectedTab, inactiveTab]) {
+        expect(tab.borderRadius).toBe('0px');
+        expect(tab.borderBottomWidth).toBe('2px');
+        expect(tab.borderBottomStyle).toBe('solid');
+      }
+      expect(selectedTab.backgroundColor).toBe('rgb(36, 37, 38)');
+      expect(selectedTab.color).toBe('rgb(178, 165, 233)');
+      expect(selectedTab.borderBottomColor).toBe('rgb(178, 165, 233)');
+      expect(inactiveTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+      expect(inactiveTab.color).toBe('rgb(166, 166, 166)');
+      expect(inactiveTab.borderBottomColor).toBe('rgba(0, 0, 0, 0)');
+      const textAlignment = tabTextAlignment[state];
+      expect(textAlignment).toHaveLength(2);
+      for (const alignment of textAlignment ?? []) {
+        expect(Math.abs(alignment.xOffset)).toBeLessThanOrEqual(1.5);
+        expect(
+          Math.abs(alignment.yOffset),
+          `${state} tab text vertical-center offset ${alignment.yOffset}`,
+        ).toBeLessThanOrEqual(1.5);
+      }
+    };
+    await expect(inspector.getByRole('tab')).toHaveText(['Details', 'Runtime']);
+    expectOriginalTabs('empty');
     for (const state of ['selected', 'cleared', 'runtime'] as const) {
       const header = geometryFor(state, '.utility-header');
       const tabs = geometryFor(state, '.utility-view-tabs');
@@ -382,6 +472,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       expect(Math.abs(close.right - (header.right - 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.x - (header.x + 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.right - (header.right - 14))).toBeLessThanOrEqual(1);
+      expectOriginalTabs(state);
     }
     expect(
       Math.abs(

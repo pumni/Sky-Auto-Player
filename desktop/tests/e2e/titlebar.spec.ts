@@ -177,6 +177,162 @@ async function expectPointerCenter(page: Page, locator: Locator) {
   await page.mouse.click(x, y);
 }
 
+async function expectCaptionHover(
+  page: Page,
+  locator: Locator,
+  expectedBackground: string,
+  expectedForeground: string,
+) {
+  const bounds = await locator.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (!bounds) throw new Error('Caption control has no hit target');
+  expect(bounds.width).toBeCloseTo(46, 0);
+  expect(bounds.height).toBeCloseTo(40, 0);
+  const dragRegion = await locator.getAttribute('data-tauri-drag-region');
+  expect(dragRegion).toBe('false');
+  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const centerIsHitTarget = await locator.evaluate((element, point) => {
+    const hit = document.elementFromPoint(point.x, point.y);
+    return hit === element || (hit !== null && element.contains(hit));
+  }, center);
+  expect(centerIsHitTarget).toBe(true);
+
+  await locator.hover();
+  const hover = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      foreground: style.color,
+      borderWidth: style.borderTopWidth,
+      borderStyle: style.borderTopStyle,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+      focusVisible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      outlineOffset: style.outlineOffset,
+    };
+  });
+  expect(hover.background).toBe(expectedBackground);
+  expect(hover.foreground).toBe(expectedForeground);
+  expect(hover.borderWidth).toBe('0px');
+  expect(hover.borderStyle).toBe('none');
+  expect(hover.borderRadius).toBe('0px');
+  expect(hover.boxShadow).toBe('none');
+  if (hover.focusVisible) {
+    expect(hover.outlineWidth).toBe('2px');
+    expect(hover.outlineStyle).toBe('solid');
+    expect(hover.outlineOffset).toBe('-2px');
+  } else {
+    expect(hover.outlineWidth).toBe('0px');
+    expect(hover.outlineStyle).toBe('none');
+  }
+
+  await page.mouse.move(320, 300);
+  const rest = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      foreground: style.color,
+      borderWidth: style.borderTopWidth,
+      borderStyle: style.borderTopStyle,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(rest.background).toBe('rgba(0, 0, 0, 0)');
+  expect(rest.foreground).toBe('rgb(166, 166, 166)');
+  expect(rest.borderWidth).toBe('0px');
+  expect(rest.borderStyle).toBe('none');
+  expect(rest.borderRadius).toBe('0px');
+  expect(rest.boxShadow).toBe('none');
+}
+
+test('Graphite caption roles preserve their hover states over full safe hit targets', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockPlaybackDurationMs=120000&mockUpdateState=current');
+  const minimize = page.getByRole('button', { name: 'Minimize window' });
+  await expect(minimize).toHaveClass(/caption-button-minimize/);
+  await expectCaptionHover(page, minimize, 'rgb(48, 49, 53)', 'rgb(212, 212, 212)');
+
+  const maximize = page.getByRole('button', { name: 'Maximize window' });
+  await expect(maximize).toHaveClass(/caption-button-zoom/);
+  await expectCaptionHover(page, maximize, 'rgba(0, 0, 0, 0)', 'rgb(166, 166, 166)');
+  await maximize.click();
+
+  const restore = page.getByRole('button', { name: 'Restore window' });
+  await expect(restore).toBeVisible();
+  await expect(restore).toHaveClass(/caption-button-zoom/);
+  await expectCaptionHover(page, restore, 'rgba(0, 0, 0, 0)', 'rgb(166, 166, 166)');
+  await restore.click();
+  const restoredMaximize = page.getByRole('button', { name: 'Maximize window' });
+  await expect(restoredMaximize).toBeVisible();
+
+  const close = page.getByRole('button', { name: 'Close window' });
+  await expect(close).toHaveClass(/caption-button-close/);
+  await expectCaptionHover(page, close, 'rgb(196, 43, 54)', 'rgb(255, 255, 255)');
+
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  const keyboardFocus = await close.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      visible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset,
+    };
+  });
+  expect(keyboardFocus.visible).toBe(true);
+  expect(keyboardFocus.outlineWidth).toBe('2px');
+  expect(keyboardFocus.outlineOffset).toBe('-2px');
+  await close.hover();
+  const focusedWhileHovered = await close.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      hovered: element.matches(':hover'),
+      visible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  expect(focusedWhileHovered).toEqual({ hovered: true, visible: true, outlineWidth: '2px' });
+
+  await page.keyboard.press('Shift+Tab');
+  await expect(restoredMaximize).toBeFocused();
+  const maximizeKeyboardFocus = await restoredMaximize.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      visible: element.matches(':focus-visible'),
+      background: style.backgroundColor,
+      outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset,
+    };
+  });
+  expect(maximizeKeyboardFocus).toEqual({
+    visible: true,
+    background: 'rgba(0, 0, 0, 0)',
+    outlineWidth: '2px',
+    outlineOffset: '-2px',
+  });
+  await restoredMaximize.hover();
+  const maximizeFocusedWhileHovered = await restoredMaximize.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      hovered: element.matches(':hover'),
+      visible: element.matches(':focus-visible'),
+      background: style.backgroundColor,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  expect(maximizeFocusedWhileHovered).toEqual({
+    hovered: true,
+    visible: true,
+    background: 'rgba(0, 0, 0, 0)',
+    outlineWidth: '2px',
+  });
+});
+
 async function expectNonOverlappingGeometry(
   page: Page,
   expectedDpr: number,
@@ -208,7 +364,8 @@ async function expectNonOverlappingGeometry(
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport.width);
   expect(geometry.dragRegion).toBe('true');
   expect(geometry.boxes.titlebar?.height).toBe(40);
-  expect(geometry.boxes.search?.height).toBeGreaterThanOrEqual(34);
+  expect(geometry.boxes.search?.height).toBeGreaterThanOrEqual(30);
+  expect(geometry.boxes.search?.height).toBeLessThanOrEqual(32);
   expect(geometry.trailingDragRegion).toBe('true');
   expect(
     geometry.workbench,
@@ -246,6 +403,12 @@ async function expectNonOverlappingGeometry(
   if (!search || !drag || !trailingDrag || !leading || !end) {
     throw new Error('Titlebar search, drag region, or occupied boundary is missing');
   }
+  const titlebar = geometry.boxes.titlebar;
+  expect(titlebar).not.toBeNull();
+  if (!titlebar) throw new Error('Titlebar bounds are missing');
+  expect(
+    Math.abs(search.y + search.height / 2 - (titlebar.y + titlebar.height / 2)),
+  ).toBeLessThanOrEqual(1);
   expect(drag.width).toBeGreaterThanOrEqual(24);
   expect(trailingDrag.width).toBeGreaterThanOrEqual(24);
   expect(drag.height).toBeGreaterThanOrEqual(search.height);

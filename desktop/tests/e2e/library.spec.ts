@@ -1058,13 +1058,15 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
 });
 
-test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560', async ({
+test('collapsed Library rail stays compact and keyboard-accessible at 800 and 640 widths', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
+  const collapseButton = navigator.locator('.library-collapse-button');
+  await collapseButton.click();
+  await expect(collapseButton).not.toHaveAttribute('aria-pressed');
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
@@ -1076,6 +1078,55 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
       }),
     ),
   ).toBe(true);
+  const collapsedLayout = await page.evaluate(() => {
+    const navigator = document.querySelector<HTMLElement>('.library-navigator');
+    const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
+    const footer = document.querySelector<HTMLElement>('.library-navigator-footer');
+    if (!navigator || !footer) throw new Error('Collapsed Library areas are missing');
+    const navigatorStyle = getComputedStyle(navigator);
+    const footerStyle = getComputedStyle(footer);
+    const launcherStyle = launchers ? getComputedStyle(launchers) : null;
+    return {
+      paddingTop: navigatorStyle.paddingTop,
+      paddingBottom: navigatorStyle.paddingBottom,
+      launcherCount: navigator.querySelectorAll('.library-collapsed-launchers').length,
+      launcherItemCount: launchers?.querySelectorAll('.library-nav-item').length ?? 0,
+      secondarySectionCount: navigator.querySelectorAll('.library-secondary-sections').length,
+      launcherMarginTop: launcherStyle?.marginTop ?? null,
+      launcherPaddingTop: launcherStyle?.paddingTop ?? null,
+      footerPaddingTop: footerStyle.paddingTop,
+    };
+  });
+  expect(collapsedLayout.paddingTop).toBe('8px');
+  expect(collapsedLayout.paddingBottom).toBe('8px');
+  expect(collapsedLayout.footerPaddingTop).toBe('8px');
+  expect(collapsedLayout.secondarySectionCount).toBe(0);
+  expect(collapsedLayout.launcherCount).toBe(collapsedLayout.launcherItemCount > 0 ? 1 : 0);
+  if (collapsedLayout.launcherItemCount === 0) {
+    expect(collapsedLayout.launcherMarginTop).toBeNull();
+    expect(collapsedLayout.launcherPaddingTop).toBeNull();
+  } else {
+    expect(collapsedLayout.launcherMarginTop).toBe('8px');
+    expect(collapsedLayout.launcherPaddingTop).toBe('6px');
+  }
+  await page.mouse.move(0, 0);
+  const collapsedToggleStyle = await collapseButton.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  expect(collapsedToggleStyle).toEqual({
+    color: 'rgb(166, 166, 166)',
+    background: 'rgba(0, 0, 0, 0)',
+  });
+  await collapseButton.hover();
+  const collapsedToggleHover = await collapseButton.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  expect(collapsedToggleHover).toEqual({
+    color: 'rgb(212, 212, 212)',
+    background: 'rgb(53, 54, 58)',
+  });
   const pane = await page.locator('.navigator-workbench-pane').boundingBox();
   expect(pane).not.toBeNull();
   if (pane) {
@@ -1085,7 +1136,14 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
       .evaluateAll((elements) =>
         elements.map((element) => {
           const rect = element.getBoundingClientRect();
-          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            hitTargeted: hit === element || (hit !== null && element.contains(hit)),
+          };
         }),
       );
     expect(tiles.length).toBeGreaterThan(0);
@@ -1093,13 +1151,325 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
       expect(tile.width).toBeCloseTo(40, 0);
       expect(tile.height).toBeCloseTo(40, 0);
       expect(Math.abs(tile.x + tile.width / 2 - (pane.x + pane.width / 2))).toBeLessThanOrEqual(1);
+      expect(tile.hitTargeted).toBe(true);
     }
   }
+  await page.keyboard.press('Tab');
+  await collapseButton.evaluate((element) => element.focus());
+  expect(await collapseButton.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  const collapseBounds = await collapseButton.boundingBox();
+  const collapsedPaneBounds = await page.locator('.navigator-workbench-pane').boundingBox();
+  expect(collapseBounds).not.toBeNull();
+  expect(collapsedPaneBounds).not.toBeNull();
+  if (collapseBounds && collapsedPaneBounds) {
+    expect(collapseBounds.x - collapsedPaneBounds.x).toBeGreaterThanOrEqual(3);
+    expect(
+      collapsedPaneBounds.x + collapsedPaneBounds.width - collapseBounds.x - collapseBounds.width,
+    ).toBeGreaterThanOrEqual(3);
+  }
+  expect(await collapseButton.evaluate((element) => getComputedStyle(element).outlineWidth)).toBe(
+    '2px',
+  );
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
   await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
 
   await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
   await expect(navigator.getByText('Your Library')).toBeVisible();
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
+  const compactPadding = await page.locator('.library-navigator').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.paddingTop, style.paddingBottom];
+  });
+  expect(compactPadding).toEqual(['8px', '8px']);
+  const compactTileBounds = await navigator
+    .locator('.library-nav-item, .library-add-button.is-collapsed, .library-collapse-button')
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+    );
+  expect(compactTileBounds.length).toBeGreaterThan(0);
+  for (const tile of compactTileBounds) {
+    expect(tile.width).toBeCloseTo(40, 0);
+    expect(tile.height).toBeCloseTo(40, 0);
+  }
+});
+
+test('Graphite Library keeps its headings, rows, actions, dividers, and compact tiles aligned', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      'sky.ui.workbench.v5',
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 240,
+        utilityWidth: 320,
+        utilityOpen: false,
+      }),
+    );
+  });
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  const createPlaylist = async (name: string) => {
+    await navigator.locator('.library-add-button').click();
+    const dialog = page.getByRole('dialog', { name: 'New playlist' });
+    await dialog.getByLabel('Playlist name').fill(name);
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(navigator.getByRole('button', { name, exact: true })).toBeVisible();
+  };
+  await createPlaylist('Longest playlist title for alignment');
+  await createPlaylist('Short list');
+
+  const expanded = await page.evaluate(() => {
+    const box = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) throw new Error('Library geometry element is missing');
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.x,
+        y: rect.y,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        centerX: rect.x + rect.width / 2,
+      };
+    };
+    const pane = document.querySelector('.navigator-workbench-pane');
+    const navigator = document.querySelector<HTMLElement>('.library-navigator');
+    const navigatorHeading = document.querySelector<HTMLElement>('.library-navigator-heading');
+    const heading = document.querySelector('.library-navigator-heading h2');
+    const sectionHeading = document.querySelector('.library-section-heading');
+    const headingActions = document.querySelector('.library-heading-actions');
+    const divider = document.querySelector('.library-secondary-sections');
+    const primaryItems = document.querySelector('.library-primary-items');
+    const footer = document.querySelector('.library-navigator-footer');
+    const rows = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '.library-primary-items .library-nav-item, .library-nav-action-row',
+      ),
+    ).map((row) => {
+      const item = row.matches('.library-nav-action-row')
+        ? row.querySelector('.library-nav-item')
+        : row;
+      const menu = row.querySelector('.library-more-button');
+      return {
+        row: box(row),
+        icon: box(item?.querySelector('.library-nav-item-icon') ?? null),
+        label: box(item?.querySelector('.library-nav-item-label') ?? null),
+        menu: menu ? box(menu) : null,
+      };
+    });
+    const paneBox = box(pane);
+    if (!navigator || !navigatorHeading || !primaryItems) {
+      throw new Error('Library navigator geometry is missing');
+    }
+    if (!divider) throw new Error('Library divider is missing');
+    const navigatorStyle = getComputedStyle(navigator);
+    const headingStyle = getComputedStyle(navigatorHeading);
+    const dividerStyle = getComputedStyle(divider);
+    const dividerBox = box(divider);
+    return {
+      pane: paneBox,
+      navigatorInnerLeft:
+        box(navigator).x + Number.parseFloat(getComputedStyle(navigator).paddingLeft),
+      navigatorPadding: [
+        navigatorStyle.paddingTop,
+        navigatorStyle.paddingRight,
+        navigatorStyle.paddingBottom,
+        navigatorStyle.paddingLeft,
+      ],
+      headingStyle: {
+        minHeight: headingStyle.minHeight,
+        marginBottom: headingStyle.marginBottom,
+        paddingTop: headingStyle.paddingTop,
+        paddingRight: headingStyle.paddingRight,
+        paddingBottom: headingStyle.paddingBottom,
+        paddingLeft: headingStyle.paddingLeft,
+      },
+      dividerSpacing: {
+        marginTop: dividerStyle.marginTop,
+        paddingTop: dividerStyle.paddingTop,
+      },
+      primaryRowGap: getComputedStyle(primaryItems).rowGap,
+      heading: box(heading),
+      sectionHeading: box(sectionHeading),
+      headingActions: box(headingActions),
+      dividerInsets: [dividerBox.x - paneBox.x, paneBox.right - dividerBox.right],
+      footerCenter: box(footer).centerX,
+      rows,
+    };
+  });
+  expect(expanded.navigatorPadding).toEqual(['12px', '8px', '12px', '8px']);
+  expect(expanded.headingStyle).toEqual({
+    minHeight: '36px',
+    marginBottom: '8px',
+    paddingTop: '0px',
+    paddingRight: '0px',
+    paddingBottom: '0px',
+    paddingLeft: '8px',
+  });
+  expect(expanded.dividerSpacing).toEqual({ marginTop: '12px', paddingTop: '8px' });
+  expect(expanded.primaryRowGap).toBe('4px');
+  expect(Math.abs(expanded.heading.x - expanded.sectionHeading.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(expanded.footerCenter - expanded.pane.centerX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(expanded.dividerInsets[0] - expanded.dividerInsets[1])).toBeLessThanOrEqual(1);
+  expect(expanded.rows).toHaveLength(4);
+  for (const row of expanded.rows) {
+    expect(row.icon.width).toBeCloseTo(24, 0);
+    expect(Math.abs(row.icon.x - expanded.heading.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(row.icon.x - (expanded.navigatorInnerLeft + 8))).toBeLessThanOrEqual(1);
+    expect(Math.abs(row.label.x - (row.icon.x + 32))).toBeLessThanOrEqual(1);
+  }
+  for (const row of expanded.rows) expect(row.row.height).toBeCloseTo(42, 0);
+  const playlistMenus = expanded.rows.map((row) => row.menu).filter((menu) => menu !== null);
+  expect(playlistMenus).toHaveLength(2);
+  for (const menu of playlistMenus) {
+    expect(Math.abs(menu!.right - expanded.headingActions.right)).toBeLessThanOrEqual(1);
+  }
+
+  const expectCollapsedGeometry = async () => {
+    const compact = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+      const heading = document.querySelector<HTMLElement>('.library-navigator-heading');
+      const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
+      const selectors = [
+        '.library-collapse-button',
+        '.library-nav-item',
+        '.library-add-button.is-collapsed',
+      ];
+      if (!pane || !heading) throw new Error('Collapsed Library geometry is missing');
+      const paneRect = pane.getBoundingClientRect();
+      const headingStyle = getComputedStyle(heading);
+      const launcherStyle = launchers ? getComputedStyle(launchers) : null;
+      const tiles = selectors.flatMap((selector) =>
+        Array.from(document.querySelectorAll<HTMLElement>(selector)).map((element) => {
+          const rect = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            centerX: rect.x + rect.width / 2,
+            targeted: hit === element || (hit !== null && element.contains(hit)),
+          };
+        }),
+      );
+      return {
+        pane: { x: paneRect.x, width: paneRect.width, centerX: paneRect.x + paneRect.width / 2 },
+        heading: {
+          minHeight: headingStyle.minHeight,
+          marginBottom: headingStyle.marginBottom,
+          padding: headingStyle.padding,
+        },
+        launcherItemCount: launchers?.querySelectorAll('.library-nav-item').length ?? 0,
+        launcherCount: pane.querySelectorAll('.library-collapsed-launchers').length,
+        launcher: launcherStyle
+          ? { marginTop: launcherStyle.marginTop, paddingTop: launcherStyle.paddingTop }
+          : null,
+        tiles,
+      };
+    });
+    expect(compact.pane.width).toBeCloseTo(48, 0);
+    expect(compact.heading).toEqual({
+      minHeight: '40px',
+      marginBottom: '4px',
+      padding: '0px',
+    });
+    expect(compact.launcherItemCount).toBe(1);
+    expect(compact.launcherCount).toBe(1);
+    expect(compact.launcher).toEqual({ marginTop: '8px', paddingTop: '6px' });
+    expect(compact.tiles.length).toBeGreaterThanOrEqual(5);
+    for (const tile of compact.tiles) {
+      expect(tile.width).toBeCloseTo(40, 0);
+      expect(tile.height).toBeCloseTo(40, 0);
+      expect(Math.abs(tile.centerX - compact.pane.centerX)).toBeLessThanOrEqual(1);
+      expect(tile.targeted).toBe(true);
+    }
+  };
+
+  await page.setViewportSize({ width: 800, height: 560 });
+  const responsiveCollapse = navigator.locator('.library-collapse-button');
+  await expect(responsiveCollapse).toBeVisible();
+  if (
+    !(await page
+      .locator('.navigator-workbench-pane')
+      .evaluate((pane) => pane.classList.contains('is-collapsed')))
+  ) {
+    await responsiveCollapse.click();
+  }
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expectCollapsedGeometry();
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expectCollapsedGeometry();
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const responsiveExpand = navigator.locator('.library-collapse-button');
+  await expect(responsiveExpand).toBeVisible();
+  if (
+    await page
+      .locator('.navigator-workbench-pane')
+      .evaluate((pane) => pane.classList.contains('is-collapsed'))
+  ) {
+    await responsiveExpand.click();
+  }
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  for (const name of ['Longest playlist title for alignment', 'Short list']) {
+    await page.getByRole('button', { name: `More actions for ${name}` }).click();
+    await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
+    const dialog = page.getByRole('dialog', { name: /Delete/ });
+    await dialog.getByRole('button', { name: 'Delete playlist', exact: true }).click();
+  }
+  const empty = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`${selector} is missing`);
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, right: rect.right, centerX: rect.x + rect.width / 2 };
+    };
+    return {
+      playlistCount: document.querySelectorAll('.library-nav-action-row').length,
+      sectionHeading: box('.library-section-heading'),
+      emptyAction: box('.library-empty-playlists-create'),
+      footer: box('.library-navigator-footer'),
+      pane: box('.navigator-workbench-pane'),
+    };
+  });
+  expect(empty.playlistCount).toBe(0);
+  expect(Math.abs(empty.emptyAction.x - empty.sectionHeading.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(empty.footer.centerX - empty.pane.centerX)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 800, height: 560 });
+  const emptyCollapseButton = navigator.locator('.library-collapse-button');
+  if (
+    !(await page
+      .locator('.navigator-workbench-pane')
+      .evaluate((pane) => pane.classList.contains('is-collapsed')))
+  ) {
+    await emptyCollapseButton.click();
+  }
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  const emptyCollapsed = await navigator.evaluate((element) => ({
+    playlistLauncherCount: element.querySelectorAll(
+      '.library-collapsed-launchers .library-nav-item',
+    ).length,
+    launchers: element.querySelectorAll('.library-collapsed-launchers').length,
+    expandedPlaylistSection: element.querySelectorAll('.library-secondary-sections').length,
+    children: Array.from(element.children).map((child) => (child as HTMLElement).className),
+  }));
+  expect(emptyCollapsed).toEqual({
+    playlistLauncherCount: 0,
+    launchers: 0,
+    expandedPlaylistSection: 0,
+    children: ['library-navigator-heading', 'library-primary-items', 'library-navigator-footer'],
+  });
 });
 
 test('Graphite automatic compact navigation preserves the saved expanded preference', async ({
@@ -1388,6 +1758,14 @@ test('dock and transport toggles show palette-specific active state without layo
       const tertiary = getComputedStyle(probe).color;
       probe.style.color = 'var(--text-secondary)';
       const secondary = getComputedStyle(probe).color;
+      probe.style.color = 'var(--workbench-control-disabled)';
+      const disabled = getComputedStyle(probe).color;
+      probe.style.color = 'var(--workbench-toggle-on)';
+      const toggleOn = getComputedStyle(probe).color;
+      probe.style.color = 'var(--workbench-toggle-off)';
+      const toggleOff = getComputedStyle(probe).color;
+      probe.style.backgroundColor = 'var(--workbench-control-hover)';
+      const controlHover = getComputedStyle(probe).backgroundColor;
       probe.remove();
       return {
         color: style.color,
@@ -1402,6 +1780,10 @@ test('dock and transport toggles show palette-specific active state without layo
         accentHover,
         tertiary,
         secondary,
+        disabled,
+        toggleOn,
+        toggleOff,
+        controlHover,
         palette: document.documentElement.dataset.palette,
       };
     });
@@ -1415,7 +1797,7 @@ test('dock and transport toggles show palette-specific active state without layo
       .toBe(before.primary);
     const after = await measureStyle(button);
     expect(after.color).toBe(after.primary);
-    expect(after.background).toBe('rgba(0, 0, 0, 0)');
+    expect(after.background).toBe(after.controlHover);
     expect(after.borderTop).toBe('0px');
     expect(after.x).toBe(before.x);
     expect(after.y).toBe(before.y);
@@ -1429,7 +1811,7 @@ test('dock and transport toggles show palette-specific active state without layo
   await page.mouse.move(0, 0);
   await expect
     .poll(async () => (await measureStyle(stop)).color, { timeout: 2_000 })
-    .toBe((await measureStyle(stop)).tertiary);
+    .toBe((await measureStyle(stop)).disabled);
   expect(await stop.isDisabled()).toBe(true);
   const stopBefore = await measureStyle(stop);
   const stopBox = await stop.boundingBox();
@@ -1437,7 +1819,7 @@ test('dock and transport toggles show palette-specific active state without layo
   await page.mouse.move(stopBox.x + stopBox.width / 2, stopBox.y + stopBox.height / 2);
   const stopAfter = await measureStyle(stop);
   expect(stopAfter.color).toBe(stopBefore.color);
-  expect(stopAfter.color).toBe(stopAfter.tertiary);
+  expect(stopAfter.color).toBe(stopAfter.disabled);
   expect(stopAfter.background).toBe('rgba(0, 0, 0, 0)');
   expect(stopAfter.borderTop).toBe('0px');
   expect(stopAfter.x).toBe(stopBefore.x);
@@ -1449,10 +1831,11 @@ test('dock and transport toggles show palette-specific active state without layo
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
   const activeShuffleTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.accentHover : style.accent;
+    style.palette === 'graphite' ? style.toggleOn : style.accent;
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
+  await page.mouse.move(0, 0);
   const activeShuffleBefore = await measureStyle(shuffle);
   expect(activeShuffleBefore.color).toBe(activeShuffleTone(activeShuffleBefore));
   expect(activeShuffleBefore.color).not.toBe(inactiveShuffle.color);
@@ -1465,6 +1848,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleAfter = await measureStyle(shuffle);
   expect(activeShuffleAfter.color).toBe(activeShuffleTone(activeShuffleAfter));
+  expect(activeShuffleAfter.background).toBe(activeShuffleAfter.controlHover);
 
   await shuffle.focus();
   await expect(shuffle).toBeFocused();
@@ -1479,9 +1863,9 @@ test('dock and transport toggles show palette-specific active state without layo
   const autoPlay = player.getByRole('button', { name: 'Auto Play' });
   const autoPlayBefore = await measureStyle(autoPlay);
   const activeAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.accentHover : style.accent;
+    style.palette === 'graphite' ? style.toggleOn : style.accent;
   const hoveredAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.accentHover;
+    style.palette === 'graphite' ? style.toggleOn : style.accentHover;
   expect(autoPlayBefore.color).toBe(activeAutoPlayTone(autoPlayBefore));
   expect(autoPlayBefore.background).toBe('rgba(0, 0, 0, 0)');
   await autoPlay.hover();
@@ -1490,7 +1874,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(hoveredAutoPlayTone(autoPlayBefore));
   const autoPlayHover = await measureStyle(autoPlay);
   expect(autoPlayHover.color).toBe(hoveredAutoPlayTone(autoPlayHover));
-  expect(autoPlayHover.background).toBe('rgba(0, 0, 0, 0)');
+  expect(autoPlayHover.background).toBe(autoPlayHover.controlHover);
   expect(autoPlayHover.borderTop).toBe('0px');
   expect(autoPlayHover.x).toBe(autoPlayBefore.x);
   expect(autoPlayHover.y).toBe(autoPlayBefore.y);
@@ -1498,17 +1882,20 @@ test('dock and transport toggles show palette-specific active state without layo
   await autoPlay.click();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
   await page.mouse.move(0, 0);
+  const inactiveAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
+    style.palette === 'graphite' ? style.toggleOff : style.tertiary;
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
-    .toBe((await measureStyle(autoPlay)).tertiary);
+    .toBe(inactiveAutoPlayTone(await measureStyle(autoPlay)));
   const autoPlayOff = await measureStyle(autoPlay);
-  expect(autoPlayOff.color).toBe(autoPlayOff.tertiary);
+  expect(autoPlayOff.color).toBe(inactiveAutoPlayTone(autoPlayOff));
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
     .toBe(autoPlayOff.primary);
   const autoPlayOffHover = await measureStyle(autoPlay);
   expect(autoPlayOffHover.color).toBe(autoPlayOffHover.primary);
+  expect(autoPlayOffHover.background).toBe(autoPlayOffHover.controlHover);
 
   await page.mouse.move(0, 0);
   await autoPlay.focus();
@@ -2209,7 +2596,9 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
     await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
     const activeShuffleTone = await shuffle.evaluate((element) => {
       const token =
-        document.documentElement.dataset.palette === 'graphite' ? '--accent-hover' : '--accent';
+        document.documentElement.dataset.palette === 'graphite'
+          ? '--workbench-toggle-on'
+          : '--accent';
       const probe = document.createElement('span');
       probe.style.color = `var(${token})`;
       document.body.append(probe);

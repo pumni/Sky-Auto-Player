@@ -13,7 +13,8 @@ revision-scoped; their presence here or in the repository does not make them cur
 - **Timing or Windows qualification:** [final-down-admission-qualification.md](final-down-admission-qualification.md)
   and [physical-key-study-method.md](physical-key-study-method.md). The associated
   [timing observations](rt-dispatch-timing-evidence.md) are revision-scoped evidence.
-- **Desktop UI and workbench layout:** [desktop-workbench.md](desktop-workbench.md).
+- **Desktop UI and workbench layout:** [desktop-workbench.md](desktop-workbench.md) and
+  [Graphite final polish evidence](evidence/graphite-final-ui-polish/README.md).
 - **Library and local import:** [library-v1-contract.md](library-v1-contract.md).
 - **Security and distribution:** [../SECURITY.md](../SECURITY.md),
   [distribution-and-update.md](distribution-and-update.md),
