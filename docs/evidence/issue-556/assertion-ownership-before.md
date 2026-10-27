@@ -62,7 +62,7 @@ The line ranges below are from the baseline file. All 63 test declarations are a
 ## Other protected owners outside the split
 
 - Six-palette appearance and Settings focus: `palette-appearance.spec.ts`; forced colors/reduced motion also `graphite-final-ui-polish.spec.ts`.
-- Cross-palette resize geometry, pointer-up persistence and v5: `workbench-resize.spec.ts`; v1–v5 migrations remain owned by existing `useWorkbenchLayout`/workbench preference unit tests.
+- Cross-palette resize geometry, pointer-up persistence and v5: `workbench-resize.spec.ts`; v1–v5 migrations remain owned by `desktop/src/components/workbench/Workbench.test.tsx` (with hook-level persistence behavior in `useWorkbenchLayout.test.tsx`).
 - Native caption 40 logical px and Snap evidence: `titlebar.spec.ts` plus `docs/evidence/issue-554`; browser checks do not replace native evidence.
 - Prepared palette-only/mixed timing tokens and session/Stop recovery: Wave C frontend/Rust tests; keep these separate from mock-clock changes.
 - Production bundle lazy-chunk smoke: `tests/e2e-bundle/bundle.spec.ts`; do not alter its runner or assertions.
