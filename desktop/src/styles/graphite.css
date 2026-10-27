@@ -46,12 +46,13 @@ html[data-palette='graphite']
 
 html[data-palette='graphite'] .window-caption-controls .caption-button-zoom:hover:not(:disabled) {
   outline: 0;
-  color: #ffffff;
-  background-color: #3b3d41;
+  color: #a6a6a6;
+  background-color: transparent;
 }
 
 html[data-palette='graphite'] .window-caption-controls .caption-button-zoom:active:not(:disabled) {
-  background-color: #404246;
+  color: #a6a6a6;
+  background-color: transparent;
 }
 
 html[data-palette='graphite'] .window-caption-controls .caption-button-close:hover:not(:disabled) {
@@ -1402,6 +1403,13 @@ html[data-palette='graphite']
       .player-tools .player-auto-play-button[aria-pressed='true']
     ):disabled::after {
     forced-color-adjust: auto;
+    background-color: GrayText;
+  }
+
+  html[data-palette='graphite']
+    .player-tools
+    .player-auto-play-button[aria-pressed='true']:disabled::after {
+    forced-color-adjust: none;
     background-color: GrayText;
   }
 
