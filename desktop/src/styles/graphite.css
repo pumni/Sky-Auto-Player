@@ -786,7 +786,265 @@ html[data-palette='graphite'] .library-confirm-message {
   line-height: 1.45;
 }
 
-/* Preserve visible system colors and focus outlines in Windows forced-colors mode. */
+/* Graphite controls follow the product hierarchy: filled primary, persistent selected, quiet secondary. */
+html[data-palette='graphite'] .button-primary {
+  border-color: var(--workbench-accent-fill);
+  color: var(--on-accent);
+  background-color: var(--workbench-accent-fill);
+}
+
+html[data-palette='graphite'] .player-transport .player-primary-action.button-primary {
+  border-color: var(--workbench-accent-fill);
+  color: var(--on-accent);
+  background-color: var(--workbench-accent-fill);
+}
+
+html[data-palette='graphite'] .button-primary:hover:not(:disabled):not([aria-disabled='true']),
+html[data-palette='graphite']
+  .player-transport
+  .player-primary-action.button-primary:hover:not(:disabled) {
+  border-color: var(--workbench-accent-fill-hover);
+  color: var(--on-accent);
+  background-color: var(--workbench-accent-fill-hover);
+}
+
+html[data-palette='graphite'] .button-primary:active:not(:disabled):not([aria-disabled='true']),
+html[data-palette='graphite']
+  .player-transport
+  .player-primary-action.button-primary:hover:active:not(:disabled) {
+  border-color: var(--workbench-accent-fill-pressed);
+  color: var(--on-accent);
+  background-color: var(--workbench-accent-fill-pressed);
+}
+
+html[data-palette='graphite'] .button-primary:disabled,
+html[data-palette='graphite'] .button-primary[aria-disabled='true'],
+html[data-palette='graphite']
+  .player-transport
+  .player-primary-action.button-primary:disabled:not(.is-pending) {
+  border-color: var(--border-subtle);
+  color: var(--workbench-control-disabled);
+  background-color: var(--surface-raised);
+  cursor: default;
+  opacity: 1;
+}
+
+html[data-palette='graphite']
+  .player-transport
+  .player-primary-action.button-primary.is-pending:disabled {
+  border-color: var(--workbench-accent-fill);
+  color: var(--on-accent);
+  background-color: var(--workbench-accent-fill);
+}
+
+html[data-palette='graphite']
+  :is(
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
+    .caption-button:not(.caption-button-close),
+    .library-menu-item,
+    .track-actions-button,
+    .track-like-button:not([aria-pressed='true'])
+  ) {
+  border-color: transparent;
+  color: var(--text-secondary);
+  background-color: transparent;
+}
+
+html[data-palette='graphite']
+  :is(
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
+    .caption-button:not(.caption-button-close),
+    .library-menu-item:not(.is-danger),
+    .track-actions-button,
+    .track-like-button:not([aria-pressed='true'])
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: transparent;
+  color: var(--text-primary);
+  background-color: var(--workbench-control-hover);
+}
+
+html[data-palette='graphite']
+  :is(
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
+    .caption-button:not(.caption-button-close),
+    .library-menu-item:not(.is-danger),
+    .track-actions-button,
+    .track-like-button:not([aria-pressed='true'])
+  ):hover:active:not(:disabled):not([aria-disabled='true']) {
+  background-color: var(--workbench-control-pressed);
+}
+
+html[data-palette='graphite'] .caption-button-close:hover:not(:disabled) {
+  border-color: var(--danger-fill);
+  color: var(--on-danger);
+  background-color: var(--danger-fill);
+}
+
+html[data-palette='graphite'] .caption-button-close:hover:active:not(:disabled) {
+  border-color: var(--danger-fill-hover);
+  background-color: var(--danger-fill-hover);
+}
+
+html[data-palette='graphite'] .library-menu-item.is-danger {
+  color: var(--danger-fg);
+  background-color: transparent;
+}
+
+html[data-palette='graphite']
+  .library-menu-item.is-danger:hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--danger-fg);
+  background-color: var(--workbench-control-danger-hover);
+}
+
+/* Navigation and selected rows retain their distinct selection surfaces at rest. */
+html[data-palette='graphite'] .library-nav-item.is-active,
+html[data-palette='graphite'] .library-nav-action-row.is-active {
+  color: var(--text-primary);
+  background-color: var(--selection-bg);
+  box-shadow: inset 2px 0 var(--selection-indicator);
+}
+
+html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon {
+  color: var(--workbench-accent-ink);
+}
+
+html[data-palette='graphite'] .library-nav-action-row.is-active:hover {
+  background-color: var(--workbench-selected-control-hover);
+}
+
+html[data-palette='graphite'] .settings-nav-item.is-active {
+  border-left-color: var(--selection-indicator);
+  color: var(--workbench-accent-ink);
+  background-color: var(--selection-bg);
+}
+
+html[data-palette='graphite'] .settings-nav-item.is-active:hover {
+  background-color: var(--workbench-selected-control-hover);
+}
+
+html[data-palette='graphite']
+  :is(.utility-view-tabs, .diagnostics-tabs)
+  [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--selection-indicator);
+  color: var(--workbench-accent-ink);
+  background-color: var(--workbench-selected-control);
+}
+
+html[data-palette='graphite']
+  :is(.utility-view-tabs, .diagnostics-tabs)
+  [role='tab'][aria-selected='true']:hover {
+  border-bottom-color: var(--selection-indicator);
+  color: var(--workbench-accent-ink-hover);
+  background-color: var(--workbench-selected-control-hover);
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .library-collapse-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ) {
+  border-color: transparent;
+  color: var(--workbench-accent-ink);
+  background-color: var(--workbench-selected-control);
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .library-collapse-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--workbench-accent-ink-hover);
+  background-color: var(--workbench-selected-control-hover);
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .library-collapse-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):hover:active:not(:disabled):not([aria-disabled='true']) {
+  background-color: var(--workbench-selected-control-pressed);
+}
+
+html[data-palette='graphite']
+  :is(
+    .track-row.is-selected,
+    .library-nav-item.is-active,
+    .settings-nav-item.is-active
+  ):focus-visible,
+html[data-palette='graphite']
+  :is(
+    .button,
+    .icon-button,
+    .caption-button,
+    .library-nav-item,
+    .settings-nav-item,
+    .library-menu-item,
+    .track-actions-button,
+    .track-like-button,
+    [role='tab']
+  ):focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: 2px;
+}
+
+html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite']
+  :is(
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .caption-button,
+    .library-menu-item,
+    .library-nav-item,
+    .settings-nav-item,
+    .track-actions-button,
+    .track-like-button,
+    [role='tab']
+  ):disabled,
+html[data-palette='graphite']
+  :is(
+    .library-menu-item,
+    .library-nav-item,
+    .settings-nav-item,
+    [role='tab']
+  )[aria-disabled='true'] {
+  border-color: transparent;
+  color: var(--workbench-control-disabled);
+  background-color: transparent;
+  cursor: default;
+  opacity: 1;
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .library-collapse-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):disabled {
+  color: var(--workbench-control-disabled);
+  background-color: var(--workbench-selected-control);
+}
+
 @media (forced-colors: active) {
   html[data-palette='graphite'] .workbench-pane,
   html[data-palette='graphite'] .utility-surface,
@@ -799,224 +1057,31 @@ html[data-palette='graphite'] .library-confirm-message {
     box-shadow: none;
   }
 
-  html[data-palette='graphite'] .track-row.is-selected,
-  html[data-palette='graphite'] .library-nav-item.is-active,
-  html[data-palette='graphite'] .settings-nav-item.is-active {
-    border-color: Highlight;
-    color: HighlightText;
-    background: Highlight;
-  }
-
-  html[data-palette='graphite'] .track-row.is-playing:not(.is-selected) {
-    border-left-color: CanvasText;
-    color: CanvasText;
-    background: Canvas;
-  }
-
-  html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button {
+  html[data-palette='graphite'] :is(.button-primary, .player-primary-action, .button-danger) {
+    forced-color-adjust: auto;
     border-color: ButtonText;
     color: ButtonText;
-    background: ButtonFace;
+    background-color: ButtonFace;
   }
 
   html[data-palette='graphite']
-    .icon-button.icon-button-boxed.library-collapse-button:hover:not(:disabled),
-  html[data-palette='graphite']
-    .icon-button.icon-button-boxed.library-collapse-button:active:not(:disabled) {
-    border-color: ButtonText;
-    color: HighlightText;
-    background: Highlight;
+    :is(.button-primary, .player-primary-action, .button-danger):disabled {
+    border-color: GrayText;
+    color: GrayText;
+    background-color: ButtonFace;
   }
 
   html[data-palette='graphite']
-    .icon-button.icon-button-boxed.library-collapse-button:focus-visible {
-    outline-color: Highlight;
-  }
-
-  html[data-palette='graphite'] .track-row.is-playing .track-cell-index,
-  html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon {
-    color: HighlightText;
-  }
-
-  html[data-palette='graphite'] .button-danger,
-  html[data-palette='graphite'] .player-transport .player-primary-action {
-    border-color: Highlight;
-    color: HighlightText;
-    background: Highlight;
-  }
-
-  html[data-palette='graphite'] button:focus-visible,
-  html[data-palette='graphite'] input:focus-visible,
-  html[data-palette='graphite'] select:focus-visible,
-  html[data-palette='graphite'] [role='tab']:focus-visible,
-  html[data-palette='graphite'] [role='separator']:focus-visible,
-  html[data-palette='graphite'] .global-search:focus-within {
-    outline-color: Highlight;
-  }
-
-  html[data-palette='graphite'] .global-search:has(input:focus-visible) {
-    outline-color: Highlight;
-  }
-}
-
-/* Graphite controls share one transparent-rest interaction contract. */
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
-    [aria-disabled='true']
-  ) {
-  border-color: transparent;
-  background-color: var(--workbench-control-rest);
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
-    [aria-disabled='true']
-  ):hover {
-  color: var(--text-primary);
-  background-color: var(--workbench-control-hover);
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
-    [aria-disabled='true']
-  ):hover:active {
-  background-color: var(--workbench-control-pressed);
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):focus-visible {
-  outline: 2px solid var(--workbench-focus);
-  outline-offset: 2px;
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
-    [aria-selected='true'],
-    [aria-expanded='true'],
-    .is-active
-  ) {
-  color: var(--workbench-accent);
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
-    [aria-pressed='true'],
-    [aria-checked='true'],
-    .is-liked,
-    .is-on
-  ) {
-  color: var(--workbench-accent-hover);
-}
-
-html[data-palette='graphite']
-  body
-  :is(.button-primary, .player-primary-action):hover:not(:disabled):not([aria-disabled='true']) {
-  color: var(--workbench-accent);
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
-    [aria-selected='true'],
-    [aria-expanded='true'],
-    [aria-pressed='true'],
-    [aria-checked='true'],
-    .is-active,
-    .is-liked,
-    .is-on
-  ):hover:not(:disabled):not([aria-disabled='true']) {
-  color: var(--workbench-accent-hover);
-}
-
-html[data-palette='graphite'] body :is(.button-primary, .player-primary-action) {
-  color: var(--workbench-accent);
-}
-
-html[data-palette='graphite'] body :is(.button-danger, .library-menu-item.is-danger) {
-  color: var(--danger-fg);
-}
-
-html[data-palette='graphite']
-  body
-  :is(.button-danger, .library-menu-item.is-danger):hover:not(:disabled):not(
-    [aria-disabled='true']
-  ) {
-  color: var(--danger-fg);
-  background-color: var(--workbench-control-danger-hover);
-}
-
-html[data-palette='graphite']
-  body
-  .caption-button-close:hover:not(:disabled):not([aria-disabled='true']) {
-  color: var(--on-danger);
-  background-color: var(--danger-fill);
-}
-
-html[data-palette='graphite']
-  body
-  .caption-button-close:hover:active:not(:disabled):not([aria-disabled='true']) {
-  background-color: var(--danger-fill-hover);
-}
-
-/* Active navigation and tab states keep their edge markers without a tile fill. */
-html[data-palette='graphite'] body .library-nav-action-row.is-active {
-  background-color: transparent;
-}
-
-html[data-palette='graphite'] body .library-nav-action-row.is-active:hover {
-  background-color: var(--workbench-control-hover);
-}
-
-html[data-palette='graphite'] body .settings-nav-item.is-active {
-  border-left-color: var(--workbench-accent);
-  color: var(--workbench-accent);
-  background-color: transparent;
-}
-
-html[data-palette='graphite'] body .settings-nav-item.is-active:not(:disabled) {
-  border-left-color: var(--workbench-accent);
-}
-
-html[data-palette='graphite']
-  body
-  :is(.utility-view-tabs, .diagnostics-tabs)
-  [role='tab'][aria-selected='true'] {
-  border-bottom-color: var(--workbench-accent);
-  color: var(--workbench-accent);
-  background-color: transparent;
-}
-
-html[data-palette='graphite'] body .library-menu-item[data-focused='true'] {
-  color: var(--text-primary);
-  background-color: transparent;
-  outline: 2px solid var(--workbench-focus);
-  outline-offset: -2px;
-}
-
-html[data-palette='graphite']
-  body
-  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
-    :disabled,
-    [aria-disabled='true']
-  ) {
-  border-color: transparent;
-  color: var(--workbench-control-disabled);
-  background-color: var(--workbench-control-rest);
-  cursor: default;
-  opacity: 1;
-}
-
-@media (forced-colors: active) {
-  html[data-palette='graphite']
-    body
-    :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
-      [aria-disabled='true']
+    :is(
+      .button:not(.button-primary):not(.button-danger),
+      .icon-button:not(.button-primary):not(.button-danger),
+      .caption-button,
+      .library-menu-item,
+      .library-nav-item:not(.is-active),
+      .settings-nav-item:not(.is-active),
+      .track-actions-button,
+      .track-like-button,
+      [role='tab']
     ) {
     forced-color-adjust: auto;
     border-color: ButtonText;
@@ -1025,80 +1090,134 @@ html[data-palette='graphite']
   }
 
   html[data-palette='graphite']
-    body
-    :is(button, [role='button'], [role='tab'], [role='menuitem']):hover:not(:disabled):not(
-      [aria-disabled='true']
+    :is(
+      .button:not(.button-primary):not(.button-danger),
+      .icon-button:not(.button-primary):not(.button-danger),
+      .caption-button,
+      .library-menu-item,
+      .library-nav-item,
+      .settings-nav-item,
+      .track-actions-button,
+      .track-like-button,
+      [role='tab']
+    ):hover:not(:disabled):not([aria-disabled='true']) {
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite']
+    :is(
+      .library-nav-item.is-active,
+      .library-nav-action-row.is-active,
+      .settings-nav-item.is-active
     ) {
+    forced-color-adjust: none;
     border-color: Highlight;
     color: HighlightText;
     background-color: Highlight;
   }
 
   html[data-palette='graphite']
-    body
-    :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
-      [aria-pressed='true'],
-      [aria-checked='true'],
-      [aria-expanded='true']
-    ):not(:disabled):not([aria-disabled='true']) {
-    color: ButtonText;
-    background-color: ButtonFace;
-  }
-
-  html[data-palette='graphite']
-    body
-    :is(button, [role='button'], [role='tab'], [role='menuitem']):disabled,
-  html[data-palette='graphite']
-    body
-    :is(button, [role='button'], [role='tab'], [role='menuitem'])[aria-disabled='true'] {
-    border-color: GrayText;
-    color: GrayText;
-    background-color: ButtonFace;
-  }
-
-  html[data-palette='graphite']
-    body
-    :is(button, [role='button'], [role='tab'], [role='menuitem']):focus-visible {
-    outline: 2px solid Highlight;
-    outline-offset: 2px;
-  }
-
-  html[data-palette='graphite']
-    body
-    :is(.library-nav-item.is-active, .settings-nav-item.is-active):not(:disabled):not(
-      [aria-disabled='true']
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true'],
+      .player-tools .player-utility-button[aria-expanded='true'],
+      .library-collapse-button[aria-pressed='true'],
+      .track-row .track-like-button[aria-pressed='true']
     ) {
+    forced-color-adjust: none;
     border-color: Highlight;
-    color: HighlightText;
-    background-color: Highlight;
-  }
-
-  html[data-palette='graphite'] body .library-nav-action-row.is-active,
-  html[data-palette='graphite'] body .library-nav-action-row.is-active:hover {
-    border-color: Highlight;
-    color: HighlightText;
-    background-color: Highlight;
-  }
-
-  html[data-palette='graphite']
-    body
-    :is(.utility-view-tabs, .diagnostics-tabs)
-    [role='tab'][aria-selected='true']:not(:disabled):not([aria-disabled='true']) {
-    border-bottom-color: Highlight;
     color: Highlight;
     background-color: ButtonFace;
   }
 
   html[data-palette='graphite']
-    body
-    .library-menu-item[data-focused='true']:not(:disabled):not([aria-disabled='true']) {
-    color: HighlightText;
-    background-color: Highlight;
-    outline-color: Highlight;
+    :is(.utility-view-tabs, .diagnostics-tabs)
+    [role='tab'][aria-selected='true'] {
+    forced-color-adjust: none;
+    border-bottom-color: Highlight;
+    color: Highlight;
+    background-color: ButtonFace;
   }
 
-  html[data-palette='graphite'] body .caption-button-close:hover:not(:disabled) {
+  html[data-palette='graphite'] .track-row.is-selected {
+    forced-color-adjust: none;
+    border-left-color: Highlight;
     color: HighlightText;
     background-color: Highlight;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing:not(.is-selected) {
+    border-left-color: Highlight;
+    color: CanvasText;
+    background-color: Canvas;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing .track-cell-index {
+    color: Highlight;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing.is-selected .track-cell-index,
+  html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon {
+    color: HighlightText;
+  }
+
+  html[data-palette='graphite']
+    :is(
+      .button-primary,
+      .player-primary-action,
+      .button-danger,
+      .button,
+      .icon-button,
+      .caption-button,
+      .library-menu-item,
+      .library-nav-item,
+      .settings-nav-item,
+      .track-actions-button,
+      .track-like-button,
+      [role='tab']
+    ):focus-visible,
+  html[data-palette='graphite'] input:focus-visible,
+  html[data-palette='graphite'] select:focus-visible,
+  html[data-palette='graphite'] .global-search:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  html[data-palette='graphite'] .caption-button-close:hover:not(:disabled) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite']
+    .library-menu-item.is-danger:hover:not(:disabled):not([aria-disabled='true']) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite']
+    :is(
+      .button-primary,
+      .player-primary-action,
+      .button-danger,
+      .button:not(.button-primary):not(.button-danger),
+      .icon-button:not(.button-primary):not(.button-danger),
+      .caption-button,
+      .library-menu-item,
+      .library-nav-item,
+      .settings-nav-item,
+      .track-actions-button,
+      .track-like-button,
+      [role='tab']
+    ):disabled,
+  html[data-palette='graphite'] :is(.library-menu-item, [role='tab'])[aria-disabled='true'] {
+    border-color: GrayText;
+    color: GrayText;
+    background-color: ButtonFace;
   }
 }

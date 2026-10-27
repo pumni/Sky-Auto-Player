@@ -103,7 +103,15 @@ html[data-palette='graphite'] {
   --workbench-control-pressed: #404246;
   --workbench-control-disabled: #8b8c90;
   --workbench-control-danger-hover: #452d32;
+  --workbench-accent-ink: #b2a5e9;
+  --workbench-accent-ink-hover: #c0b4f1;
+  --workbench-accent-fill: #705eae;
+  --workbench-accent-fill-hover: #7564b4;
+  --workbench-accent-fill-pressed: #6553a0;
   --workbench-selected: #25242c;
+  --workbench-selected-control: #302d38;
+  --workbench-selected-control-hover: #3b3646;
+  --workbench-selected-control-pressed: #474151;
   --workbench-divider: #2a2b2c;
   --workbench-pane-edge: #313336;
   --workbench-pane-radius: 6px;
@@ -114,8 +122,8 @@ html[data-palette='graphite'] {
   --workbench-text-primary: #d4d4d4;
   --workbench-text-secondary: #a6a6a6;
   --workbench-text-tertiary: #929292;
-  --workbench-accent: #b2a5e9;
-  --workbench-accent-hover: #c0b4f1;
+  --workbench-accent: var(--workbench-accent-ink);
+  --workbench-accent-hover: var(--workbench-accent-ink-hover);
   --workbench-focus: #b2a5e9;
   --workbench-search-surface: #202123;
   --workbench-search-idle-edge: #3d3f43;
@@ -138,7 +146,7 @@ html[data-palette='graphite'] {
   --text-tertiary: var(--workbench-text-tertiary);
   --accent: var(--workbench-accent);
   --accent-hover: var(--workbench-accent-hover);
-  --on-accent: #121314;
+  --on-accent: #ffffff;
   --focus-ring: var(--workbench-focus);
   --type-body: 13px;
   --type-page-heading: 18px;
