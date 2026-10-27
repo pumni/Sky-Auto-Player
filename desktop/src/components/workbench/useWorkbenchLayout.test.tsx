@@ -191,7 +191,12 @@ describe('shared palette geometry boundary', () => {
     const themes = readFileSync(resolve(process.cwd(), 'src/styles/themes.css'), 'utf8');
     const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];
     expect(paletteRules).toHaveLength(6);
-    for (const [, selector, declarations] of paletteRules) {
+    for (const paletteRule of paletteRules) {
+      const selector = paletteRule[1];
+      const declarations = paletteRule[2];
+      if (selector === undefined || declarations === undefined) {
+        throw new Error('Palette rule is missing its selector or declarations');
+      }
       expect(selector).not.toMatch(
         /(?:min|max)?(?:width|height)|gap|padding|margin|radius|font|transition/i,
       );
