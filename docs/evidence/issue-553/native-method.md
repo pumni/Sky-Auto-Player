@@ -10,8 +10,8 @@ Results and compressed DevTools traces are in [native/README.md](native/README.m
   entry `index-BjoSRmUi.js`.
 - Intermediate inherited-property measurement:
   `6992f3d0b6d8d436595a96da53db99ce6455e6af`.
-- Final runtime source: `2fec7501a2f4e7f863669246863f2918b33ab64d`,
-  entry `index-BF9n3eZT.js`. Later evidence-only commits preserve this runtime source.
+- Final runtime source: `fd416e459d0260878bc7f9edcb67a7c6e236375e`,
+  entry `index-DO4F7-Ha.js`. Later evidence-only commits preserve this runtime source.
 - [Before](native/before-artifact.json) and [final](native/final-artifact.json)
   record executable, JavaScript, instrumented HTML and measurement-preload SHA-256
   identities. The preload hash is identical. [Trace hashes](native/trace-manifest.json)
@@ -51,7 +51,7 @@ Each build runs the same 12 cases:
   keyboard input or game process is involved.
 - Inspector 280→440→280 at client width 1366 CSS px; navigator 240→340→240 at
   1366; Inspector 280→requested440→280 with the 388 cap at 1024.
-- Each physical pointer triangle lasts four seconds. Helpers request moves every
+- Each Windows cursor triangle lasts four seconds. Helpers request moves every
   ~4ms; Windows/WebView coalesces delivery. JSON retains actual trusted pointer
   event counts, generally around 220–240 per gesture. No mock bridge, synthetic
   DOM pointer stream or per-move IPC drives measured resizing.
@@ -63,6 +63,7 @@ It refuses to connect if its DevTools port is already occupied. WebView data,
 native configuration and song fixtures are temporary sandbox data. It closes
 only its launched process after each fixture set. Setup uses DevTools-driven UI;
 the measured pointer stream comes from Windows and is checked for `isTrusted`.
+These are SendInput cursor gestures, not a human hardware-mouse or photodiode measurement.
 No process memory access, game debugger, hooks or alternate input injection was used.
 
 ## Measurements and limits
@@ -73,8 +74,8 @@ No process memory access, game debugger, hooks or alternate input injection was 
   Profiler render durations. Final idle counts of 1–2 demonstrate that distinct
   transient widths no longer require a Workbench React commit per width.
 - An rAF sampler records frame intervals and pane geometry while the pointer is
-  down. Final and retained baseline matrices both have p50 ~16.7ms and no >33ms
-  gaps in these short windows. This does not prove compositor presentation FPS,
+  down. Both matrices have p50 ~16.7ms; the retained baseline has no >33ms gaps,
+  and the final matrix has one isolated 33.3ms gap in the small idle clamp case. This does not prove compositor presentation FPS,
   eliminate longer-session stalls or establish VS Code parity.
 - Latest-pointer error compares pane DOM width to the last delivered event's
   requested/clamped width. Matched-event age finds the most recent matching
@@ -122,7 +123,7 @@ successful native measurements. An initial complete baseline's raw files were
 accidentally cleared by browser tests; the retained baseline was recorded again
 outside that cleanup directory.
 
-Focused validation: 39 workbench unit/component tests; 9 final browser cases;
+Focused validation: 40 workbench unit/component tests; 9 final browser cases;
 an earlier three-worker, three-repeat run passed all 27 cases for the same
 visual-path/reload behavior before property registration; desktop
 typecheck/lint/production build passed. Exact canonical final-HEAD

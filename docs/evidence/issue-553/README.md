@@ -35,8 +35,8 @@ Additional literal oracles cover 1366 (300 / 610 / 440), 960 during drag
 (200 / 420 / 324), and a viewport rebase to 900 during drag (200 / 420 / 264).
 At session end, v5 normalization still enforces saved Inspector width `>=280`.
 The effective topology now survives pointerup, retaining 200 / 420 / 264 at 900px
-until a genuine later viewport change, explicit navigator action, or Inspector
-close/reopen. Independent DOM tests also cover 915/916/917px release thresholds.
+across Inspector close/reopen until a genuine later viewport change or explicit
+navigator action. Independent DOM tests also cover 915/916/917px release thresholds.
 Temporary window shrink never rewrites saved navigator preference/expanded width.
 
 ![Graphite Inspector clamped at 1024](inspector-clamped-1024.png)
