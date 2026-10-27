@@ -301,61 +301,67 @@ html[data-color-mode='dark'] {
 }
 
 @media (forced-colors: active) {
-  :root :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true'],
-    .player-tools .player-utility-button[aria-expanded='true'],
-    .track-row .track-like-button[aria-pressed='true']
-  ) {
+  :root
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true'],
+      .player-tools .player-utility-button[aria-expanded='true'],
+      .track-row .track-like-button[aria-pressed='true']
+    ) {
     forced-color-adjust: none;
     border-color: Highlight;
     color: Highlight;
     background-color: ButtonFace;
   }
 
-  :root :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true'],
-    .player-tools .player-utility-button[aria-expanded='true'],
-    .track-row .track-like-button[aria-pressed='true']
-  ):hover:not(:disabled):not([aria-disabled='true']) {
+  :root
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true'],
+      .player-tools .player-utility-button[aria-expanded='true'],
+      .track-row .track-like-button[aria-pressed='true']
+    ):hover:not(:disabled):not([aria-disabled='true']) {
     forced-color-adjust: none;
     border-color: Highlight;
     color: HighlightText;
     background-color: Highlight;
   }
 
-  :root :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true']
-  )::after {
+  :root
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true']
+    )::after {
     forced-color-adjust: none;
     background-color: Highlight;
   }
 
-  :root :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true']
-  ):disabled::after {
+  :root
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true']
+    ):disabled::after {
     forced-color-adjust: auto;
     background-color: GrayText;
   }
 
-  :root :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true']
-  ):disabled {
+  :root
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true']
+    ):disabled {
     forced-color-adjust: auto;
     border-color: GrayText;
     color: GrayText;
     background-color: ButtonFace;
   }
 
-  :root :is(
-    .library-nav-item.is-active,
-    .library-nav-action-row.is-active,
-    .settings-nav-item.is-active
-  ) {
+  :root
+    :is(
+      .library-nav-item.is-active,
+      .library-nav-action-row.is-active,
+      .settings-nav-item.is-active
+    ) {
     forced-color-adjust: none;
     border-color: Highlight;
     color: HighlightText;
@@ -390,21 +396,22 @@ html[data-color-mode='dark'] {
     color: Highlight;
   }
 
-  :root :is(
-    .button-primary,
-    .player-primary-action,
-    .button-danger,
-    .button,
-    .icon-button,
-    .caption-button,
-    .update-indicator,
-    .library-menu-item,
-    .library-nav-item,
-    .settings-nav-item,
-    .track-actions-button,
-    .track-like-button,
-    [role='tab']
-  ):focus-visible,
+  :root
+    :is(
+      .button-primary,
+      .player-primary-action,
+      .button-danger,
+      .button,
+      .icon-button,
+      .caption-button,
+      .update-indicator,
+      .library-menu-item,
+      .library-nav-item,
+      .settings-nav-item,
+      .track-actions-button,
+      .track-like-button,
+      [role='tab']
+    ):focus-visible,
   :root input:focus-visible,
   :root select:focus-visible,
   :root .global-search:has(input:focus-visible) {

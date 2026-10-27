@@ -1023,9 +1023,8 @@
   background-color: var(--workbench-control-hover);
 }
 
-.player-tools .icon-button.player-utility-button:hover:active:not(:disabled):not(
-    [aria-disabled='true']
-  ) {
+.player-tools
+  .icon-button.player-utility-button:hover:active:not(:disabled):not([aria-disabled='true']) {
   background-color: var(--workbench-control-pressed);
 }
 
