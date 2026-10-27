@@ -66,6 +66,15 @@ for (const pane of ['utility', 'navigator'] as const) {
         .getByRole('tab', { name: delta === 32 ? 'Runtime' : 'Details', exact: true })
         .evaluate((element) => (element as HTMLElement).click());
       await expect(separator).toHaveAttribute('aria-valuenow', String(width));
+      // Pane width must not become an inherited input to every row/content node.
+      expect(
+        await page
+          .locator(pane === 'utility' ? '.utility-surface' : '.library-navigator')
+          .evaluate(
+            (element, property) => getComputedStyle(element).getPropertyValue(property),
+            pane === 'utility' ? '--utility-pane-width' : '--navigator-pane-width',
+          ),
+      ).toBe(pane === 'utility' ? '320px' : '240px');
       expect(await page.evaluate((key) => localStorage.getItem(key), key)).toBe(before);
     }
     await page.mouse.up();

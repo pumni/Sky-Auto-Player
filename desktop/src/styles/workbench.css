@@ -1,3 +1,17 @@
+/* Widths belong to the shell and its immediate panes, not their contents.
+   Non-inheriting registration prevents each drag frame invalidating every row. */
+@property --navigator-pane-width {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 240px;
+}
+
+@property --utility-pane-width {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 320px;
+}
+
 .workbench {
   position: relative;
   display: flex;
@@ -19,6 +33,7 @@
 }
 
 .navigator-workbench-pane {
+  --navigator-pane-width: inherit;
   flex-shrink: 0;
 }
 
@@ -29,6 +44,7 @@
 }
 
 .utility-workbench-pane {
+  --utility-pane-width: inherit;
   flex-shrink: 0;
   container: utility / inline-size;
 }
