@@ -1,0 +1,127 @@
+[
+  {
+    "file": "before-12-idle-inspector.trace.json.gz",
+    "bytes": 279795,
+    "sha256": "08dcd959dfe2ea42991a9c07bb8406425627728d1fa8b05c8cb814ad9c8b2d73"
+  },
+  {
+    "file": "before-12-idle-navigator.trace.json.gz",
+    "bytes": 251688,
+    "sha256": "3bcf2c26e92fdeba7c2566f3b8ec7e2dc07e39403b6f1ce7e546b54dd2c38526"
+  },
+  {
+    "file": "before-12-idle-clamp.trace.json.gz",
+    "bytes": 201832,
+    "sha256": "e460373b0adf96d7efd49593bbe084a805ec36514254c7144699472653951988"
+  },
+  {
+    "file": "before-12-playback-inspector.trace.json.gz",
+    "bytes": 269170,
+    "sha256": "f672e53c067c03aec0f191f8e0960f73d45a2315423c83ec143286e5c36542c3"
+  },
+  {
+    "file": "before-12-playback-navigator.trace.json.gz",
+    "bytes": 247089,
+    "sha256": "55a9b967e8d93bb7bc8c074222c307f557a740eb762b635e3bb95b1e0becc7e8"
+  },
+  {
+    "file": "before-12-playback-clamp.trace.json.gz",
+    "bytes": 223314,
+    "sha256": "d6b36e3b5468a6f18ea9515dde33b7a4695f230de68063f508e6ffb42076c508"
+  },
+  {
+    "file": "before-1280-idle-inspector.trace.json.gz",
+    "bytes": 494627,
+    "sha256": "3095f3f07055d233d5cb5103f7cd76e771e4de3172e1681180e3e35cde5afda7"
+  },
+  {
+    "file": "before-1280-idle-navigator.trace.json.gz",
+    "bytes": 259638,
+    "sha256": "ba1b4100162516a474add66be383b08bd6ec40031d5cc142dc9b1c9d8469b62f"
+  },
+  {
+    "file": "before-1280-idle-clamp.trace.json.gz",
+    "bytes": 228504,
+    "sha256": "4b8a40c950557f426c69744ef1a6e225e7a8b475cfdbaf3620eebc40770967f1"
+  },
+  {
+    "file": "before-1280-playback-inspector.trace.json.gz",
+    "bytes": 323248,
+    "sha256": "1ea9c4c687373b51c5c2728a1ac14007fe8469de0871c551913dfc7495792118"
+  },
+  {
+    "file": "before-1280-playback-navigator.trace.json.gz",
+    "bytes": 277584,
+    "sha256": "5175d4b7373b187cd8f7ef4cd08cf20fc237882c839c771a67ffdd0619eb8943"
+  },
+  {
+    "file": "before-1280-playback-clamp.trace.json.gz",
+    "bytes": 252279,
+    "sha256": "99a934805a8e99d280603efbed840fe2af2cd0abe463018e70cf0e1a7de9a605"
+  },
+  {
+    "file": "final-12-idle-inspector.trace.json.gz",
+    "bytes": 233584,
+    "sha256": "1df55e0387a566d1141798694cc6e6069938108e9b9d66016d50114ad1697082"
+  },
+  {
+    "file": "final-12-idle-navigator.trace.json.gz",
+    "bytes": 207860,
+    "sha256": "cd3f507fb8ed17dc5d948c650fa2671f88d6a463a2563bc755e2e7437d54aa08"
+  },
+  {
+    "file": "final-12-idle-clamp.trace.json.gz",
+    "bytes": 191805,
+    "sha256": "8597d193c90bbe84c0ceece2883cd8d2afcfb98c713ee2c84c36ea89679fed38"
+  },
+  {
+    "file": "final-12-playback-inspector.trace.json.gz",
+    "bytes": 256090,
+    "sha256": "78f78e6551f5f81410b8c59ada66a939d07e3beec747a0932bcbd3869cc081cc"
+  },
+  {
+    "file": "final-12-playback-navigator.trace.json.gz",
+    "bytes": 229404,
+    "sha256": "312da611219c5a9ef5000943aba59e5fb6c6a2975e80ed15f1057a5dc9988cea"
+  },
+  {
+    "file": "final-12-playback-clamp.trace.json.gz",
+    "bytes": 215948,
+    "sha256": "11e82a2fe55731dd32e4327981c7faf5b8a8f0dfd16a31f1942d41fb4facee2c"
+  },
+  {
+    "file": "final-1280-idle-inspector.trace.json.gz",
+    "bytes": 266725,
+    "sha256": "92a5ddec62c50626c1738237cf1a86a8e7fa3920e483872a468733f603bd9339"
+  },
+  {
+    "file": "final-1280-idle-navigator.trace.json.gz",
+    "bytes": 235921,
+    "sha256": "445ff597bab40a4a50453c3eb00e9e7a4f1685412f0d4d579f7eb3dfbbddd4a1"
+  },
+  {
+    "file": "final-1280-idle-clamp.trace.json.gz",
+    "bytes": 212042,
+    "sha256": "9c784613da0d781a593ea9b599cf423a1b95690d2d3fda9e7250ee29af27c426"
+  },
+  {
+    "file": "final-1280-playback-inspector.trace.json.gz",
+    "bytes": 290856,
+    "sha256": "1c5aea67d69bce11902d67570ab90f9789dd7525271fa905fcd5d5c894d52fa1"
+  },
+  {
+    "file": "final-1280-playback-navigator.trace.json.gz",
+    "bytes": 266250,
+    "sha256": "61ba2dec26c2211d8c820f646384319b05e2b727d2fe647188538b6cae0b061d"
+  },
+  {
+    "file": "final-1280-playback-clamp.trace.json.gz",
+    "bytes": 234995,
+    "sha256": "81fa841c862312f6780dd7c9498aa0fa632aab1c71c02b82c3fc1e77e78f2da8"
+  },
+  {
+    "file": "after-1280-idle-inspector.trace.json.gz",
+    "bytes": 289897,
+    "sha256": "dcff93cf53242d4c59232a2bef4982bf099cc2402900cb04003bdfb81ec97fdd"
+  }
+]

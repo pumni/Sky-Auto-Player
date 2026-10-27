@@ -1,5 +1,10 @@
 # Inspector resize correctness evidence
 
+The CHANGES REQUESTED follow-up adds a session-owned CSS visual path, stable
+frame lifecycle, retained release geometry, robust reload polling, and
+[native continuous-drag measurements](native/README.md). The historical 200-to-1
+callback probe below remains saturation/dedup evidence only.
+
 Scope: [#553](https://github.com/pumni/Sky-Auto-Player/issues/553), under
 [#552](https://github.com/pumni/Sky-Auto-Player/issues/552). Baseline:
 `e310b911e3ae188ffc779c1eba6369ffa765c621`. Only the shared implementation branch
@@ -28,10 +33,11 @@ keyboard resize/reset, explicit collapsed rail (48 / 520 / 440), and Tab navigat
 
 Additional literal oracles cover 1366 (300 / 610 / 440), 960 during drag
 (200 / 420 / 324), and a viewport rebase to 900 during drag (200 / 420 / 264).
-At session end, existing v5 normalization still enforces saved Inspector width
-
-> =280; normal responsive fallback resumes after the pointer session. Temporary
-> window shrink never rewrites saved navigator preference/expanded width.
+At session end, v5 normalization still enforces saved Inspector width `>=280`.
+The effective topology now survives pointerup, retaining 200 / 420 / 264 at 900px
+until a genuine later viewport change, explicit navigator action, or Inspector
+close/reopen. Independent DOM tests also cover 915/916/917px release thresholds.
+Temporary window shrink never rewrites saved navigator preference/expanded width.
 
 ![Graphite Inspector clamped at 1024](inspector-clamped-1024.png)
 
@@ -60,6 +66,9 @@ probe passes as part of the focused workbench tests.
   cleanup including a deliberately invoked stale callback, pointer identity and
   capture, both directions, 8/32 px keys, Home/End/Enter, clamped doubleclick,
   disabled controls and ARIA/tab index.
+  Follow-up coverage adds frequent parent rerenders without cancelling or
+  rescheduling frames, latest callback ownership, and unsaturated visual widths
+  without React preference updates until commit.
 - `useWorkbenchLayout.test.tsx`: independent 1024/1100/960 budgets, explicit toggle
   during a session, viewport rebase, lock disposal when docked separator unmounts,
   v5 roundtrip, saved expanded preference through temporary shrink, no-op queued
@@ -68,19 +77,24 @@ probe passes as part of the focused workbench tests.
 - `workbench-resize.spec.ts`: actual pane bounds, capture, keyboard, focus return,
   storage write count/roundtrip, viewport changes, and closing during capture
   without a stale width commit. Existing browser assertions remain intact.
+  Follow-up coverage adds continuous multi-frame dragging of both separators,
+  parent state changes during capture, isolated width-property inheritance,
+  release geometry and reopening at adjacent narrow thresholds. Reload waits for
+  the Inspector and retries nullable geometry, fixing CI run 40525391391's race.
+  Screenshots are attachments rather than writes to tracked evidence during tests.
 
 ## Environment and limits
 
 Measured on 2026-10-27, Windows 11 Home `10.0.26300` (build 26300), installed
-WebView2 Runtime `157.0.4341.16`, registry `AppliedDPI=120` (125%). Browser tests
-use Playwright Chromium/mock bridge and CSS logical pixels; they do not launch
-the native application or validate WebView2/Snap behavior. No native FPS/heap or
-manual native drag baseline was measured. Those measurements remain outstanding
-for native acceptance; they are not a correctness-wave blocker per #553.
+WebView2 Runtime `157.0.4341.16`, registry `AppliedDPI=120` (125%). Browser regression
+tests use Playwright Chromium/mock bridge. Separate native profiling now exercises
+the actual Tauri/native bridge, trusted Windows pointer input and native dry-run
+playback; see [method and limitations](native-method.md). No game-input,
+caption/Snap, heap, release-mode acceptance or VS Code comparison is claimed.
 
-No dependencies, lockfiles, CSS geometry, palette migration, native input,
-updater/release, CI/workflow, preference key/schema, or meaningful existing test
-assertions were changed. No width transition or drag debounce was introduced.
+No dependencies, lockfiles, palette geometry/migration, native runtime input,
+updater/release, CI/workflow or preference key/schema were changed. No meaningful
+test assertions were removed. No width transition or drag debounce was introduced.
 
 Validation outcomes and the tested/pushed source identity are recorded in the
 cumulative Draft PR handoff. Packaging/release/timing acceptance were not run:
