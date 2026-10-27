@@ -173,10 +173,7 @@ for (const [viewport, inspector] of [
     await trigger.click();
     await trigger.click();
     await expect(separator).toBeVisible();
-    if (viewport! < 916)
-      await expect
-        .poll(() => bounds(page))
-        .toEqual({ navigator: 48, tracks: viewport! - 344, inspector: 280 });
+    await expect.poll(() => bounds(page)).toEqual(geometry);
     await page.setViewportSize({ width: 1366, height: 768 });
     await expect
       .poll(() => bounds(page))

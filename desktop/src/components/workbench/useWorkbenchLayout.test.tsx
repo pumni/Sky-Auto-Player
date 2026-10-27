@@ -9,6 +9,38 @@ afterEach(() => {
 });
 
 describe('Inspector topology and preference ownership', () => {
+  it('keeps a completed rebased topology across close/reopen until a real viewport change', () => {
+    const { result, rerender } = renderHook(
+      ({ width, docked }) => useWorkbenchLayout(width, docked, 'graphite'),
+      { initialProps: { width: 1024, docked: true } },
+    );
+    act(() => result.current.beginUtilityDrag());
+    rerender({ width: 900, docked: true });
+    act(() => {
+      result.current.setUtilityWidth(264, true);
+      result.current.endUtilityDrag();
+    });
+    expect(result.current.geometry).toMatchObject({
+      navigatorWidth: 200,
+      trackBrowserWidth: 420,
+      utilityWidth: 264,
+    });
+    rerender({ width: 900, docked: false });
+    expect(result.current.utilityWidth).toBe(0);
+    rerender({ width: 900, docked: true });
+    expect(result.current.geometry).toMatchObject({
+      navigatorWidth: 200,
+      trackBrowserWidth: 420,
+      utilityWidth: 264,
+    });
+    rerender({ width: 901, docked: true });
+    expect(result.current.navigatorCollapsed).toBe(true);
+    expect(result.current.utilityWidth).toBe(280);
+    expect(JSON.parse(localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      navigatorPreference: 'expanded',
+      utilityWidth: 280,
+    });
+  });
   it.each([
     [900, 264],
     [915, 279],

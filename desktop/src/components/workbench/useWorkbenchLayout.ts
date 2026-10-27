@@ -206,11 +206,11 @@ export function useWorkbenchLayout(
     width: number;
     revision: number;
   } | null>(null);
-  // The docked separator unmounts when closed or replaced by the responsive overlay.
-  // Its cleanup must not commit, and its topology lock must not survive reopening.
+  // Unmount discards an unfinished drag, but a completed effective topology
+  // survives closing/reopening until bounds or explicit navigator intent change.
   const topologyExpired =
     utilityTopology !== null &&
-    (!utilityDocked ||
+    ((utilityTopology.dragging && !utilityDocked) ||
       (!utilityTopology.dragging &&
         (utilityTopology.width !== viewportWidth ||
           utilityTopology.revision !== viewportRevision)));
