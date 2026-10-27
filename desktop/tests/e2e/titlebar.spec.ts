@@ -208,7 +208,8 @@ async function expectNonOverlappingGeometry(
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport.width);
   expect(geometry.dragRegion).toBe('true');
   expect(geometry.boxes.titlebar?.height).toBe(40);
-  expect(geometry.boxes.search?.height).toBeGreaterThanOrEqual(34);
+  expect(geometry.boxes.search?.height).toBeGreaterThanOrEqual(30);
+  expect(geometry.boxes.search?.height).toBeLessThanOrEqual(32);
   expect(geometry.trailingDragRegion).toBe('true');
   expect(
     geometry.workbench,
@@ -246,6 +247,12 @@ async function expectNonOverlappingGeometry(
   if (!search || !drag || !trailingDrag || !leading || !end) {
     throw new Error('Titlebar search, drag region, or occupied boundary is missing');
   }
+  const titlebar = geometry.boxes.titlebar;
+  expect(titlebar).not.toBeNull();
+  if (!titlebar) throw new Error('Titlebar bounds are missing');
+  expect(
+    Math.abs(search.y + search.height / 2 - (titlebar.y + titlebar.height / 2)),
+  ).toBeLessThanOrEqual(1);
   expect(drag.width).toBeGreaterThanOrEqual(24);
   expect(trailingDrag.width).toBeGreaterThanOrEqual(24);
   expect(drag.height).toBeGreaterThanOrEqual(search.height);

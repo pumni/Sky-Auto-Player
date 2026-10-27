@@ -73,6 +73,15 @@ async function computedAppearance(page: Page, view: string) {
       '--workbench-pane-radius',
       '--workbench-overlay-edge',
       '--workbench-overlay-radius',
+      '--workbench-radius-xs',
+      '--workbench-radius-sm',
+      '--workbench-radius-md',
+      '--workbench-radius-lg',
+      '--workbench-radius-xl',
+      '--workbench-radius-2xl',
+      '--radius-control',
+      '--radius-panel',
+      '--radius-dialog',
       '--text-primary',
       '--text-secondary',
       '--text-tertiary',
@@ -84,6 +93,10 @@ async function computedAppearance(page: Page, view: string) {
     const selectors: Record<string, string> = {
       titlebar: '.app-titlebar',
       search: '.global-search',
+      searchShortcut: '.global-search kbd',
+      libraryRow: '.library-nav-item:not(.is-active)',
+      trackRow: '.track-row',
+      playerTool: '.player-auto-play-button',
       navigator: '.navigator-workbench-pane',
       navigatorHeading: '.library-navigator h2',
       navigatorItem: '.library-nav-item:not(.is-active) .library-nav-item-label',
@@ -358,15 +371,24 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       '--border-strong': '#393b3e',
       '--control-border': '#72777d',
       '--workbench-pane-edge': '#313336',
-      '--workbench-pane-radius': '6px',
+      '--workbench-pane-radius': '10px',
       '--workbench-overlay-edge': '#72777d',
-      '--workbench-overlay-radius': '6px',
+      '--workbench-overlay-radius': '12px',
+      '--workbench-radius-xs': '4px',
+      '--workbench-radius-sm': '6px',
+      '--workbench-radius-md': '8px',
+      '--workbench-radius-lg': '10px',
+      '--workbench-radius-xl': '12px',
+      '--workbench-radius-2xl': '14px',
+      '--radius-control': '8px',
+      '--radius-panel': '10px',
+      '--radius-dialog': '14px',
       '--text-primary': '#d4d4d4',
       '--text-secondary': '#a6a6a6',
       '--text-tertiary': '#929292',
       '--accent': '#b2a5e9',
       '--accent-hover': '#c0b4f1',
-      '--on-accent': '#121314',
+      '--on-accent': '#ffffff',
       '--focus-ring': '#b2a5e9',
     });
 
@@ -386,11 +408,17 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
         borderRightColor: 'rgb(49, 51, 54)',
         borderBottomColor: 'rgb(49, 51, 54)',
         borderLeftColor: 'rgb(49, 51, 54)',
-        borderRadius: '6px',
+        borderRadius: '10px',
         boxSizing: 'border-box',
       });
       expect(pane?.boxShadow).toBe('none');
     }
+    expect(populated.elements.libraryRow?.borderRadius).toBe('6px');
+    expect(populated.elements.trackRow?.borderRadius).toBe('6px');
+    expect(populated.elements.search?.borderRadius).toBe('8px');
+    expect(populated.elements.searchShortcut?.borderRadius).toBe('4px');
+    expect(populated.elements.playerTool?.borderRadius).toBe('8px');
+    expect(populated.elements.inspectorTab?.borderRadius).toBe('6px');
     expect(populated.elements.navigatorSectionDivider).toMatchObject({
       borderTopWidth: '1px',
       borderTopColor: 'rgb(42, 43, 44)',
@@ -474,7 +502,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       borderRightColor: 'rgb(114, 119, 125)',
       borderBottomColor: 'rgb(114, 119, 125)',
       borderLeftColor: 'rgb(114, 119, 125)',
-      borderRadius: '6px',
+      borderRadius: '12px',
       boxSizing: 'border-box',
     });
     const compactGeometry = compact.geometry as {

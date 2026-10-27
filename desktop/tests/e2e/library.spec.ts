@@ -1058,13 +1058,15 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
 });
 
-test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560', async ({
+test('collapsed Library rail stays compact and keyboard-accessible at 800 and 640 widths', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
+  const collapseButton = navigator.locator('.library-collapse-button');
+  await collapseButton.click();
+  await expect(collapseButton).toHaveAttribute('aria-pressed', 'true');
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
@@ -1076,6 +1078,47 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
       }),
     ),
   ).toBe(true);
+  const collapsedLayout = await page.evaluate(() => {
+    const navigator = document.querySelector<HTMLElement>('.library-navigator');
+    const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
+    const footer = document.querySelector<HTMLElement>('.library-navigator-footer');
+    if (!navigator || !launchers || !footer) throw new Error('Collapsed Library areas are missing');
+    const navigatorStyle = getComputedStyle(navigator);
+    const launcherStyle = getComputedStyle(launchers);
+    const footerStyle = getComputedStyle(footer);
+    return {
+      paddingTop: navigatorStyle.paddingTop,
+      paddingBottom: navigatorStyle.paddingBottom,
+      launcherMarginTop: launcherStyle.marginTop,
+      launcherPaddingTop: launcherStyle.paddingTop,
+      footerPaddingTop: footerStyle.paddingTop,
+    };
+  });
+  expect(collapsedLayout).toEqual({
+    paddingTop: '8px',
+    paddingBottom: '8px',
+    launcherMarginTop: '8px',
+    launcherPaddingTop: '6px',
+    footerPaddingTop: '8px',
+  });
+  await page.mouse.move(0, 0);
+  const collapsedToggleStyle = await collapseButton.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  expect(collapsedToggleStyle).toEqual({
+    color: 'rgb(178, 165, 233)',
+    background: 'rgba(0, 0, 0, 0)',
+  });
+  await collapseButton.hover();
+  const collapsedToggleHover = await collapseButton.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  expect(collapsedToggleHover).toEqual({
+    color: 'rgb(192, 180, 241)',
+    background: 'rgb(53, 54, 58)',
+  });
   const pane = await page.locator('.navigator-workbench-pane').boundingBox();
   expect(pane).not.toBeNull();
   if (pane) {
@@ -1085,7 +1128,14 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
       .evaluateAll((elements) =>
         elements.map((element) => {
           const rect = element.getBoundingClientRect();
-          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            hitTargeted: hit === element || (hit !== null && element.contains(hit)),
+          };
         }),
       );
     expect(tiles.length).toBeGreaterThan(0);
@@ -1093,13 +1143,51 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
       expect(tile.width).toBeCloseTo(40, 0);
       expect(tile.height).toBeCloseTo(40, 0);
       expect(Math.abs(tile.x + tile.width / 2 - (pane.x + pane.width / 2))).toBeLessThanOrEqual(1);
+      expect(tile.hitTargeted).toBe(true);
     }
   }
+  await page.keyboard.press('Tab');
+  await collapseButton.evaluate((element) => element.focus());
+  expect(await collapseButton.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  const collapseBounds = await collapseButton.boundingBox();
+  const collapsedPaneBounds = await page.locator('.navigator-workbench-pane').boundingBox();
+  expect(collapseBounds).not.toBeNull();
+  expect(collapsedPaneBounds).not.toBeNull();
+  if (collapseBounds && collapsedPaneBounds) {
+    expect(collapseBounds.x - collapsedPaneBounds.x).toBeGreaterThanOrEqual(3);
+    expect(
+      collapsedPaneBounds.x + collapsedPaneBounds.width - collapseBounds.x - collapseBounds.width,
+    ).toBeGreaterThanOrEqual(3);
+  }
+  expect(await collapseButton.evaluate((element) => getComputedStyle(element).outlineWidth)).toBe(
+    '2px',
+  );
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
   await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
 
   await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
   await expect(navigator.getByText('Your Library')).toBeVisible();
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
+  const compactPadding = await page.locator('.library-navigator').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.paddingTop, style.paddingBottom];
+  });
+  expect(compactPadding).toEqual(['8px', '8px']);
+  const compactTileBounds = await navigator
+    .locator('.library-nav-item, .library-add-button.is-collapsed, .library-collapse-button')
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+    );
+  expect(compactTileBounds.length).toBeGreaterThan(0);
+  for (const tile of compactTileBounds) {
+    expect(tile.width).toBeCloseTo(40, 0);
+    expect(tile.height).toBeCloseTo(40, 0);
+  }
 });
 
 test('Graphite automatic compact navigation preserves the saved expanded preference', async ({

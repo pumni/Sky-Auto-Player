@@ -133,6 +133,12 @@ async function readAppearance(page: Page, view: string) {
         searchIdleEdge: root.getPropertyValue('--workbench-search-idle-edge').trim(),
         searchFocus: root.getPropertyValue('--workbench-search-focus').trim(),
         divider: root.getPropertyValue('--workbench-divider').trim(),
+        radiusXs: root.getPropertyValue('--workbench-radius-xs').trim(),
+        radiusSm: root.getPropertyValue('--workbench-radius-sm').trim(),
+        radiusMd: root.getPropertyValue('--workbench-radius-md').trim(),
+        radiusLg: root.getPropertyValue('--workbench-radius-lg').trim(),
+        radiusXl: root.getPropertyValue('--workbench-radius-xl').trim(),
+        radius2xl: root.getPropertyValue('--workbench-radius-2xl').trim(),
       },
       computed: {
         titlebar: style('.app-titlebar'),
@@ -290,6 +296,14 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
     expect(item.tokens.searchSurface).toBe(expected.searchSurfaceToken);
     expect(item.tokens.searchIdleEdge).toBe(expected.searchEdgeToken);
     expect(item.tokens.searchFocus).toBe(expected.focusRingToken);
+    expect(item.tokens).toMatchObject({
+      radiusXs: '4px',
+      radiusSm: '6px',
+      radiusMd: '8px',
+      radiusLg: '10px',
+      radiusXl: '12px',
+      radius2xl: '14px',
+    });
     expect(item.geometry.cssWorkbenchGap).toBe('4px');
     expect(item.geometry.solverWorkbenchGap).toBe('4');
     expect(item.computed.browser?.backgroundColor).toBe(expected.browser);
@@ -300,18 +314,20 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
     expect(item.computed.titlebar?.height).toBe('40px');
     expect(item.computed.playerDock?.backgroundColor).toBe('rgb(25, 26, 27)');
     expect(item.computed.navigator?.borderColor).toBe(expected.paneEdge);
-    expect(item.computed.navigator?.borderRadius).toBe('6px');
-    expect(item.computed.browser?.borderRadius).toBe('6px');
+    expect(item.computed.navigator?.borderRadius).toBe('10px');
+    expect(item.computed.browser?.borderRadius).toBe('10px');
     expect(item.computed.inspector?.borderColor).toBe(
       index === 3 ? 'rgb(114, 119, 125)' : expected.paneEdge,
     );
-    expect(item.computed.inspector?.borderRadius).toBe('6px');
+    expect(item.computed.inspector?.borderRadius).toBe(index === 3 ? '12px' : '10px');
     if (index === 3) {
       expect(item.computed.inspector?.boxShadow).toContain('0px 10px 28px');
     }
     expect(item.computed.search?.backgroundColor).toBe(expected.searchSurface);
     expect(item.computed.search?.borderColor).toBe(expected.searchEdge);
     expect(item.computed.search?.borderWidth).toBe('1px');
+    expect(item.computed.search?.height).toBe('32px');
+    expect(item.computed.search?.borderRadius).toBe('8px');
     expect(item.computed.updateButton?.borderColor).toBe('rgba(0, 0, 0, 0)');
     expect(item.computed.updateButton?.backgroundColor).toBe('rgba(0, 0, 0, 0)');
     expect(item.computed.search?.fontSize).toBe('13px');

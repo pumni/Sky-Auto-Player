@@ -207,14 +207,16 @@ test('Graphite transport keeps Play, Pause, and Resume in the filled primary rol
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
 });
 
-test('Graphite navigation, tabs, toggles, and track selection stay persistent', async ({
+test('Graphite navigation stays selected while ON toggles remain transparent with accent icons', async ({
   page,
 }) => {
   await openApp(page, { width: 1366, height: 768 });
 
   const selectionFill = await token(page, '--selection-bg');
-  const selectedControl = await token(page, '--workbench-selected-control');
   const selectedHover = await token(page, '--workbench-selected-control-hover');
+  const controlHover = await token(page, '--workbench-control-hover');
+  const controlPressed = await token(page, '--workbench-control-pressed');
+  const transparent = 'rgba(0, 0, 0, 0)';
   const activeLibrary = page.locator('.library-nav-item.is-active').first();
   const activeLibraryStyle = await colors(activeLibrary);
   expect(sameColor(activeLibraryStyle.background, selectionFill)).toBe(true);
@@ -238,6 +240,10 @@ test('Graphite navigation, tabs, toggles, and track selection stay persistent', 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   const activeSettings = settings.getByRole('button', { name: 'Playback', exact: true });
+  expect(await settings.evaluate((element) => getComputedStyle(element).borderRadius)).toBe('14px');
+  expect(await activeSettings.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
+    '8px',
+  );
   await expect(activeSettings).toHaveAttribute('aria-current', 'page');
   const activeSettingsStyle = await colors(activeSettings);
   expect(sameColor(activeSettingsStyle.background, selectionFill)).toBe(true);
@@ -268,34 +274,62 @@ test('Graphite navigation, tabs, toggles, and track selection stay persistent', 
   await page.mouse.move(0, 0);
   await expectForeground(shuffle, 'rgb(178, 165, 233)');
   const shuffleRest = await colors(shuffle);
-  expect(sameColor(shuffleRest.background, selectedControl)).toBe(true);
+  expect(sameColor(shuffleRest.background, transparent)).toBe(true);
   expect(shuffleRest.foreground).toBe('rgb(178, 165, 233)');
-  expect(contrastRatio(shuffleRest.foreground, shuffleRest.background)).toBeGreaterThanOrEqual(3);
+  expect(
+    contrastRatio(shuffleRest.foreground, await token(page, '--workbench-navigation')),
+  ).toBeGreaterThanOrEqual(3);
   await shuffle.hover();
   await expectForeground(shuffle, 'rgb(192, 180, 241)');
   const shuffleHover = await colors(shuffle);
-  expect(sameColor(shuffleHover.background, selectedHover)).toBe(true);
+  expect(sameColor(shuffleHover.background, controlHover)).toBe(true);
   expect(shuffleHover.foreground).toBe('rgb(192, 180, 241)');
   expect(contrastRatio(shuffleHover.foreground, shuffleHover.background)).toBeGreaterThanOrEqual(3);
   await page.mouse.move(0, 0);
-  expect(sameColor((await colors(shuffle)).background, selectedControl)).toBe(true);
+  expect(sameColor((await colors(shuffle)).background, transparent)).toBe(true);
   await page.keyboard.press('Tab');
   await shuffle.evaluate((element) => element.focus());
   expect(await shuffle.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  await expectForeground(shuffle, 'rgb(192, 180, 241)');
   const shuffleFocus = await colors(shuffle);
-  expect(sameColor(shuffleFocus.background, selectedControl)).toBe(true);
+  expect(sameColor(shuffleFocus.background, transparent)).toBe(true);
   expect(shuffleFocus.foreground).toBe('rgb(192, 180, 241)');
-  expect(contrastRatio(shuffleFocus.foreground, shuffleFocus.background)).toBeGreaterThanOrEqual(3);
+  expect(
+    contrastRatio(shuffleFocus.foreground, await token(page, '--workbench-navigation')),
+  ).toBeGreaterThanOrEqual(3);
   expect(shuffleFocus.outlineWidth).toBe('2px');
 
   const autoPlay = page.getByRole('button', { name: 'Auto Play' });
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-  const autoPlayStyle = await colors(autoPlay);
-  expect(sameColor(autoPlayStyle.background, selectedControl)).toBe(true);
-  expect(autoPlayStyle.foreground).toBe('rgb(178, 165, 233)');
-  expect(contrastRatio(autoPlayStyle.foreground, autoPlayStyle.background)).toBeGreaterThanOrEqual(
-    3,
-  );
+  await page.mouse.move(0, 0);
+  const autoPlayOn = await colors(autoPlay);
+  expect(sameColor(autoPlayOn.background, transparent)).toBe(true);
+  expect(autoPlayOn.foreground).toBe('rgb(178, 165, 233)');
+  await autoPlay.hover();
+  await expectForeground(autoPlay, 'rgb(192, 180, 241)');
+  const autoPlayHover = await colors(autoPlay);
+  expect(sameColor(autoPlayHover.background, controlHover)).toBe(true);
+  expect(autoPlayHover.foreground).toBe('rgb(192, 180, 241)');
+  const autoPlayPressed = await pressWithoutClick(page, autoPlay);
+  expect(sameColor(autoPlayPressed.background, controlPressed)).toBe(true);
+  expect(autoPlayPressed.foreground).toBe('rgb(192, 180, 241)');
+  await autoPlay.click();
+  await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
+  await expectForeground(autoPlay, 'rgb(212, 212, 212)');
+  const autoPlayOffHover = await colors(autoPlay);
+  expect(sameColor(autoPlayOffHover.background, controlHover)).toBe(true);
+  expect(autoPlayOffHover.foreground).toBe('rgb(212, 212, 212)');
+  await page.mouse.move(0, 0);
+  await expectForeground(autoPlay, 'rgb(166, 166, 166)');
+  const autoPlayOff = await colors(autoPlay);
+  expect(sameColor(autoPlayOff.background, transparent)).toBe(true);
+  expect(autoPlayOff.foreground).toBe('rgb(166, 166, 166)');
+  await autoPlay.click();
+  await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
+  await page.mouse.move(0, 0);
+  await expectForeground(autoPlay, 'rgb(178, 165, 233)');
+  expect(sameColor((await colors(autoPlay)).background, transparent)).toBe(true);
+  expect((await colors(autoPlay)).foreground).toBe('rgb(178, 165, 233)');
 
   const utility = page.locator('.player-utility-button');
   await utility.click();
@@ -303,29 +337,61 @@ test('Graphite navigation, tabs, toggles, and track selection stay persistent', 
   await page.mouse.move(0, 0);
   await expectForeground(utility, 'rgb(178, 165, 233)');
   const utilityStyle = await colors(utility);
-  expect(sameColor(utilityStyle.background, selectedControl)).toBe(true);
+  expect(sameColor(utilityStyle.background, transparent)).toBe(true);
   expect(utilityStyle.foreground).toBe('rgb(178, 165, 233)');
-  expect(contrastRatio(utilityStyle.foreground, utilityStyle.background)).toBeGreaterThanOrEqual(3);
+  expect(
+    contrastRatio(utilityStyle.foreground, await token(page, '--workbench-inspector')),
+  ).toBeGreaterThanOrEqual(3);
+  await utility.hover();
+  await expectForeground(utility, 'rgb(192, 180, 241)');
+  const utilityHover = await colors(utility);
+  expect(sameColor(utilityHover.background, controlHover)).toBe(true);
+  expect(utilityHover.foreground).toBe('rgb(192, 180, 241)');
+  await page.mouse.move(0, 0);
   const detailsTab = page.locator('.utility-view-tabs [role=tab][aria-selected=true]');
   await expect(detailsTab).toHaveAccessibleName('Details');
   const detailsStyle = await colors(detailsTab);
-  expect(sameColor(detailsStyle.background, selectedControl)).toBe(true);
+  expect(sameColor(detailsStyle.background, transparent)).toBe(true);
   expect(detailsStyle.foreground).toBe('rgb(178, 165, 233)');
-  expect(contrastRatio(detailsStyle.foreground, detailsStyle.background)).toBeGreaterThanOrEqual(3);
+  expect(
+    contrastRatio(detailsStyle.foreground, await token(page, '--workbench-inspector')),
+  ).toBeGreaterThanOrEqual(3);
   await detailsTab.focus();
   await page.keyboard.press('ArrowRight');
   const runtimeTab = page.getByRole('tab', { name: 'Runtime' });
   await expect(runtimeTab).toHaveAttribute('aria-selected', 'true');
   await expect(runtimeTab).toBeFocused();
   expect(await runtimeTab.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
-  expect(sameColor((await colors(runtimeTab)).background, selectedControl)).toBe(true);
-  expect((await colors(runtimeTab)).outlineWidth).toBe('2px');
+  const runtimeFocus = await colors(runtimeTab);
+  expect(sameColor(runtimeFocus.background, transparent)).toBe(true);
+  expect(runtimeFocus.foreground).toBe('rgb(178, 165, 233)');
+  expect(runtimeFocus.outlineWidth).toBe('2px');
   await runtimeTab.hover();
   const runtimeHover = await colors(runtimeTab);
-  expect(sameColor(runtimeHover.background, selectedHover)).toBe(true);
+  expect(sameColor(runtimeHover.background, controlHover)).toBe(true);
   expect(runtimeHover.foreground).toBe('rgb(192, 180, 241)');
-  expect(contrastRatio(runtimeHover.foreground, runtimeHover.background)).toBeGreaterThanOrEqual(3);
+  expect(
+    contrastRatio(runtimeHover.foreground, await token(page, '--workbench-inspector')),
+  ).toBeGreaterThanOrEqual(3);
   expect(runtimeHover.outlineWidth).toBe('2px');
+
+  const like = page.getByRole('button', { name: 'Add Blue Bird to Liked Songs' });
+  await like.hover();
+  await expect(like).toBeVisible();
+  await like.click();
+  await expect(
+    page.getByRole('button', { name: 'Remove Blue Bird from Liked Songs' }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  const activeLike = page.getByRole('button', { name: 'Remove Blue Bird from Liked Songs' });
+  await page.mouse.move(0, 0);
+  const likeRest = await colors(activeLike);
+  expect(sameColor(likeRest.background, transparent)).toBe(true);
+  expect(likeRest.foreground).toBe('rgb(178, 165, 233)');
+  await activeLike.hover();
+  await expectForeground(activeLike, 'rgb(192, 180, 241)');
+  const likeHover = await colors(activeLike);
+  expect(sameColor(likeHover.background, controlHover)).toBe(true);
+  expect(likeHover.foreground).toBe('rgb(192, 180, 241)');
 
   const player = await startDryRunWithSelection(page);
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
@@ -495,6 +561,10 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
   const inspector = page.locator('.utility-surface');
   const selectedTab = inspector.getByRole('tab', { name: 'Details' });
   await expect(selectedTab).toHaveAttribute('aria-selected', 'true');
+  const shuffle = page.getByRole('button', { name: 'Shuffle' });
+  await shuffle.click();
+  await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+  await page.mouse.move(0, 0);
 
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
   await expect
@@ -525,6 +595,17 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
   expect(primaryStyle.background).toBe(systemColors.buttonFace);
   expect(primaryStyle.foreground).toBe(systemColors.buttonText);
 
+  const shuffleStyle = await colors(shuffle);
+  expect(shuffleStyle.background).toBe(systemColors.buttonFace);
+  expect(shuffleStyle.foreground).toBe(systemColors.highlight);
+  expect(shuffleStyle.border).toBe(systemColors.highlight);
+  await shuffle.hover();
+  await expectForeground(shuffle, systemColors.highlightText);
+  const shuffleHover = await colors(shuffle);
+  expect(shuffleHover.background).toBe(systemColors.highlight);
+  expect(shuffleHover.foreground).toBe(systemColors.highlightText);
+  await page.mouse.move(0, 0);
+
   const activeNavigation = page.locator('.library-nav-item.is-active').first();
   const navigationStyle = await colors(activeNavigation);
   expect(navigationStyle.background, JSON.stringify({ navigationStyle, systemColors })).toBe(
@@ -536,6 +617,13 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
   expect(tabStyle.background).toBe(systemColors.buttonFace);
   expect(tabStyle.foreground).toBe(systemColors.highlight);
   expect(tabStyle.borderBottom).toBe(systemColors.highlight);
+
+  await page.keyboard.press('Tab');
+  await shuffle.evaluate((element) => element.focus());
+  const toggleFocus = await colors(shuffle);
+  expect(toggleFocus.outlineStyle).toBe('solid');
+  expect(toggleFocus.outlineColor).toBe(systemColors.highlight);
+  expect(Number.parseFloat(toggleFocus.outlineWidth)).toBeGreaterThanOrEqual(2);
 
   await page.keyboard.press('Tab');
   await page

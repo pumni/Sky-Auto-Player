@@ -322,7 +322,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
       borderBottomColor: 'rgb(49, 51, 54)',
       borderLeftWidth: '1px',
       borderLeftColor: 'rgb(49, 51, 54)',
-      borderRadius: '6px',
+      borderRadius: '10px',
     });
   }
   expect(populated.elements.titlebar?.borderBottomWidth).toBe('0px');
@@ -347,7 +347,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   expect(compact.elements.inspector).toMatchObject({
     borderTopWidth: '1px',
     borderTopColor: 'rgb(114, 119, 125)',
-    borderRadius: '6px',
+    borderRadius: '12px',
     boxShadow: 'rgba(0, 0, 0, 0.34) 0px 10px 28px 0px',
   });
   expect(compact.elements.search).toMatchObject({
@@ -421,7 +421,7 @@ test('Graphite Search uses a responsive preferred width and stays centered in th
       if (!geometry) throw new Error('Graphite titlebar geometry is unavailable');
       const expectedWidth = Math.min(480, viewport.width * 0.42);
       expect(Math.abs(geometry.search.width - expectedWidth)).toBeLessThanOrEqual(4);
-      expect(geometry.search.height).toBe(34);
+      expect(geometry.search.height).toBe(32);
       expect(geometry.centerError).toBeLessThanOrEqual(2);
       expect(geometry.drag.width).toBeGreaterThanOrEqual(24);
       expect(geometry.trailingDrag.width).toBeGreaterThanOrEqual(24);

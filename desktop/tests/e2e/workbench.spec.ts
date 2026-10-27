@@ -88,6 +88,8 @@ async function readInspectorHeaderGeometry(page: Page) {
       '.utility-close-button',
       '.utility-close-button svg',
       '.utility-view-tabs',
+      '.utility-view-tabs [role="tab"]:first-child',
+      '.utility-view-tabs [role="tab"]:last-child',
       '.utility-content',
       '.utility-empty p',
       '.song-details-heading h3',
@@ -355,6 +357,21 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     const baselineClose = geometryFor('empty', '.utility-close-button');
     const baselineCloseIcon = geometryFor('empty', '.utility-close-button svg');
     const baselineSurface = geometryFor('empty', '.utility-surface');
+    const expectCenteredTabs = (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
+      const tabs = geometryFor(state, '.utility-view-tabs');
+      const details = geometryFor(state, '.utility-view-tabs [role="tab"]:first-child');
+      const runtime = geometryFor(state, '.utility-view-tabs [role="tab"]:last-child');
+      const pairCenter = (details.x + runtime.right) / 2;
+      const tabsCenter = tabs.x + tabs.width / 2;
+      expect(
+        Math.abs(pairCenter - tabsCenter),
+        `${state} Details/Runtime tab pair is centered`,
+      ).toBeLessThanOrEqual(1);
+      expect(details.x).toBeGreaterThanOrEqual(tabs.x);
+      expect(runtime.right).toBeLessThanOrEqual(tabs.right);
+      expect(Math.abs(details.y - runtime.y)).toBeLessThanOrEqual(1);
+    };
+    expectCenteredTabs('empty');
     for (const state of ['selected', 'cleared', 'runtime'] as const) {
       const header = geometryFor(state, '.utility-header');
       const tabs = geometryFor(state, '.utility-view-tabs');
@@ -382,6 +399,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       expect(Math.abs(close.right - (header.right - 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.x - (header.x + 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.right - (header.right - 14))).toBeLessThanOrEqual(1);
+      expectCenteredTabs(state);
     }
     expect(
       Math.abs(

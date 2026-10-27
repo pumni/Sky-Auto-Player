@@ -1,9 +1,3 @@
-html[data-palette='graphite'] {
-  --radius-region: 0px;
-  --radius-panel: 8px;
-  --radius-dialog: 10px;
-}
-
 /* The workbench uses semantic surface roles; pane geometry remains owned by layout.css. */
 html[data-palette='graphite'] .app-titlebar {
   border-bottom: 0;
@@ -12,8 +6,18 @@ html[data-palette='graphite'] .app-titlebar {
 
 html[data-palette='graphite'] .global-search {
   flex-basis: min(480px, 42vw);
+  height: 32px;
   border-color: var(--workbench-search-idle-edge);
   background: var(--workbench-search-surface);
+}
+
+html[data-palette='graphite'] .global-search kbd {
+  border-radius: var(--workbench-radius-xs);
+}
+
+html[data-palette='graphite'] .caption-button,
+html[data-palette='graphite'] .player-tool-button {
+  border-radius: var(--workbench-radius-md);
 }
 
 html[data-palette='graphite'] .global-search:focus-within {
@@ -56,6 +60,16 @@ html[data-palette='graphite'] .utility-workbench-pane.is-overlay {
 
 html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-navigator {
   padding-inline: 3px;
+  padding-block: 8px;
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-collapsed-launchers {
+  margin-top: 8px;
+  padding-top: 6px;
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-navigator-footer {
+  padding-top: 8px;
 }
 
 html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-collapse-button {
@@ -113,7 +127,7 @@ html[data-palette='graphite'] .library-navigator h2 {
 }
 
 html[data-palette='graphite'] .library-nav-item {
-  border-radius: 4px;
+  border-radius: var(--workbench-radius-sm);
   font-size: 13px;
   font-weight: 500;
 }
@@ -450,10 +464,15 @@ html[data-palette='graphite'] .utility-header h2 {
   font-weight: 600;
 }
 
+html[data-palette='graphite'] .utility-view-tabs {
+  justify-content: center;
+}
+
 html[data-palette='graphite'] .utility-view-tabs [role='tab'],
 html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
   min-height: 34px;
   padding-inline: 10px;
+  border-radius: var(--workbench-radius-sm);
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
@@ -616,26 +635,6 @@ html[data-palette='graphite'] .player-track-status.is-active {
   font-weight: 600;
 }
 
-html[data-palette='graphite'] .player-transport .player-shuffle-action.is-active,
-html[data-palette='graphite']
-  .player-transport
-  .player-shuffle-action.is-active:hover:not(:disabled),
-html[data-palette='graphite']
-  .player-transport
-  .player-shuffle-action.is-active:focus-visible:not(:disabled) {
-  color: var(--accent-hover);
-}
-
-html[data-palette='graphite'] .player-tool-button[aria-pressed='true'] {
-  color: var(--accent-hover);
-}
-
-html[data-palette='graphite'] .player-tool-button[aria-pressed='true']:hover:not(:disabled),
-html[data-palette='graphite']
-  .player-tool-button[aria-pressed='true']:focus-visible:not(:disabled) {
-  color: var(--accent-hover);
-}
-
 html[data-palette='graphite'] .player-track-status.is-attention {
   color: var(--warning-fg);
 }
@@ -663,11 +662,6 @@ html[data-palette='graphite']
   color: var(--text-primary);
 }
 
-html[data-palette='graphite'] .player-utility-button[aria-expanded='true'] {
-  color: var(--text-primary);
-  background: var(--control-hover);
-}
-
 html[data-palette='graphite'] .profile-fields label {
   color: var(--text-secondary);
   font-size: 12px;
@@ -683,7 +677,7 @@ html[data-palette='graphite'] .profile-test-explanation {
 }
 
 html[data-palette='graphite'] .player-admission {
-  border-radius: 6px;
+  border-radius: var(--workbench-radius-xs);
 }
 
 html[data-palette='graphite'] .admission-copy strong {
@@ -699,7 +693,7 @@ html[data-palette='graphite'] .admission-recovery-action {
 html[data-palette='graphite'] .settings-dialog,
 html[data-palette='graphite'] .library-dialog {
   border-color: var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--workbench-radius-2xl);
   background: var(--surface-panel);
 }
 
@@ -750,13 +744,14 @@ html[data-palette='graphite'] .library-menu-popover,
 html[data-palette='graphite'] .track-menu-popover,
 html[data-palette='graphite'] .profile-popover {
   border-color: var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--workbench-radius-xl);
   background: var(--surface-raised);
   box-shadow: 0 10px 28px rgb(0 0 0 / 34%);
 }
 
 html[data-palette='graphite'] .library-menu-item {
   min-height: 36px;
+  border-radius: var(--workbench-radius-sm);
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -848,6 +843,7 @@ html[data-palette='graphite']
     .icon-button:not(.button-primary):not(.button-danger),
     .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
     .caption-button:not(.caption-button-close),
+    .update-indicator,
     .library-menu-item,
     .track-actions-button,
     .track-like-button:not([aria-pressed='true'])
@@ -863,6 +859,7 @@ html[data-palette='graphite']
     .icon-button:not(.button-primary):not(.button-danger),
     .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
     .caption-button:not(.caption-button-close),
+    .update-indicator,
     .library-menu-item:not(.is-danger),
     .track-actions-button,
     .track-like-button:not([aria-pressed='true'])
@@ -878,6 +875,7 @@ html[data-palette='graphite']
     .icon-button:not(.button-primary):not(.button-danger),
     .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
     .caption-button:not(.caption-button-close),
+    .update-indicator,
     .library-menu-item:not(.is-danger),
     .track-actions-button,
     .track-like-button:not([aria-pressed='true'])
@@ -937,20 +935,40 @@ html[data-palette='graphite'] .settings-nav-item.is-active:hover {
   background-color: var(--workbench-selected-control-hover);
 }
 
-html[data-palette='graphite']
-  :is(.utility-view-tabs, .diagnostics-tabs)
-  [role='tab'][aria-selected='true'] {
+html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--selection-indicator);
+  color: var(--workbench-accent-ink);
+  background-color: transparent;
+}
+
+html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true']:hover {
+  border-bottom-color: var(--selection-indicator);
+  color: var(--workbench-accent-ink-hover);
+  background-color: var(--workbench-control-hover);
+}
+
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true'] {
   border-bottom-color: var(--selection-indicator);
   color: var(--workbench-accent-ink);
   background-color: var(--workbench-selected-control);
 }
 
-html[data-palette='graphite']
-  :is(.utility-view-tabs, .diagnostics-tabs)
-  [role='tab'][aria-selected='true']:hover {
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true']:hover {
   border-bottom-color: var(--selection-indicator);
   color: var(--workbench-accent-ink-hover);
   background-color: var(--workbench-selected-control-hover);
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .library-collapse-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):focus-visible:not(:disabled):not([aria-disabled='true']):not(:hover) {
+  color: var(--workbench-accent-ink-hover);
+  background-color: transparent;
 }
 
 html[data-palette='graphite']
@@ -963,7 +981,7 @@ html[data-palette='graphite']
   ) {
   border-color: transparent;
   color: var(--workbench-accent-ink);
-  background-color: var(--workbench-selected-control);
+  background-color: transparent;
 }
 
 html[data-palette='graphite']
@@ -975,7 +993,7 @@ html[data-palette='graphite']
     .track-row .track-like-button[aria-pressed='true']
   ):hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--workbench-accent-ink-hover);
-  background-color: var(--workbench-selected-control-hover);
+  background-color: var(--workbench-control-hover);
 }
 
 html[data-palette='graphite']
@@ -986,7 +1004,7 @@ html[data-palette='graphite']
     .library-collapse-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):hover:active:not(:disabled):not([aria-disabled='true']) {
-  background-color: var(--workbench-selected-control-pressed);
+  background-color: var(--workbench-control-pressed);
 }
 
 html[data-palette='graphite']
@@ -1000,6 +1018,7 @@ html[data-palette='graphite']
     .button,
     .icon-button,
     .caption-button,
+    .update-indicator,
     .library-nav-item,
     .settings-nav-item,
     .library-menu-item,
@@ -1051,7 +1070,7 @@ html[data-palette='graphite']
     .track-row .track-like-button[aria-pressed='true']
   ):disabled {
   color: var(--workbench-control-disabled);
-  background-color: var(--workbench-selected-control);
+  background-color: transparent;
 }
 
 @media (forced-colors: active) {
@@ -1085,6 +1104,7 @@ html[data-palette='graphite']
       .button:not(.button-primary):not(.button-danger),
       .icon-button:not(.button-primary):not(.button-danger),
       .caption-button,
+      .update-indicator,
       .library-menu-item,
       .library-nav-item:not(.is-active),
       .settings-nav-item:not(.is-active),
@@ -1103,6 +1123,7 @@ html[data-palette='graphite']
       .button:not(.button-primary):not(.button-danger),
       .icon-button:not(.button-primary):not(.button-danger),
       .caption-button,
+      .update-indicator,
       .library-menu-item,
       .library-nav-item,
       .settings-nav-item,
@@ -1139,6 +1160,20 @@ html[data-palette='graphite']
     border-color: Highlight;
     color: Highlight;
     background-color: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true'],
+      .player-tools .player-utility-button[aria-expanded='true'],
+      .library-collapse-button[aria-pressed='true'],
+      .track-row .track-like-button[aria-pressed='true']
+    ):hover:not(:disabled):not([aria-disabled='true']) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
   }
 
   html[data-palette='graphite']
@@ -1180,6 +1215,7 @@ html[data-palette='graphite']
       .button,
       .icon-button,
       .caption-button,
+      .update-indicator,
       .library-menu-item,
       .library-nav-item,
       .settings-nav-item,
@@ -1217,6 +1253,7 @@ html[data-palette='graphite']
       .button:not(.button-primary):not(.button-danger),
       .icon-button:not(.button-primary):not(.button-danger),
       .caption-button,
+      .update-indicator,
       .library-menu-item,
       .library-nav-item,
       .settings-nav-item,
