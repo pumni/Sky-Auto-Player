@@ -45,9 +45,13 @@ const RELEASE_PREPUBLISH_JOB_NAMES: [&str; 6] = [
 ];
 const RELEASE_METADATA_PROMOTE_JOB: &str = "Promote only the qualified release channel metadata";
 const RELEASE_FINAL_VERIFY_JOB: &str = "Verify public release assets and updater metadata";
-const RECOVERY_PLAN_JOB_NAMES: [&str; 2] = [
-    "Validate operator dispatch",
-    "Verify immutable release and publish read-only plan",
+const RECOVERY_PLAN_JOB_CONCLUSIONS: [(&str, &str); 3] = [
+    ("Validate operator dispatch", "success"),
+    (
+        "Verify immutable release and publish read-only plan",
+        "success",
+    ),
+    ("Protected metadata-only apply", "skipped"),
 ];
 static NEXT_DOWNLOAD_DIRECTORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -552,15 +556,19 @@ fn validate_recovery_plan_run(transport: &mut dyn Transport, plan_run: &PlanRun)
         );
     }
     let jobs = list_run_attempt_jobs(transport, &plan_run.run_id, plan_run.run_attempt, 100)?;
-    let jobs = exact_job_map(&jobs, &RECOVERY_PLAN_JOB_NAMES, None)?;
+    let expected_names = RECOVERY_PLAN_JOB_CONCLUSIONS.map(|(name, _)| name);
+    let jobs = exact_job_map(&jobs, &expected_names, None)?;
     let run_id = plan_run.run_id.parse::<u64>()?;
-    for name in RECOVERY_PLAN_JOB_NAMES {
+    for (name, expected_conclusion) in RECOVERY_PLAN_JOB_CONCLUSIONS {
         let job = jobs
             .get(name)
             .ok_or("recovery plan workflow job is missing")?;
         validate_job_identity(job, run_id, &plan_run.source_sha, name)?;
-        if job["status"] != "completed" || job["conclusion"] != "success" {
-            return Err(format!("recovery plan workflow job did not succeed: {name}").into());
+        if job["status"] != "completed" || job["conclusion"] != expected_conclusion {
+            return Err(format!(
+                "recovery plan workflow job has an unexpected status or conclusion: {name}"
+            )
+            .into());
         }
     }
     Ok(())
@@ -1317,16 +1325,16 @@ mod tests {
                 "conclusion": "success",
             }),
         );
-        let plan_jobs = RECOVERY_PLAN_JOB_NAMES
+        let plan_jobs = RECOVERY_PLAN_JOB_CONCLUSIONS
             .iter()
             .enumerate()
-            .map(|(index, name)| {
+            .map(|(index, (name, conclusion))| {
                 fake_job(
                     index as u64 + 101,
                     8002,
                     &plan_run.source_sha,
                     name,
-                    "success",
+                    conclusion,
                 )
             })
             .collect::<Vec<_>>();
@@ -1410,6 +1418,66 @@ mod tests {
         assert!(
             parse_reviewed_plan(&wrong_artifact, &plan.tag, "8002", &wrong_artifact_hash).is_err()
         );
+    }
+
+    #[test]
+    fn recovery_plan_run_requires_the_exact_three_job_attempt_inventory() {
+        let (mut github, _) = recovery_fixture().unwrap();
+        let plan_run = test_plan_run();
+        validate_recovery_plan_run(&mut github, &plan_run).unwrap();
+        assert!(github.events.iter().any(|event| {
+            event
+                == &format!(
+                    "GET repos/{REPOSITORY}/actions/runs/8002/attempts/1/jobs?per_page=100&page=1"
+                )
+        }));
+
+        for mutation in 0..8 {
+            let (mut github, _) = recovery_fixture().unwrap();
+            let jobs = github
+                .workflow_jobs
+                .get_mut(&("8002".to_owned(), 1))
+                .unwrap();
+            match mutation {
+                0 => {
+                    let duplicate = jobs[0].clone();
+                    jobs.push(duplicate);
+                }
+                1 => {
+                    let mut duplicate_name = jobs[0].clone();
+                    duplicate_name["id"] = json!(999);
+                    jobs.push(duplicate_name);
+                }
+                2 => jobs.push(fake_job(
+                    999,
+                    8002,
+                    &plan_run.source_sha,
+                    "unexpected success",
+                    "success",
+                )),
+                3 => jobs[0]["head_sha"] = json!("c".repeat(40)),
+                4 => github.workflow_runs.get_mut("8002").unwrap()["run_attempt"] = json!(2),
+                5 => {
+                    jobs.iter_mut()
+                        .find(|job| job["name"] == "Protected metadata-only apply")
+                        .unwrap()["conclusion"] = json!("success");
+                }
+                6 => {
+                    jobs.iter_mut()
+                        .find(|job| job["name"] == "Protected metadata-only apply")
+                        .unwrap()["conclusion"] = json!("failure");
+                }
+                _ => {
+                    jobs.iter_mut()
+                        .find(|job| job["name"] == "Protected metadata-only apply")
+                        .unwrap()["status"] = json!("in_progress");
+                }
+            }
+            assert!(
+                validate_recovery_plan_run(&mut github, &plan_run).is_err(),
+                "recovery plan job mutation {mutation} must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -1548,12 +1616,11 @@ mod tests {
         assert_eq!(plan.source_sha, "a".repeat(40));
         assert_eq!(plan.assets.len(), 2);
         assert_eq!(plan.stable_before_version.as_deref(), Some("4.1.4"));
-        assert!(
-            github
-                .events
-                .iter()
-                .all(|event| event.starts_with("GET ") || event.starts_with("RAW_GET "))
-        );
+        assert!(github.events.iter().all(|event| {
+            event.starts_with("GET ")
+                || event.starts_with("RAW_GET ")
+                || event.starts_with("DOWNLOAD ")
+        }));
         assert!(!github.events.iter().any(|event| event.starts_with("PUT ")
             || event.starts_with("POST ")
             || event.starts_with("DELETE ")));

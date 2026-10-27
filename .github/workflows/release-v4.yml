@@ -144,7 +144,7 @@ jobs:
       - name: Build and export the unsigned handoff once
         run: cargo xtask release-v4 build-unsigned --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
 
-      - name: Upload immutable unsigned installer and typed manifest
+      - name: Upload immutable unsigned installer, calibration executable, and typed manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
@@ -381,7 +381,7 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal
 
       - name: Revalidate qualified handoff before using metadata credentials
-        run: cargo xtask release-v4 verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
+        run: cargo xtask release-v4 probe-verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
       - name: Mint write-capable metadata App token before publication
         id: metadata-app-token

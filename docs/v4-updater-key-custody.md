@@ -120,8 +120,9 @@ cargo xtask updater-trust inventory
    - All Bun children in the signing phase (Tauri CLI version probe, private-key challenge and
      final signer) clear inherited environment state. They receive only the Windows runtime
      allowlist and, where required, the temporary encrypted key path and passphrase. Rust Git
-     identity subprocesses follow the same runtime-only policy. A real child-process regression
-     verifies that synthetic secret and token values do not appear in the child's environment.
+     identity subprocesses, including the Git queries reached while `sign-candidate` loads release
+     context, follow the same runtime-only policy. A fake-Git regression exercises the release
+     entrypoint with synthetic signing secrets and tokens and verifies the actual child environment.
    - Environment filtering is a child-process boundary, not isolation from the runner itself. The
      protected hosted Windows job remains responsible for handling the mapped secrets, and the
      ephemeral runner VM is the trust boundary. Do not run unreviewed code in that job.

@@ -451,6 +451,8 @@ fn validate_metadata_recovery_workflow(source: &str) -> Result<()> {
     }
     if !apply.contains("if: inputs.operation == 'apply' && inputs.confirm")
         || !apply.contains("environment: v4-production-release")
+        || !apply.contains("group: v4-release-control-plane")
+        || !apply.contains("cancel-in-progress: false")
         || !apply.contains("actions: read")
         || !apply.contains("attestations: read")
         || !apply.contains("contents: read")
@@ -907,6 +909,14 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = fs::read_to_string(root.join(APPROVED_RECOVERY_WORKFLOW)).unwrap();
         validate_metadata_recovery_workflow(&source).unwrap();
+        assert!(
+            validate_metadata_recovery_workflow(&replace_all_fixture(
+                &source,
+                "group: v4-release-control-plane",
+                "group: v4-recovery-apply-only"
+            ))
+            .is_err()
+        );
         assert!(
             validate_metadata_recovery_workflow(&replace_all_fixture(
                 &source,

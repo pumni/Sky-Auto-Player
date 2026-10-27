@@ -25,8 +25,11 @@ fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), St
         "fn validate_recovery_plan_run(",
         "fn list_run_attempt_jobs(",
         "RELEASE_PREPUBLISH_JOB_NAMES",
+        "RECOVERY_PLAN_JOB_CONCLUSIONS",
         "RELEASE_METADATA_PROMOTE_JOB",
         "fn build_plan(",
+        "exact_job_map(&jobs, &expected_names, None)?",
+        "recovery_plan_run_requires_the_exact_three_job_attempt_inventory",
         "verify_updater_signature_for_version",
         "gh",
         "--source-digest",
@@ -352,6 +355,14 @@ fn rust_release_state_machine_contract(
             ));
         }
     }
+    let attest_workflow = job("attest")?;
+    let metadata_probe_workflow = job("metadata_probe")?;
+    if !attest_workflow.contains("release-v4 verify-candidate --state-root")
+        || !metadata_probe_workflow.contains("release-v4 probe-verify-candidate --state-root")
+        || metadata_probe_workflow.contains("release-v4 verify-candidate --state-root")
+    {
+        return Err("qualified candidate verification must use the exact attestation and metadata_probe dispatcher entrypoints".into());
+    }
     let unsigned = job("build_unsigned")?;
     if unsigned.contains("secrets.")
         || unsigned.contains("environment:")
@@ -361,6 +372,32 @@ fn rust_release_state_machine_contract(
         || !unsigned.contains("release-v4 build-unsigned")
     {
         return Err("unsigned build must be hosted, credential-free, and read-only".into());
+    }
+    let unsigned_artifact = workflow_step_blocks(unsigned)
+        .into_iter()
+        .find(|(name, _)| {
+            name == "Upload immutable unsigned installer, calibration executable, and typed manifest"
+        })
+        .map(|(_, block)| block)
+        .ok_or("unsigned Windows build must upload its typed cross-runner handoff")?;
+    if !unsigned_artifact.contains("unsigned-handoff/manifest.json")
+        || !unsigned_artifact.contains("unsigned-handoff/*.exe")
+    {
+        return Err("unsigned run artifact must transfer the manifest, installer, and calibration executable".into());
+    }
+    let qualification = rust
+        .split_once("fn qualify_candidate(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_candidate_handoff("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing candidate qualification")?;
+    let qualification_compact = qualification.split_whitespace().collect::<String>();
+    if !qualification_compact.contains("incoming.join(&handoff.calibration_binary)")
+        || qualification_compact
+            .contains("root.join(\"desktop/src-tauri/resources/native_calibration.exe\")")
+    {
+        return Err(
+            "candidate creation must use the validated cross-runner calibration bytes".into(),
+        );
     }
     let signer = job("sign_qualify")?;
     let sign_steps = workflow_step_blocks(signer);
@@ -550,7 +587,7 @@ fn rust_release_state_machine_contract(
         "GITHUB_WORKFLOW_REF",
         "--workflow-sha is required for Preflight",
         "runtime_identity_fails_closed_without_exact_workflow_context",
-        "require_runtime_context(root, &options, expected_job)?",
+        "require_runtime_context(root, &options, command)?",
         "fn build_unsigned",
         "fn sign_candidate",
         "fn qualify_candidate",
@@ -609,7 +646,7 @@ fn rust_release_state_machine_contract(
         .map(|(body, _)| body)
         .ok_or("Rust release CLI is missing its production runtime guard")?;
     let runtime_guard = release_cli
-        .find("require_runtime_context(root, &options, expected_job)?")
+        .find("require_runtime_context(root, &options, command)?")
         .ok_or("release side-effect phases must require exact runtime identity")?;
     let command_dispatch = release_cli[runtime_guard..]
         .find("match command")
@@ -689,6 +726,19 @@ fn rust_release_state_machine_contract(
                 .into(),
         );
     }
+    let git_identity = rust
+        .split_once("fn git_text(")
+        .and_then(|(_, body)| body.split_once("\nfn validate_release_notes("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing its Git identity adapter")?;
+    if !git_identity.contains("capture_text_runtime_only")
+        || git_identity.contains("process::capture(\"git\"")
+    {
+        return Err(
+            "release Git identity queries must use the bounded runtime-only child environment"
+                .into(),
+        );
+    }
     let metadata_probe = rust
         .split_once("fn probe_metadata_token(")
         .and_then(|(_, body)| body.split_once("\nfn cleanup_local_state("))
@@ -712,6 +762,8 @@ fn rust_release_state_machine_contract(
         );
     }
     if !main.contains("\"release-v4\" => release_v4::run")
+        || !main.contains("release_v4::usage()")
+        || main.contains("build-candidate")
         || !main.contains("\"release-doctor\" =>")
         || !main.contains("release_v4::run(&repo::root(), &doctor_args)")
         || main.contains("scripts/release_doctor.ps1")
@@ -719,6 +771,30 @@ fn rust_release_state_machine_contract(
         return Err(
             "xtask CLI must route release-v4 and release-doctor to the native Rust owner".into(),
         );
+    }
+    let release_help = rust
+        .split_once("pub(crate) fn usage()")
+        .and_then(|(_, body)| body.split_once("\nfn expected_job_for_command("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release-v4 CLI help is missing")?;
+    for command in [
+        "build-unsigned",
+        "sign-candidate",
+        "qualify-candidate",
+        "probe-verify-candidate",
+        "metadata-recovery-plan",
+        "metadata-recovery-apply",
+        "--plan-run-id",
+        "--confirm-metadata-only-recovery",
+    ] {
+        if !release_help.contains(command) {
+            return Err(format!(
+                "release-v4 CLI help omits current command syntax: {command}"
+            ));
+        }
+    }
+    if release_help.contains("build-candidate") {
+        return Err("release-v4 CLI help advertises a retired command".into());
     }
     for marker in [
         "cargo xtask release-v4 self-test",
@@ -752,6 +828,12 @@ fn rust_release_state_machine_contract(
         "run_attempt",
         "installer_sha256",
         "producer_job",
+        "calibration_binary",
+        "calibration_binary_size",
+        "calibration_binary_sha256",
+        "calibration_binary_architecture",
+        "MAX_CALIBRATION_BYTES",
+        "ci_artifacts::pe_machine",
     ] {
         if !handoff.contains(marker) {
             return Err(format!("Rust unsigned handoff is missing bound `{marker}`"));
@@ -814,6 +896,8 @@ fn rust_release_state_machine_contract(
         || !workflow.contains("release-v4 sign-candidate")
         || !workflow.contains("release-v4 qualify-candidate")
         || workflow.matches("release-v4 build-unsigned").count() != 1
+        || !workflow.contains("unsigned-handoff/*.exe")
+        || !workflow.contains("release-v4 probe-verify-candidate")
     {
         return Err("release pipeline must disable build-time updater sidecars and keep build/sign as separate Rust phases".into());
     }
@@ -964,6 +1048,30 @@ mod tests {
         let (workflow, rust, main, ci) = current_sources();
         let stale_gate = replace_fixture(&workflow, "head_sha=$GITHUB_SHA", "head_branch=main");
         assert!(rust_release_state_machine_contract(&stale_gate, "", &rust, &main, &ci).is_err());
+        let shared_probe_entrypoint = replace_fixture(
+            &workflow,
+            "release-v4 probe-verify-candidate --state-root",
+            "release-v4 verify-candidate --state-root",
+        );
+        assert!(
+            rust_release_state_machine_contract(&shared_probe_entrypoint, "", &rust, &main, &ci)
+                .is_err()
+        );
+        let handoff_without_executables = replace_fixture(
+            &workflow,
+            "unsigned-handoff/*.exe",
+            "unsigned-handoff/manifest.json",
+        );
+        assert!(
+            rust_release_state_machine_contract(
+                &handoff_without_executables,
+                "",
+                &rust,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
         assert!(
             rust_release_state_machine_contract(&workflow, "retired rehearsal", &rust, &main, &ci)
                 .is_err()
@@ -974,6 +1082,14 @@ mod tests {
             "release-v4 build-candidate",
         );
         assert!(rust_release_state_machine_contract(&legacy, "", &rust, &main, &ci).is_err());
+        let stale_help = replace_fixture(
+            &rust,
+            "build-unsigned|sign-candidate",
+            "build-candidate|sign-candidate",
+        );
+        assert!(
+            rust_release_state_machine_contract(&workflow, "", &stale_help, &main, &ci).is_err()
+        );
     }
 
     #[test]

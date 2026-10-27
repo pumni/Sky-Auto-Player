@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_HANDOFF_MANIFEST_BYTES: u64 = 32 * 1024;
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_CALIBRATION_BYTES: u64 = 64 * 1024 * 1024;
+const CALIBRATION_BINARY: &str = "native_calibration.exe";
 const RELEASE_WORKFLOW_REF: &str =
     "pumni/Sky-Auto-Player/.github/workflows/release-v4.yml@refs/heads/main";
 
@@ -23,6 +25,10 @@ pub(crate) struct UnsignedArtifactManifest {
     pub(crate) installer_name: String,
     pub(crate) installer_size: u64,
     pub(crate) installer_sha256: String,
+    pub(crate) calibration_binary: String,
+    pub(crate) calibration_binary_size: u64,
+    pub(crate) calibration_binary_sha256: String,
+    pub(crate) calibration_binary_architecture: String,
     pub(crate) producer_job: String,
     pub(crate) artifact_name: String,
 }
@@ -120,23 +126,25 @@ pub(crate) fn artifact_name(run_id: &str, run_attempt: u32) -> Result<String> {
 pub(crate) fn create_unsigned_handoff(
     state_root: &Path,
     installer: &Path,
-    version: &str,
-    source_sha: &str,
-    workflow_sha: &str,
-    run_id: &str,
-    run_attempt: u32,
+    calibration_binary: &Path,
+    identity: &ExpectedHandoffIdentity<'_>,
 ) -> Result<UnsignedArtifactManifest> {
-    ci_artifacts::validate_semver(version, "unsigned installer version")?;
-    let source_sha = ci_artifacts::validate_commit_sha(source_sha, "unsigned source SHA")?;
-    let workflow_sha = ci_artifacts::validate_commit_sha(workflow_sha, "workflow SHA")?;
+    ci_artifacts::validate_semver(identity.version, "unsigned installer version")?;
+    let source_sha = ci_artifacts::validate_commit_sha(identity.source_sha, "unsigned source SHA")?;
+    let workflow_sha = ci_artifacts::validate_commit_sha(identity.workflow_sha, "workflow SHA")?;
     if source_sha != workflow_sha {
         return Err("unsigned handoff workflow and source SHAs differ".into());
     }
-    validate_run_id(run_id)?;
-    if run_attempt == 0 || run_attempt > 100 {
+    if identity.repository != "pumni/Sky-Auto-Player" {
+        return Err(
+            "unsigned handoff repository differs from the canonical release repository".into(),
+        );
+    }
+    validate_run_id(identity.run_id)?;
+    if identity.run_attempt == 0 || identity.run_attempt > 100 {
         return Err("release run attempt is outside the supported bound".into());
     }
-    let installer_name = release_metadata::canonical_installer_name(version);
+    let installer_name = release_metadata::canonical_installer_name(identity.version);
     let metadata = ci_artifacts::require_regular_file(installer, "unsigned NSIS installer")?;
     if metadata.len() == 0 || metadata.len() > MAX_INSTALLER_BYTES {
         return Err("unsigned NSIS installer is empty or exceeds the handoff size bound".into());
@@ -146,23 +154,46 @@ pub(crate) fn create_unsigned_handoff(
             "unsigned installer name differs from the canonical versioned NSIS name".into(),
         );
     }
+    let calibration_metadata =
+        ci_artifacts::require_regular_file(calibration_binary, "unsigned calibration executable")?;
+    if calibration_metadata.len() == 0 || calibration_metadata.len() > MAX_CALIBRATION_BYTES {
+        return Err(
+            "unsigned calibration executable is empty or exceeds the handoff size bound".into(),
+        );
+    }
+    if calibration_binary
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(CALIBRATION_BINARY)
+    {
+        return Err("unsigned calibration executable has a non-canonical filename".into());
+    }
+    if ci_artifacts::pe_machine(calibration_binary, "unsigned calibration executable")? != 0x8664 {
+        return Err("unsigned calibration executable must be an x86_64 PE file".into());
+    }
     let handoff = state_root.join("unsigned-handoff");
     fs::create_dir(&handoff)?;
     let output_installer = handoff.join(&installer_name);
     fs::copy(installer, &output_installer)?;
+    let output_calibration = handoff.join(CALIBRATION_BINARY);
+    fs::copy(calibration_binary, &output_calibration)?;
     let manifest = UnsignedArtifactManifest {
-        schema_version: 1,
-        repository: "pumni/Sky-Auto-Player".to_owned(),
+        schema_version: 2,
+        repository: identity.repository.to_owned(),
         source_sha,
         workflow_sha,
-        run_id: run_id.to_owned(),
-        run_attempt,
-        version: version.to_owned(),
+        run_id: identity.run_id.to_owned(),
+        run_attempt: identity.run_attempt,
+        version: identity.version.to_owned(),
         installer_name,
         installer_size: metadata.len(),
         installer_sha256: hash::sha256(&output_installer)?,
+        calibration_binary: CALIBRATION_BINARY.to_owned(),
+        calibration_binary_size: calibration_metadata.len(),
+        calibration_binary_sha256: hash::sha256(&output_calibration)?,
+        calibration_binary_architecture: "x86_64".to_owned(),
         producer_job: "build_unsigned".to_owned(),
-        artifact_name: artifact_name(run_id, run_attempt)?,
+        artifact_name: artifact_name(identity.run_id, identity.run_attempt)?,
     };
     write_manifest(&handoff.join("manifest.json"), &manifest)?;
     validate_handoff_directory(&handoff, &manifest)?;
@@ -207,7 +238,7 @@ pub(crate) fn validate_manifest_identity(
     let workflow_sha = ci_artifacts::validate_commit_sha(expected.workflow_sha, "workflow SHA")?;
     ci_artifacts::validate_semver(expected.version, "release version")?;
     let expected_installer = release_metadata::canonical_installer_name(expected.version);
-    if manifest.schema_version != 1
+    if manifest.schema_version != 2
         || expected.repository != "pumni/Sky-Auto-Player"
         || manifest.repository != expected.repository
         || manifest.source_sha != source_sha
@@ -224,6 +255,15 @@ pub(crate) fn validate_manifest_identity(
             .installer_sha256
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
+        || manifest.calibration_binary != CALIBRATION_BINARY
+        || manifest.calibration_binary_size == 0
+        || manifest.calibration_binary_size > MAX_CALIBRATION_BYTES
+        || manifest.calibration_binary_sha256.len() != 64
+        || !manifest
+            .calibration_binary_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || manifest.calibration_binary_architecture != "x86_64"
         || manifest.producer_job != "build_unsigned"
         || manifest.artifact_name != artifact_name(expected.run_id, expected.run_attempt)?
     {
@@ -240,10 +280,14 @@ fn validate_handoff_directory(directory: &Path, manifest: &UnsignedArtifactManif
         .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
         .collect::<std::io::Result<Vec<_>>>()?;
     names.sort();
-    let mut expected = vec!["manifest.json".to_owned(), manifest.installer_name.clone()];
+    let mut expected = vec![
+        "manifest.json".to_owned(),
+        manifest.installer_name.clone(),
+        manifest.calibration_binary.clone(),
+    ];
     expected.sort();
     if names != expected {
-        return Err("unsigned handoff must contain exactly one manifest and one installer".into());
+        return Err("unsigned handoff must contain exactly a manifest, installer, and calibration executable".into());
     }
     let installer = directory.join(&manifest.installer_name);
     let metadata = ci_artifacts::require_regular_file(&installer, "unsigned handoff installer")?;
@@ -251,6 +295,26 @@ fn validate_handoff_directory(directory: &Path, manifest: &UnsignedArtifactManif
         || hash::sha256(&installer)? != manifest.installer_sha256.to_ascii_lowercase()
     {
         return Err("unsigned installer bytes differ from the same-run handoff manifest".into());
+    }
+    let calibration_binary = directory.join(&manifest.calibration_binary);
+    let calibration_metadata = ci_artifacts::require_regular_file(
+        &calibration_binary,
+        "unsigned handoff calibration executable",
+    )?;
+    if calibration_metadata.len() != manifest.calibration_binary_size
+        || hash::sha256(&calibration_binary)?
+            != manifest.calibration_binary_sha256.to_ascii_lowercase()
+    {
+        return Err(
+            "calibration executable bytes differ from the same-run handoff manifest".into(),
+        );
+    }
+    if ci_artifacts::pe_machine(
+        &calibration_binary,
+        "unsigned handoff calibration executable",
+    )? != 0x8664
+    {
+        return Err("unsigned handoff calibration executable must be an x86_64 PE file".into());
     }
     Ok(())
 }
@@ -285,6 +349,15 @@ mod tests {
         std::env::temp_dir().join(format!("sky-v4-handoff-{}-{nonce}", std::process::id()))
     }
 
+    fn valid_x64_pe() -> Vec<u8> {
+        let mut bytes = vec![0_u8; 0x86];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80_i32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x84..0x86].copy_from_slice(&0x8664_u16.to_le_bytes());
+        bytes
+    }
+
     fn fixture() -> (PathBuf, UnsignedArtifactManifest) {
         let root = temp_dir();
         let directory = root.join("incoming");
@@ -292,8 +365,10 @@ mod tests {
         let installer_name = release_metadata::canonical_installer_name("4.3.0");
         let installer = directory.join(&installer_name);
         fs::write(&installer, b"same-build-bytes").expect("write installer fixture");
+        let calibration_binary = directory.join(CALIBRATION_BINARY);
+        fs::write(&calibration_binary, valid_x64_pe()).expect("write calibration fixture");
         let manifest = UnsignedArtifactManifest {
-            schema_version: 1,
+            schema_version: 2,
             repository: "pumni/Sky-Auto-Player".to_owned(),
             source_sha: "a".repeat(40),
             workflow_sha: "a".repeat(40),
@@ -303,6 +378,12 @@ mod tests {
             installer_name,
             installer_size: b"same-build-bytes".len() as u64,
             installer_sha256: hash::sha256(&installer).expect("hash fixture"),
+            calibration_binary: CALIBRATION_BINARY.to_owned(),
+            calibration_binary_size: fs::metadata(&calibration_binary)
+                .expect("calibration metadata")
+                .len(),
+            calibration_binary_sha256: hash::sha256(&calibration_binary).expect("calibration hash"),
+            calibration_binary_architecture: "x86_64".to_owned(),
             producer_job: "build_unsigned".to_owned(),
             artifact_name: "v4-unsigned-123456-2".to_owned(),
         };
@@ -333,6 +414,45 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_handoff_exports_the_build_origin_calibration_as_the_third_file() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("create state root");
+        let installer = root.join(release_metadata::canonical_installer_name("4.3.0"));
+        fs::write(&installer, b"same Windows installer bytes").expect("write installer");
+        let calibration = root.join(CALIBRATION_BINARY);
+        fs::write(&calibration, valid_x64_pe()).expect("write build-origin calibration");
+        let source_sha = "a".repeat(40);
+        let manifest = create_unsigned_handoff(
+            &root,
+            &installer,
+            &calibration,
+            &ExpectedHandoffIdentity {
+                repository: "pumni/Sky-Auto-Player",
+                source_sha: &source_sha,
+                workflow_sha: &source_sha,
+                run_id: "123456",
+                run_attempt: 2,
+                version: "4.3.0",
+            },
+        )
+        .expect("create exact unsigned handoff");
+        let handoff = root.join("unsigned-handoff");
+        assert_eq!(manifest.schema_version, 2);
+        assert_eq!(manifest.calibration_binary, CALIBRATION_BINARY);
+        assert_eq!(manifest.calibration_binary_architecture, "x86_64");
+        assert_eq!(
+            fs::read(handoff.join(CALIBRATION_BINARY)).expect("read handed-off calibration"),
+            fs::read(&calibration).expect("read source calibration")
+        );
+        assert_eq!(
+            fs::read_dir(&handoff).expect("handoff inventory").count(),
+            3
+        );
+        validate_handoff_directory(&handoff, &manifest).expect("validate exact three-file handoff");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn unsigned_handoff_rejects_stale_or_tampered_inputs() {
         let (root, manifest) = fixture();
         let directory = root.join("incoming");
@@ -348,6 +468,22 @@ mod tests {
         )
         .expect("tamper fixture");
         assert!(validate_handoff_directory(&directory, &manifest).is_err());
+        fs::write(
+            directory.join(&manifest.installer_name),
+            b"same-build-bytes",
+        )
+        .expect("restore installer fixture");
+        fs::write(
+            directory.join(CALIBRATION_BINARY),
+            valid_x64_pe().into_iter().chain([0x7f]).collect::<Vec<_>>(),
+        )
+        .expect("tamper calibration fixture");
+        assert!(
+            validate_handoff_directory(&directory, &manifest)
+                .unwrap_err()
+                .to_string()
+                .contains("calibration executable bytes")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -357,6 +493,22 @@ mod tests {
         let directory = root.join("incoming");
         fs::write(directory.join("unexpected.sig"), b"sidecar").expect("write sidecar");
         assert!(validate_handoff_directory(&directory, &manifest).is_err());
+        fs::remove_file(directory.join("unexpected.sig")).expect("remove sidecar");
+        let wrong_architecture = {
+            let mut bytes = valid_x64_pe();
+            bytes[0x84..0x86].copy_from_slice(&0x014c_u16.to_le_bytes());
+            bytes
+        };
+        fs::write(directory.join(CALIBRATION_BINARY), wrong_architecture)
+            .expect("write wrong architecture");
+        let mut wrong_machine_manifest = manifest.clone();
+        wrong_machine_manifest.calibration_binary_size =
+            fs::metadata(directory.join(CALIBRATION_BINARY))
+                .expect("wrong machine file metadata")
+                .len();
+        wrong_machine_manifest.calibration_binary_sha256 =
+            hash::sha256(&directory.join(CALIBRATION_BINARY)).expect("wrong machine hash");
+        assert!(validate_handoff_directory(&directory, &wrong_machine_manifest).is_err());
         let oversized = json!({ "padding": "x".repeat(MAX_HANDOFF_MANIFEST_BYTES as usize) });
         assert!(
             serde_json::to_vec(&oversized).expect("serialize").len() as u64

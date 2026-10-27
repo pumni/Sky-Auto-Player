@@ -85,10 +85,11 @@ control executable is built and source/hash checked before the secrets are mappe
 invokes that executable directly and does not run Cargo. Every Bun child in the secret-bearing
 signing phase, including the Tauri CLI version probe and local-key challenge, clears inherited
 environment state and receives only the bounded Windows runtime allowlist plus the temporary key
-path/passphrase required by Tauri. Git identity subprocesses use the same runtime-only policy. A
-spawned-child regression verifies the actual environment contains no synthetic signing secrets,
-GitHub tokens, or unrelated secrets. This reduces secret propagation to children; the protected
-ephemeral hosted job remains the signing trust boundary.
+path/passphrase required by Tauri. Git identity subprocesses, including the Git queries reached
+while `sign-candidate` reads and validates release context, use the same runtime-only policy. A
+spawned fake-Git regression exercises the release entrypoint with synthetic updater secrets and
+tokens and verifies the actual child environment. This reduces secret propagation to children;
+the protected ephemeral hosted job remains the signing trust boundary.
 
 The production updater public root remains Key ID `19AABD2E7838818C`. Never place updater signing
 secrets in repository/organization scope, pull-request CI, test-key proof jobs, artifacts, command
