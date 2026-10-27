@@ -914,6 +914,10 @@ html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon
   color: var(--workbench-accent-ink);
 }
 
+html[data-palette='graphite'] .library-nav-item.is-active:hover .library-nav-item-icon {
+  color: var(--workbench-accent-ink);
+}
+
 html[data-palette='graphite'] .library-nav-action-row.is-active:hover {
   background-color: var(--workbench-selected-control-hover);
 }

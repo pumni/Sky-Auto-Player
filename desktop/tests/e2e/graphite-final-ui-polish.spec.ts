@@ -114,6 +114,12 @@ async function colors(control: Locator) {
   });
 }
 
+async function expectForeground(control: Locator, expected: string) {
+  await expect
+    .poll(() => control.evaluate((element) => getComputedStyle(element).color))
+    .toBe(expected);
+}
+
 async function expectFilledWhite(control: Locator, expectedBackground: string) {
   const style = await colors(control);
   expect(
@@ -212,21 +218,46 @@ test('Graphite navigation, tabs, toggles, and track selection stay persistent', 
   const activeLibrary = page.locator('.library-nav-item.is-active').first();
   const activeLibraryStyle = await colors(activeLibrary);
   expect(sameColor(activeLibraryStyle.background, selectionFill)).toBe(true);
+  expect(activeLibraryStyle.foreground).toBe('rgb(212, 212, 212)');
+  expect(activeLibraryStyle.iconColor).toBe('rgb(178, 165, 233)');
+  expect(
+    contrastRatio(activeLibraryStyle.iconColor!, activeLibraryStyle.background),
+  ).toBeGreaterThanOrEqual(3);
   await activeLibrary.hover();
-  expect(sameColor((await colors(activeLibrary)).background, selectionFill)).toBe(true);
+  const activeLibraryHover = await colors(activeLibrary);
+  expect(sameColor(activeLibraryHover.background, selectionFill)).toBe(true);
+  expect(activeLibraryHover.iconColor).toBe('rgb(178, 165, 233)');
+  await page.mouse.move(0, 0);
+  await page.keyboard.press('Tab');
+  await activeLibrary.evaluate((element) => element.focus());
+  expect(await activeLibrary.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  const activeLibraryFocus = await colors(activeLibrary);
+  expect(sameColor(activeLibraryFocus.background, selectionFill)).toBe(true);
+  expect(activeLibraryFocus.outlineWidth).toBe('2px');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   const activeSettings = settings.getByRole('button', { name: 'Playback', exact: true });
   await expect(activeSettings).toHaveAttribute('aria-current', 'page');
-  expect(sameColor((await colors(activeSettings)).background, selectionFill)).toBe(true);
+  const activeSettingsStyle = await colors(activeSettings);
+  expect(sameColor(activeSettingsStyle.background, selectionFill)).toBe(true);
+  expect(activeSettingsStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(
+    contrastRatio(activeSettingsStyle.foreground, activeSettingsStyle.background),
+  ).toBeGreaterThanOrEqual(3);
   await activeSettings.hover();
-  expect(sameColor((await colors(activeSettings)).background, selectedHover)).toBe(true);
+  const activeSettingsHover = await colors(activeSettings);
+  expect(sameColor(activeSettingsHover.background, selectedHover)).toBe(true);
+  expect(activeSettingsHover.foreground).toBe('rgb(178, 165, 233)');
   await settings.getByRole('button', { name: 'Appearance', exact: true }).focus();
   await page.keyboard.press('Shift+Tab');
   await expect(activeSettings).toBeFocused();
   expect(await activeSettings.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
   const activeSettingsFocus = await colors(activeSettings);
+  expect(activeSettingsFocus.foreground).toBe('rgb(178, 165, 233)');
+  expect(
+    contrastRatio(activeSettingsFocus.foreground, activeSettingsFocus.background),
+  ).toBeGreaterThanOrEqual(3);
   expect(activeSettingsFocus.outlineStyle).toBe('solid');
   expect(activeSettingsFocus.outlineWidth).toBe('2px');
 
@@ -235,24 +266,52 @@ test('Graphite navigation, tabs, toggles, and track selection stay persistent', 
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.move(0, 0);
-  expect(sameColor((await colors(shuffle)).background, selectedControl)).toBe(true);
+  await expectForeground(shuffle, 'rgb(178, 165, 233)');
+  const shuffleRest = await colors(shuffle);
+  expect(sameColor(shuffleRest.background, selectedControl)).toBe(true);
+  expect(shuffleRest.foreground).toBe('rgb(178, 165, 233)');
+  expect(contrastRatio(shuffleRest.foreground, shuffleRest.background)).toBeGreaterThanOrEqual(3);
   await shuffle.hover();
-  expect(sameColor((await colors(shuffle)).background, selectedHover)).toBe(true);
+  await expectForeground(shuffle, 'rgb(192, 180, 241)');
+  const shuffleHover = await colors(shuffle);
+  expect(sameColor(shuffleHover.background, selectedHover)).toBe(true);
+  expect(shuffleHover.foreground).toBe('rgb(192, 180, 241)');
+  expect(contrastRatio(shuffleHover.foreground, shuffleHover.background)).toBeGreaterThanOrEqual(3);
   await page.mouse.move(0, 0);
   expect(sameColor((await colors(shuffle)).background, selectedControl)).toBe(true);
+  await page.keyboard.press('Tab');
+  await shuffle.evaluate((element) => element.focus());
+  expect(await shuffle.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  const shuffleFocus = await colors(shuffle);
+  expect(sameColor(shuffleFocus.background, selectedControl)).toBe(true);
+  expect(shuffleFocus.foreground).toBe('rgb(192, 180, 241)');
+  expect(contrastRatio(shuffleFocus.foreground, shuffleFocus.background)).toBeGreaterThanOrEqual(3);
+  expect(shuffleFocus.outlineWidth).toBe('2px');
 
   const autoPlay = page.getByRole('button', { name: 'Auto Play' });
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-  expect(sameColor((await colors(autoPlay)).background, selectedControl)).toBe(true);
+  const autoPlayStyle = await colors(autoPlay);
+  expect(sameColor(autoPlayStyle.background, selectedControl)).toBe(true);
+  expect(autoPlayStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(contrastRatio(autoPlayStyle.foreground, autoPlayStyle.background)).toBeGreaterThanOrEqual(
+    3,
+  );
 
   const utility = page.locator('.player-utility-button');
   await utility.click();
   await expect(utility).toHaveAttribute('aria-expanded', 'true');
   await page.mouse.move(0, 0);
-  expect(sameColor((await colors(utility)).background, selectedControl)).toBe(true);
+  await expectForeground(utility, 'rgb(178, 165, 233)');
+  const utilityStyle = await colors(utility);
+  expect(sameColor(utilityStyle.background, selectedControl)).toBe(true);
+  expect(utilityStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(contrastRatio(utilityStyle.foreground, utilityStyle.background)).toBeGreaterThanOrEqual(3);
   const detailsTab = page.locator('.utility-view-tabs [role=tab][aria-selected=true]');
   await expect(detailsTab).toHaveAccessibleName('Details');
-  expect(sameColor((await colors(detailsTab)).background, selectedControl)).toBe(true);
+  const detailsStyle = await colors(detailsTab);
+  expect(sameColor(detailsStyle.background, selectedControl)).toBe(true);
+  expect(detailsStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(contrastRatio(detailsStyle.foreground, detailsStyle.background)).toBeGreaterThanOrEqual(3);
   await detailsTab.focus();
   await page.keyboard.press('ArrowRight');
   const runtimeTab = page.getByRole('tab', { name: 'Runtime' });
@@ -262,8 +321,11 @@ test('Graphite navigation, tabs, toggles, and track selection stay persistent', 
   expect(sameColor((await colors(runtimeTab)).background, selectedControl)).toBe(true);
   expect((await colors(runtimeTab)).outlineWidth).toBe('2px');
   await runtimeTab.hover();
-  expect(sameColor((await colors(runtimeTab)).background, selectedHover)).toBe(true);
-  expect((await colors(runtimeTab)).outlineWidth).toBe('2px');
+  const runtimeHover = await colors(runtimeTab);
+  expect(sameColor(runtimeHover.background, selectedHover)).toBe(true);
+  expect(runtimeHover.foreground).toBe('rgb(192, 180, 241)');
+  expect(contrastRatio(runtimeHover.foreground, runtimeHover.background)).toBeGreaterThanOrEqual(3);
+  expect(runtimeHover.outlineWidth).toBe('2px');
 
   const player = await startDryRunWithSelection(page);
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
