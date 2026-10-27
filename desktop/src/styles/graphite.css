@@ -44,9 +44,7 @@ html[data-palette='graphite']
   background-color: #404246;
 }
 
-html[data-palette='graphite']
-  .window-caption-controls
-  .caption-button-zoom:hover:not(:disabled) {
+html[data-palette='graphite'] .window-caption-controls .caption-button-zoom:hover:not(:disabled) {
   outline: 0;
   color: #ffffff;
   background-color: #3b3d41;
@@ -1477,9 +1475,7 @@ html[data-palette='graphite']
     background-color: ButtonFace;
   }
 
-  html[data-palette='graphite']
-    .window-caption-controls
-    .caption-button:hover:not(:disabled) {
+  html[data-palette='graphite'] .window-caption-controls .caption-button:hover:not(:disabled) {
     border: 0;
     outline: 0;
     color: HighlightText;
