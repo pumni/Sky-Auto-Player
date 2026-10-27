@@ -8,7 +8,7 @@ prominent, selected states persist, and secondary actions remain quiet until hov
 - Before images were retained from source SHA
   `cf97261887047c626b9222c118adab32a27e39df`.
 - After images were captured from implementation SHA
-  `d6f2136bfe72074bc7855bc550fbd3ca33477f31`.
+  `bfdb0bc2055411ca451c77884462c9b4a62d7e7e`.
 - Both sets use the Windows Playwright Chromium UI with the mock playback bridge. These are browser
   captures, not native Tauri screenshots. No physical input was sent.
 - The three before images were reused unchanged. The optional capture test produces only the three
