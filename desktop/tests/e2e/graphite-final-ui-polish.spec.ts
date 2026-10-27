@@ -361,8 +361,32 @@ test('Graphite controls expose transparent rest and visible hover and focus stat
       .filter((element): element is HTMLElement => element !== null)
       .map((element) => getComputedStyle(element).backgroundColor),
   );
+  const contrastTokens = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    return {
+      accent: style.getPropertyValue('--workbench-accent').trim(),
+      accentHover: style.getPropertyValue('--workbench-accent-hover').trim(),
+      focus: style.getPropertyValue('--workbench-focus').trim(),
+      dangerText: style.getPropertyValue('--danger-fg').trim(),
+      dangerFill: style.getPropertyValue('--danger-fill').trim(),
+      onDanger: style.getPropertyValue('--on-danger').trim(),
+      dangerHover: style.getPropertyValue('--workbench-control-danger-hover').trim(),
+    };
+  });
   expect(parentSurfaceColors.length).toBeGreaterThan(2);
   expect(parentSurfaceColors.every((surface) => hoverLuminance > luminance(surface))).toBe(true);
+  for (const surface of parentSurfaceColors) {
+    expect(contrastRatio(contrastTokens.accent, surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(contrastTokens.focus, surface)).toBeGreaterThanOrEqual(3);
+  }
+  expect(contrastRatio(contrastTokens.accent, pressedState)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(contrastTokens.accentHover, hoverState)).toBeGreaterThanOrEqual(4.5);
+  expect(
+    contrastRatio(contrastTokens.dangerText, contrastTokens.dangerHover),
+  ).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(contrastTokens.onDanger, contrastTokens.dangerFill)).toBeGreaterThanOrEqual(
+    4.5,
+  );
 
   await expectRestingControlsTransparent(page);
 

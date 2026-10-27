@@ -97,10 +97,10 @@ html[data-palette='graphite'] {
   --workbench-inspector: #191a1b;
   --chrome-surface: #191a1b;
   --workbench-hover: #222324;
-  --workbench-pressed: #414348;
+  --workbench-pressed: #404246;
   --workbench-control-rest: transparent;
   --workbench-control-hover: #35363a;
-  --workbench-control-pressed: #414348;
+  --workbench-control-pressed: #404246;
   --workbench-control-disabled: #8b8c90;
   --workbench-control-danger-hover: #452d32;
   --workbench-selected: #25242c;
