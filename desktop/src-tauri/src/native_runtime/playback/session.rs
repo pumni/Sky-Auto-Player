@@ -2194,22 +2194,15 @@ pub(in crate::native_runtime) fn plan_fingerprint(
 pub(in crate::native_runtime) fn settings_fingerprint(
     settings: &ApplicationSettings,
 ) -> Result<String, String> {
-    // Keep this in lockstep with DesktopPlaybackService._settings_fingerprint.
-    // Update timestamps and unrelated preferences must not invalidate a plan.
-    // The routed settings.patch path additionally invalidates plans for
-    // schedule-affecting changes; behavior-only Auto Play changes stay outside
-    // this identity and preserve a prepared schedule.
-    // Python's settings fingerprint uses json.dumps with sorted keys and its
-    // default separators (`, ` and `: `). Keep the flat payload explicit so
-    // this cross-runtime identity cannot depend on Rust struct field order.
-    let palette = serde_json::to_string(&settings.palette).map_err(json_error)?;
+    // Appearance and Auto Play do not affect the prepared schedule. The
+    // settings.patch path conservatively invalidates plans for every other
+    // field; keep this payload explicit so its identity is stable.
     let payload = format!(
-        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"palette\": {}, \"timing_margin_us\": {}}}",
+        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"timing_margin_us\": {}}}",
         settings.playback_defaults.fps,
         settings.playback_defaults.hold_frames,
         settings.telemetry_enabled,
         settings.playback_defaults.tempo_scale,
-        palette,
         settings.playback_defaults.timing_margin_us,
     );
     let digest = Sha256::digest(payload.as_bytes());

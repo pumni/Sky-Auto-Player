@@ -12,23 +12,32 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const selectedRow = useStore((store) =>
     selectSongById(store.library, store.library.selectedSongId),
   );
-  const currentSong = useStore((store) => store.playback.currentSong);
-  const preparedSong = useStore((store) => store.playback.prepared?.song);
+  const currentSongId = useStore((store) => store.playback.currentSong?.songId ?? null);
+  const currentSongTitle = useStore((store) => store.playback.currentSong?.title);
+  const currentSongLiked = useStore((store) => store.playback.currentSong?.liked);
+  const hasCurrentSong = useStore((store) => store.playback.currentSong !== null);
+  const preparedSongTitle = useStore((store) => store.playback.prepared?.song.title);
   const preparedRisk = useStore((store) => store.playback.prepared?.risk);
-  const playback = useStore((store) => store.playback);
-  const active = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
-  const sessionStatusConcern = playbackSessionStatusConcern(playback);
+  const state = useStore((store) => store.playback.state);
+  const sessionStatusConcern = useStore((store) => playbackSessionStatusConcern(store.playback));
+  const active = ['starting', 'playing', 'paused', 'stopping'].includes(state);
+  const dryRun = useStore(
+    (store) =>
+      (store.playback.context?.dryRun === true ||
+        store.playback.preparedContext?.dryRun === true) &&
+      (active || sessionStatusConcern !== null),
+  );
   const setSongLiked = useStore((store) => store.setSongLiked);
 
   const fallbackIdentity = selectedRow;
   const title =
-    (active || sessionStatusConcern !== null ? currentSong?.title : undefined) ??
-    preparedSong?.title ??
-    currentSong?.title ??
+    (active || sessionStatusConcern !== null ? currentSongTitle : undefined) ??
+    preparedSongTitle ??
+    currentSongTitle ??
     fallbackIdentity?.title ??
     'No song selected';
-  const liked = currentSong?.liked ?? fallbackIdentity?.liked ?? false;
-  const likeSongId = currentSong?.songId ?? selectedSongId;
+  const liked = currentSongLiked ?? fallbackIdentity?.liked ?? false;
+  const likeSongId = currentSongId ?? selectedSongId;
   const statusConcernLabel =
     sessionStatusConcern === 'recoverable_status'
       ? 'Playback status uncertain'
@@ -38,17 +47,14 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const baseStatus =
     statusConcernLabel ??
     (active
-      ? playerStateLabel(playback.state)
-      : !currentSong && !preparedSong && !fallbackIdentity
+      ? playerStateLabel(state)
+      : !hasCurrentSong && !preparedSongTitle && !fallbackIdentity
         ? 'Select a song from your Library'
-        : preparedSong
+        : preparedSongTitle
           ? 'Prepared'
-          : currentSong
+          : hasCurrentSong
             ? 'Last played'
             : 'Ready to play');
-  const dryRun =
-    (playback.context?.dryRun === true || playback.preparedContext?.dryRun === true) &&
-    (active || sessionStatusConcern !== null);
   const status = dryRun ? `Dry run · ${baseStatus}` : baseStatus;
 
   return (
@@ -70,7 +76,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           </span>
         </div>
       </div>
-      {likeSongId && (currentSong || fallbackIdentity) && (
+      {likeSongId && (hasCurrentSong || fallbackIdentity) && (
         <button
           className={`icon-button player-like-button${liked ? ' is-liked' : ''}`}
           type="button"

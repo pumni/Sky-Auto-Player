@@ -710,8 +710,7 @@ impl NativeDesktopRuntime {
                 "channel_unavailable: beta update channel is not supported in production".into(),
             );
         }
-        let auto_play_only = patch.auto_play.is_some()
-            && patch.palette.is_none()
+        let preparation_safe_patch = (patch.palette.is_some() || patch.auto_play.is_some())
             && patch.telemetry_enabled.is_none()
             && patch.verbose_hud.is_none()
             && patch.playback_defaults.is_none()
@@ -761,7 +760,7 @@ impl NativeDesktopRuntime {
         let candidate_invalidation_needed = before_channel != snapshot.update.channel
             || before_skip_version != snapshot.update.skip_version;
         let after_fingerprint = settings_fingerprint(&snapshot)?;
-        if !auto_play_only || before_fingerprint != after_fingerprint {
+        if !preparation_safe_patch || before_fingerprint != after_fingerprint {
             self.playback
                 .invalidate_settings_locked(&mut prepare_publication, Some(after_fingerprint));
         } else {
@@ -770,7 +769,7 @@ impl NativeDesktopRuntime {
         }
         drop(settings);
         drop(prepare_publication);
-        if !auto_play_only {
+        if !preparation_safe_patch {
             self.invalidate_analysis_cache();
         }
         if candidate_invalidation_needed && let Some(update_service) = &self.update_service {

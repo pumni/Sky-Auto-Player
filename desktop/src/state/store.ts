@@ -1,4 +1,5 @@
-import { create } from 'zustand';
+import { create, type StateCreator } from 'zustand';
+import { subscribeWithSelector } from 'zustand/middleware';
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 import { boundedText, eventDetail } from './eventHelpers';
@@ -54,7 +55,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
   let diagnosticsEventSeq = 0;
   let cancelStaleAutoAdvanceHandoff = (_state: DesktopStore): void => undefined;
   const workbenchPreferences = loadWorkbenchPreferences();
-  const store = create<DesktopStore>((set, get) => {
+  const storeInitializer: StateCreator<DesktopStore> = (set, get) => {
     let loadPage: LibrarySlice['loadPage'] = async () => {
       throw new Error('Library slice is not initialized.');
     };
@@ -409,7 +410,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
     };
-  });
+  };
+  const store = create<DesktopStore>()(subscribeWithSelector(storeInitializer));
   store.subscribe((state) => {
     cancelStaleAutoAdvanceHandoff(state);
   });

@@ -718,6 +718,89 @@ describe('desktop store', () => {
     expect(rowAt(store, 200)?.title).toBe('Song 212');
   });
 
+  it('coalesces only identical in-flight viewport hydration requests', async () => {
+    const bridge = createMockBridge();
+    const originalViewport = bridge.setLibraryViewport;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let viewportCalls = 0;
+    bridge.setLibraryViewport = async (request) => {
+      viewportCalls += 1;
+      if (viewportCalls === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      return originalViewport(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    let visibleRangeChanges = 0;
+    store.subscribe(
+      (state) => state.library.visibleRange,
+      () => {
+        visibleRangeChanges += 1;
+      },
+    );
+
+    const first = store.getState().setViewport(0, 10);
+    await entered.promise;
+    const overlapping = store.getState().setViewport(0, 10);
+    await Promise.resolve();
+    expect(viewportCalls).toBe(1);
+    release.resolve();
+    await Promise.all([first, overlapping]);
+    expect(viewportCalls).toBe(1);
+    expect(visibleRangeChanges).toBe(1);
+
+    await act(async () => store.getState().setViewport(0, 10));
+    expect(viewportCalls).toBe(2);
+  });
+
+  it('retries a failed viewport hydration on the next identical request', async () => {
+    const bridge = createMockBridge();
+    const originalViewport = bridge.setLibraryViewport;
+    let viewportCalls = 0;
+    bridge.setLibraryViewport = async (request) => {
+      viewportCalls += 1;
+      if (viewportCalls === 1) throw new Error('temporary viewport bridge failure');
+      return originalViewport(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    await act(async () => store.getState().setViewport(0, 10));
+    await act(async () => store.getState().setViewport(0, 10));
+
+    expect(viewportCalls).toBe(2);
+  });
+
+  it('retries an incomplete viewport hydration on the next identical request', async () => {
+    const bridge = createMockBridge();
+    const originalViewport = bridge.setLibraryViewport;
+    let viewportCalls = 0;
+    bridge.setLibraryViewport = async (request) => {
+      viewportCalls += 1;
+      if (viewportCalls === 1) {
+        return {
+          accepted: true,
+          generation: request.generation,
+          first_index: request.firstIndex,
+          last_index: request.lastIndex,
+          selected_song_id: request.selectedSongId,
+          items: [],
+        };
+      }
+      return originalViewport(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    await act(async () => store.getState().setViewport(0, 10));
+    await act(async () => store.getState().setViewport(0, 10));
+
+    expect(viewportCalls).toBe(2);
+  });
+
   it('persists liked source state through the native bridge contract', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
@@ -1016,6 +1099,125 @@ describe('desktop store', () => {
     expect(store.getState().settings?.palette).toBe('slate');
     expect(store.getState().settingsError).toBeNull();
     expect(store.getState().settingsState).toBe('ready');
+  });
+
+  it('preserves a ready plan across palette and combined palette/Auto Play patches', async () => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const prepared = store.getState().playback.prepared;
+    const identity = store.getState().playback.preparedIdentity;
+    const context = store.getState().playback.preparedContext;
+    expect(prepared).not.toBeNull();
+
+    await act(async () => store.getState().patchSettings({ palette: 'slate' }));
+    expect(store.getState().playback.prepared).toBe(prepared);
+    expect(store.getState().playback.preparedIdentity).toBe(identity);
+    expect(store.getState().playback.preparedContext).toBe(context);
+
+    await act(async () => store.getState().patchSettings({ palette: 'aurora', autoPlay: false }));
+    expect(store.getState().playback.prepared).toBe(prepared);
+    expect(store.getState().playback.preparedIdentity).toBe(identity);
+    expect(store.getState().playback.preparedContext).toBe(context);
+
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('keeps an in-flight prepare current through a palette patch and accepts its late response', async () => {
+    const bridge = createMockBridge({ startDelayMs: 5 });
+    const originalPrepare = bridge.preparePlayback;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    bridge.preparePlayback = async (request) => {
+      const prepared = await originalPrepare(request);
+      entered.resolve();
+      await release.promise;
+      return prepared;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    const preparation = store.getState().prepareSelectedPlayback();
+    await entered.promise;
+    expect(store.getState().playback.transportOperation).toBe('preparing');
+    await act(async () => store.getState().patchSettings({ palette: 'slate' }));
+    expect(store.getState().playback.transportOperation).toBe('preparing');
+    expect(store.getState().playback.prepared).toBeNull();
+
+    release.resolve();
+    await act(async () => preparation);
+    expect(store.getState().playback.transportOperation).toBeNull();
+    expect(store.getState().playback.prepared?.song.song_id).toBe(first.song_id);
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('preserves an existing plan when a settings patch is rejected', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const prepared = store.getState().playback.prepared;
+    const identity = store.getState().playback.preparedIdentity;
+    const context = store.getState().playback.preparedContext;
+    bridge.patchSettings = async () => {
+      throw new Error('settings IPC rejected');
+    };
+
+    await act(async () => store.getState().patchSettings({ palette: 'slate' }));
+
+    expect(store.getState().settingsError).toContain('settings IPC rejected');
+    expect(store.getState().playback.prepared).toBe(prepared);
+    expect(store.getState().playback.preparedIdentity).toBe(identity);
+    expect(store.getState().playback.preparedContext).toBe(context);
+  });
+
+  it('invalidates preparation for a queued mixed palette and timing patch', async () => {
+    const bridge = createMockBridge();
+    const originalPatch = bridge.patchSettings;
+    const firstPatchStarted = deferred<void>();
+    const releaseFirstPatch = deferred<void>();
+    let patchCount = 0;
+    bridge.patchSettings = async (patch) => {
+      patchCount += 1;
+      if (patchCount === 1) {
+        firstPatchStarted.resolve();
+        await releaseFirstPatch.promise;
+      }
+      return originalPatch(patch);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    expect(store.getState().playback.prepared).not.toBeNull();
+
+    const palettePatch = store.getState().patchSettings({ palette: 'slate' });
+    await firstPatchStarted.promise;
+    const mixedPatch = store
+      .getState()
+      .patchSettings({ palette: 'aurora', playbackDefaults: { tempoScale: 0.95 } });
+    releaseFirstPatch.resolve();
+    await Promise.all([palettePatch, mixedPatch]);
+
+    expect(patchCount).toBe(2);
+    expect(store.getState().settings?.palette).toBe('aurora');
+    expect(store.getState().settings?.playback_defaults.tempo_scale).toBe(0.95);
+    expect(store.getState().playback.prepared).toBeNull();
+    expect(store.getState().playback.preparedIdentity).toBeNull();
+    expect(store.getState().playback.preparedContext).toBeNull();
   });
 
   it('detaches a prepared plan when the selected song changes', async () => {
