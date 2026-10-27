@@ -20,6 +20,17 @@ html[data-palette='graphite'] .player-tool-button {
   border-radius: var(--workbench-radius-md);
 }
 
+html[data-palette='graphite'] .caption-button:not(.caption-button-close):hover:not(:disabled) {
+  color: var(--text-primary);
+  background-color: var(--workbench-caption-hover);
+  box-shadow: inset 0 0 0 1px var(--workbench-control-boundary);
+}
+
+html[data-palette='graphite']
+  .caption-button:not(.caption-button-close):hover:active:not(:disabled) {
+  background-color: var(--workbench-control-pressed);
+}
+
 html[data-palette='graphite'] .global-search:focus-within {
   border-color: var(--workbench-search-idle-edge);
   outline: 0;
@@ -447,6 +458,11 @@ html[data-palette='graphite'] .track-like-button {
   min-height: 30px;
 }
 
+html[data-palette='graphite'] .track-like-button {
+  font-size: 16px;
+  line-height: 1;
+}
+
 /* The Inspector reads as a supporting rail; section rules carry its structure. */
 html[data-palette='graphite'] .utility-surface {
   background: var(--workbench-inspector);
@@ -839,10 +855,9 @@ html[data-palette='graphite']
 
 html[data-palette='graphite']
   :is(
-    .button:not(.button-primary):not(.button-danger),
+    .button-ghost,
     .icon-button:not(.button-primary):not(.button-danger),
     .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
-    .caption-button:not(.caption-button-close),
     .update-indicator,
     .library-menu-item,
     .track-actions-button,
@@ -853,12 +868,33 @@ html[data-palette='graphite']
   background-color: transparent;
 }
 
+html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger):not(.button-ghost) {
+  border-color: var(--workbench-action-edge);
+  color: var(--text-primary);
+  background-color: var(--surface-raised);
+}
+
+html[data-palette='graphite']
+  .button:not(.button-primary):not(.button-danger):not(.button-ghost):hover:not(:disabled):not(
+    [aria-disabled='true']
+  ) {
+  border-color: var(--workbench-action-hover-edge);
+  color: var(--text-primary);
+  background-color: var(--workbench-action-hover);
+}
+
+html[data-palette='graphite']
+  .button:not(.button-primary):not(.button-danger):not(.button-ghost):hover:active:not(
+    :disabled
+  ):not([aria-disabled='true']) {
+  background-color: var(--workbench-control-pressed);
+}
+
 html[data-palette='graphite']
   :is(
-    .button:not(.button-primary):not(.button-danger),
+    .button-ghost,
     .icon-button:not(.button-primary):not(.button-danger),
     .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
-    .caption-button:not(.caption-button-close),
     .update-indicator,
     .library-menu-item:not(.is-danger),
     .track-actions-button,
@@ -871,10 +907,9 @@ html[data-palette='graphite']
 
 html[data-palette='graphite']
   :is(
-    .button:not(.button-primary):not(.button-danger),
+    .button-ghost,
     .icon-button:not(.button-primary):not(.button-danger),
     .player-tool-button:not([aria-pressed='true']):not([aria-expanded='true']),
-    .caption-button:not(.caption-button-close),
     .update-indicator,
     .library-menu-item:not(.is-danger),
     .track-actions-button,
@@ -963,11 +998,9 @@ html[data-palette='graphite']
   :is(
     .player-transport .player-shuffle-action[aria-pressed='true'],
     .player-tools .player-auto-play-button[aria-pressed='true'],
-    .player-tools .player-utility-button[aria-expanded='true'],
-    .library-collapse-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):focus-visible:not(:disabled):not([aria-disabled='true']):not(:hover) {
-  color: var(--workbench-accent-ink-hover);
+  color: var(--workbench-toggle-on);
   background-color: transparent;
 }
 
@@ -975,12 +1008,10 @@ html[data-palette='graphite']
   :is(
     .player-transport .player-shuffle-action[aria-pressed='true'],
     .player-tools .player-auto-play-button[aria-pressed='true'],
-    .player-tools .player-utility-button[aria-expanded='true'],
-    .library-collapse-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ) {
   border-color: transparent;
-  color: var(--workbench-accent-ink);
+  color: var(--workbench-toggle-on);
   background-color: transparent;
 }
 
@@ -988,11 +1019,9 @@ html[data-palette='graphite']
   :is(
     .player-transport .player-shuffle-action[aria-pressed='true'],
     .player-tools .player-auto-play-button[aria-pressed='true'],
-    .player-tools .player-utility-button[aria-expanded='true'],
-    .library-collapse-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):hover:not(:disabled):not([aria-disabled='true']) {
-  color: var(--workbench-accent-ink-hover);
+  color: var(--workbench-toggle-on);
   background-color: var(--workbench-control-hover);
 }
 
@@ -1000,11 +1029,49 @@ html[data-palette='graphite']
   :is(
     .player-transport .player-shuffle-action[aria-pressed='true'],
     .player-tools .player-auto-play-button[aria-pressed='true'],
-    .player-tools .player-utility-button[aria-expanded='true'],
-    .library-collapse-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):hover:active:not(:disabled):not([aria-disabled='true']) {
   background-color: var(--workbench-control-pressed);
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='false'],
+    .player-tools .player-auto-play-button[aria-pressed='false'],
+    .track-row .track-like-button[aria-pressed='false']
+  ) {
+  color: var(--workbench-toggle-off);
+}
+
+html[data-palette='graphite']
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='false'],
+    .player-tools .player-auto-play-button[aria-pressed='false'],
+    .track-row .track-like-button[aria-pressed='false']
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--text-primary);
+}
+
+html[data-palette='graphite'] .player-tools .player-utility-button[aria-expanded='true'] {
+  border-color: transparent;
+  color: var(--workbench-accent-ink);
+  background-color: transparent;
+}
+
+html[data-palette='graphite']
+  .player-tools
+  .icon-button.player-utility-button[aria-expanded='true']:hover:not(:disabled) {
+  color: var(--workbench-accent-ink-hover);
+  background-color: var(--workbench-control-hover);
+}
+
+html[data-palette='graphite']
+  .player-tools
+  .icon-button.player-utility-button[aria-expanded='true']:focus-visible:not(:disabled):not(
+    :hover
+  ) {
+  color: var(--workbench-accent-ink-hover);
+  background-color: transparent;
 }
 
 html[data-palette='graphite']
@@ -1036,8 +1103,17 @@ html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
 }
 
 html[data-palette='graphite']
+  .button:not(.button-primary):not(.button-danger):not(.button-ghost):disabled {
+  border-color: var(--workbench-action-edge);
+  color: var(--workbench-control-disabled);
+  background-color: var(--surface-raised);
+  cursor: default;
+  opacity: 1;
+}
+
+html[data-palette='graphite']
   :is(
-    .button:not(.button-primary):not(.button-danger),
+    .button-ghost,
     .icon-button:not(.button-primary):not(.button-danger),
     .caption-button,
     .library-menu-item,
@@ -1066,7 +1142,6 @@ html[data-palette='graphite']
     .player-transport .player-shuffle-action[aria-pressed='true'],
     .player-tools .player-auto-play-button[aria-pressed='true'],
     .player-tools .player-utility-button[aria-expanded='true'],
-    .library-collapse-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):disabled {
   color: var(--workbench-control-disabled);
@@ -1153,7 +1228,6 @@ html[data-palette='graphite']
       .player-transport .player-shuffle-action[aria-pressed='true'],
       .player-tools .player-auto-play-button[aria-pressed='true'],
       .player-tools .player-utility-button[aria-expanded='true'],
-      .library-collapse-button[aria-pressed='true'],
       .track-row .track-like-button[aria-pressed='true']
     ) {
     forced-color-adjust: none;
@@ -1167,7 +1241,6 @@ html[data-palette='graphite']
       .player-transport .player-shuffle-action[aria-pressed='true'],
       .player-tools .player-auto-play-button[aria-pressed='true'],
       .player-tools .player-utility-button[aria-expanded='true'],
-      .library-collapse-button[aria-pressed='true'],
       .track-row .track-like-button[aria-pressed='true']
     ):hover:not(:disabled):not([aria-disabled='true']) {
     forced-color-adjust: none;

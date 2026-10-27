@@ -55,7 +55,6 @@ export function LibraryNavigator({
             type="button"
             aria-label={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
             title={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
-            aria-pressed={collapsed}
             onClick={onToggleCollapsed}
           >
             {collapsed ? (

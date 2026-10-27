@@ -177,6 +177,54 @@ async function expectPointerCenter(page: Page, locator: Locator) {
   await page.mouse.click(x, y);
 }
 
+async function expectVisibleCaptionHover(page: Page, locator: Locator) {
+  const bounds = await locator.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (!bounds) throw new Error('Caption control has no hit target');
+  expect(bounds.width).toBeCloseTo(46, 0);
+  expect(bounds.height).toBeCloseTo(40, 0);
+  const dragRegion = await locator.getAttribute('data-tauri-drag-region');
+  expect(dragRegion).toBe('false');
+  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const centerIsHitTarget = await locator.evaluate((element, point) => {
+    const hit = document.elementFromPoint(point.x, point.y);
+    return hit === element || (hit !== null && element.contains(hit));
+  }, center);
+  expect(centerIsHitTarget).toBe(true);
+
+  await locator.hover();
+  const hover = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, boxShadow: style.boxShadow };
+  });
+  expect(hover.background).toBe('rgb(59, 61, 65)');
+  expect(hover.boxShadow).not.toBe('none');
+
+  await page.mouse.move(320, 300);
+  const rest = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, boxShadow: style.boxShadow };
+  });
+  expect(rest.background).toBe('rgba(0, 0, 0, 0)');
+  expect(rest.boxShadow).toBe('none');
+}
+
+test('Graphite Maximize and Restore have visible hover over the full safe hit target', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockPlaybackDurationMs=120000&mockUpdateState=current');
+  const maximize = page.getByRole('button', { name: 'Maximize window' });
+  await expectVisibleCaptionHover(page, maximize);
+  await maximize.click();
+
+  const restore = page.getByRole('button', { name: 'Restore window' });
+  await expect(restore).toBeVisible();
+  await expectVisibleCaptionHover(page, restore);
+  await restore.click();
+  await expect(page.getByRole('button', { name: 'Maximize window' })).toBeVisible();
+});
+
 async function expectNonOverlappingGeometry(
   page: Page,
   expectedDpr: number,

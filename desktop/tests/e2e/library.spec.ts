@@ -1066,7 +1066,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
   const navigator = page.getByRole('navigation', { name: 'Library' });
   const collapseButton = navigator.locator('.library-collapse-button');
   await collapseButton.click();
-  await expect(collapseButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(collapseButton).not.toHaveAttribute('aria-pressed');
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
@@ -1107,7 +1107,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     return { color: style.color, background: style.backgroundColor };
   });
   expect(collapsedToggleStyle).toEqual({
-    color: 'rgb(178, 165, 233)',
+    color: 'rgb(166, 166, 166)',
     background: 'rgba(0, 0, 0, 0)',
   });
   await collapseButton.hover();
@@ -1116,7 +1116,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     return { color: style.color, background: style.backgroundColor };
   });
   expect(collapsedToggleHover).toEqual({
-    color: 'rgb(192, 180, 241)',
+    color: 'rgb(212, 212, 212)',
     background: 'rgb(53, 54, 58)',
   });
   const pane = await page.locator('.navigator-workbench-pane').boundingBox();
@@ -1188,6 +1188,189 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     expect(tile.width).toBeCloseTo(40, 0);
     expect(tile.height).toBeCloseTo(40, 0);
   }
+});
+
+test('Graphite Library keeps its headings, rows, actions, dividers, and compact tiles aligned', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      'sky.ui.workbench.v5',
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 240,
+        utilityWidth: 320,
+        utilityOpen: false,
+      }),
+    );
+  });
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  const createPlaylist = async (name: string) => {
+    await navigator.locator('.library-add-button').click();
+    const dialog = page.getByRole('dialog', { name: 'New playlist' });
+    await dialog.getByLabel('Playlist name').fill(name);
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(navigator.getByRole('button', { name, exact: true })).toBeVisible();
+  };
+  await createPlaylist('Longest playlist title for alignment');
+  await createPlaylist('Short list');
+
+  const expanded = await page.evaluate(() => {
+    const box = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) throw new Error('Library geometry element is missing');
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.x,
+        y: rect.y,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        centerX: rect.x + rect.width / 2,
+      };
+    };
+    const pane = document.querySelector('.navigator-workbench-pane');
+    const heading = document.querySelector('.library-navigator-heading h2');
+    const sectionHeading = document.querySelector('.library-section-heading');
+    const headingActions = document.querySelector('.library-heading-actions');
+    const divider = document.querySelector('.library-secondary-sections');
+    const footer = document.querySelector('.library-navigator-footer');
+    const rows = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '.library-primary-items .library-nav-item, .library-nav-action-row',
+      ),
+    ).map((row) => {
+      const item = row.matches('.library-nav-action-row')
+        ? row.querySelector('.library-nav-item')
+        : row;
+      const menu = row.querySelector('.library-more-button');
+      return {
+        row: box(row),
+        icon: box(item?.querySelector('.library-nav-item-icon') ?? null),
+        label: box(item?.querySelector('.library-nav-item-label') ?? null),
+        menu: menu ? box(menu) : null,
+      };
+    });
+    const paneBox = box(pane);
+    const dividerBox = box(divider);
+    return {
+      pane: paneBox,
+      heading: box(heading),
+      sectionHeading: box(sectionHeading),
+      headingActions: box(headingActions),
+      dividerInsets: [dividerBox.x - paneBox.x, paneBox.right - dividerBox.right],
+      footerCenter: box(footer).centerX,
+      rows,
+    };
+  });
+  expect(Math.abs(expanded.heading.x - expanded.sectionHeading.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(expanded.footerCenter - expanded.pane.centerX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(expanded.dividerInsets[0] - expanded.dividerInsets[1])).toBeLessThanOrEqual(1);
+  expect(expanded.rows).toHaveLength(4);
+  const iconCenters = expanded.rows.map((row) => row.icon.centerX);
+  const labelStarts = expanded.rows.map((row) => row.label.x);
+  for (const center of iconCenters)
+    expect(Math.abs(center - iconCenters[0])).toBeLessThanOrEqual(1);
+  for (const start of labelStarts) expect(Math.abs(start - labelStarts[0])).toBeLessThanOrEqual(1);
+  for (const row of expanded.rows) expect(row.row.height).toBeCloseTo(42, 0);
+  const playlistMenus = expanded.rows.map((row) => row.menu).filter((menu) => menu !== null);
+  expect(playlistMenus).toHaveLength(2);
+  expect(Math.abs(playlistMenus[0]!.centerX - playlistMenus[1]!.centerX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(expanded.headingActions.right - expanded.rows[0]!.row.right)).toBeLessThanOrEqual(
+    5,
+  );
+
+  const expectCollapsedGeometry = async () => {
+    const compact = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+      const selectors = [
+        '.library-collapse-button',
+        '.library-nav-item',
+        '.library-add-button.is-collapsed',
+      ];
+      if (!pane) throw new Error('Library pane is missing');
+      const paneRect = pane.getBoundingClientRect();
+      const tiles = selectors.flatMap((selector) =>
+        Array.from(document.querySelectorAll<HTMLElement>(selector)).map((element) => {
+          const rect = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            centerX: rect.x + rect.width / 2,
+            targeted: hit === element || (hit !== null && element.contains(hit)),
+          };
+        }),
+      );
+      return {
+        pane: { x: paneRect.x, width: paneRect.width, centerX: paneRect.x + paneRect.width / 2 },
+        tiles,
+      };
+    });
+    expect(compact.pane.width).toBeCloseTo(48, 0);
+    expect(compact.tiles.length).toBeGreaterThanOrEqual(5);
+    for (const tile of compact.tiles) {
+      expect(tile.width).toBeCloseTo(40, 0);
+      expect(tile.height).toBeCloseTo(40, 0);
+      expect(Math.abs(tile.centerX - compact.pane.centerX)).toBeLessThanOrEqual(1);
+      expect(tile.targeted).toBe(true);
+    }
+  };
+
+  await page.setViewportSize({ width: 800, height: 560 });
+  const responsiveCollapse = navigator.locator('.library-collapse-button');
+  await expect(responsiveCollapse).toBeVisible();
+  if (
+    !(await page
+      .locator('.navigator-workbench-pane')
+      .evaluate((pane) => pane.classList.contains('is-collapsed')))
+  ) {
+    await responsiveCollapse.click();
+  }
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expectCollapsedGeometry();
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expectCollapsedGeometry();
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const responsiveExpand = navigator.locator('.library-collapse-button');
+  await expect(responsiveExpand).toBeVisible();
+  if (
+    await page
+      .locator('.navigator-workbench-pane')
+      .evaluate((pane) => pane.classList.contains('is-collapsed'))
+  ) {
+    await responsiveExpand.click();
+  }
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  for (const name of ['Longest playlist title for alignment', 'Short list']) {
+    await page.getByRole('button', { name: `More actions for ${name}` }).click();
+    await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
+    const dialog = page.getByRole('dialog', { name: /Delete/ });
+    await dialog.getByRole('button', { name: 'Delete playlist', exact: true }).click();
+  }
+  const empty = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`${selector} is missing`);
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, right: rect.right, centerX: rect.x + rect.width / 2 };
+    };
+    return {
+      sectionHeading: box('.library-section-heading'),
+      emptyAction: box('.library-empty-playlists-create'),
+      footer: box('.library-navigator-footer'),
+      pane: box('.navigator-workbench-pane'),
+    };
+  });
+  expect(Math.abs(empty.emptyAction.x - empty.sectionHeading.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(empty.footer.centerX - empty.pane.centerX)).toBeLessThanOrEqual(1);
 });
 
 test('Graphite automatic compact navigation preserves the saved expanded preference', async ({

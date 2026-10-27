@@ -111,10 +111,16 @@ html[data-palette='graphite'] {
   --workbench-control-rest: transparent;
   --workbench-control-hover: #35363a;
   --workbench-control-pressed: #404246;
+  --workbench-caption-hover: #3b3d41;
   --workbench-control-disabled: #8b8c90;
+  --workbench-action-edge: #393b3e;
+  --workbench-action-hover-edge: #5b5e63;
+  --workbench-action-hover: #303135;
   --workbench-control-danger-hover: #452d32;
   --workbench-accent-ink: #b2a5e9;
   --workbench-accent-ink-hover: #c0b4f1;
+  --workbench-toggle-on: #d0c4ff;
+  --workbench-toggle-off: #888b90;
   --workbench-accent-fill: #705eae;
   --workbench-accent-fill-hover: #7564b4;
   --workbench-accent-fill-pressed: #6553a0;
