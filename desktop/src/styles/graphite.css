@@ -787,6 +787,11 @@ html[data-palette='graphite'] .library-confirm-message {
 }
 
 /* Graphite controls follow the product hierarchy: filled primary, persistent selected, quiet secondary. */
+html[data-palette='graphite'] .startup-mark {
+  color: var(--on-accent);
+  background-color: var(--workbench-accent-fill);
+}
+
 html[data-palette='graphite'] .button-primary {
   border-color: var(--workbench-accent-fill);
   color: var(--on-accent);

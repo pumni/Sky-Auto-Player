@@ -466,6 +466,23 @@ test('Graphite hierarchy leaves the five existing palette accent contracts uncha
     'rgb(255, 255, 255)',
   ]);
   expect(sameColor(await token(page, '--workbench-accent-fill'), '#705eae')).toBe(true);
+  const startupMark = await page.evaluate(() => {
+    const element = document.createElement('div');
+    element.className = 'startup-mark';
+    element.textContent = '♪';
+    element.style.position = 'absolute';
+    element.style.left = '-10000px';
+    document.body.append(element);
+    const style = getComputedStyle(element);
+    const colors = { foreground: style.color, background: style.backgroundColor };
+    element.remove();
+    return colors;
+  });
+  expect(startupMark.foreground).toBe('rgb(255, 255, 255)');
+  expect(sameColor(startupMark.background, await token(page, '--workbench-accent-fill'))).toBe(
+    true,
+  );
+  expect(contrastRatio(startupMark.foreground, startupMark.background)).toBeGreaterThanOrEqual(4.5);
 });
 
 test('Graphite primary, selected, and focus roles use Windows forced colors and reduced motion', async ({
