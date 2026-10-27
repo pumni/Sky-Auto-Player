@@ -13,8 +13,6 @@ mod startup_telemetry;
 mod startup_window;
 mod ui_events;
 #[cfg(windows)]
-mod windows_caption;
-#[cfg(windows)]
 mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
@@ -366,11 +364,6 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                     && let Err(error) = windows_icon::apply_native_window_icons(&window)
                 {
                     eprintln!("failed to apply native Windows icons: {error}");
-                }
-                if let Some(window) = app.get_webview_window("main")
-                    && let Err(error) = windows_caption::install(&window)
-                {
-                    eprintln!("failed to install native maximize hit target: {error}");
                 }
             }
             if gui_smoke {

@@ -252,17 +252,6 @@ test('Graphite caption roles have flat hover over their full safe hit targets', 
   const maximize = page.getByRole('button', { name: 'Maximize window' });
   await expect(maximize).toHaveClass(/caption-button-zoom/);
   await expectVisibleCaptionHover(page, maximize, 'rgb(59, 61, 65)', 'rgb(255, 255, 255)');
-  await maximize.evaluate((element) => element.setAttribute('data-native-hover', 'true'));
-  await page.mouse.move(0, 0);
-  const nativeHoverStyle = await maximize.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { background: style.backgroundColor, color: style.color };
-  });
-  expect(nativeHoverStyle).toEqual({ background: 'rgb(59, 61, 65)', color: 'rgb(255, 255, 255)' });
-  await maximize.evaluate((element) => element.removeAttribute('data-native-hover'));
-  expect(await maximize.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
-    'rgba(0, 0, 0, 0)',
-  );
   await maximize.click();
 
   const restore = page.getByRole('button', { name: 'Restore window' });

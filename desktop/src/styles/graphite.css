@@ -46,7 +46,7 @@ html[data-palette='graphite']
 
 html[data-palette='graphite']
   .window-caption-controls
-  .caption-button-zoom:is(:hover, [data-native-hover='true']):not(:disabled) {
+  .caption-button-zoom:hover:not(:disabled) {
   outline: 0;
   color: #ffffff;
   background-color: #3b3d41;
@@ -1479,7 +1479,7 @@ html[data-palette='graphite']
 
   html[data-palette='graphite']
     .window-caption-controls
-    .caption-button:is(:hover, [data-native-hover='true']):not(:disabled) {
+    .caption-button:hover:not(:disabled) {
     border: 0;
     outline: 0;
     color: HighlightText;
