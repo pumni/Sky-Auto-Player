@@ -418,7 +418,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     expect(populated.elements.search?.borderRadius).toBe('8px');
     expect(populated.elements.searchShortcut?.borderRadius).toBe('4px');
     expect(populated.elements.playerTool?.borderRadius).toBe('8px');
-    expect(populated.elements.inspectorTab?.borderRadius).toBe('6px');
+    expect(populated.elements.inspectorTab?.borderRadius).toBe('0px');
     expect(populated.elements.navigatorSectionDivider).toMatchObject({
       borderTopWidth: '1px',
       borderTopColor: 'rgb(42, 43, 44)',

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WindowControls } from '../../platform/windowControls';
+import { isTauriRuntime } from '../../platform/runtime';
 
 interface WindowCaptionControlsProps {
   controls: WindowControls;
@@ -8,6 +9,8 @@ interface WindowCaptionControlsProps {
 export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) {
   const [maximized, setMaximized] = useState(false);
   const [windowActive, setWindowActive] = useState(() => document.hasFocus());
+  const [nativeZoomHovered, setNativeZoomHovered] = useState(false);
+  const windowActiveRef = useRef(document.hasFocus());
   const disposedRef = useRef(false);
 
   const refreshMaximized = useCallback(() => {
@@ -50,8 +53,42 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
   }, [controls, refreshMaximized, refreshSettled]);
 
   useEffect(() => {
-    const activate = () => setWindowActive(true);
-    const deactivate = () => setWindowActive(false);
+    if (!isTauriRuntime()) return;
+
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    void import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) =>
+        getCurrentWindow().listen<{ hovered: boolean }>('sky:caption-zoom-hover', (event) => {
+          if (!disposed) {
+            setNativeZoomHovered(event.payload.hovered && windowActiveRef.current);
+          }
+        }),
+      )
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unsubscribe = cleanup;
+      })
+      .catch((error: unknown) => {
+        if (!disposed) console.error('Could not subscribe to native caption hover state.', error);
+      });
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const activate = () => {
+      windowActiveRef.current = true;
+      setWindowActive(true);
+    };
+    const deactivate = () => {
+      windowActiveRef.current = false;
+      setWindowActive(false);
+      setNativeZoomHovered(false);
+    };
     window.addEventListener('focus', activate);
     window.addEventListener('blur', deactivate);
     return () => {
@@ -83,6 +120,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label={maximizeLabel}
         title={maximizeLabel}
         data-tauri-drag-region="false"
+        data-native-hover={nativeZoomHovered ? 'true' : undefined}
         onClick={() => void controls.toggleMaximize().finally(refreshSettled)}
       >
         <span

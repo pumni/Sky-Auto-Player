@@ -638,7 +638,7 @@ test('Graphite secondary controls stay quiet at rest and show clear hover, focus
 
   const minimize = page.getByRole('button', { name: 'Minimize window' });
   expect(sameColor((await colors(minimize)).background, transparent)).toBe(true);
-  await expectVisibleHover(minimize, hoverToken);
+  await expectVisibleHover(minimize, '#303135');
   const close = page.getByRole('button', { name: 'Close window' });
   await close.hover();
   const closeStyle = await colors(close);
@@ -899,6 +899,7 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
   const disabledAutoPlay = await colors(autoPlay);
   expect(disabledAutoPlay.background).toBe(systemColors.buttonFace);
   expect(disabledAutoPlay.foreground).toBe(systemColors.grayText);
+  expect(disabledAutoPlay.opacity).toBe('1');
   expect((await toggleIndicator(autoPlay)).background).toBe(systemColors.grayText);
   await autoPlay.evaluate((element) => element.removeAttribute('disabled'));
 

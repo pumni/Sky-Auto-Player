@@ -474,7 +474,7 @@ test('Graphite is the new-install palette and persists through the appearance se
     '--text-tertiary': '#929292',
     '--accent': '#b2a5e9',
     '--accent-hover': '#c0b4f1',
-    '--on-accent': '#121314',
+    '--on-accent': '#ffffff',
     '--focus-ring': '#b2a5e9',
   } as const;
   for (const [name, value] of Object.entries(graphiteTokens)) {

@@ -252,6 +252,17 @@ test('Graphite caption roles have flat hover over their full safe hit targets', 
   const maximize = page.getByRole('button', { name: 'Maximize window' });
   await expect(maximize).toHaveClass(/caption-button-zoom/);
   await expectVisibleCaptionHover(page, maximize, 'rgb(59, 61, 65)', 'rgb(255, 255, 255)');
+  await maximize.evaluate((element) => element.setAttribute('data-native-hover', 'true'));
+  await page.mouse.move(0, 0);
+  const nativeHoverStyle = await maximize.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, color: style.color };
+  });
+  expect(nativeHoverStyle).toEqual({ background: 'rgb(59, 61, 65)', color: 'rgb(255, 255, 255)' });
+  await maximize.evaluate((element) => element.removeAttribute('data-native-hover'));
+  expect(await maximize.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+    'rgba(0, 0, 0, 0)',
+  );
   await maximize.click();
 
   const restore = page.getByRole('button', { name: 'Restore window' });
@@ -279,6 +290,16 @@ test('Graphite caption roles have flat hover over their full safe hit targets', 
   expect(keyboardFocus.visible).toBe(true);
   expect(keyboardFocus.outlineWidth).toBe('2px');
   expect(keyboardFocus.outlineOffset).toBe('-2px');
+  await close.hover();
+  const focusedWhileHovered = await close.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      hovered: element.matches(':hover'),
+      visible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  expect(focusedWhileHovered).toEqual({ hovered: true, visible: true, outlineWidth: '2px' });
 });
 
 async function expectNonOverlappingGeometry(

@@ -1760,6 +1760,10 @@ test('dock and transport toggles show palette-specific active state without layo
       const secondary = getComputedStyle(probe).color;
       probe.style.color = 'var(--workbench-control-disabled)';
       const disabled = getComputedStyle(probe).color;
+      probe.style.color = 'var(--workbench-toggle-on)';
+      const toggleOn = getComputedStyle(probe).color;
+      probe.style.color = 'var(--workbench-toggle-off)';
+      const toggleOff = getComputedStyle(probe).color;
       probe.style.backgroundColor = 'var(--workbench-control-hover)';
       const controlHover = getComputedStyle(probe).backgroundColor;
       probe.remove();
@@ -1777,6 +1781,8 @@ test('dock and transport toggles show palette-specific active state without layo
         tertiary,
         secondary,
         disabled,
+        toggleOn,
+        toggleOff,
         controlHover,
         palette: document.documentElement.dataset.palette,
       };
@@ -1825,7 +1831,7 @@ test('dock and transport toggles show palette-specific active state without layo
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
   const activeShuffleTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.accentHover : style.accent;
+    style.palette === 'graphite' ? style.toggleOn : style.accent;
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
@@ -1857,9 +1863,9 @@ test('dock and transport toggles show palette-specific active state without layo
   const autoPlay = player.getByRole('button', { name: 'Auto Play' });
   const autoPlayBefore = await measureStyle(autoPlay);
   const activeAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.accentHover : style.accent;
+    style.palette === 'graphite' ? style.toggleOn : style.accent;
   const hoveredAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.accentHover;
+    style.palette === 'graphite' ? style.toggleOn : style.accentHover;
   expect(autoPlayBefore.color).toBe(activeAutoPlayTone(autoPlayBefore));
   expect(autoPlayBefore.background).toBe('rgba(0, 0, 0, 0)');
   await autoPlay.hover();
@@ -1876,11 +1882,13 @@ test('dock and transport toggles show palette-specific active state without layo
   await autoPlay.click();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
   await page.mouse.move(0, 0);
+  const inactiveAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
+    style.palette === 'graphite' ? style.toggleOff : style.tertiary;
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
-    .toBe((await measureStyle(autoPlay)).tertiary);
+    .toBe(inactiveAutoPlayTone(await measureStyle(autoPlay)));
   const autoPlayOff = await measureStyle(autoPlay);
-  expect(autoPlayOff.color).toBe(autoPlayOff.tertiary);
+  expect(autoPlayOff.color).toBe(inactiveAutoPlayTone(autoPlayOff));
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
@@ -2588,7 +2596,9 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
     await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
     const activeShuffleTone = await shuffle.evaluate((element) => {
       const token =
-        document.documentElement.dataset.palette === 'graphite' ? '--accent-hover' : '--accent';
+        document.documentElement.dataset.palette === 'graphite'
+          ? '--workbench-toggle-on'
+          : '--accent';
       const probe = document.createElement('span');
       probe.style.color = `var(${token})`;
       document.body.append(probe);

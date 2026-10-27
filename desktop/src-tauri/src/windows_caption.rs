@@ -1,30 +1,39 @@
 #![cfg(windows)]
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::mem::size_of;
-use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
-use tauri::{Runtime, WebviewWindow};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, WebviewWindow};
+use tokio::sync::watch;
 use windows_sys::Win32::Foundation::{
     GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, SetLastError, WPARAM,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
     GetParent, HTMAXBUTTON, HWND_TOP, IsWindow, IsZoomed, LWA_ALPHA, PostMessageW,
     RegisterClassExW, SC_MAXIMIZE, SC_RESTORE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOOWNERZORDER, SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos, WM_DESTROY,
-    WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW,
-    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_OVERLAPPED, WS_VISIBLE,
+    SWP_NOOWNERZORDER, SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos, WA_INACTIVE,
+    WM_ACTIVATE, WM_DESTROY, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+    WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_OVERLAPPED, WS_VISIBLE,
 };
 
-const TITLEBAR_HEIGHT: u32 = 48;
+const TITLEBAR_HEIGHT: u32 = 40;
 const CAPTION_BUTTON_WIDTH: u32 = 46;
 const CLOSE_BUTTONS_TO_THE_RIGHT: u32 = 1;
 const SUBCLASS_ID: usize = 0x534b_5943_4150;
+const CAPTION_ZOOM_HOVER_EVENT: &str = "sky:caption-zoom-hover";
 const SNAP_CLASS: &[u16] = &[
     b'S' as u16,
     b'k' as u16,
@@ -46,17 +55,72 @@ const SNAP_CLASS: &[u16] = &[
     0,
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SnapOverlayState {
     overlay: isize,
     titlebar_height: u32,
     button_width: u32,
+    hover_bridge: Option<NativeHoverBridge>,
 }
 
 type OverlayRegistry = Mutex<HashMap<isize, SnapOverlayState>>;
 
 static SNAP_OVERLAYS: LazyLock<OverlayRegistry> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static REGISTER_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[derive(Clone)]
+struct NativeHoverBridge {
+    sender: watch::Sender<bool>,
+    alive: Arc<AtomicBool>,
+    tracking_nonclient: Arc<AtomicBool>,
+}
+
+impl NativeHoverBridge {
+    fn new() -> (Self, watch::Receiver<bool>) {
+        let (sender, receiver) = watch::channel(false);
+        (
+            Self {
+                sender,
+                alive: Arc::new(AtomicBool::new(true)),
+                tracking_nonclient: Arc::new(AtomicBool::new(false)),
+            },
+            receiver,
+        )
+    }
+
+    fn set_hovered(&self, hovered: bool) {
+        if !self.alive.load(Ordering::Acquire) {
+            return;
+        }
+        self.sender.send_if_modified(|current| {
+            if *current == hovered {
+                false
+            } else {
+                *current = hovered;
+                true
+            }
+        });
+    }
+
+    fn begin_nonclient_tracking(&self) -> bool {
+        !self.tracking_nonclient.swap(true, Ordering::AcqRel)
+    }
+
+    fn reset(&self) {
+        self.tracking_nonclient.store(false, Ordering::Release);
+        self.set_hovered(false);
+    }
+
+    fn stop(&self) {
+        self.alive.store(false, Ordering::Release);
+        self.tracking_nonclient.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct CaptionZoomHoverPayload {
+    hovered: bool,
+}
 
 /// `setup` runs from Tauri's main-thread `Ready` event. Reserve the parent
 /// subclass synchronously so WM_DESTROY owns the captured HWND before queuing
@@ -65,9 +129,21 @@ static REGISTER_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
 pub fn install<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
     let parent = window_hwnd(window)?;
     register_class()?;
-    if !reserve_parent(parent, &SNAP_OVERLAYS, &Win32CaptionOperations)? {
+    let (hover_bridge, receiver) = NativeHoverBridge::new();
+    if !reserve_parent_with_hover(
+        parent,
+        &SNAP_OVERLAYS,
+        &Win32CaptionOperations,
+        Some(hover_bridge.clone()),
+    )? {
         return Ok(());
     }
+    start_hover_event_dispatch(
+        window.app_handle().clone(),
+        window.label().to_owned(),
+        Arc::clone(&hover_bridge.alive),
+        receiver,
+    );
 
     window
         .run_on_main_thread(move || {
@@ -81,6 +157,47 @@ pub fn install<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
             cancel_pending_install(parent, &SNAP_OVERLAYS, &Win32CaptionOperations);
             format!("schedule Windows caption hit target: {error}")
         })
+}
+
+fn start_hover_event_dispatch<R: Runtime + 'static>(
+    app_handle: AppHandle<R>,
+    window_label: String,
+    alive: Arc<AtomicBool>,
+    mut receiver: watch::Receiver<bool>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_emitted = false;
+        while receiver.changed().await.is_ok() {
+            if !alive.load(Ordering::Acquire) {
+                break;
+            }
+
+            let hovered = *receiver.borrow_and_update();
+            if hovered == last_emitted {
+                continue;
+            }
+            last_emitted = hovered;
+
+            let event_app = app_handle.clone();
+            let event_label = window_label.clone();
+            let event_alive = Arc::clone(&alive);
+            let dispatcher = app_handle.clone();
+            if let Err(error) = dispatcher.run_on_main_thread(move || {
+                if !event_alive.load(Ordering::Acquire) {
+                    return;
+                }
+                if let Err(error) = event_app.emit_to(
+                    EventTarget::webview_window(event_label),
+                    CAPTION_ZOOM_HOVER_EVENT,
+                    CaptionZoomHoverPayload { hovered },
+                ) {
+                    eprintln!("failed to emit native caption hover state: {error}");
+                }
+            }) {
+                eprintln!("failed to queue native caption hover state: {error}");
+            }
+        }
+    });
 }
 
 fn window_hwnd<W>(window: &W) -> Result<isize, String>
@@ -210,10 +327,20 @@ fn install_overlay(
     Ok(())
 }
 
+#[cfg(test)]
 fn reserve_parent(
     parent: isize,
     registry: &OverlayRegistry,
     operations: &impl CaptionOperations,
+) -> Result<bool, String> {
+    reserve_parent_with_hover(parent, registry, operations, None)
+}
+
+fn reserve_parent_with_hover(
+    parent: isize,
+    registry: &OverlayRegistry,
+    operations: &impl CaptionOperations,
+    hover_bridge: Option<NativeHoverBridge>,
 ) -> Result<bool, String> {
     if parent == 0 || !operations.is_window(parent) {
         return Err("cannot install native caption hit target on an invalid HWND".into());
@@ -235,6 +362,7 @@ fn reserve_parent(
             overlay: 0,
             titlebar_height: TITLEBAR_HEIGHT,
             button_width: CAPTION_BUTTON_WIDTH,
+            hover_bridge,
         },
     );
     Ok(true)
@@ -249,7 +377,8 @@ fn finish_overlay_install(
         return Ok(());
     }
     if !operations.is_window(parent) {
-        lock_overlays(registry).remove(&parent);
+        let removed = lock_overlays(registry).remove(&parent);
+        stop_hover_bridge(removed.as_ref());
         return Err("parent HWND became unavailable before caption hit target creation".into());
     }
 
@@ -272,11 +401,12 @@ fn finish_overlay_install(
 
     let state = lock_overlays(registry)
         .get(&parent)
-        .copied()
+        .cloned()
         .unwrap_or(SnapOverlayState {
             overlay: 0,
             titlebar_height: TITLEBAR_HEIGHT,
             button_width: CAPTION_BUTTON_WIDTH,
+            hover_bridge: None,
         });
     if !is_pending_install(parent, registry) {
         // WM_DESTROY removed the reservation while CreateWindowExW or child
@@ -330,13 +460,20 @@ fn cancel_pending_install(
             .get(&parent)
             .is_some_and(|state| state.overlay == 0)
         {
-            overlays.remove(&parent).is_some()
+            overlays.remove(&parent)
         } else {
-            false
+            None
         }
     };
-    if removed && !operations.remove_parent_subclass(parent) {
+    stop_hover_bridge(removed.as_ref());
+    if removed.is_some() && !operations.remove_parent_subclass(parent) {
         eprintln!("RemoveWindowSubclass failed while rolling back caption hit target installation");
+    }
+}
+
+fn stop_hover_bridge(state: Option<&SnapOverlayState>) {
+    if let Some(bridge) = state.and_then(|state| state.hover_bridge.as_ref()) {
+        bridge.stop();
     }
 }
 
@@ -428,12 +565,52 @@ fn position_overlay(parent: isize, state: SnapOverlayState) -> Result<(), String
 fn update_overlay_position(parent: HWND) -> Result<(), String> {
     let state = lock_overlays(&SNAP_OVERLAYS)
         .get(&(parent as isize))
-        .copied();
+        .cloned();
     if let Some(state) = state.filter(|state| state.overlay != 0) {
+        reset_hover_bridge(state.hover_bridge.as_ref());
         position_overlay(parent as isize, state)
     } else {
         Ok(())
     }
+}
+
+fn hover_bridge_for_parent(parent: isize) -> Option<NativeHoverBridge> {
+    lock_overlays(&SNAP_OVERLAYS)
+        .get(&parent)
+        .and_then(|state| state.hover_bridge.clone())
+}
+
+fn hover_bridge_for_overlay(overlay: isize) -> Option<NativeHoverBridge> {
+    lock_overlays(&SNAP_OVERLAYS)
+        .values()
+        .find(|state| state.overlay == overlay)
+        .and_then(|state| state.hover_bridge.clone())
+}
+
+fn reset_hover_bridge(bridge: Option<&NativeHoverBridge>) {
+    if let Some(bridge) = bridge {
+        bridge.reset();
+    }
+}
+
+fn reset_hover_for_parent(parent: isize) {
+    reset_hover_bridge(hover_bridge_for_parent(parent).as_ref());
+}
+
+fn reset_hover_for_overlay(overlay: isize) {
+    reset_hover_bridge(hover_bridge_for_overlay(overlay).as_ref());
+}
+
+fn track_nonclient_mouse_leave(hwnd: HWND) -> bool {
+    let mut tracking = TRACKMOUSEEVENT {
+        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE | TME_NONCLIENT,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    // SAFETY: `tracking` is initialized with the live child HWND and is only
+    // borrowed for the documented TrackMouseEvent call.
+    unsafe { TrackMouseEvent(&mut tracking) != 0 }
 }
 
 fn scale(value: u32, dpi: u64) -> i32 {
@@ -471,6 +648,9 @@ unsafe extern "system" fn parent_subclass_proc(
     unsafe {
         match message {
             WM_DESTROY => parent_destroying(hwnd),
+            WM_ACTIVATE if (wparam & 0xffff) == WA_INACTIVE as usize => {
+                reset_hover_for_parent(hwnd as isize);
+            }
             WM_SIZE | WM_DPICHANGED => {
                 if let Err(error) = update_overlay_position(hwnd) {
                     eprintln!("failed to update native caption hit target: {error}");
@@ -496,9 +676,25 @@ unsafe extern "system" fn overlay_proc(
     unsafe {
         match message {
             WM_NCHITTEST => HTMAXBUTTON as LRESULT,
-            WM_NCMOUSEMOVE => 0,
+            WM_NCMOUSEMOVE => {
+                if let Some(bridge) = hover_bridge_for_overlay(hwnd as isize) {
+                    if bridge.begin_nonclient_tracking() && !track_nonclient_mouse_leave(hwnd) {
+                        bridge.tracking_nonclient.store(false, Ordering::Release);
+                    }
+                    bridge.set_hovered(true);
+                }
+                0
+            }
+            WM_NCMOUSELEAVE | WM_MOUSELEAVE => {
+                if let Some(bridge) = hover_bridge_for_overlay(hwnd as isize) {
+                    bridge.tracking_nonclient.store(false, Ordering::Release);
+                    bridge.set_hovered(false);
+                }
+                0
+            }
             WM_NCLBUTTONDOWN | WM_LBUTTONDOWN => 0,
             WM_NCLBUTTONUP | WM_LBUTTONUP => {
+                reset_hover_for_overlay(hwnd as isize);
                 let parent = GetParent(hwnd);
                 if !parent.is_null() {
                     let command = if IsZoomed(parent) != 0 {
@@ -532,8 +728,9 @@ fn parent_destroyed_from(
     registry: &OverlayRegistry,
     operations: &impl CaptionOperations,
 ) {
-    let had_state = { lock_overlays(registry).remove(&parent).is_some() };
-    if had_state && !operations.remove_parent_subclass(parent) {
+    let removed = { lock_overlays(registry).remove(&parent) };
+    stop_hover_bridge(removed.as_ref());
+    if removed.is_some() && !operations.remove_parent_subclass(parent) {
         eprintln!("RemoveWindowSubclass failed during native caption teardown");
     }
 }
@@ -543,16 +740,15 @@ fn child_destroyed_from(
     registry: &OverlayRegistry,
     operations: &impl CaptionOperations,
 ) {
-    let parent = {
+    let (parent, removed) = {
         let mut overlays = lock_overlays(registry);
         let parent = overlays
             .iter()
             .find_map(|(parent, state)| (state.overlay == overlay).then_some(*parent));
-        if let Some(parent) = parent {
-            overlays.remove(&parent);
-        }
-        parent
+        let removed = parent.and_then(|parent| overlays.remove(&parent));
+        (parent, removed)
     };
+    stop_hover_bridge(removed.as_ref());
     if let Some(parent) = parent
         && !operations.remove_parent_subclass(parent)
     {
@@ -563,9 +759,9 @@ fn child_destroyed_from(
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptionOperations, OverlayRegistry, SnapOverlayState, child_destroyed_from,
-        finish_overlay_install, install_overlay, lock_overlays, parent_destroyed_from,
-        reserve_parent,
+        CAPTION_BUTTON_WIDTH, CaptionOperations, NativeHoverBridge, OverlayRegistry,
+        SnapOverlayState, TITLEBAR_HEIGHT, child_destroyed_from, finish_overlay_install,
+        install_overlay, lock_overlays, parent_destroyed_from, reserve_parent, scale,
     };
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
@@ -811,5 +1007,31 @@ mod tests {
         assert!(registry.lock().unwrap().is_empty());
         assert_eq!(operations.remove_subclass_count.get(), 1);
         assert_eq!(operations.destroy_count.get(), 0);
+    }
+
+    #[test]
+    fn native_hover_channel_coalesces_transitions_and_closes_after_teardown() {
+        let (bridge, mut receiver) = NativeHoverBridge::new();
+
+        bridge.set_hovered(true);
+        bridge.set_hovered(false);
+
+        assert!(receiver.has_changed().unwrap());
+        assert!(!*receiver.borrow_and_update());
+        assert!(!receiver.has_changed().unwrap());
+
+        bridge.stop();
+        bridge.set_hovered(true);
+        assert!(!receiver.has_changed().unwrap());
+    }
+
+    #[test]
+    fn titlebar_overlay_matches_the_forty_pixel_caption_at_supported_dpi_scales() {
+        assert_eq!(TITLEBAR_HEIGHT, 40);
+        assert_eq!(CAPTION_BUTTON_WIDTH, 46);
+        for (dpi, expected_height, expected_width) in [(96, 40, 46), (120, 50, 58), (144, 60, 69)] {
+            assert_eq!(scale(TITLEBAR_HEIGHT, dpi), expected_height);
+            assert_eq!(scale(CAPTION_BUTTON_WIDTH, dpi), expected_width);
+        }
     }
 }

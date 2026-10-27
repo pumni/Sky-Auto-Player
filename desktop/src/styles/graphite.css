@@ -44,7 +44,9 @@ html[data-palette='graphite']
   background-color: #404246;
 }
 
-html[data-palette='graphite'] .window-caption-controls .caption-button-zoom:hover:not(:disabled) {
+html[data-palette='graphite']
+  .window-caption-controls
+  .caption-button-zoom:is(:hover, [data-native-hover='true']):not(:disabled) {
   outline: 0;
   color: #ffffff;
   background-color: #3b3d41;
@@ -64,13 +66,11 @@ html[data-palette='graphite'] .window-caption-controls .caption-button-close:act
   background-color: #9e1f2a;
 }
 
-html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:not(:hover) {
+html[data-palette='graphite']
+  .window-caption-controls
+  .caption-button:focus-visible:not(:disabled) {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
-}
-
-html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:hover {
-  outline: 0;
 }
 
 html[data-palette='graphite'] .global-search:focus-within {
@@ -1403,8 +1403,12 @@ html[data-palette='graphite']
       .player-transport .player-shuffle-action[aria-pressed='true'],
       .player-tools .player-auto-play-button[aria-pressed='true']
     ):disabled::after {
-    forced-color-adjust: none;
+    forced-color-adjust: auto;
     background-color: GrayText;
+  }
+
+  html[data-palette='graphite'] .player-tools .player-auto-play-button:disabled {
+    opacity: 1;
   }
 
   html[data-palette='graphite']
@@ -1461,6 +1465,11 @@ html[data-palette='graphite']
     outline-offset: 2px;
   }
 
+  html[data-palette='graphite'] .global-search:has(input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
   html[data-palette='graphite'] .window-caption-controls .caption-button {
     forced-color-adjust: auto;
     border: 0;
@@ -1468,7 +1477,9 @@ html[data-palette='graphite']
     background-color: ButtonFace;
   }
 
-  html[data-palette='graphite'] .window-caption-controls .caption-button:hover:not(:disabled) {
+  html[data-palette='graphite']
+    .window-caption-controls
+    .caption-button:is(:hover, [data-native-hover='true']):not(:disabled) {
     border: 0;
     outline: 0;
     color: HighlightText;
@@ -1479,13 +1490,9 @@ html[data-palette='graphite']
     background-color: Highlight;
   }
 
-  html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:not(:hover) {
+  html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: -2px;
-  }
-
-  html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:hover {
-    outline: 0;
   }
 
   html[data-palette='graphite']
