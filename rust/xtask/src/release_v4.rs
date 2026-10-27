@@ -2139,6 +2139,21 @@ fn validate_candidate_evidence(
     records: &[CandidateRecord],
     context: &Context,
 ) -> Result<()> {
+    let expected_updater_key_id = crate::updater_trust::canonical_key_id()?;
+    validate_candidate_evidence_with_updater_key_id(
+        root,
+        records,
+        context,
+        &expected_updater_key_id,
+    )
+}
+
+fn validate_candidate_evidence_with_updater_key_id(
+    root: &Path,
+    records: &[CandidateRecord],
+    context: &Context,
+    expected_updater_key_id: &str,
+) -> Result<()> {
     let production_record = records
         .iter()
         .find(|record| record.source_name == EVIDENCE_NAMES[0])
@@ -2162,7 +2177,7 @@ fn validate_candidate_evidence(
         || !production["approved_signer_thumbprint"].is_null()
         || !production["observed_signer_thumbprint"].is_null()
         || production["updater_signature_status"] != "valid"
-        || production["updater_key_id"] != crate::updater_trust::canonical_key_id()?
+        || production["updater_key_id"] != expected_updater_key_id
         || production["qualification_status"] != "PASS"
     {
         return Err("production evidence does not match release identity or unsigned-zero-budget trust state".into());
@@ -2435,6 +2450,16 @@ fn validate_beta_keeps_latest(
 }
 
 fn read_manifest(root: &Path, options: &Options, context: &Context) -> Result<CandidateManifest> {
+    let expected_updater_key_id = crate::updater_trust::canonical_key_id()?;
+    read_manifest_with_updater_key_id(root, options, context, &expected_updater_key_id)
+}
+
+fn read_manifest_with_updater_key_id(
+    root: &Path,
+    options: &Options,
+    context: &Context,
+    expected_updater_key_id: &str,
+) -> Result<CandidateManifest> {
     let manifest: CandidateManifest =
         read_json(&options.state_root.join("candidate-manifest.json"))?;
     if manifest.schema_version != 2 || manifest.repository_mismatch(context) {
@@ -2490,7 +2515,12 @@ fn read_manifest(root: &Path, options: &Options, context: &Context) -> Result<Ca
             return Err("public asset record is not bound by qualification manifest".into());
         }
     }
-    validate_candidate_evidence(&options.state_root, &manifest.qualification_assets, context)?;
+    validate_candidate_evidence_with_updater_key_id(
+        &options.state_root,
+        &manifest.qualification_assets,
+        context,
+        expected_updater_key_id,
+    )?;
     let _ = root;
     Ok(manifest)
 }
@@ -2601,10 +2631,12 @@ impl CandidateManifest {
 }
 
 fn publish_release(root: &Path, options: &Options, transport: &mut dyn Transport) -> Result<()> {
+    let expected_updater_key_id = crate::updater_trust::canonical_key_id()?;
     publish_release_with_signature_verifier(
         root,
         options,
         transport,
+        &expected_updater_key_id,
         crate::updater_trust::verify_updater_signature_for_version,
     )
 }
@@ -2614,10 +2646,12 @@ fn publish_release_with_mock_verifier(
     options: &Options,
     transport: &mut dyn Transport,
 ) -> Result<()> {
+    let expected_updater_key_id = crate::updater_trust::canonical_key_id()?;
     publish_release_with_signature_verifier(
         root,
         options,
         transport,
+        &expected_updater_key_id,
         |installer, signature, version| {
             let installer_name = release_metadata::canonical_installer_name(version);
             let signature_name = format!("{installer_name}.sig");
@@ -2639,6 +2673,7 @@ fn publish_release_with_signature_verifier(
     root: &Path,
     options: &Options,
     transport: &mut dyn Transport,
+    expected_updater_key_id: &str,
     mut verify_signature: impl FnMut(&Path, &Path, &str) -> Result<()>,
 ) -> Result<()> {
     let context = read_context(root, options)?;
@@ -2647,7 +2682,8 @@ fn publish_release_with_signature_verifier(
         return Err("PublishRelease requires a READY candidate state".into());
     }
     validate_state(&state, &context)?;
-    let manifest = read_manifest(root, options, &context)?;
+    let manifest =
+        read_manifest_with_updater_key_id(root, options, &context, expected_updater_key_id)?;
     let latest_before = read_json::<Value>(&options.state_root.join("preflight-evidence.json"))?["pre_publication_latest"].clone();
     validate_stable_latest(&latest_before)?;
     prepublication_metadata_qualification(
@@ -4740,6 +4776,7 @@ fn mock_draft_readback_failures_never_patch() -> Result<()> {
                 &root,
                 &options,
                 &mut github,
+                &crate::updater_trust::canonical_key_id()?,
                 |installer, signature, version| {
                     let expected_installer = release_metadata::canonical_installer_name(version);
                     let expected_signature = format!("{expected_installer}.sig");
@@ -5481,6 +5518,16 @@ fn mock_cleanup_failure_preserves_original_error() -> Result<()> {
     assert!(message.contains("owned draft cleanup failed"));
     assert!(message.contains("injected delete failure"));
     assert!(github.releases.contains_key(&12));
+    assert!(
+        github
+            .events
+            .iter()
+            .all(|event| { event != "PATCH repos/pumni/Sky-Auto-Player/releases/12" })
+    );
+    let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
+    assert_eq!(state.phase, Phase::Ready);
+    assert!(!state.qualified_after_download);
+    assert_eq!(state.release_id, None);
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -5492,13 +5539,29 @@ fn mock_patch_timeout_reconciles_exact_release_id() -> Result<()> {
     github.patch_applies_then_fails = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
     publish_release_with_mock_verifier(&root, &options, &mut github)?;
-    assert!(
+    let patch = github
+        .events
+        .iter()
+        .position(|event| event == "PATCH repos/pumni/Sky-Auto-Player/releases/12")
+        .ok_or("publication PATCH missing")?;
+    assert_eq!(
         github
             .events
             .iter()
-            .any(|event| event == "GET repos/pumni/Sky-Auto-Player/releases/12")
+            .filter(|event| event.as_str() == "PATCH repos/pumni/Sky-Auto-Player/releases/12")
+            .count(),
+        1,
+        "uncertain PATCH is reconciled, never replayed"
     );
+    assert!(github.events.iter().enumerate().any(|(index, event)| {
+        index > patch && event == "GET repos/pumni/Sky-Auto-Player/releases/12"
+    }));
     assert!(github.deletions.is_empty());
+    let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
+    assert_eq!(state.phase, Phase::PublishedPendingMetadata);
+    assert!(state.qualified_after_download);
+    assert_eq!(state.release_id, Some(12));
+    assert!(state.published_at.is_some());
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -5510,8 +5573,24 @@ fn mock_unknown_publication_never_cleans_up() -> Result<()> {
     github.fail_reconcile_after_patch = true;
     github.patch_applies_then_fails = true;
     prepare_publish_fixture(&options, &context, &manifest, &github.latest)?;
-    assert!(publish_release_with_mock_verifier(&root, &options, &mut github).is_err());
+    let error = publish_release_with_mock_verifier(&root, &options, &mut github)
+        .expect_err("unknown publication outcome must surface for operator reconciliation");
+    assert!(error.to_string().contains("POST_PUBLICATION_INCIDENT"));
     assert!(github.deletions.is_empty());
+    assert_eq!(
+        github
+            .events
+            .iter()
+            .filter(|event| event.as_str() == "PATCH repos/pumni/Sky-Auto-Player/releases/12")
+            .count(),
+        1,
+        "unknown PATCH outcome must not be retried"
+    );
+    let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
+    assert_eq!(state.phase, Phase::Ready);
+    assert!(state.qualified_after_download);
+    assert_eq!(state.release_id, None);
+    assert_eq!(state.published_at, None);
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -6310,7 +6389,446 @@ fn prepare_publish_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use std::ffi::OsString;
     use std::process::Command;
+
+    struct TestDirectory(PathBuf);
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn run_test_tauri(root: &Path, args: Vec<OsString>) -> Result<()> {
+        let mut command = Command::new("bun");
+        command
+            .arg("run")
+            .arg("tauri")
+            .args(args)
+            .current_dir(root.join("desktop"));
+        for name in [
+            "V4_TAURI_UPDATER_PRIVATE_KEY",
+            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
+            "TAURI_SIGNING_PRIVATE_KEY",
+            "TAURI_SIGNING_PRIVATE_KEY_PATH",
+            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+        ] {
+            command.env_remove(name);
+        }
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(
+                format!("local Tauri test-key command failed with {}", output.status).into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn generate_test_signing_key(root: &Path, key_path: &Path) -> Result<PathBuf> {
+        run_test_tauri(
+            root,
+            vec![
+                "signer".into(),
+                "generate".into(),
+                "--ci".into(),
+                "--password".into(),
+                "".into(),
+                "--force".into(),
+                "-w".into(),
+                key_path.as_os_str().to_owned(),
+            ],
+        )?;
+        Ok(PathBuf::from(format!("{}.pub", key_path.display())))
+    }
+
+    fn sign_test_installer(
+        root: &Path,
+        key_path: &Path,
+        version: &str,
+        installer: &Path,
+    ) -> Result<Vec<u8>> {
+        run_test_tauri(
+            root,
+            vec![
+                "signer".into(),
+                "sign".into(),
+                "--private-key-path".into(),
+                key_path.as_os_str().to_owned(),
+                "--app-version".into(),
+                version.into(),
+                installer.as_os_str().to_owned(),
+            ],
+        )?;
+        let name = installer
+            .file_name()
+            .ok_or("test installer has no filename")?
+            .to_string_lossy();
+        Ok(fs::read(installer.with_file_name(format!("{name}.sig")))?)
+    }
+
+    fn rebind_test_signature(
+        options: &Options,
+        manifest: &mut CandidateManifest,
+        signature_bytes: &[u8],
+        test_key_id: &str,
+    ) -> Result<()> {
+        let signature_index = manifest
+            .qualification_assets
+            .iter()
+            .position(|record| record.role == "updater-signature")
+            .ok_or("test candidate signature record missing")?;
+        let mut signature = manifest.qualification_assets[signature_index].clone();
+        let signature_path = safe_state_asset_path(&options.state_root, &signature)?;
+        fs::write(&signature_path, signature_bytes)?;
+        signature.size = signature_bytes.len() as u64;
+        signature.sha256 = sha256_hex(signature_bytes);
+        manifest.qualification_assets[signature_index] = signature.clone();
+        for record in &mut manifest.public_assets {
+            if record.role == "updater-signature" {
+                *record = signature.clone();
+            }
+        }
+
+        for evidence_role in ["production-evidence", "qualification-evidence"] {
+            let evidence_index = manifest
+                .qualification_assets
+                .iter()
+                .position(|record| record.role == evidence_role)
+                .ok_or("test candidate evidence record missing")?;
+            let evidence_record = manifest.qualification_assets[evidence_index].clone();
+            let evidence_path = safe_state_asset_path(&options.state_root, &evidence_record)?;
+            let mut evidence: Value = read_json(&evidence_path)?;
+            evidence["updater_signature"] = json!(signature.source_name);
+            evidence["signature_size"] = json!(signature.size);
+            evidence["updater_signature_sha256"] = json!(signature.sha256);
+            if evidence_role == "production-evidence" {
+                evidence["updater_key_id"] = json!(test_key_id);
+            }
+            write_json_atomic(&evidence_path, &evidence)?;
+            let bytes = fs::read(&evidence_path)?;
+            let mut updated_record = evidence_record;
+            updated_record.size = bytes.len() as u64;
+            updated_record.sha256 = sha256_hex(&bytes);
+            manifest.qualification_assets[evidence_index] = updated_record;
+        }
+        Ok(())
+    }
+
+    fn tamper_test_signature(signature: &[u8]) -> Result<Vec<u8>> {
+        let encoded = std::str::from_utf8(signature)?.trim();
+        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+        let decoded = String::from_utf8(decoded)?;
+        let mut lines = decoded.lines().map(str::to_owned).collect::<Vec<_>>();
+        let signature_line = lines
+            .iter_mut()
+            .find(|line| {
+                !line.is_empty()
+                    && !line.starts_with("untrusted comment:")
+                    && !line.starts_with("trusted comment:")
+            })
+            .ok_or("test signature has no encoded signature payload")?;
+        let mut bytes = signature_line.as_bytes().to_vec();
+        bytes[0] = if bytes[0] == b'A' { b'B' } else { b'A' };
+        *signature_line = String::from_utf8(bytes)?;
+        Ok(base64::engine::general_purpose::STANDARD
+            .encode(lines.join("\n"))
+            .into_bytes())
+    }
+
+    #[test]
+    #[ignore = "manual read-only GET integration against the immutable public v4.2.0 assets"]
+    fn public_v4_2_0_asset_pair_downloads_through_production_adapter() -> Result<()> {
+        if ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"]
+            .iter()
+            .any(|name| env::var_os(name).is_some())
+        {
+            return Err(
+                "manual public asset check requires token environment variables unset".into(),
+            );
+        }
+        let mut transport = GhTransport::new();
+        let release = required_api(
+            &mut transport,
+            "GET",
+            "repos/pumni/Sky-Auto-Player/releases/tags/v4.2.0",
+            None,
+        )?;
+        if release["tag_name"] != "v4.2.0"
+            || release["draft"] != false
+            || release["immutable"] != true
+        {
+            return Err(
+                "public v4.2.0 release is not the expected immutable published release".into(),
+            );
+        }
+        let expected = [
+            (
+                "Sky.Auto.Player_4.2.0_x64-setup.exe",
+                "Sky Auto Player_4.2.0_x64-setup.exe",
+                4_459_233,
+                "a6048bd8dc8691798ed2ec7078dd66abe57a5cedfd4d086eedb10cd185751105",
+            ),
+            (
+                "Sky.Auto.Player_4.2.0_x64-setup.exe.sig",
+                "Sky Auto Player_4.2.0_x64-setup.exe.sig",
+                448,
+                "2f1603eb7448339a4a3bd43ec892298a1d82421a38d5bf72ceb0bc4984d678ce",
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(release_name, source_name, size, sha256)| CandidateRecord {
+                name: release_name.to_owned(),
+                release_name: release_name.to_owned(),
+                source_name: source_name.to_owned(),
+                role: if release_name.ends_with(".sig") {
+                    "updater-signature"
+                } else {
+                    "installer"
+                }
+                .to_owned(),
+                size,
+                sha256: sha256.to_owned(),
+                state_path: "public-read-only-check".to_owned(),
+            },
+        )
+        .collect::<Vec<_>>();
+        verify_public_assets(&mut transport, &release, &expected, true)?;
+
+        let verification_root = unique_temp(&env::temp_dir(), "sky-release-v4-2-0-public-proof");
+        fs::create_dir(&verification_root)?;
+        let _verification_cleanup = TestDirectory(verification_root.clone());
+        let assets = release["assets"]
+            .as_array()
+            .ok_or("public v4.2.0 release omitted its assets array")?;
+        for record in &expected {
+            let asset = assets
+                .iter()
+                .find(|asset| asset["name"] == record.release_name)
+                .ok_or("public v4.2.0 asset disappeared during signature verification")?;
+            let endpoint = asset["url"]
+                .as_str()
+                .ok_or("public v4.2.0 asset omitted its API URL")?;
+            let path = verification_root.join(&record.source_name);
+            transport.download(asset_api_endpoint(endpoint)?, &path)?;
+            if fs::metadata(&path)?.len() != record.size
+                || crate::hash::sha256(&path)? != record.sha256
+            {
+                return Err(format!(
+                    "production-adapter v4.2.0 readback differs for {}",
+                    record.release_name
+                )
+                .into());
+            }
+        }
+        crate::updater_trust::verify_updater_signature_for_version(
+            &verification_root.join(&expected[0].source_name),
+            &verification_root.join(&expected[1].source_name),
+            "4.2.0",
+        )?;
+        fs::remove_dir_all(&verification_root)?;
+        if verification_root.exists() {
+            return Err("public v4.2.0 verification files were not cleaned up".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "hermetic fake-transport proof using disposable local Tauri test keys"]
+    fn test_key_signature_is_verified_after_draft_readback_before_patch() -> Result<()> {
+        let (root, options, context, manifest) = fixture()?;
+        let _state_cleanup = TestDirectory(options.state_root.clone());
+        let signing_root = unique_temp(&env::temp_dir(), "sky-release-publication-test-key");
+        fs::create_dir(&signing_root)?;
+        let _signing_cleanup = TestDirectory(signing_root.clone());
+        let key_a = signing_root.join("publication-a.key");
+        let key_b = signing_root.join("publication-b.key");
+        let public_a = generate_test_signing_key(&root, &key_a)?;
+        let public_b = generate_test_signing_key(&root, &key_b)?;
+        let key_a_id =
+            crate::updater_trust::extract_key_id_from_public_key(&fs::read_to_string(&public_a)?)?;
+        let key_b_id =
+            crate::updater_trust::extract_key_id_from_public_key(&fs::read_to_string(&public_b)?)?;
+        if key_a_id == crate::updater_trust::canonical_key_id()?
+            || key_b_id == crate::updater_trust::canonical_key_id()?
+            || key_a_id == key_b_id
+        {
+            return Err("disposable publication test keys did not have isolated identities".into());
+        }
+
+        let installer_record = manifest
+            .public_assets
+            .iter()
+            .find(|record| record.role == "installer")
+            .ok_or("test candidate installer record missing")?;
+        let installer_path = safe_state_asset_path(&options.state_root, installer_record)?;
+        let correct_signature =
+            sign_test_installer(&root, &key_a, &context.version, &installer_path)?;
+        let wrong_key_signature =
+            sign_test_installer(&root, &key_b, &context.version, &installer_path)?;
+        let wrong_version = if context.version == "0.0.0" {
+            "0.0.1"
+        } else {
+            "0.0.0"
+        };
+        let wrong_version_signature =
+            sign_test_installer(&root, &key_a, wrong_version, &installer_path)?;
+        let wrong_file = signing_root.join("wrong-file.exe");
+        fs::copy(&installer_path, &wrong_file)?;
+        let wrong_file_signature =
+            sign_test_installer(&root, &key_a, &context.version, &wrong_file)?;
+        let tampered_signature = tamper_test_signature(&correct_signature)?;
+        let installer_sha256 = installer_record.sha256.clone();
+
+        struct Scenario {
+            label: &'static str,
+            signature: Vec<u8>,
+            evidence_key_id: String,
+            verification_key: PathBuf,
+            expected_error: Option<&'static str>,
+        }
+        let scenarios = [
+            Scenario {
+                label: "correct signature",
+                signature: correct_signature,
+                evidence_key_id: key_a_id.clone(),
+                verification_key: public_a.clone(),
+                expected_error: None,
+            },
+            Scenario {
+                label: "wrong key",
+                signature: wrong_key_signature,
+                evidence_key_id: key_b_id,
+                verification_key: public_a.clone(),
+                expected_error: Some("signature does not match the supplied test public key"),
+            },
+            Scenario {
+                label: "wrong trusted filename",
+                signature: wrong_file_signature,
+                evidence_key_id: key_a_id.clone(),
+                verification_key: public_a.clone(),
+                expected_error: Some("filename does not match the candidate"),
+            },
+            Scenario {
+                label: "wrong trusted version",
+                signature: wrong_version_signature,
+                evidence_key_id: key_a_id.clone(),
+                verification_key: public_a.clone(),
+                expected_error: Some("version does not match the candidate"),
+            },
+            Scenario {
+                label: "tampered signature",
+                signature: tampered_signature,
+                evidence_key_id: key_a_id,
+                verification_key: public_a,
+                expected_error: Some("signature"),
+            },
+        ];
+
+        for scenario in scenarios {
+            let mut case_manifest = manifest.clone();
+            rebind_test_signature(
+                &options,
+                &mut case_manifest,
+                &scenario.signature,
+                &scenario.evidence_key_id,
+            )?;
+            let latest = fake_release(11, "v4.1.4", "b".repeat(40), false, false, true);
+            prepare_publish_fixture(&options, &context, &case_manifest, &latest)?;
+            let mut github = FakeTransport::new();
+            github.latest = latest;
+            let expected_key_id = scenario.evidence_key_id;
+            let verification_key = scenario.verification_key;
+            let expected_sha256 = installer_sha256.clone();
+            let source_sha = context.source_sha.clone();
+            let result = publish_release_with_signature_verifier(
+                &root,
+                &options,
+                &mut github,
+                &expected_key_id,
+                |installer, signature, version| {
+                    crate::updater_trust::verify_test_updater_signature(
+                        installer,
+                        signature,
+                        &verification_key,
+                        version,
+                        &expected_sha256,
+                        &source_sha,
+                        None,
+                    )
+                },
+            );
+            let patch_count = github
+                .events
+                .iter()
+                .filter(|event| event.as_str() == "PATCH repos/pumni/Sky-Auto-Player/releases/12")
+                .count();
+            if let Some(expected_error) = scenario.expected_error {
+                let error = result.expect_err("invalid test signature must stop publication");
+                assert!(
+                    error.to_string().contains(expected_error),
+                    "{} returned an unexpected verification error: {error}",
+                    scenario.label
+                );
+                assert_eq!(
+                    patch_count, 0,
+                    "{} issued a publication PATCH",
+                    scenario.label
+                );
+                assert_eq!(github.deletions, [12], "owned failed draft is cleaned up");
+                let state: ReleaseState =
+                    read_json(&options.state_root.join("release-state.json"))?;
+                assert_eq!(state.phase, Phase::Ready, "{} phase", scenario.label);
+                assert!(
+                    !state.qualified_after_download,
+                    "{} proof flag",
+                    scenario.label
+                );
+                assert_eq!(state.release_id, None, "{} release ID", scenario.label);
+            } else {
+                result?;
+                assert_eq!(patch_count, 1);
+                assert_eq!(
+                    github
+                        .events
+                        .iter()
+                        .filter(|event| event.starts_with("DOWNLOAD "))
+                        .count(),
+                    2,
+                    "installer and sidecar are read back before publication"
+                );
+                let patch = github
+                    .events
+                    .iter()
+                    .position(|event| event == "PATCH repos/pumni/Sky-Auto-Player/releases/12")
+                    .ok_or("valid test-key publication PATCH missing")?;
+                assert!(
+                    github
+                        .events
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, event)| event.starts_with("DOWNLOAD "))
+                        .all(|(index, _)| index < patch)
+                );
+                let state: ReleaseState =
+                    read_json(&options.state_root.join("release-state.json"))?;
+                assert_eq!(state.phase, Phase::PublishedPendingMetadata);
+                assert!(state.qualified_after_download);
+                assert_eq!(state.release_id, Some(12));
+                assert!(github.deletions.is_empty());
+            }
+        }
+        fs::remove_dir_all(&signing_root)?;
+        fs::remove_dir_all(&options.state_root)?;
+        if signing_root.exists() || options.state_root.exists() {
+            return Err("disposable publication test material was not cleaned up".into());
+        }
+        Ok(())
+    }
 
     #[test]
     fn candidate_verification_dispatcher_requires_the_exact_workflow_job() {
