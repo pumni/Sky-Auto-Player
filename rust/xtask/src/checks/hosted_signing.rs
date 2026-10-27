@@ -4,6 +4,8 @@ use std::fs;
 use std::path::Path;
 
 const WORKFLOW_PATH: &str = ".github/workflows/hosted-v4-signing-proof.yml";
+const DRAFT_READBACK_STEP: &str = "Run ignored draft readback publication proof";
+const DRAFT_READBACK_TEST: &str = "cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests::test_key_signature_is_verified_after_draft_readback_before_patch -- --ignored --exact --test-threads=1";
 const BUILD_STEP: &str = "Build one unsigned NSIS installer without signing credentials";
 const SIGN_STEP: &str = "Sign the unchanged installer in an isolated test-key step";
 const VERIFY_STEP: &str = "Verify exact test-key signature, version, digest, and source binding";
@@ -97,6 +99,12 @@ fn validate_workflow_source(source: &str) -> Result<()> {
     let sign = step(source, SIGN_STEP)?;
     let verify = step(source, VERIFY_STEP)?;
     let cleanup = step(source, CLEANUP_STEP)?;
+    let draft_readback = step(source, DRAFT_READBACK_STEP)?;
+    if !draft_readback.contains(DRAFT_READBACK_TEST) {
+        return Err(
+            "hosted signing proof must run the ignored draft readback publication test".into(),
+        );
+    }
     if build.contains("tauri signer")
         || build.contains("--private-key-path")
         || build.contains("TAURI_SIGNING_PRIVATE_KEY=")
@@ -154,6 +162,20 @@ fn validate_workflow_source(source: &str) -> Result<()> {
     let sign_position = source.find(SIGN_STEP).unwrap();
     let verify_position = source.find(VERIFY_STEP).unwrap();
     let cleanup_position = source.find(CLEANUP_STEP).unwrap();
+    let dependencies_position = source
+        .find("Install locked desktop dependencies")
+        .ok_or("hosted proof must install locked desktop dependencies")?;
+    let draft_readback_position = source.find(DRAFT_READBACK_STEP).unwrap();
+    let source_identity_position = source
+        .find("Verify source identity and pinned Tauri CLI")
+        .ok_or("hosted proof must verify the checkout and pinned Tauri CLI")?;
+    if !(dependencies_position < draft_readback_position
+        && draft_readback_position < source_identity_position)
+    {
+        return Err(
+            "hosted draft readback proof must run after locked dependency setup and before the build".into(),
+        );
+    }
     if !(build_position < sign_position
         && sign_position < verify_position
         && verify_position < cleanup_position)
