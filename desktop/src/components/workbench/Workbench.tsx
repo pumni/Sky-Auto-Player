@@ -132,6 +132,8 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
               max={layout.utilityWidthMax}
               defaultValue={320}
               direction={-1}
+              onDragStart={layout.beginUtilityDrag}
+              onDragEnd={layout.endUtilityDrag}
               onChange={(value) => layout.setUtilityWidth(value)}
               onCommit={(value) => layout.setUtilityWidth(value, true)}
             />

@@ -200,20 +200,38 @@ export function useWorkbenchLayout(
   >(null);
   // Keep queued event updates composable between renders without side effects in the updater.
   const pendingLayoutRef = useRef(layout);
+  const [utilityDragCollapsed, setUtilityDragCollapsed] = useState<boolean | null>(null);
+  // The docked separator unmounts when closed or replaced by the responsive overlay.
+  // Its cleanup must not commit, and its topology lock must not survive reopening.
+  if (!utilityDocked && utilityDragCollapsed !== null) setUtilityDragCollapsed(null);
 
-  const utilityWidthMax = getUtilityWidthMax(viewportWidth, palette);
+  const responsiveUtilityMax = getUtilityWidthMax(viewportWidth, palette);
+  const expandedUtilityMax = Math.max(
+    0,
+    Math.min(
+      MAX_UTILITY_WIDTH,
+      viewportWidth -
+        outerInlinePadding(palette) -
+        getWorkbenchGutter(palette) * 2 -
+        MIN_NAVIGATOR_WIDTH -
+        MIN_TRACK_BROWSER_WIDTH,
+    ),
+  );
+  const utilityWidthMax =
+    utilityDragCollapsed === false ? expandedUtilityMax : responsiveUtilityMax;
   const effectiveUtilityWidth = utilityDocked
-    ? clamp(layout.utilityWidth, getUtilityWidthMin(viewportWidth, palette), utilityWidthMax)
+    ? clamp(layout.utilityWidth, Math.min(MIN_UTILITY_WIDTH, utilityWidthMax), utilityWidthMax)
     : 0;
   const navigatorMax = getNavigatorWidthMax(viewportWidth, effectiveUtilityWidth, palette);
   const narrowGraphiteWindow =
     palette === 'graphite' && viewportWidth <= GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH;
   const narrowExpansionOverride =
     narrowGraphiteWindow && narrowExpansionOverrideRevision === viewportRevision;
-  const navigatorCollapsed =
+  const responsiveCollapsed =
     layout.navigatorPreference === 'collapsed' ||
     (narrowGraphiteWindow && !narrowExpansionOverride) ||
     availableNavigatorWidth(viewportWidth, effectiveUtilityWidth, palette) < MIN_NAVIGATOR_WIDTH;
+  const navigatorCollapsed = utilityDragCollapsed ?? responsiveCollapsed;
   const navigatorWidth = navigatorCollapsed
     ? getCompactNavigatorWidth(palette)
     : clamp(layout.expandedNavigatorWidth, MIN_NAVIGATOR_WIDTH, navigatorMax);
@@ -226,16 +244,26 @@ export function useWorkbenchLayout(
 
   const update = (patch: WorkbenchPreferencePatch, persist = false) => {
     const next = normalizeWorkbenchPreferences({ ...pendingLayoutRef.current, ...patch });
-    pendingLayoutRef.current = next;
-    setLayout(() => next);
+    const replace = (candidate: WorkbenchPreferencesV5) => {
+      const previous = pendingLayoutRef.current;
+      if (
+        previous.navigatorPreference === candidate.navigatorPreference &&
+        previous.expandedNavigatorWidth === candidate.expandedNavigatorWidth &&
+        previous.utilityWidth === candidate.utilityWidth &&
+        previous.utilityOpen === candidate.utilityOpen
+      )
+        return;
+      pendingLayoutRef.current = candidate;
+      setLayout(candidate);
+    };
+    replace(next);
     if (persist) {
       const persisted = updateWorkbenchPreferences({
         navigatorPreference: next.navigatorPreference,
         expandedNavigatorWidth: next.expandedNavigatorWidth,
         utilityWidth: next.utilityWidth,
       });
-      pendingLayoutRef.current = persisted;
-      setLayout(() => persisted);
+      replace(persisted);
     }
   };
 
@@ -245,11 +273,14 @@ export function useWorkbenchLayout(
     navigatorMax,
     navigatorCollapsed,
     utilityWidth: effectiveUtilityWidth,
-    utilityWidthMax,
+    utilityWidthMax: navigatorCollapsed ? utilityWidthMax : expandedUtilityMax,
+    beginUtilityDrag: () => setUtilityDragCollapsed(navigatorCollapsed),
+    endUtilityDrag: () => setUtilityDragCollapsed(null),
     geometry,
     setNavigatorWidth: (width: number, persist = false) =>
       update({ expandedNavigatorWidth: width, navigatorPreference: 'expanded' }, persist),
     setNavigatorPreference: (preference: NavigatorPreference, persist = false) => {
+      if (utilityDragCollapsed !== null) setUtilityDragCollapsed(preference === 'collapsed');
       setNarrowExpansionOverrideRevision(
         narrowGraphiteWindow && preference === 'expanded' ? viewportRevision : null,
       );
