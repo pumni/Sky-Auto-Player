@@ -10,7 +10,7 @@ on:
         default: plan
         required: true
       tag:
-        description: Existing immutable stable release tag, for example v4.2.0
+        description: Immutable stable release produced by the current workflow; historical v4.2.0 is not eligible
         type: string
         required: true
       plan_run_id:
