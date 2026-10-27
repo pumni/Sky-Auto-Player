@@ -126,7 +126,7 @@ test('all palettes preserve Inspector 388/389/388 geometry and persist once', as
     await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
     expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(1);
     trace.push({ palette, samples: paletteTrace });
-    if (palette === 'graphite') {
+    if (palette === 'graphite' && process.env.WORKBENCH_RESIZE_CAPTURE === '1') {
       await info.attach('inspector-clamped-1024', {
         body: await page.screenshot(),
         contentType: 'image/png',

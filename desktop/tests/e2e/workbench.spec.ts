@@ -30,8 +30,6 @@ type InspectorHeaderGeometry = Record<string, InspectorHeaderElementGeometry | n
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
-  await page.evaluate(() => window.localStorage.clear());
-  await page.reload();
 });
 
 async function expectNoSeriousAccessibilityViolations(page: Page) {
@@ -354,12 +352,12 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       tabTextAlignment[state] = await readInspectorTabTextAlignment(page);
     };
     await record('empty');
-    if (viewport.width === 1366) {
+    if (process.env.WORKBENCH_INSPECTOR_CAPTURE === '1' && viewport.width === 1366) {
       await page.screenshot({
         path: 'test-results/final-polish-k-inspector-empty-1366x768.png',
         animations: 'disabled',
       });
-    } else {
+    } else if (process.env.WORKBENCH_INSPECTOR_CAPTURE === '1') {
       await page.screenshot({
         path: 'test-results/frozen-spec-inspector-compact-640x448.png',
         animations: 'disabled',
@@ -371,7 +369,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await expect(inspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
     await expectInspectorGeometry(page, presentation);
     await record('selected');
-    if (viewport.width === 1366) {
+    if (process.env.WORKBENCH_INSPECTOR_CAPTURE === '1' && viewport.width === 1366) {
       await page.screenshot({
         path: 'test-results/final-polish-k-inspector-selected-1366x768.png',
         animations: 'disabled',

@@ -3,9 +3,9 @@ import { mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { palettes, selectPalette, type PaletteId } from './testHelpers';
 
-const palettes = ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
-type Palette = (typeof palettes)[number];
+type Palette = PaletteId;
 
 const paletteTokenNames = [
   '--canvas',
@@ -211,21 +211,16 @@ function contrastRatio(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-async function selectPalette(page: Page, palette: Palette) {
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await dialog.getByLabel('Color palette').selectOption(palette);
-  await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
-  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
-  await dialog.getByRole('button', { name: 'Close settings' }).click();
-  await expect(dialog).toBeHidden();
-}
-
-async function token(page: Page, name: string): Promise<string> {
+async function tokenValues(page: Page, names: readonly string[]): Promise<Record<string, string>> {
   return page.evaluate(
-    (tokenName) => getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim(),
-    name,
+    (tokenNames) =>
+      Object.fromEntries(
+        tokenNames.map((name) => [
+          name,
+          getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+        ]),
+      ),
+    [...names],
   );
 }
 
@@ -238,6 +233,27 @@ async function resolvedTokenColor(page: Page, name: string): Promise<string> {
     probe.remove();
     return color;
   }, name);
+}
+
+async function resolvedTokenColors<const Names extends readonly string[]>(
+  page: Page,
+  names: Names,
+): Promise<Record<Names[number], string>> {
+  return page.evaluate(
+    (tokenNames) => {
+      const probe = document.createElement('span');
+      document.body.append(probe);
+      const colors = Object.fromEntries(
+        tokenNames.map((name) => {
+          probe.style.color = `var(${name})`;
+          return [name, getComputedStyle(probe).color];
+        }),
+      );
+      probe.remove();
+      return colors;
+    },
+    [...names],
+  ) as Promise<Record<Names[number], string>>;
 }
 
 async function styleValue(
@@ -392,7 +408,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(geometry.separatorWidths).toEqual([expectedGutter]);
 
     const values = expected[palette];
-    for (const [name, value] of Object.entries({
+    const expectedTokenValues = {
       '--control-border': values.controlBorder,
       '--selection-bg': values.selectionBg,
       '--accent': palette === 'graphite' ? values.accent : values.accentFill,
@@ -405,32 +421,43 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       '--selection-row-indicator': palette === 'graphite' ? 'transparent' : values.accent,
       '--primary-fill': values.accentFill,
       '--border-strong': values.borderStrong,
-    })) {
-      await expect.poll(() => token(page, name)).toBe(value);
-    }
-    if (palette === 'graphite') {
-      for (const [name, value] of Object.entries(graphiteRoleTokens)) {
-        await expect.poll(() => token(page, name)).toBe(value);
-      }
-    }
-    for (const [name, value] of Object.entries(stableStatusTokens)) {
-      await expect.poll(() => token(page, name)).toBe(value);
-    }
+      ...(palette === 'graphite' ? graphiteRoleTokens : {}),
+      ...stableStatusTokens,
+    };
+    await expect
+      .poll(() => tokenValues(page, Object.keys(expectedTokenValues)))
+      .toEqual(expectedTokenValues);
 
+    const resolvedColors = await resolvedTokenColors(page, [
+      '--accent-ink',
+      '--accent-ink-hover',
+      '--accent-fill',
+      '--accent-fill-hover',
+      '--control-border',
+      '--selection-bg',
+      '--canvas',
+      '--surface-raised',
+      '--on-accent',
+      '--on-danger',
+      '--danger-fill',
+      '--danger-fill-hover',
+      '--focus-ring',
+      ...(palette === 'graphite' ? ['--danger-fg', '--workbench-control-danger-hover'] : []),
+    ] as const);
     const colors = {
-      accent: await resolvedTokenColor(page, '--accent-ink'),
-      accentHover: await resolvedTokenColor(page, '--accent-ink-hover'),
-      accentFill: await resolvedTokenColor(page, '--accent-fill'),
-      accentFillHover: await resolvedTokenColor(page, '--accent-fill-hover'),
-      controlBorder: await resolvedTokenColor(page, '--control-border'),
-      selectionBg: await resolvedTokenColor(page, '--selection-bg'),
-      canvas: await resolvedTokenColor(page, '--canvas'),
-      surfaceRaised: await resolvedTokenColor(page, '--surface-raised'),
-      onAccent: await resolvedTokenColor(page, '--on-accent'),
-      onDanger: await resolvedTokenColor(page, '--on-danger'),
-      dangerFill: await resolvedTokenColor(page, '--danger-fill'),
-      dangerFillHover: await resolvedTokenColor(page, '--danger-fill-hover'),
-      focusRing: await resolvedTokenColor(page, '--focus-ring'),
+      accent: resolvedColors['--accent-ink'],
+      accentHover: resolvedColors['--accent-ink-hover'],
+      accentFill: resolvedColors['--accent-fill'],
+      accentFillHover: resolvedColors['--accent-fill-hover'],
+      controlBorder: resolvedColors['--control-border'],
+      selectionBg: resolvedColors['--selection-bg'],
+      canvas: resolvedColors['--canvas'],
+      surfaceRaised: resolvedColors['--surface-raised'],
+      onAccent: resolvedColors['--on-accent'],
+      onDanger: resolvedColors['--on-danger'],
+      dangerFill: resolvedColors['--danger-fill'],
+      dangerFillHover: resolvedColors['--danger-fill-hover'],
+      focusRing: resolvedColors['--focus-ring'],
     };
     for (const surface of [colors.canvas, colors.surfaceRaised, colors.selectionBg]) {
       expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
@@ -446,22 +473,20 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.focusRing, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
     if (palette === 'graphite') {
-      const dangerText = await resolvedTokenColor(page, '--danger-fg');
-      const dangerHover = await resolvedTokenColor(page, '--workbench-control-danger-hover');
+      const dangerText = resolvedColors['--danger-fg'];
+      const dangerHover = resolvedColors['--workbench-control-danger-hover'];
       expect(contrastRatio(dangerText, dangerHover)).toBeGreaterThanOrEqual(4.5);
     }
   }
 
   await selectPalette(page, 'graphite');
-  const defaultTokens = await Promise.all(paletteTokenNames.map((name) => token(page, name)));
+  const defaultTokens = await tokenValues(page, paletteTokenNames);
   await selectPalette(page, 'aurora');
 
   await page.locator('html').evaluate((root) => root.removeAttribute('data-palette'));
   await expect(page.locator('html')).not.toHaveAttribute('data-palette');
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
-  for (const [index, name] of paletteTokenNames.entries()) {
-    await expect.poll(() => token(page, name)).toBe(defaultTokens[index]);
-  }
+  await expect.poll(() => tokenValues(page, paletteTokenNames)).toEqual(defaultTokens);
   await selectPalette(page, 'aurora');
 });
 
@@ -514,21 +539,18 @@ test('Dark mode is the new-install palette and keeps the graphite setting ID', a
     '--on-accent': '#ffffff',
     '--focus-ring': '#b2a5e9',
   } as const;
-  for (const [name, value] of Object.entries(graphiteTokens)) {
-    await expect.poll(() => token(page, name)).toBe(value);
-  }
-  for (const [name, value] of Object.entries(stableStatusTokens)) {
-    await expect.poll(() => token(page, name)).toBe(value);
-  }
-  for (const [name, value] of Object.entries({
+  const expectedGraphiteTokens = {
+    ...graphiteTokens,
+    ...stableStatusTokens,
     '--type-body': '13px',
     '--type-page-heading': '18px',
     '--type-section-heading': '14px',
     '--type-control-label': '13px',
     '--type-metadata': '12px',
-  })) {
-    await expect.poll(() => token(page, name)).toBe(value);
-  }
+  };
+  await expect
+    .poll(() => tokenValues(page, Object.keys(expectedGraphiteTokens)))
+    .toEqual(expectedGraphiteTokens);
 
   const colors = {
     canvas: await resolvedTokenColor(page, '--canvas'),
