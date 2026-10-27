@@ -73,6 +73,41 @@ describe('separator drag sessions', () => {
     expect(props.onChange).toHaveBeenCalledTimes(1);
     expect(props.onCommit).not.toHaveBeenCalled();
   });
+  it('does not cancel or reschedule frames on parent renders and uses the latest callback', () => {
+    const { props, separator, move, rerender } = setup();
+    move(480);
+    const scheduled = vi.mocked(window.requestAnimationFrame).mock.calls.length;
+    const latest = vi.fn();
+    for (let i = 0; i < 40; i++) rerender(<ResizableSeparator {...props} onChange={latest} />);
+    expect(window.cancelAnimationFrame).not.toHaveBeenCalled();
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(scheduled);
+    frame();
+    expect(latest.mock.calls).toEqual([[340]]);
+    expect(props.onChange).not.toHaveBeenCalled();
+    for (let i = 0; i < 40; i++) rerender(<ResizableSeparator {...props} onChange={latest} />);
+    expect(frames.size).toBe(0);
+    move(460);
+    frame();
+    fireEvent.pointerUp(separator);
+    expect(latest.mock.calls).toEqual([[340], [360]]);
+    expect(props.onCommit.mock.calls).toEqual([[360]]);
+  });
+  it('keeps unsaturated pointer widths on the visual callback until one final commit', () => {
+    const visual = vi.fn();
+    const { props, separator, move } = setup({ onDragChange: visual });
+    for (const x of [490, 480, 470, 460, 470, 480, 490]) {
+      move(x);
+      frame();
+    }
+    expect(visual.mock.calls).toEqual([[330], [340], [350], [360], [350], [340], [330]]);
+    expect(props.onChange).not.toHaveBeenCalled();
+    expect(separator).toHaveAttribute('aria-valuenow', '330');
+    expect(props.onCommit).not.toHaveBeenCalled();
+    fireEvent.pointerUp(separator);
+    expect(props.onCommit.mock.calls).toEqual([[330]]);
+    fireEvent.keyDown(separator, { key: 'ArrowLeft' });
+    expect(props.onChange).toHaveBeenLastCalledWith(328);
+  });
   it('records a deterministic drag update proxy', () => {
     const { props, separator, move } = setup();
     for (let x = 499; x >= 400; x--) move(x);

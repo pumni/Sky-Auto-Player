@@ -200,10 +200,22 @@ export function useWorkbenchLayout(
   >(null);
   // Keep queued event updates composable between renders without side effects in the updater.
   const pendingLayoutRef = useRef(layout);
-  const [utilityDragCollapsed, setUtilityDragCollapsed] = useState<boolean | null>(null);
+  const [utilityTopology, setUtilityTopology] = useState<{
+    collapsed: boolean;
+    dragging: boolean;
+    width: number;
+    revision: number;
+  } | null>(null);
   // The docked separator unmounts when closed or replaced by the responsive overlay.
   // Its cleanup must not commit, and its topology lock must not survive reopening.
-  if (!utilityDocked && utilityDragCollapsed !== null) setUtilityDragCollapsed(null);
+  const topologyExpired =
+    utilityTopology !== null &&
+    (!utilityDocked ||
+      (!utilityTopology.dragging &&
+        (utilityTopology.width !== viewportWidth ||
+          utilityTopology.revision !== viewportRevision)));
+  if (topologyExpired) setUtilityTopology(null);
+  const utilityDragCollapsed = topologyExpired ? null : (utilityTopology?.collapsed ?? null);
 
   const responsiveUtilityMax = getUtilityWidthMax(viewportWidth, palette);
   const expandedUtilityMax = Math.max(
@@ -274,13 +286,29 @@ export function useWorkbenchLayout(
     navigatorCollapsed,
     utilityWidth: effectiveUtilityWidth,
     utilityWidthMax: navigatorCollapsed ? utilityWidthMax : expandedUtilityMax,
-    beginUtilityDrag: () => setUtilityDragCollapsed(navigatorCollapsed),
-    endUtilityDrag: () => setUtilityDragCollapsed(null),
+    beginUtilityDrag: () =>
+      setUtilityTopology({
+        collapsed: navigatorCollapsed,
+        dragging: true,
+        width: viewportWidth,
+        revision: viewportRevision,
+      }),
+    // v5 may save >=280 while the current viewport only permits 264. Retain the
+    // effective topology until a later viewport or explicit navigator action.
+    endUtilityDrag: () =>
+      setUtilityTopology({
+        collapsed: navigatorCollapsed,
+        dragging: false,
+        width: viewportWidth,
+        revision: viewportRevision,
+      }),
     geometry,
     setNavigatorWidth: (width: number, persist = false) =>
       update({ expandedNavigatorWidth: width, navigatorPreference: 'expanded' }, persist),
     setNavigatorPreference: (preference: NavigatorPreference, persist = false) => {
-      if (utilityDragCollapsed !== null) setUtilityDragCollapsed(preference === 'collapsed');
+      if (utilityTopology?.dragging)
+        setUtilityTopology({ ...utilityTopology, collapsed: preference === 'collapsed' });
+      else setUtilityTopology(null);
       setNarrowExpansionOverrideRevision(
         narrowGraphiteWindow && preference === 'expanded' ? viewportRevision : null,
       );

@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { LibraryNavigator } from '../library/LibraryNavigator';
 import { TrackBrowser } from '../tracks/TrackBrowser';
@@ -7,6 +15,7 @@ import { ResizableSeparator } from './ResizableSeparator';
 import {
   getUtilityOverlayWidth,
   getUtilityPresentationMode,
+  getNavigatorWidthMax,
   useWorkbenchLayout,
 } from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
@@ -67,6 +76,84 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth, palette);
   const layout = useWorkbenchLayout(viewportWidth, utilityDocked, palette, viewport.revision);
   const previousUtilityOpenRef = useRef(utility.open);
+  const liveResizeRef = useRef<{
+    pane: 'navigator' | 'utility';
+    width: number;
+    navigator: number;
+    utility: number;
+  } | null>(null);
+
+  const applyLiveResize = (pane: 'navigator' | 'utility', width: number, rebase = false) => {
+    const live = liveResizeRef.current;
+    const shell = workbenchRef.current;
+    if (!live || live.pane !== pane || !shell) return;
+    const utilityWidth =
+      pane === 'utility'
+        ? Math.min(layout.utilityWidthMax, Math.max(Math.min(280, layout.utilityWidthMax), width))
+        : layout.utilityWidth;
+    const navigatorMax = getNavigatorWidthMax(viewportWidth, utilityWidth, palette);
+    const navigatorWidth = layout.navigatorCollapsed
+      ? layout.navigatorWidth
+      : Math.min(
+          navigatorMax,
+          Math.max(200, pane === 'navigator' ? width : layout.expandedNavigatorWidth),
+        );
+    live.width = pane === 'utility' ? utilityWidth : navigatorWidth;
+    if (!rebase && live.navigator === navigatorWidth && live.utility === utilityWidth) return;
+    live.navigator = navigatorWidth;
+    live.utility = utilityWidth;
+    shell.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
+    shell.style.setProperty('--utility-pane-width', `${utilityWidth}px`);
+    const navigator = shell.querySelector('[aria-label="Resize library navigator"]');
+    navigator?.setAttribute('aria-valuenow', String(navigatorWidth));
+    navigator?.setAttribute('aria-valuemax', String(navigatorMax));
+    shell
+      .querySelector('[aria-label="Resize utility pane"]')
+      ?.setAttribute('aria-valuenow', String(utilityWidth));
+  };
+
+  const beginLiveResize = (pane: 'navigator' | 'utility') => {
+    liveResizeRef.current = {
+      pane,
+      width: pane === 'utility' ? layout.utilityWidth : layout.navigatorWidth,
+      navigator: layout.navigatorWidth,
+      utility: layout.utilityWidth,
+    };
+    if (pane === 'utility') layout.beginUtilityDrag();
+  };
+
+  const rebaseLiveResize = useEffectEvent(() => {
+    const live = liveResizeRef.current;
+    if (!live) return;
+    if (live.pane === 'utility' && !utilityDocked) {
+      liveResizeRef.current = null;
+      // Discard an uncommitted session without leaving an imperative width on
+      // a pane whose React style value may not otherwise have changed.
+      workbenchRef.current?.style.setProperty(
+        '--navigator-pane-width',
+        `${layout.navigatorWidth}px`,
+      );
+      workbenchRef.current?.style.setProperty('--utility-pane-width', `${layout.utilityWidth}px`);
+      workbenchRef.current
+        ?.querySelector('[aria-label="Resize library navigator"]')
+        ?.setAttribute('aria-valuenow', String(layout.navigatorWidth));
+      return;
+    }
+    applyLiveResize(live.pane, live.width, true);
+  });
+  useLayoutEffect(() => {
+    rebaseLiveResize();
+  }, [
+    viewportWidth,
+    viewport.revision,
+    palette,
+    utilityDocked,
+    layout.utilityWidthMax,
+    layout.utilityWidth,
+    layout.navigatorWidth,
+    layout.navigatorCollapsed,
+    layout.expandedNavigatorWidth,
+  ]);
 
   useEffect(() => {
     const openedFromClosed = utility.open && !previousUtilityOpenRef.current;
@@ -93,10 +180,16 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       data-utility-presentation={presentationMode}
       data-workbench-gap={layout.geometry.gutter}
       data-workbench-width={viewportWidth}
+      style={
+        {
+          '--navigator-pane-width': `${layout.navigatorWidth}px`,
+          '--utility-pane-width': `${layout.utilityWidth}px`,
+        } as CSSProperties
+      }
     >
       <WorkbenchPane
         className={`navigator-workbench-pane${layout.navigatorCollapsed ? ' is-collapsed' : ''}`}
-        style={{ flex: `0 0 ${layout.navigatorWidth}px` }}
+        style={{ flex: '0 0 var(--navigator-pane-width)' }}
       >
         <LibraryNavigator
           collapsed={layout.navigatorCollapsed}
@@ -116,6 +209,11 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
         max={layout.navigatorMax}
         defaultValue={240}
         disabled={layout.navigatorCollapsed}
+        onDragStart={() => beginLiveResize('navigator')}
+        onDragChange={(value) => applyLiveResize('navigator', value)}
+        onDragEnd={() => {
+          liveResizeRef.current = null;
+        }}
         onChange={(value) => layout.setNavigatorWidth(value)}
         onCommit={(value) => layout.setNavigatorWidth(value, true)}
       />
@@ -132,8 +230,12 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
               max={layout.utilityWidthMax}
               defaultValue={320}
               direction={-1}
-              onDragStart={layout.beginUtilityDrag}
-              onDragEnd={layout.endUtilityDrag}
+              onDragStart={() => beginLiveResize('utility')}
+              onDragChange={(value) => applyLiveResize('utility', value)}
+              onDragEnd={() => {
+                liveResizeRef.current = null;
+                layout.endUtilityDrag();
+              }}
               onChange={(value) => layout.setUtilityWidth(value)}
               onCommit={(value) => layout.setUtilityWidth(value, true)}
             />
@@ -143,7 +245,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
             style={
               presentationMode === 'overlay'
                 ? { width: utilityOverlayWidth }
-                : { flex: `0 0 ${layout.utilityWidth}px` }
+                : { flex: '0 0 var(--utility-pane-width)' }
             }
           >
             <UtilityPane

@@ -10,6 +10,35 @@ afterEach(() => {
 
 describe('Inspector topology and preference ownership', () => {
   it.each([
+    [900, 264],
+    [915, 279],
+    [916, 280],
+    [917, 281],
+  ])('retains effective geometry on release at %s without violating v5', (width, effective) => {
+    const { result, rerender } = renderHook(
+      ({ width }) => useWorkbenchLayout(width, true, 'graphite'),
+      { initialProps: { width: 1024 } },
+    );
+    act(() => result.current.beginUtilityDrag());
+    rerender({ width });
+    expect(result.current.utilityWidth).toBe(effective);
+    const geometry = result.current.geometry;
+    act(() => {
+      result.current.setUtilityWidth(result.current.utilityWidth, true);
+      result.current.endUtilityDrag();
+    });
+    expect(result.current.geometry).toEqual(geometry);
+    expect(result.current.navigatorCollapsed).toBe(false);
+    expect(JSON.parse(localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      version: 5,
+      navigatorPreference: 'expanded',
+      utilityWidth: Math.max(280, effective),
+    });
+    rerender({ width: 1366 });
+    expect(result.current.utilityWidth).toBe(Math.max(280, effective));
+    expect(result.current.navigatorCollapsed).toBe(false);
+  });
+  it.each([
     // Independent budget: viewport - 8 padding - 8 separators - 200 navigator - 420 tracks.
     [1024, 388, 388],
     [1100, 320, 440],

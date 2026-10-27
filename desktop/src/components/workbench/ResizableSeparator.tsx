@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react';
 
 interface ResizableSeparatorProps {
   label: string;
@@ -13,6 +21,7 @@ interface ResizableSeparatorProps {
   onCommit?: (value: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  onDragChange?: (value: number) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -31,6 +40,7 @@ export function ResizableSeparator({
   onCommit,
   onDragStart,
   onDragEnd,
+  onDragChange,
 }: ResizableSeparatorProps) {
   const separatorRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
@@ -41,6 +51,7 @@ export function ResizableSeparator({
   } | null>(null);
   const dragValueRef = useRef(value);
   const frameRef = useRef<number | null>(null);
+  const latestRef = useRef({ min, max, direction, onChange, onDragChange });
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
@@ -58,25 +69,33 @@ export function ResizableSeparator({
     [],
   );
 
-  const applyLatest = () => {
+  const applyLatest = useCallback(() => {
     const drag = dragRef.current;
     if (!drag) return;
+    const { min, max, direction, onChange, onDragChange } = latestRef.current;
     const next = clamp(drag.startValue + direction * (drag.lastX - drag.startX), min, max);
     if (next === dragValueRef.current) return;
     dragValueRef.current = next;
-    onChange(next);
-  };
+    separatorRef.current?.setAttribute('aria-valuenow', String(next));
+    (onDragChange ?? onChange)(next);
+  }, []);
 
-  // A pending frame must use current bounds/callbacks after a viewport change.
-  useEffect(() => {
-    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
-    frameRef.current = null;
-    if (!dragRef.current) return;
+  const schedule = useCallback(() => {
+    if (frameRef.current !== null || !dragRef.current) return;
     frameRef.current = window.requestAnimationFrame(() => {
       frameRef.current = null;
       applyLatest();
     });
-  });
+  }, [applyLatest]);
+
+  // Parent renders refresh handlers without cancelling or postponing a frame.
+  // Only a real bounds change can require a frame without new pointer input.
+  useLayoutEffect(() => {
+    const previous = latestRef.current;
+    latestRef.current = { min, max, direction, onChange, onDragChange };
+    if (previous.min !== min || previous.max !== max || previous.direction !== direction)
+      schedule();
+  }, [min, max, direction, onChange, onDragChange, schedule]);
 
   const finishDrag = () => {
     if (!dragRef.current) return;
@@ -109,11 +128,7 @@ export function ResizableSeparator({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     drag.lastX = event.clientX;
-    if (frameRef.current !== null) return;
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = null;
-      applyLatest();
-    });
+    schedule();
   };
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
