@@ -1082,25 +1082,33 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     const navigator = document.querySelector<HTMLElement>('.library-navigator');
     const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
     const footer = document.querySelector<HTMLElement>('.library-navigator-footer');
-    if (!navigator || !launchers || !footer) throw new Error('Collapsed Library areas are missing');
+    if (!navigator || !footer) throw new Error('Collapsed Library areas are missing');
     const navigatorStyle = getComputedStyle(navigator);
-    const launcherStyle = getComputedStyle(launchers);
     const footerStyle = getComputedStyle(footer);
+    const launcherStyle = launchers ? getComputedStyle(launchers) : null;
     return {
       paddingTop: navigatorStyle.paddingTop,
       paddingBottom: navigatorStyle.paddingBottom,
-      launcherMarginTop: launcherStyle.marginTop,
-      launcherPaddingTop: launcherStyle.paddingTop,
+      launcherCount: navigator.querySelectorAll('.library-collapsed-launchers').length,
+      launcherItemCount: launchers?.querySelectorAll('.library-nav-item').length ?? 0,
+      secondarySectionCount: navigator.querySelectorAll('.library-secondary-sections').length,
+      launcherMarginTop: launcherStyle?.marginTop ?? null,
+      launcherPaddingTop: launcherStyle?.paddingTop ?? null,
       footerPaddingTop: footerStyle.paddingTop,
     };
   });
-  expect(collapsedLayout).toEqual({
-    paddingTop: '8px',
-    paddingBottom: '8px',
-    launcherMarginTop: '8px',
-    launcherPaddingTop: '6px',
-    footerPaddingTop: '8px',
-  });
+  expect(collapsedLayout.paddingTop).toBe('8px');
+  expect(collapsedLayout.paddingBottom).toBe('8px');
+  expect(collapsedLayout.footerPaddingTop).toBe('8px');
+  expect(collapsedLayout.secondarySectionCount).toBe(0);
+  expect(collapsedLayout.launcherCount).toBe(collapsedLayout.launcherItemCount > 0 ? 1 : 0);
+  if (collapsedLayout.launcherItemCount === 0) {
+    expect(collapsedLayout.launcherMarginTop).toBeNull();
+    expect(collapsedLayout.launcherPaddingTop).toBeNull();
+  } else {
+    expect(collapsedLayout.launcherMarginTop).toBe('8px');
+    expect(collapsedLayout.launcherPaddingTop).toBe('6px');
+  }
   await page.mouse.move(0, 0);
   const collapsedToggleStyle = await collapseButton.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -1233,10 +1241,13 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       };
     };
     const pane = document.querySelector('.navigator-workbench-pane');
+    const navigator = document.querySelector<HTMLElement>('.library-navigator');
+    const navigatorHeading = document.querySelector<HTMLElement>('.library-navigator-heading');
     const heading = document.querySelector('.library-navigator-heading h2');
     const sectionHeading = document.querySelector('.library-section-heading');
     const headingActions = document.querySelector('.library-heading-actions');
     const divider = document.querySelector('.library-secondary-sections');
+    const primaryItems = document.querySelector('.library-primary-items');
     const footer = document.querySelector('.library-navigator-footer');
     const rows = Array.from(
       document.querySelectorAll<HTMLElement>(
@@ -1255,9 +1266,37 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       };
     });
     const paneBox = box(pane);
+    if (!navigator || !navigatorHeading || !primaryItems) {
+      throw new Error('Library navigator geometry is missing');
+    }
+    if (!divider) throw new Error('Library divider is missing');
+    const navigatorStyle = getComputedStyle(navigator);
+    const headingStyle = getComputedStyle(navigatorHeading);
+    const dividerStyle = getComputedStyle(divider);
     const dividerBox = box(divider);
     return {
       pane: paneBox,
+      navigatorInnerLeft:
+        box(navigator).x + Number.parseFloat(getComputedStyle(navigator).paddingLeft),
+      navigatorPadding: [
+        navigatorStyle.paddingTop,
+        navigatorStyle.paddingRight,
+        navigatorStyle.paddingBottom,
+        navigatorStyle.paddingLeft,
+      ],
+      headingStyle: {
+        minHeight: headingStyle.minHeight,
+        marginBottom: headingStyle.marginBottom,
+        paddingTop: headingStyle.paddingTop,
+        paddingRight: headingStyle.paddingRight,
+        paddingBottom: headingStyle.paddingBottom,
+        paddingLeft: headingStyle.paddingLeft,
+      },
+      dividerSpacing: {
+        marginTop: dividerStyle.marginTop,
+        paddingTop: dividerStyle.paddingTop,
+      },
+      primaryRowGap: getComputedStyle(primaryItems).rowGap,
       heading: box(heading),
       sectionHeading: box(sectionHeading),
       headingActions: box(headingActions),
@@ -1266,33 +1305,48 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       rows,
     };
   });
+  expect(expanded.navigatorPadding).toEqual(['12px', '8px', '12px', '8px']);
+  expect(expanded.headingStyle).toEqual({
+    minHeight: '36px',
+    marginBottom: '8px',
+    paddingTop: '0px',
+    paddingRight: '0px',
+    paddingBottom: '0px',
+    paddingLeft: '8px',
+  });
+  expect(expanded.dividerSpacing).toEqual({ marginTop: '12px', paddingTop: '8px' });
+  expect(expanded.primaryRowGap).toBe('4px');
   expect(Math.abs(expanded.heading.x - expanded.sectionHeading.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(expanded.footerCenter - expanded.pane.centerX)).toBeLessThanOrEqual(1);
   expect(Math.abs(expanded.dividerInsets[0] - expanded.dividerInsets[1])).toBeLessThanOrEqual(1);
   expect(expanded.rows).toHaveLength(4);
-  const iconCenters = expanded.rows.map((row) => row.icon.centerX);
-  const labelStarts = expanded.rows.map((row) => row.label.x);
-  for (const center of iconCenters)
-    expect(Math.abs(center - iconCenters[0])).toBeLessThanOrEqual(1);
-  for (const start of labelStarts) expect(Math.abs(start - labelStarts[0])).toBeLessThanOrEqual(1);
+  for (const row of expanded.rows) {
+    expect(row.icon.width).toBeCloseTo(24, 0);
+    expect(Math.abs(row.icon.x - expanded.heading.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(row.icon.x - (expanded.navigatorInnerLeft + 8))).toBeLessThanOrEqual(1);
+    expect(Math.abs(row.label.x - (row.icon.x + 32))).toBeLessThanOrEqual(1);
+  }
   for (const row of expanded.rows) expect(row.row.height).toBeCloseTo(42, 0);
   const playlistMenus = expanded.rows.map((row) => row.menu).filter((menu) => menu !== null);
   expect(playlistMenus).toHaveLength(2);
-  expect(Math.abs(playlistMenus[0]!.centerX - playlistMenus[1]!.centerX)).toBeLessThanOrEqual(1);
-  expect(Math.abs(expanded.headingActions.right - expanded.rows[0]!.row.right)).toBeLessThanOrEqual(
-    5,
-  );
+  for (const menu of playlistMenus) {
+    expect(Math.abs(menu!.right - expanded.headingActions.right)).toBeLessThanOrEqual(1);
+  }
 
   const expectCollapsedGeometry = async () => {
     const compact = await page.evaluate(() => {
       const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+      const heading = document.querySelector<HTMLElement>('.library-navigator-heading');
+      const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
       const selectors = [
         '.library-collapse-button',
         '.library-nav-item',
         '.library-add-button.is-collapsed',
       ];
-      if (!pane) throw new Error('Library pane is missing');
+      if (!pane || !heading) throw new Error('Collapsed Library geometry is missing');
       const paneRect = pane.getBoundingClientRect();
+      const headingStyle = getComputedStyle(heading);
+      const launcherStyle = launchers ? getComputedStyle(launchers) : null;
       const tiles = selectors.flatMap((selector) =>
         Array.from(document.querySelectorAll<HTMLElement>(selector)).map((element) => {
           const rect = element.getBoundingClientRect();
@@ -1309,10 +1363,28 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       );
       return {
         pane: { x: paneRect.x, width: paneRect.width, centerX: paneRect.x + paneRect.width / 2 },
+        heading: {
+          minHeight: headingStyle.minHeight,
+          marginBottom: headingStyle.marginBottom,
+          padding: headingStyle.padding,
+        },
+        launcherItemCount: launchers?.querySelectorAll('.library-nav-item').length ?? 0,
+        launcherCount: pane.querySelectorAll('.library-collapsed-launchers').length,
+        launcher: launcherStyle
+          ? { marginTop: launcherStyle.marginTop, paddingTop: launcherStyle.paddingTop }
+          : null,
         tiles,
       };
     });
     expect(compact.pane.width).toBeCloseTo(48, 0);
+    expect(compact.heading).toEqual({
+      minHeight: '40px',
+      marginBottom: '4px',
+      padding: '0px',
+    });
+    expect(compact.launcherItemCount).toBe(1);
+    expect(compact.launcherCount).toBe(1);
+    expect(compact.launcher).toEqual({ marginTop: '8px', paddingTop: '6px' });
     expect(compact.tiles.length).toBeGreaterThanOrEqual(5);
     for (const tile of compact.tiles) {
       expect(tile.width).toBeCloseTo(40, 0);
@@ -1363,14 +1435,41 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       return { x: rect.x, right: rect.right, centerX: rect.x + rect.width / 2 };
     };
     return {
+      playlistCount: document.querySelectorAll('.library-nav-action-row').length,
       sectionHeading: box('.library-section-heading'),
       emptyAction: box('.library-empty-playlists-create'),
       footer: box('.library-navigator-footer'),
       pane: box('.navigator-workbench-pane'),
     };
   });
+  expect(empty.playlistCount).toBe(0);
   expect(Math.abs(empty.emptyAction.x - empty.sectionHeading.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(empty.footer.centerX - empty.pane.centerX)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 800, height: 560 });
+  const emptyCollapseButton = navigator.locator('.library-collapse-button');
+  if (
+    !(await page
+      .locator('.navigator-workbench-pane')
+      .evaluate((pane) => pane.classList.contains('is-collapsed')))
+  ) {
+    await emptyCollapseButton.click();
+  }
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  const emptyCollapsed = await navigator.evaluate((element) => ({
+    playlistLauncherCount: element.querySelectorAll(
+      '.library-collapsed-launchers .library-nav-item',
+    ).length,
+    launchers: element.querySelectorAll('.library-collapsed-launchers').length,
+    expandedPlaylistSection: element.querySelectorAll('.library-secondary-sections').length,
+    children: Array.from(element.children).map((child) => (child as HTMLElement).className),
+  }));
+  expect(emptyCollapsed).toEqual({
+    playlistLauncherCount: 0,
+    launchers: 0,
+    expandedPlaylistSection: 0,
+    children: ['library-navigator-heading', 'library-primary-items', 'library-navigator-footer'],
+  });
 });
 
 test('Graphite automatic compact navigation preserves the saved expanded preference', async ({

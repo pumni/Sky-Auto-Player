@@ -119,6 +119,47 @@ async function colors(control: Locator) {
   });
 }
 
+async function iconMetrics(control: Locator) {
+  return control.locator('svg').evaluate((icon) => {
+    const style = getComputedStyle(icon);
+    return { width: style.width, height: style.height, strokeWidth: style.strokeWidth };
+  });
+}
+
+async function controlGeometry(control: Locator) {
+  return control.evaluate((element) => {
+    const button = element.getBoundingClientRect();
+    const icon = element.querySelector('svg')?.getBoundingClientRect();
+    if (!icon) throw new Error('Toggle icon is missing');
+    return {
+      x: button.x,
+      y: button.y,
+      width: button.width,
+      height: button.height,
+      iconCenterOffsetX: icon.x + icon.width / 2 - (button.x + button.width / 2),
+      iconCenterOffsetY: icon.y + icon.height / 2 - (button.y + button.height / 2),
+    };
+  });
+}
+
+async function toggleIndicator(control: Locator) {
+  return control.evaluate((element) => {
+    const style = getComputedStyle(element, '::after');
+    return {
+      content: style.content,
+      position: style.position,
+      bottom: style.bottom,
+      left: style.left,
+      width: style.width,
+      height: style.height,
+      borderRadius: style.borderRadius,
+      background: style.backgroundColor,
+      pointerEvents: style.pointerEvents,
+      transform: style.transform,
+    };
+  });
+}
+
 async function expectForeground(control: Locator, expected: string) {
   await expect
     .poll(() => control.evaluate((element) => getComputedStyle(element).color))
@@ -223,6 +264,8 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const controlPressed = await token(page, '--workbench-control-pressed');
   const toggleOn = await token(page, '--workbench-toggle-on');
   const toggleOff = await token(page, '--workbench-toggle-off');
+  expect(toggleOn).toBe('#b68cff');
+  expect(toggleOff).toBe('#808187');
   const transparent = 'rgba(0, 0, 0, 0)';
   const activeLibrary = page.locator('.library-nav-item.is-active').first();
   const activeLibraryStyle = await colors(activeLibrary);
@@ -278,38 +321,72 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const shuffle = page.getByRole('button', { name: 'Shuffle' });
   await page.mouse.move(0, 0);
   const shuffleOff = await colors(shuffle);
+  const shuffleOffGeometry = await controlGeometry(shuffle);
+  expect(Math.abs(shuffleOffGeometry.iconCenterOffsetX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(shuffleOffGeometry.iconCenterOffsetY)).toBeLessThanOrEqual(1);
+  expect(await shuffle.evaluate((element) => getComputedStyle(element).position)).toBe('absolute');
   expect(sameColor(shuffleOff.foreground, toggleOff)).toBe(true);
+  expect(sameColor(shuffleOff.background, transparent)).toBe(true);
+  expect(await iconMetrics(shuffle)).toEqual({
+    width: '18px',
+    height: '18px',
+    strokeWidth: '2px',
+  });
+  expect((await toggleIndicator(shuffle)).content).toBe('none');
   expect(
     contrastRatio(shuffleOff.foreground, await token(page, '--workbench-navigation')),
   ).toBeGreaterThanOrEqual(3);
+  await shuffle.hover();
+  await expectForeground(shuffle, rgbColor(await token(page, '--workbench-text-primary')));
+  const shuffleOffHover = await colors(shuffle);
+  expect(sameColor(shuffleOffHover.background, controlHover)).toBe(true);
+  expect(sameColor(shuffleOffHover.foreground, await token(page, '--workbench-text-primary'))).toBe(
+    true,
+  );
+  expect(
+    contrastRatio(shuffleOffHover.foreground, shuffleOffHover.background),
+  ).toBeGreaterThanOrEqual(3);
+  expect((await toggleIndicator(shuffle)).content).toBe('none');
+  await page.mouse.move(0, 0);
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.move(0, 0);
   await expectForeground(shuffle, rgbColor(toggleOn));
   const shuffleRest = await colors(shuffle);
+  expect(await controlGeometry(shuffle)).toEqual(shuffleOffGeometry);
   expect(sameColor(shuffleRest.background, transparent)).toBe(true);
   expect(
     sameColor(shuffleRest.foreground, toggleOn),
     `Shuffle ON color ${shuffleRest.foreground} should use ${toggleOn}`,
   ).toBe(true);
   expect(
-    Math.abs(luminance(shuffleRest.foreground) - luminance(shuffleOff.foreground)),
-  ).toBeGreaterThanOrEqual(0.25);
-  expect(
     contrastRatio(shuffleRest.foreground, await token(page, '--workbench-navigation')),
   ).toBeGreaterThanOrEqual(3);
-  expect(
-    await shuffle.locator('svg').evaluate((icon) => {
-      const style = getComputedStyle(icon);
-      return [style.width, style.height];
-    }),
-  ).toEqual(['16px', '16px']);
+  expect(await iconMetrics(shuffle)).toEqual({
+    width: '18px',
+    height: '18px',
+    strokeWidth: '2.4px',
+  });
+  const shuffleDot = await toggleIndicator(shuffle);
+  expect(shuffleDot).toMatchObject({
+    position: 'absolute',
+    bottom: '1px',
+    width: '4px',
+    height: '4px',
+    borderRadius: '50%',
+    pointerEvents: 'none',
+  });
+  expect(Number.parseFloat(shuffleDot.left)).toBeCloseTo(shuffleOffGeometry.width / 2, 0);
+  expect(sameColor(shuffleDot.background, toggleOn)).toBe(true);
+  expect(shuffleDot.content).not.toBe('none');
+  expect(shuffleDot.transform).toBe('matrix(1, 0, 0, 1, -2, 0)');
   await shuffle.hover();
   await expectForeground(shuffle, rgbColor(toggleOn));
   const shuffleHover = await colors(shuffle);
   expect(sameColor(shuffleHover.background, controlHover)).toBe(true);
   expect(sameColor(shuffleHover.foreground, toggleOn)).toBe(true);
   expect(contrastRatio(shuffleHover.foreground, shuffleHover.background)).toBeGreaterThanOrEqual(3);
+  expect(sameColor((await toggleIndicator(shuffle)).background, toggleOn)).toBe(true);
   await page.mouse.move(0, 0);
   expect(sameColor((await colors(shuffle)).background, transparent)).toBe(true);
   await page.keyboard.press('Tab');
@@ -319,6 +396,7 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const shuffleFocus = await colors(shuffle);
   expect(sameColor(shuffleFocus.background, transparent)).toBe(true);
   expect(sameColor(shuffleFocus.foreground, toggleOn)).toBe(true);
+  expect(sameColor((await toggleIndicator(shuffle)).background, toggleOn)).toBe(true);
   expect(
     contrastRatio(shuffleFocus.foreground, await token(page, '--workbench-navigation')),
   ).toBeGreaterThanOrEqual(3);
@@ -329,48 +407,85 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   await page.mouse.move(0, 0);
   await expectForeground(autoPlay, rgbColor(toggleOn));
   const autoPlayOn = await colors(autoPlay);
+  const autoPlayOnGeometry = await controlGeometry(autoPlay);
+  expect(Math.abs(autoPlayOnGeometry.iconCenterOffsetX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(autoPlayOnGeometry.iconCenterOffsetY)).toBeLessThanOrEqual(1);
+  expect(await autoPlay.evaluate((element) => getComputedStyle(element).position)).toBe('relative');
   expect(sameColor(autoPlayOn.background, transparent)).toBe(true);
   expect(sameColor(autoPlayOn.foreground, toggleOn)).toBe(true);
+  expect(await iconMetrics(autoPlay)).toEqual({
+    width: '18px',
+    height: '18px',
+    strokeWidth: '2.4px',
+  });
+  const autoPlayDot = await toggleIndicator(autoPlay);
+  expect(autoPlayDot).toMatchObject({
+    position: 'absolute',
+    bottom: '1px',
+    width: '4px',
+    height: '4px',
+    borderRadius: '50%',
+    pointerEvents: 'none',
+  });
+  expect(Number.parseFloat(autoPlayDot.left)).toBeCloseTo(autoPlayOnGeometry.width / 2, 0);
+  expect(sameColor(autoPlayDot.background, toggleOn)).toBe(true);
+  expect(autoPlayDot.content).not.toBe('none');
+  expect(autoPlayDot.transform).toBe('matrix(1, 0, 0, 1, -2, 0)');
   expect(
     contrastRatio(autoPlayOn.foreground, await token(page, '--workbench-navigation')),
   ).toBeGreaterThanOrEqual(3);
-  expect(
-    await autoPlay.locator('svg').evaluate((icon) => {
-      const style = getComputedStyle(icon);
-      return [style.width, style.height];
-    }),
-  ).toEqual(['16px', '16px']);
   await autoPlay.hover();
   await expectForeground(autoPlay, rgbColor(toggleOn));
   const autoPlayHover = await colors(autoPlay);
   expect(sameColor(autoPlayHover.background, controlHover)).toBe(true);
   expect(sameColor(autoPlayHover.foreground, toggleOn)).toBe(true);
+  expect(contrastRatio(autoPlayHover.foreground, autoPlayHover.background)).toBeGreaterThanOrEqual(
+    3,
+  );
+  expect(sameColor((await toggleIndicator(autoPlay)).background, toggleOn)).toBe(true);
   const autoPlayPressed = await pressWithoutClick(page, autoPlay);
   expect(sameColor(autoPlayPressed.background, controlPressed)).toBe(true);
   expect(sameColor(autoPlayPressed.foreground, toggleOn)).toBe(true);
   await autoPlay.click();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
+  expect(await controlGeometry(autoPlay)).toEqual(autoPlayOnGeometry);
   await expectForeground(autoPlay, 'rgb(212, 212, 212)');
   const autoPlayOffHover = await colors(autoPlay);
   expect(sameColor(autoPlayOffHover.background, controlHover)).toBe(true);
   expect(autoPlayOffHover.foreground).toBe('rgb(212, 212, 212)');
+  expect(
+    contrastRatio(autoPlayOffHover.foreground, autoPlayOffHover.background),
+  ).toBeGreaterThanOrEqual(3);
+  expect((await toggleIndicator(autoPlay)).content).toBe('none');
   await page.mouse.move(0, 0);
   await expectForeground(autoPlay, rgbColor(toggleOff));
   const autoPlayOff = await colors(autoPlay);
   expect(sameColor(autoPlayOff.background, transparent)).toBe(true);
   expect(sameColor(autoPlayOff.foreground, toggleOff)).toBe(true);
+  expect(await iconMetrics(autoPlay)).toEqual({
+    width: '18px',
+    height: '18px',
+    strokeWidth: '2px',
+  });
+  expect((await toggleIndicator(autoPlay)).content).toBe('none');
   expect(
     contrastRatio(autoPlayOff.foreground, await token(page, '--workbench-navigation')),
   ).toBeGreaterThanOrEqual(3);
-  expect(
-    Math.abs(luminance(autoPlayOn.foreground) - luminance(autoPlayOff.foreground)),
-  ).toBeGreaterThanOrEqual(0.25);
   await autoPlay.click();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.move(0, 0);
   await expectForeground(autoPlay, rgbColor(toggleOn));
   expect(sameColor((await colors(autoPlay)).background, transparent)).toBe(true);
   expect(sameColor((await colors(autoPlay)).foreground, toggleOn)).toBe(true);
+  expect(sameColor((await toggleIndicator(autoPlay)).background, toggleOn)).toBe(true);
+  await page.keyboard.press('Tab');
+  await autoPlay.evaluate((element) => element.focus());
+  expect(await autoPlay.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  const autoPlayFocus = await colors(autoPlay);
+  expect(sameColor(autoPlayFocus.background, transparent)).toBe(true);
+  expect(sameColor(autoPlayFocus.foreground, toggleOn)).toBe(true);
+  expect(autoPlayFocus.outlineWidth).toBe('2px');
+  expect(sameColor((await toggleIndicator(autoPlay)).background, toggleOn)).toBe(true);
 
   const utility = page.locator('.player-utility-button');
   await utility.click();
@@ -394,6 +509,9 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const detailsStyle = await colors(detailsTab);
   expect(sameColor(detailsStyle.background, transparent)).toBe(true);
   expect(detailsStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(sameColor(detailsStyle.borderBottom, await token(page, '--selection-indicator'))).toBe(
+    true,
+  );
   expect(
     contrastRatio(detailsStyle.foreground, await token(page, '--workbench-inspector')),
   ).toBeGreaterThanOrEqual(3);
@@ -430,6 +548,7 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   expect(
     contrastRatio(likeOff.foreground, await token(page, '--workbench-content')),
   ).toBeGreaterThanOrEqual(3);
+  expect((await toggleIndicator(like)).content).toBe('none');
   await like.hover();
   await expect(like).toBeVisible();
   await like.click();
@@ -444,9 +563,7 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   expect(
     contrastRatio(likeRest.foreground, await token(page, '--workbench-content')),
   ).toBeGreaterThanOrEqual(3);
-  expect(
-    Math.abs(luminance(likeRest.foreground) - luminance(likeOff.foreground)),
-  ).toBeGreaterThanOrEqual(0.25);
+  expect((await toggleIndicator(activeLike)).content).toBe('none');
   await activeLike.hover();
   const likeHover = await colors(activeLike);
   expect(sameColor(likeHover.background, controlHover)).toBe(true);
@@ -692,6 +809,8 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.move(0, 0);
+  const autoPlay = page.getByRole('button', { name: 'Auto Play' });
+  await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
 
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
   await expect
@@ -707,14 +826,19 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
     const highlightTextProbe = document.createElement('span');
     highlightTextProbe.style.color = 'HighlightText';
     document.body.append(highlightTextProbe);
+    const grayTextProbe = document.createElement('span');
+    grayTextProbe.style.color = 'GrayText';
+    document.body.append(grayTextProbe);
     const values = {
       buttonText: style.color,
       buttonFace: style.backgroundColor,
       highlight: style.outlineColor,
       highlightText: getComputedStyle(highlightTextProbe).color,
+      grayText: getComputedStyle(grayTextProbe).color,
     };
     probe.remove();
     highlightTextProbe.remove();
+    grayTextProbe.remove();
     return values;
   });
   const primary = player.locator('.player-primary-action');
@@ -726,12 +850,25 @@ test('Graphite primary, selected, and focus roles use Windows forced colors and 
   expect(shuffleStyle.background).toBe(systemColors.buttonFace);
   expect(shuffleStyle.foreground).toBe(systemColors.highlight);
   expect(shuffleStyle.border).toBe(systemColors.highlight);
+  expect((await toggleIndicator(shuffle)).background).toBe(systemColors.highlight);
+  const autoPlayStyle = await colors(autoPlay);
+  expect(autoPlayStyle.background).toBe(systemColors.buttonFace);
+  expect(autoPlayStyle.foreground).toBe(systemColors.highlight);
+  expect((await toggleIndicator(autoPlay)).background).toBe(systemColors.highlight);
   await shuffle.hover();
   await expectForeground(shuffle, systemColors.highlightText);
   const shuffleHover = await colors(shuffle);
   expect(shuffleHover.background).toBe(systemColors.highlight);
   expect(shuffleHover.foreground).toBe(systemColors.highlightText);
+  expect((await toggleIndicator(shuffle)).background).toBe(systemColors.highlight);
   await page.mouse.move(0, 0);
+
+  await autoPlay.evaluate((element) => element.setAttribute('disabled', ''));
+  const disabledAutoPlay = await colors(autoPlay);
+  expect(disabledAutoPlay.background).toBe(systemColors.buttonFace);
+  expect(disabledAutoPlay.foreground).toBe(systemColors.grayText);
+  expect((await toggleIndicator(autoPlay)).background).toBe(systemColors.grayText);
+  await autoPlay.evaluate((element) => element.removeAttribute('disabled'));
 
   const activeNavigation = page.locator('.library-nav-item.is-active').first();
   const navigationStyle = await colors(activeNavigation);

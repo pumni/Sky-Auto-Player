@@ -91,8 +91,8 @@ export function LibraryNavigator({
       </div>
 
       {collapsed ? (
-        <div className="library-collapsed-launchers">
-          {navigation.playlistOrder.length > 0 && (
+        navigation.playlistOrder.length > 0 ? (
+          <div className="library-collapsed-launchers">
             <LibraryNavItem
               collapsed
               label="Playlists"
@@ -101,8 +101,8 @@ export function LibraryNavigator({
             >
               Playlists
             </LibraryNavItem>
-          )}
-        </div>
+          </div>
+        ) : null
       ) : (
         <div className="library-secondary-sections">
           <LibrarySection label="Playlists" showWhenEmpty>

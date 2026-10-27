@@ -119,8 +119,8 @@ html[data-palette='graphite'] {
   --workbench-control-danger-hover: #452d32;
   --workbench-accent-ink: #b2a5e9;
   --workbench-accent-ink-hover: #c0b4f1;
-  --workbench-toggle-on: #d0c4ff;
-  --workbench-toggle-off: #888b90;
+  --workbench-toggle-on: #b68cff;
+  --workbench-toggle-off: #808187;
   --workbench-accent-fill: #705eae;
   --workbench-accent-fill-hover: #7564b4;
   --workbench-accent-fill-pressed: #6553a0;

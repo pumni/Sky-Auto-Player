@@ -123,6 +123,23 @@ async function readInspectorHeaderGeometry(page: Page) {
   });
 }
 
+async function readInspectorTabTextAlignment(page: Page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>('.utility-view-tabs [role="tab"]')).map(
+      (tab) => {
+        const range = document.createRange();
+        range.selectNodeContents(tab);
+        const text = range.getBoundingClientRect();
+        const button = tab.getBoundingClientRect();
+        return {
+          xOffset: text.x + text.width / 2 - (button.x + button.width / 2),
+          yOffset: text.y + text.height / 2 - (button.y + button.height / 2),
+        };
+      },
+    ),
+  );
+}
+
 async function expectInspectorGeometry(page: Page, mode: 'docked' | 'overlay') {
   const geometry = await readWorkbenchGeometry(page);
   expect(geometry.mode).toBe(mode);
@@ -309,17 +326,30 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await expect(page.getByText('Select a song to view details.')).toBeVisible();
     const presentation = getUtilityPresentationMode(viewport.width, true, 'graphite');
     await expectInspectorGeometry(page, presentation);
+    await page.mouse.move(0, 0);
 
     const measurements: Partial<
       Record<'empty' | 'selected' | 'cleared' | 'runtime', InspectorHeaderGeometry>
     > = {};
+    const tabTextAlignment: Partial<
+      Record<
+        'empty' | 'selected' | 'cleared' | 'runtime',
+        Awaited<ReturnType<typeof readInspectorTabTextAlignment>>
+      >
+    > = {};
     const record = async (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
       measurements[state] = await readInspectorHeaderGeometry(page);
+      tabTextAlignment[state] = await readInspectorTabTextAlignment(page);
     };
     await record('empty');
     if (viewport.width === 1366) {
       await page.screenshot({
         path: 'test-results/final-polish-k-inspector-empty-1366x768.png',
+        animations: 'disabled',
+      });
+    } else {
+      await page.screenshot({
+        path: 'test-results/frozen-spec-inspector-compact-640x448.png',
         animations: 'disabled',
       });
     }
@@ -357,21 +387,35 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     const baselineClose = geometryFor('empty', '.utility-close-button');
     const baselineCloseIcon = geometryFor('empty', '.utility-close-button svg');
     const baselineSurface = geometryFor('empty', '.utility-surface');
-    const expectCenteredTabs = (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
+    const baselineDetailsTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:first-child');
+    const baselineRuntimeTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:last-child');
+    const expectOriginalTabs = (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
       const tabs = geometryFor(state, '.utility-view-tabs');
       const details = geometryFor(state, '.utility-view-tabs [role="tab"]:first-child');
       const runtime = geometryFor(state, '.utility-view-tabs [role="tab"]:last-child');
-      const pairCenter = (details.x + runtime.right) / 2;
-      const tabsCenter = tabs.x + tabs.width / 2;
       expect(
-        Math.abs(pairCenter - tabsCenter),
-        `${state} Details/Runtime tab pair is centered`,
+        Math.abs(details.x - tabs.x),
+        `${state} first tab starts at the tablist left edge`,
       ).toBeLessThanOrEqual(1);
-      expect(details.x).toBeGreaterThanOrEqual(tabs.x);
+      expect(details.x).toBeLessThan(runtime.x);
+      expect(details.flex).toBe('0 0 auto');
+      expect(runtime.flex).toBe('0 0 auto');
+      expect(Math.abs(details.width - baselineDetailsTab.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(runtime.width - baselineRuntimeTab.width)).toBeLessThanOrEqual(1);
       expect(runtime.right).toBeLessThanOrEqual(tabs.right);
       expect(Math.abs(details.y - runtime.y)).toBeLessThanOrEqual(1);
+      const textAlignment = tabTextAlignment[state];
+      expect(textAlignment).toHaveLength(2);
+      for (const alignment of textAlignment ?? []) {
+        expect(Math.abs(alignment.xOffset)).toBeLessThanOrEqual(1.5);
+        expect(
+          Math.abs(alignment.yOffset),
+          `${state} tab text vertical-center offset ${alignment.yOffset}`,
+        ).toBeLessThanOrEqual(1.5);
+      }
     };
-    expectCenteredTabs('empty');
+    await expect(inspector.getByRole('tab')).toHaveText(['Details', 'Runtime']);
+    expectOriginalTabs('empty');
     for (const state of ['selected', 'cleared', 'runtime'] as const) {
       const header = geometryFor(state, '.utility-header');
       const tabs = geometryFor(state, '.utility-view-tabs');
@@ -399,7 +443,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       expect(Math.abs(close.right - (header.right - 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.x - (header.x + 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.right - (header.right - 14))).toBeLessThanOrEqual(1);
-      expectCenteredTabs(state);
+      expectOriginalTabs(state);
     }
     expect(
       Math.abs(

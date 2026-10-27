@@ -24,8 +24,12 @@ export function UtilityHeader({ activeView, onClose }: UtilityHeaderProps) {
         <X size={16} aria-hidden="true" />
       </button>
       <TabList className="utility-view-tabs" aria-label="Utility views">
-        <Tab id="details">Details</Tab>
-        <Tab id="diagnostics">Runtime</Tab>
+        <Tab id="details">
+          <span>Details</span>
+        </Tab>
+        <Tab id="diagnostics">
+          <span>Runtime</span>
+        </Tab>
       </TabList>
     </header>
   );
