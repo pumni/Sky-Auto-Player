@@ -1410,6 +1410,7 @@ html[data-palette='graphite']
     forced-color-adjust: none;
     color: GrayText;
     background-color: currentColor;
+    transition: none !important;
   }
 
   html[data-palette='graphite'] .player-tools .player-auto-play-button:disabled {
