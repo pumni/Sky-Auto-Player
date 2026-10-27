@@ -1398,10 +1398,8 @@ html[data-palette='graphite']
   }
 
   html[data-palette='graphite']
-    :is(
-      .player-transport .player-shuffle-action[aria-pressed='true'],
-      .player-tools .player-auto-play-button[aria-pressed='true']
-    ):disabled::after {
+    .player-transport
+    .player-shuffle-action[aria-pressed='true']:disabled::after {
     forced-color-adjust: auto;
     background-color: GrayText;
   }
@@ -1410,7 +1408,8 @@ html[data-palette='graphite']
     .player-tools
     .player-auto-play-button[aria-pressed='true']:disabled::after {
     forced-color-adjust: none;
-    background-color: GrayText;
+    color: GrayText;
+    background-color: currentColor;
   }
 
   html[data-palette='graphite'] .player-tools .player-auto-play-button:disabled {
