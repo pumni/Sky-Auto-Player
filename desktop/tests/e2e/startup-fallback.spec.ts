@@ -10,6 +10,6 @@ test.describe('static startup fallback', () => {
 
     await expect(page.getByRole('status')).toContainText('Starting the desktop application…');
     await expect(page.getByText('Preparing your library and saved settings.')).toBeVisible();
-    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(11, 16, 24)');
+    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(18, 19, 20)');
   });
 });

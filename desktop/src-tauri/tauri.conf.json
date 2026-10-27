@@ -28,7 +28,7 @@
         "maximizable": true,
         "decorations": false,
         "transparent": false,
-        "backgroundColor": [11, 16, 24, 255]
+        "backgroundColor": [18, 19, 20, 255]
       }
     ],
     "security": {

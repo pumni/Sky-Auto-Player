@@ -68,13 +68,10 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const viewport = useWorkbenchWidth(workbenchRef);
   const viewportWidth = viewport.width;
   const utility = useStore((store) => store.utility);
-  const palette = useStore(
-    (store) => store.settings?.palette ?? store.bootstrap?.settings.palette ?? 'graphite',
-  );
-  const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open, palette);
+  const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open);
   const utilityDocked = presentationMode === 'docked';
-  const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth, palette);
-  const layout = useWorkbenchLayout(viewportWidth, utilityDocked, palette, viewport.revision);
+  const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth);
+  const layout = useWorkbenchLayout(viewportWidth, utilityDocked, viewport.revision);
   const previousUtilityOpenRef = useRef(utility.open);
   const liveResizeRef = useRef<{
     pane: 'navigator' | 'utility';
@@ -91,7 +88,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       pane === 'utility'
         ? Math.min(layout.utilityWidthMax, Math.max(Math.min(280, layout.utilityWidthMax), width))
         : layout.utilityWidth;
-    const navigatorMax = getNavigatorWidthMax(viewportWidth, utilityWidth, palette);
+    const navigatorMax = getNavigatorWidthMax(viewportWidth, utilityWidth);
     const navigatorWidth = layout.navigatorCollapsed
       ? layout.navigatorWidth
       : Math.min(
@@ -146,7 +143,6 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   }, [
     viewportWidth,
     viewport.revision,
-    palette,
     utilityDocked,
     layout.utilityWidthMax,
     layout.utilityWidth,

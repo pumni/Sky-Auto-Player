@@ -15,7 +15,6 @@ import './styles/tracks.css';
 import './styles/player.css';
 import './styles/overlays.css';
 import './styles/themes.css';
-import './styles/graphite.css';
 
 recordStartupTelemetry('frontend.entry');
 const mockDurations = (

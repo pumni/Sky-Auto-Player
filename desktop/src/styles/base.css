@@ -101,13 +101,13 @@ h3 {
   background: var(--control-pressed);
 }
 .button-primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
+  border-color: var(--primary-fill);
+  background: var(--primary-fill);
+  color: var(--on-primary);
   font-weight: 700;
 }
 .button-primary:hover {
-  background: var(--accent-hover);
+  background: var(--primary-fill-hover);
 }
 .button:disabled,
 .icon-button:disabled {
@@ -131,14 +131,14 @@ h3 {
   place-items: center;
   min-height: 30px;
   padding: 0;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--workbench-control-rest-edge);
   border-radius: var(--radius-control);
   color: var(--text-primary);
-  background: var(--surface-raised);
+  background: var(--workbench-control-rest);
   font-size: 11px;
 }
 .update-indicator:hover {
-  background: var(--control-hover);
+  background: var(--workbench-control-hover);
 }
 .update-actions {
   display: flex;
@@ -162,14 +162,14 @@ h3 {
   height: 38px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--surface-raised);
 }
 .update-notes {
   max-height: 120px;
   overflow: auto;
   padding: 10px;
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--accent-ink);
   background: var(--surface-raised);
   white-space: pre-wrap;
 }
@@ -222,4 +222,370 @@ h3 {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
+
+  .workbench-pane,
+  .utility-surface,
+  .player-bar,
+  .settings-dialog,
+  .library-dialog {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  :is(
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .update-indicator,
+    .library-menu-item,
+    .library-nav-item:not(.is-active),
+    .settings-nav-item:not(.is-active),
+    .track-actions-button,
+    .track-like-button,
+    [role='tab']
+  ) {
+    forced-color-adjust: auto;
+    border-color: ButtonText;
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  :is(
+      .button:not(.button-primary):not(.button-danger),
+      .icon-button:not(.button-primary):not(.button-danger),
+      .update-indicator,
+      .library-menu-item,
+      .library-nav-item,
+      .settings-nav-item,
+      .track-actions-button,
+      .track-like-button,
+      [role='tab']
+    ):hover:not(:disabled):not([aria-disabled='true']) {
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  :is(
+    .library-nav-item.is-active,
+    .library-nav-action-row.is-active,
+    .settings-nav-item.is-active
+  ) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  :is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    color: Highlight;
+    background-color: ButtonFace;
+  }
+
+  :is(
+      .player-transport .player-shuffle-action[aria-pressed='true'],
+      .player-tools .player-auto-play-button[aria-pressed='true'],
+      .player-tools .player-utility-button[aria-expanded='true'],
+      .track-row .track-like-button[aria-pressed='true']
+    ):hover:not(:disabled):not([aria-disabled='true']) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  .track-row.is-playing.is-selected .track-cell-index,
+  .library-nav-item.is-active .library-nav-item-icon {
+    color: HighlightText;
+  }
+
+  :is(
+    .button-primary,
+    .player-primary-action,
+    .button-danger,
+    .button,
+    .icon-button,
+    .caption-button,
+    .update-indicator,
+    .library-menu-item,
+    .library-nav-item,
+    .settings-nav-item,
+    .track-actions-button,
+    .track-like-button,
+    [role='tab']
+  ):focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  .global-search:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  :is(
+    .button-primary,
+    .player-primary-action,
+    .button-danger,
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .caption-button,
+    .update-indicator,
+    .library-menu-item,
+    .library-nav-item,
+    .settings-nav-item,
+    .track-actions-button,
+    .track-like-button,
+    [role='tab']
+  ):disabled,
+  :is(.library-menu-item, [role='tab'])[aria-disabled='true'] {
+    border-color: GrayText;
+    color: GrayText;
+    background-color: ButtonFace;
+  }
+}
+
+.library-nav-item-count,
+.track-browser-count,
+.track-cell-index,
+.track-cell-notes,
+.track-cell-duration {
+  font-size: 12px;
+}
+
+.library-nav-action-row,
+.library-nav-item,
+.settings-nav-item,
+.library-menu-item,
+.track-row,
+.utility-view-tabs [role='tab'],
+.diagnostics-tabs [role='tab'] {
+  transition: none;
+}
+
+.track-metadata-status.is-error,
+.library-inline-error {
+  font-size: 12px;
+}
+
+.recommendation-grid dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.recommendation-grid dd {
+  font-size: 14px;
+}
+
+.admission-copy strong {
+  font-size: 14px;
+}
+
+.admission-copy span,
+.admission-recovery-action {
+  font-size: 12px;
+}
+
+.settings-dialog,
+.library-dialog {
+  border-color: var(--border-strong);
+  border-radius: var(--workbench-radius-2xl);
+  background: var(--surface-panel);
+}
+
+.settings-section select,
+.settings-section input:not([type='checkbox']),
+.library-dialog-form input {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+.settings-note,
+.timing-margin-recommendation,
+.auto-play-switch-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.library-menu-popover,
+.track-menu-popover,
+.profile-popover {
+  border-color: var(--border-strong);
+  border-radius: var(--workbench-radius-xl);
+  background: var(--surface-raised);
+  box-shadow: 0 10px 28px var(--shadow-overlay);
+}
+
+.library-dialog-form label {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+:is(
+  .button-ghost,
+  .icon-button:not(.button-primary):not(.button-danger),
+  .library-menu-item,
+  .track-actions-button,
+  .track-like-button:not([aria-pressed='true'])
+) {
+  border-color: transparent;
+  color: var(--text-secondary);
+  background-color: transparent;
+}
+
+.button:not(.button-primary):not(.button-danger):not(.button-ghost) {
+  border-color: var(--workbench-action-edge);
+  color: var(--text-primary);
+  background-color: var(--surface-raised);
+}
+
+.button:not(.button-primary):not(.button-danger):not(.button-ghost):hover:not(:disabled):not(
+    [aria-disabled='true']
+  ) {
+  border-color: var(--workbench-action-hover-edge);
+  color: var(--text-primary);
+  background-color: var(--workbench-action-hover);
+}
+
+.button:not(.button-primary):not(.button-danger):not(.button-ghost):hover:active:not(:disabled):not(
+    [aria-disabled='true']
+  ) {
+  background-color: var(--workbench-control-pressed);
+}
+
+:is(
+    .button-ghost,
+    .icon-button:not(.button-primary):not(.button-danger),
+    .library-menu-item:not(.is-danger),
+    .track-actions-button,
+    .track-like-button:not([aria-pressed='true'])
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: transparent;
+  color: var(--text-primary);
+  background-color: var(--workbench-control-hover);
+}
+
+:is(
+    .button-ghost,
+    .library-menu-item:not(.is-danger),
+    .track-actions-button,
+    .track-like-button:not([aria-pressed='true'])
+  ):hover:active:not(:disabled):not([aria-disabled='true']) {
+  background-color: var(--workbench-control-pressed);
+}
+
+:is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):focus-visible:not(:disabled):not([aria-disabled='true']):not(:hover) {
+  color: var(--workbench-toggle-on);
+  background-color: transparent;
+}
+
+:is(
+  .player-transport .player-shuffle-action[aria-pressed='true'],
+  .player-tools .player-auto-play-button[aria-pressed='true'],
+  .track-row .track-like-button[aria-pressed='true']
+) {
+  border-color: transparent;
+  color: var(--workbench-toggle-on);
+  background-color: transparent;
+}
+
+:is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--workbench-toggle-on);
+  background-color: var(--workbench-control-hover);
+}
+
+:is(
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):hover:active:not(:disabled):not([aria-disabled='true']) {
+  background-color: var(--workbench-control-pressed);
+}
+
+:is(
+  .player-transport .player-shuffle-action[aria-pressed='false'],
+  .player-tools .player-auto-play-button[aria-pressed='false'],
+  .track-row .track-like-button[aria-pressed='false']
+) {
+  color: var(--workbench-toggle-off);
+}
+
+:is(
+    .player-transport .player-shuffle-action[aria-pressed='false'],
+    .player-tools .player-auto-play-button[aria-pressed='false'],
+    .track-row .track-like-button[aria-pressed='false']
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--text-primary);
+}
+
+:is(
+  .track-row.is-selected,
+  .library-nav-item.is-active,
+  .settings-nav-item.is-active
+):focus-visible,
+:is(
+  .button,
+  .icon-button,
+  .caption-button,
+  .update-indicator,
+  .library-nav-item,
+  .settings-nav-item,
+  .library-menu-item,
+  .track-actions-button,
+  .track-like-button,
+  [role='tab']
+):focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: 2px;
+}
+
+.button:not(.button-primary):not(.button-danger):not(.button-ghost):disabled {
+  border-color: var(--workbench-action-edge);
+  color: var(--workbench-control-disabled);
+  background-color: var(--surface-raised);
+  cursor: default;
+  opacity: 1;
+}
+
+:is(
+  .button-ghost,
+  .icon-button:not(.button-primary):not(.button-danger),
+  .caption-button,
+  .library-menu-item,
+  .library-nav-item,
+  .settings-nav-item,
+  .track-actions-button,
+  .track-like-button,
+  [role='tab']
+):disabled,
+:is(.library-menu-item, .library-nav-item, .settings-nav-item, [role='tab'])[aria-disabled='true'] {
+  border-color: transparent;
+  color: var(--workbench-control-disabled);
+  background-color: transparent;
+  cursor: default;
+  opacity: 1;
+}
+
+:is(
+  .player-transport .player-shuffle-action[aria-pressed='true'],
+  .player-tools .player-auto-play-button[aria-pressed='true'],
+  .player-tools .player-utility-button[aria-expanded='true'],
+  .track-row .track-like-button[aria-pressed='true']
+):disabled {
+  color: var(--workbench-control-disabled);
+  background-color: transparent;
 }

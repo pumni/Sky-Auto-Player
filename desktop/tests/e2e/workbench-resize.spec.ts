@@ -90,41 +90,54 @@ for (const pane of ['utility', 'navigator'] as const) {
   });
 }
 
-test('Inspector 388/389/388 stays expanded, caps at 388, and persists once', async ({
+test('all palettes preserve Inspector 388/389/388 geometry and persist once', async ({
   page,
 }, info) => {
-  await seed(page, 1024);
-  const separator = page.getByRole('separator', { name: 'Resize utility pane' });
-  const box = (await separator.boundingBox())!;
-  await page.evaluate(() => {
-    const original = Storage.prototype.setItem;
-    Object.assign(window, { resizeWrites: 0 });
-    Storage.prototype.setItem = function (key, value) {
-      if (key === 'sky.ui.workbench.v5')
-        Object.assign(window, { resizeWrites: Reflect.get(window, 'resizeWrites') + 1 });
-      return original.call(this, key, value);
-    };
-  });
-  await page.mouse.move(box.x + box.width / 2, box.y + 80);
-  await page.mouse.down();
+  test.setTimeout(180_000);
   const trace = [];
-  for (const offset of [0, -1, 0]) {
-    await page.mouse.move(box.x + box.width / 2 + offset, box.y + 80);
-    await expect.poll(() => bounds(page)).toEqual({ navigator: 200, tracks: 420, inspector: 388 });
-    trace.push({ requested: 388 - offset, ...(await bounds(page)) });
+  for (const palette of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
+    await seed(page, 1024);
+    await page.locator('html').evaluate((root, value) => {
+      (root as HTMLElement).dataset.palette = value;
+    }, palette);
+    const separator = page.getByRole('separator', { name: 'Resize utility pane' });
+    const box = (await separator.boundingBox())!;
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Object.assign(window, { resizeWrites: 0 });
+      Storage.prototype.setItem = function (key, value) {
+        if (key === 'sky.ui.workbench.v5')
+          Object.assign(window, { resizeWrites: Reflect.get(window, 'resizeWrites') + 1 });
+        return original.call(this, key, value);
+      };
+    });
+    await page.mouse.move(box.x + box.width / 2, box.y + 80);
+    await page.mouse.down();
+    const paletteTrace = [];
+    for (const offset of [0, -1, 0]) {
+      await page.mouse.move(box.x + box.width / 2 + offset, box.y + 80);
+      await expect
+        .poll(() => bounds(page))
+        .toEqual({ navigator: 200, tracks: 420, inspector: 388 });
+      paletteTrace.push({ requested: 388 - offset, ...(await bounds(page)) });
+    }
+    expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(0);
+    await page.mouse.up();
+    await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
+    expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(1);
+    trace.push({ palette, samples: paletteTrace });
+    if (palette === 'graphite') {
+      await info.attach('inspector-clamped-1024', {
+        body: await page.screenshot(),
+        contentType: 'image/png',
+      });
+    }
   }
-  expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(0);
-  await page.mouse.up();
-  await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
-  expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(1);
   await info.attach('geometry-oracle', {
     body: JSON.stringify(trace, null, 2),
     contentType: 'application/json',
   });
-  await info.attach('inspector-clamped-1024', {
-    body: await page.screenshot(),
-    contentType: 'image/png',
-  });
+  const separator = page.getByRole('separator', { name: 'Resize utility pane' });
   await page.reload();
   await expect(separator).toBeVisible();
   await expect.poll(() => bounds(page)).toEqual({ navigator: 200, tracks: 420, inspector: 388 });
@@ -141,6 +154,63 @@ test('Inspector 388/389/388 stays expanded, caps at 388, and persists once', asy
   await expect.poll(() => bounds(page)).toEqual({ navigator: 48, tracks: 520, inspector: 440 });
   await page.keyboard.press('Tab');
   await expect(separator).not.toBeFocused();
+});
+
+test('all palette IDs share workbench geometry across the dock and overlay thresholds', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await seed(page, 1366);
+  for (const width of [1366, 1024, 800, 764, 763, 640]) {
+    await page.setViewportSize({ width, height: width === 640 ? 448 : 768 });
+    const docked = width >= 764;
+    const expectedInspector = docked
+      ? Math.min(388, Math.max(0, width - 484))
+      : Math.min(width - 16, Math.min(352, Math.max(288, Math.floor(width * 0.45))));
+    await expect
+      .poll(() =>
+        page
+          .locator('.utility-workbench-pane')
+          .evaluate((element) => element.getBoundingClientRect().width),
+      )
+      .toBe(expectedInspector);
+    let sharedGeometry: unknown;
+    for (const palette of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
+      await page.locator('html').evaluate((root, value) => {
+        (root as HTMLElement).dataset.palette = value;
+      }, palette);
+      await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
+      const geometry = await page.evaluate(() => {
+        const rect = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return null;
+          const bounds = element.getBoundingClientRect();
+          return [bounds.x, bounds.y, bounds.width, bounds.height];
+        };
+        return {
+          titlebar: rect('.app-titlebar'),
+          workbench: rect('.workbench'),
+          navigator: rect('.navigator-workbench-pane'),
+          tracks: rect('.track-browser-workbench-pane'),
+          inspector: rect('.utility-workbench-pane'),
+          trackHeader: rect('.track-browser-header'),
+          trackRow: rect('.track-row'),
+          player: rect('.player-bar'),
+          separators: Array.from(
+            document.querySelectorAll<HTMLElement>('.resizable-separator'),
+          ).map((separator) => {
+            const bounds = separator.getBoundingClientRect();
+            return [bounds.x, bounds.y, bounds.width, bounds.height];
+          }),
+          presentation:
+            document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation,
+        };
+      });
+      expect(geometry.presentation).toBe(width < 764 ? 'overlay' : 'docked');
+      if (sharedGeometry === undefined) sharedGeometry = geometry;
+      else expect(geometry, `${width}px using ${palette}`).toEqual(sharedGeometry);
+    }
+  }
 });
 
 for (const [viewport, inspector] of [

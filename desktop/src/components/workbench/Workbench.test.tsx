@@ -3,11 +3,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResizableSeparator } from './ResizableSeparator';
 import {
-  GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH,
+  AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH,
   DEFAULT_NAVIGATOR_WIDTH,
   COMPACT_NAVIGATOR_WIDTH,
-  getWorkbenchGutter,
-  getCompactNavigatorWidth,
+  WORKBENCH_GUTTER,
+  OUTER_INLINE_PADDING,
   getNavigatorWidthMax,
   LEGACY_WORKBENCH_STORAGE_KEY,
   LEGACY_WORKBENCH_V4_STORAGE_KEY,
@@ -54,7 +54,7 @@ function ResponsiveNavigatorHarness({
   viewportWidth: number;
   viewportRevision?: number;
 }) {
-  const layout = useWorkbenchLayout(viewportWidth, false, 'graphite', viewportRevision);
+  const layout = useWorkbenchLayout(viewportWidth, false, viewportRevision);
   return (
     <>
       <output data-testid="responsive-navigator">
@@ -305,7 +305,7 @@ describe('workbench layout persistence', () => {
     expect(getNavigatorWidthMax(900)).toBe(340);
     expect(getNavigatorWidthMax(1200, 340)).toBe(340);
     expect(getNavigatorWidthMax(920, 320)).toBe(MIN_NAVIGATOR_WIDTH);
-    expect(getUtilityWidthMax(920)).toBe(412);
+    expect(getUtilityWidthMax(920)).toBe(436);
     const minimum = solveWorkbenchGeometry({
       viewportWidth: 800,
       navigatorWidth: COMPACT_NAVIGATOR_WIDTH,
@@ -313,24 +313,18 @@ describe('workbench layout persistence', () => {
     });
     expect(minimum.trackBrowserWidth).toBe(420);
     expect(minimum.fits).toBe(true);
-    expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
-    expect(getCompactNavigatorWidth('graphite')).toBe(48);
-    expect(getCompactNavigatorWidth('aurora')).toBe(56);
+    expect(COMPACT_NAVIGATOR_WIDTH).toBe(48);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
   });
 
-  it('uses the Graphite compact rail width in inspector limits and preserves legacy width', () => {
-    const legacyPalettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
-    for (const palette of legacyPalettes) expect(getCompactNavigatorWidth(palette)).toBe(56);
-
-    expect(getUtilityWidthMax(800, 'graphite')).toBe(316);
-    const graphite = solveWorkbenchGeometry({
+  it('uses the shared compact rail width in inspector limits', () => {
+    expect(getUtilityWidthMax(800)).toBe(316);
+    const geometry = solveWorkbenchGeometry({
       viewportWidth: 800,
-      navigatorWidth: getCompactNavigatorWidth('graphite'),
-      utilityWidth: getUtilityWidthMax(800, 'graphite'),
-      palette: 'graphite',
+      navigatorWidth: COMPACT_NAVIGATOR_WIDTH,
+      utilityWidth: getUtilityWidthMax(800),
     });
-    expect(graphite).toMatchObject({ navigatorWidth: 48, trackBrowserWidth: 420, fits: true });
+    expect(geometry).toMatchObject({ navigatorWidth: 48, trackBrowserWidth: 420, fits: true });
   });
 
   it('automatically collapses at 640 without persisting or changing the saved preference', () => {
@@ -362,21 +356,19 @@ describe('workbench layout persistence', () => {
     expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('true:48:expanded:286');
     expect(write).not.toHaveBeenCalled();
     expect(loadWorkbenchLayout().navigatorPreference).toBe('expanded');
-    expect(GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH).toBe(640);
+    expect(AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH).toBe(640);
   });
 
-  it('uses Graphite spacing in layout math and preserves legacy palette geometry', () => {
-    const legacyPalettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
-    expect(getWorkbenchGutter('graphite')).toBe(4);
-    for (const palette of legacyPalettes) expect(getWorkbenchGutter(palette)).toBe(8);
+  it('uses one shared spacing and geometry calculation', () => {
+    expect(WORKBENCH_GUTTER).toBe(4);
+    expect(OUTER_INLINE_PADDING).toBe(8);
 
-    const graphite = solveWorkbenchGeometry({
+    const geometry = solveWorkbenchGeometry({
       viewportWidth: 1366,
       navigatorWidth: 240,
       utilityWidth: 320,
-      palette: 'graphite',
     });
-    expect(graphite).toMatchObject({
+    expect(geometry).toMatchObject({
       outerInlinePadding: 8,
       gutter: 4,
       separatorSpace: 8,
@@ -386,50 +378,30 @@ describe('workbench layout persistence', () => {
       fits: true,
     });
 
-    const legacy = solveWorkbenchGeometry({
-      viewportWidth: 1366,
-      navigatorWidth: 240,
-      utilityWidth: 320,
-      palette: 'slate',
-    });
-    expect(legacy).toMatchObject({
-      outerInlinePadding: 16,
-      gutter: 8,
-      separatorSpace: 16,
-      trackBrowserWidth: 774,
-      fits: true,
-    });
-    expect(getUtilityWidthMax(764, 'graphite')).toBe(280);
-    expect(getUtilityWidthMax(763, 'graphite')).toBe(279);
-    expect(getUtilityPresentationMode(764, true, 'graphite')).toBe('docked');
-    expect(getUtilityPresentationMode(763, true, 'graphite')).toBe('overlay');
-    expect(getUtilityPresentationMode(788, true, 'slate')).toBe('docked');
-    expect(getUtilityPresentationMode(787, true, 'slate')).toBe('overlay');
+    expect(getUtilityWidthMax(764)).toBe(280);
+    expect(getUtilityWidthMax(763)).toBe(279);
+    expect(getUtilityPresentationMode(764, true)).toBe('docked');
+    expect(getUtilityPresentationMode(763, true)).toBe('overlay');
   });
 
   it('chooses docked presentation only when the minimum inspector width fits', () => {
-    for (const viewportWidth of [1920, 1366, 1024, 900, 800, 788]) {
+    for (const viewportWidth of [1920, 1366, 1024, 900, 800, 788, 787, 780, 764]) {
       expect(getUtilityPresentationMode(viewportWidth, true)).toBe('docked');
     }
-    for (const viewportWidth of [787, 780, 640]) {
+    for (const viewportWidth of [763, 640]) {
       expect(getUtilityPresentationMode(viewportWidth, true)).toBe('overlay');
     }
     expect(getUtilityPresentationMode(640, false)).toBe('closed');
-    expect(getUtilityWidthMax(788)).toBe(280);
-    expect(getUtilityWidthMax(787)).toBe(279);
+    expect(getUtilityWidthMax(788)).toBe(304);
+    expect(getUtilityWidthMax(787)).toBe(303);
   });
 
   it('computes a compact overlay width independently from docked width preferences', () => {
-    expect(getUtilityOverlayWidth(640)).toBe(320);
-    expect(getUtilityOverlayWidth(780)).toBe(390);
-    expect(getUtilityOverlayWidth(400)).toBe(280);
-    expect(getUtilityOverlayWidth(250)).toBe(234);
-    expect(getUtilityOverlayWidth(640, 'graphite')).toBe(288);
-    expect(getUtilityOverlayWidth(800, 'graphite')).toBe(352);
-    expect(getUtilityOverlayWidth(400, 'graphite')).toBe(288);
-    expect(getUtilityOverlayWidth(250, 'graphite')).toBe(242);
-    expect(getUtilityOverlayWidth(640, 'slate')).toBe(320);
-    expect(getUtilityOverlayWidth(780, 'slate')).toBe(390);
+    expect(getUtilityOverlayWidth(640)).toBe(288);
+    expect(getUtilityOverlayWidth(780)).toBe(351);
+    expect(getUtilityOverlayWidth(400)).toBe(288);
+    expect(getUtilityOverlayWidth(800)).toBe(352);
+    expect(getUtilityOverlayWidth(250)).toBe(242);
   });
 
   it('combines rapid functional updates while persisting only explicit commits', () => {

@@ -4,7 +4,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 const palettes = ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
 type Palette = (typeof palettes)[number];
 
-const auroraTokenNames = [
+const paletteTokenNames = [
   '--canvas',
   '--surface-panel',
   '--surface-raised',
@@ -12,6 +12,7 @@ const auroraTokenNames = [
   '--control-pressed',
   '--selection-bg',
   '--selection-indicator',
+  '--selection-row-indicator',
   '--border-subtle',
   '--border-strong',
   '--control-border',
@@ -20,6 +21,12 @@ const auroraTokenNames = [
   '--text-tertiary',
   '--accent',
   '--accent-hover',
+  '--accent-fill',
+  '--accent-fill-hover',
+  '--accent-fill-pressed',
+  '--accent-ink',
+  '--accent-ink-hover',
+  '--primary-fill',
   '--on-accent',
   '--focus-ring',
 ] as const;
@@ -30,18 +37,24 @@ const expected = {
     selectionBg: '#25242c',
     accent: '#b2a5e9',
     accentHover: '#c0b4f1',
+    accentFill: '#705eae',
+    accentFillHover: '#7564b4',
+    accentFillPressed: '#6553a0',
     borderStrong: '#393b3e',
     canvas: '#121314',
     surfaceRaised: '#242526',
-    onAccent: '#121314',
+    onAccent: '#ffffff',
     focusRing: '#b2a5e9',
     onDanger: '#ffffff',
   },
   aurora: {
     controlBorder: '#617390',
     selectionBg: '#152132',
-    accent: '#785ddd',
-    accentHover: '#825bdb',
+    accent: '#9b8cff',
+    accentHover: '#b4a8ff',
+    accentFill: '#785ddd',
+    accentFillHover: '#825bdb',
+    accentFillPressed: '#6647bd',
     borderStrong: '#33445e',
     canvas: '#0b1018',
     surfaceRaised: '#151e2b',
@@ -54,6 +67,9 @@ const expected = {
     selectionBg: '#2d343d',
     accent: '#a0b8d5',
     accentHover: '#c4d0df',
+    accentFill: '#a0b8d5',
+    accentFillHover: '#c4d0df',
+    accentFillPressed: '#88a4c4',
     borderStrong: '#58616d',
     canvas: '#17191d',
     surfaceRaised: '#292d33',
@@ -64,8 +80,11 @@ const expected = {
   slate: {
     controlBorder: '#6a8699',
     selectionBg: '#2a3d4a',
-    accent: '#6ca7d8',
-    accentHover: '#83b8e3',
+    accent: '#a8dded',
+    accentHover: '#c1f0fb',
+    accentFill: '#6ca7d8',
+    accentFillHover: '#83b8e3',
+    accentFillPressed: '#568fbe',
     borderStrong: '#486274',
     canvas: '#10171d',
     surfaceRaised: '#20313d',
@@ -76,8 +95,11 @@ const expected = {
   cyberpunk: {
     controlBorder: '#976595',
     selectionBg: '#3a274a',
-    accent: '#d95abf',
-    accentHover: '#ef78d4',
+    accent: '#f4a8e3',
+    accentHover: '#ffd0f2',
+    accentFill: '#d95abf',
+    accentFillHover: '#ef78d4',
+    accentFillPressed: '#c954b1',
     borderStrong: '#654872',
     canvas: '#130f1d',
     surfaceRaised: '#291c37',
@@ -88,8 +110,11 @@ const expected = {
   classic: {
     controlBorder: '#897864',
     selectionBg: '#352c21',
-    accent: '#c99242',
-    accentHover: '#e0aa5b',
+    accent: '#e8c17a',
+    accentHover: '#f2dca5',
+    accentFill: '#c99242',
+    accentFillHover: '#e0aa5b',
+    accentFillPressed: '#a87832',
     borderStrong: '#695845',
     canvas: '#171512',
     surfaceRaised: '#2c261f',
@@ -120,6 +145,10 @@ const graphiteRoleTokens = {
   '--workbench-text-tertiary': '#929292',
   '--workbench-accent': '#b2a5e9',
   '--workbench-accent-hover': '#c0b4f1',
+  '--workbench-accent-fill': '#705eae',
+  '--workbench-accent-fill-hover': '#7564b4',
+  '--workbench-accent-fill-pressed': '#6553a0',
+  '--workbench-toggle-on': '#b68cff',
   '--workbench-focus': '#b2a5e9',
   '--workbench-search-surface': '#202123',
   '--workbench-search-idle-edge': '#3d3f43',
@@ -313,7 +342,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   for (const palette of palettes) {
     await page.goto('/');
     await selectPalette(page, palette);
-    const expectedGutter = palette === 'graphite' ? 4 : 8;
+    const expectedGutter = 4;
     await expect(page.locator('.workbench')).toHaveAttribute(
       'data-workbench-gap',
       String(expectedGutter),
@@ -351,7 +380,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     });
     expect(geometry.gutter).toBe(expectedGutter);
     expect(geometry.solverGutter).toBe(expectedGutter);
-    expect(geometry.titlebarHeight).toBe(palette === 'graphite' ? 40 : 48);
+    expect(geometry.titlebarHeight).toBe(40);
     expect(geometry.navigator).toMatchObject({ x: expectedGutter, width: 240 });
     expect(geometry.track?.x).toBe(expectedGutter * 2 + 240);
     expect(geometry.track?.right).toBe(1366 - expectedGutter);
@@ -363,8 +392,15 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     for (const [name, value] of Object.entries({
       '--control-border': values.controlBorder,
       '--selection-bg': values.selectionBg,
-      '--accent': values.accent,
-      '--accent-hover': values.accentHover,
+      '--accent': palette === 'graphite' ? values.accent : values.accentFill,
+      '--accent-hover': palette === 'graphite' ? values.accentHover : values.accentFillHover,
+      '--accent-fill': values.accentFill,
+      '--accent-fill-hover': values.accentFillHover,
+      '--accent-fill-pressed': values.accentFillPressed,
+      '--accent-ink': values.accent,
+      '--accent-ink-hover': values.accentHover,
+      '--selection-row-indicator': palette === 'graphite' ? 'transparent' : values.accent,
+      '--primary-fill': values.accentFill,
       '--border-strong': values.borderStrong,
     })) {
       await expect.poll(() => token(page, name)).toBe(value);
@@ -379,8 +415,10 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     }
 
     const colors = {
-      accent: await resolvedTokenColor(page, '--accent'),
-      accentHover: await resolvedTokenColor(page, '--accent-hover'),
+      accent: await resolvedTokenColor(page, '--accent-ink'),
+      accentHover: await resolvedTokenColor(page, '--accent-ink-hover'),
+      accentFill: await resolvedTokenColor(page, '--accent-fill'),
+      accentFillHover: await resolvedTokenColor(page, '--accent-fill-hover'),
       controlBorder: await resolvedTokenColor(page, '--control-border'),
       selectionBg: await resolvedTokenColor(page, '--selection-bg'),
       canvas: await resolvedTokenColor(page, '--canvas'),
@@ -391,15 +429,12 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       dangerFillHover: await resolvedTokenColor(page, '--danger-fill-hover'),
       focusRing: await resolvedTokenColor(page, '--focus-ring'),
     };
-    if (palette === 'graphite') {
-      for (const surface of [colors.canvas, colors.surfaceRaised, colors.selectionBg]) {
-        expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
-        expect(contrastRatio(colors.accentHover, surface)).toBeGreaterThanOrEqual(4.5);
-      }
-    } else {
-      expect(contrastRatio(colors.onAccent, colors.accent)).toBeGreaterThanOrEqual(4.5);
-      expect(contrastRatio(colors.onAccent, colors.accentHover)).toBeGreaterThanOrEqual(4.5);
+    for (const surface of [colors.canvas, colors.surfaceRaised, colors.selectionBg]) {
+      expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.accentHover, surface)).toBeGreaterThanOrEqual(4.5);
     }
+    expect(contrastRatio(colors.onAccent, colors.accentFill)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.onAccent, colors.accentFillHover)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.onDanger, colors.dangerFill)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.onDanger, colors.dangerFillHover)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.controlBorder, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
@@ -414,21 +449,20 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     }
   }
 
+  await selectPalette(page, 'graphite');
+  const defaultTokens = await Promise.all(paletteTokenNames.map((name) => token(page, name)));
   await selectPalette(page, 'aurora');
-  const auroraTokens = await Promise.all(auroraTokenNames.map((name) => token(page, name)));
 
   await page.locator('html').evaluate((root) => root.removeAttribute('data-palette'));
   await expect(page.locator('html')).not.toHaveAttribute('data-palette');
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
-  for (const [index, name] of auroraTokenNames.entries()) {
-    await expect.poll(() => token(page, name)).toBe(auroraTokens[index]);
+  for (const [index, name] of paletteTokenNames.entries()) {
+    await expect.poll(() => token(page, name)).toBe(defaultTokens[index]);
   }
   await selectPalette(page, 'aurora');
 });
 
-test('Graphite is the new-install palette and persists through the appearance settings surface', async ({
-  page,
-}) => {
+test('Dark mode is the new-install palette and keeps the graphite setting ID', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -441,7 +475,7 @@ test('Graphite is the new-install palette and persists through the appearance se
   const palette = settings.getByLabel('Color palette');
   await expect(palette).toHaveValue('graphite');
   await expect(palette.locator('option')).toHaveCount(6);
-  await expect(palette.locator('option[value="graphite"]')).toHaveCount(1);
+  await expect(palette.locator('option[value="graphite"]')).toHaveText('Dark mode');
   await palette.selectOption('slate');
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'slate');
   await palette.selectOption('graphite');
@@ -603,7 +637,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await expect(selectedRow).toHaveCount(1);
   await expect(selectedRow).toHaveClass(/is-selected/);
   await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
-  await assertBorderUsesToken(page, selectedRow, '--accent', 'borderLeftColor');
+  await assertBorderUsesToken(page, selectedRow, '--selection-row-indicator', 'borderLeftColor');
   await assertBackgroundUsesToken(
     page,
     page.locator('.library-nav-item.is-active'),
@@ -627,7 +661,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   );
   await page.mouse.down();
   await expect(styleValue(separatorLine, 'borderLeftColor')).resolves.toBe(
-    await resolvedTokenColor(page, '--accent'),
+    await resolvedTokenColor(page, '--accent-ink'),
   );
   await page.mouse.up();
 
@@ -682,7 +716,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await assertBackgroundUsesToken(page, update, '--surface-raised');
   await update.hover();
   await assertBackgroundUsesToken(page, update, '--control-hover');
-  await assertBackgroundUsesToken(page, page.locator('.update-indicator-dot'), '--accent');
+  await assertBackgroundUsesToken(page, page.locator('.update-indicator-dot'), '--accent-ink');
 
   const navigator = page.getByRole('navigation', { name: 'Library' });
   const collapseNavigator = navigator.getByRole('button', { name: 'Collapse library navigator' });
@@ -720,9 +754,9 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await assertBackgroundUsesToken(page, cancel, '--control-hover');
   await pressAndReadBackground(page, cancel, await resolvedTokenColor(page, '--control-pressed'));
   const primary = createDialog.getByRole('button', { name: 'Create' });
-  await assertBackgroundUsesToken(page, primary, '--accent');
+  await assertBackgroundUsesToken(page, primary, '--primary-fill');
   await primary.hover();
-  await assertBackgroundUsesToken(page, primary, '--accent-hover');
+  await assertBackgroundUsesToken(page, primary, '--primary-fill-hover');
   await createDialog.getByLabel('Playlist name').fill('Palette Contract');
   await primary.click();
   await page.getByRole('button', { name: 'More actions for Palette Contract' }).click();

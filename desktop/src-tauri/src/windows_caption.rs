@@ -21,7 +21,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_OVERLAPPED, WS_VISIBLE,
 };
 
-const TITLEBAR_HEIGHT: u32 = 48;
+const TITLEBAR_HEIGHT: u32 = 40;
 const CAPTION_BUTTON_WIDTH: u32 = 46;
 const CLOSE_BUTTONS_TO_THE_RIGHT: u32 = 1;
 const SUBCLASS_ID: usize = 0x534b_5943_4150;
@@ -563,9 +563,9 @@ fn child_destroyed_from(
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptionOperations, OverlayRegistry, SnapOverlayState, child_destroyed_from,
-        finish_overlay_install, install_overlay, lock_overlays, parent_destroyed_from,
-        reserve_parent,
+        CaptionOperations, OverlayRegistry, SnapOverlayState, TITLEBAR_HEIGHT,
+        child_destroyed_from, finish_overlay_install, install_overlay, lock_overlays,
+        parent_destroyed_from, reserve_parent, scale,
     };
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
@@ -664,6 +664,15 @@ mod tests {
 
     fn registry() -> OverlayRegistry {
         Mutex::new(HashMap::new())
+    }
+
+    #[test]
+    fn snap_hit_target_tracks_the_shared_logical_titlebar_height_at_each_dpi() {
+        assert_eq!(TITLEBAR_HEIGHT, 40);
+        assert_eq!(scale(TITLEBAR_HEIGHT, 96), 40);
+        assert_eq!(scale(TITLEBAR_HEIGHT, 120), 50);
+        assert_eq!(scale(TITLEBAR_HEIGHT, 144), 60);
+        assert_eq!(scale(TITLEBAR_HEIGHT, 192), 80);
     }
 
     #[test]

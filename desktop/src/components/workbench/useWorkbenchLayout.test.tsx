@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useWorkbenchLayout, WORKBENCH_STORAGE_KEY } from './useWorkbenchLayout';
@@ -11,7 +13,7 @@ afterEach(() => {
 describe('Inspector topology and preference ownership', () => {
   it('keeps a completed rebased topology across close/reopen until a real viewport change', () => {
     const { result, rerender } = renderHook(
-      ({ width, docked }) => useWorkbenchLayout(width, docked, 'graphite'),
+      ({ width, docked }) => useWorkbenchLayout(width, docked),
       { initialProps: { width: 1024, docked: true } },
     );
     act(() => result.current.beginUtilityDrag());
@@ -47,10 +49,9 @@ describe('Inspector topology and preference ownership', () => {
     [916, 280],
     [917, 281],
   ])('retains effective geometry on release at %s without violating v5', (width, effective) => {
-    const { result, rerender } = renderHook(
-      ({ width }) => useWorkbenchLayout(width, true, 'graphite'),
-      { initialProps: { width: 1024 } },
-    );
+    const { result, rerender } = renderHook(({ width }) => useWorkbenchLayout(width, true), {
+      initialProps: { width: 1024 },
+    });
     act(() => result.current.beginUtilityDrag());
     rerender({ width });
     expect(result.current.utilityWidth).toBe(effective);
@@ -85,7 +86,7 @@ describe('Inspector topology and preference ownership', () => {
         utilityWidth: initialWidth,
       }),
     );
-    const { result } = renderHook(() => useWorkbenchLayout(viewport, true, 'graphite'));
+    const { result } = renderHook(() => useWorkbenchLayout(viewport, true));
     act(() => result.current.beginUtilityDrag());
     expect(result.current.utilityWidthMax).toBe(maximum);
     for (const requested of [388, 389, 388]) {
@@ -114,7 +115,7 @@ describe('Inspector topology and preference ownership', () => {
   });
   it('allows an explicit collapsed rail during the session and restores expanded preference after temporary shrink', () => {
     const { result, rerender } = renderHook(
-      ({ width, docked }) => useWorkbenchLayout(width, docked, 'graphite'),
+      ({ width, docked }) => useWorkbenchLayout(width, docked),
       { initialProps: { width: 1024, docked: true } },
     );
     act(() => result.current.beginUtilityDrag());
@@ -140,7 +141,7 @@ describe('Inspector topology and preference ownership', () => {
   });
   it('adapts a locked session to viewport bounds and discards the lock when separator unmounts', () => {
     const { result, rerender } = renderHook(
-      ({ width, docked }) => useWorkbenchLayout(width, docked, 'graphite'),
+      ({ width, docked }) => useWorkbenchLayout(width, docked),
       { initialProps: { width: 1024, docked: true } },
     );
     act(() => result.current.beginUtilityDrag());
@@ -176,5 +177,33 @@ describe('Inspector topology and preference ownership', () => {
     act(() => result.current.setUtilityWidth(360, true));
     expect(renders).toBe(before + 1);
     expect(writes).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('shared palette geometry boundary', () => {
+  it('keeps palette selectors color-only and the solver palette-independent', () => {
+    const solver = readFileSync(
+      resolve(process.cwd(), 'src/components/workbench/useWorkbenchLayout.ts'),
+      'utf8',
+    );
+    expect(solver).not.toMatch(/palette|PaletteId/);
+
+    const themes = readFileSync(resolve(process.cwd(), 'src/styles/themes.css'), 'utf8');
+    const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];
+    expect(paletteRules).toHaveLength(6);
+    for (const [, selector, declarations] of paletteRules) {
+      expect(selector).not.toMatch(
+        /(?:min|max)?(?:width|height)|gap|padding|margin|radius|font|transition/i,
+      );
+      for (const declaration of declarations
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)) {
+        expect(declaration).toMatch(/^--[\w-]+\s*:\s*[^{}]+$/);
+        expect(declaration).not.toMatch(
+          /(?:min|max)?(?:width|height)|gap|padding|margin|radius|font|transition/i,
+        );
+      }
+    }
   });
 });
