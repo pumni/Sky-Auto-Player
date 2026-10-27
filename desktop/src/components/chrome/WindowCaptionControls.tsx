@@ -68,7 +68,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
       data-tauri-drag-region="false"
     >
       <button
-        className="caption-button"
+        className="caption-button caption-button-minimize"
         type="button"
         aria-label="Minimize window"
         title="Minimize window"
@@ -78,7 +78,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         <span className="caption-glyph caption-glyph-minimize" aria-hidden="true" />
       </button>
       <button
-        className="caption-button"
+        className="caption-button caption-button-zoom"
         type="button"
         aria-label={maximizeLabel}
         title={maximizeLabel}

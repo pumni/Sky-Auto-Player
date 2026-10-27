@@ -18,6 +18,12 @@ type InspectorHeaderElementGeometry = {
   flex: string;
   gridTemplateColumns: string;
   paddingInline: string;
+  backgroundColor: string;
+  color: string;
+  borderRadius: string;
+  borderBottomWidth: string;
+  borderBottomStyle: string;
+  borderBottomColor: string;
 };
 
 type InspectorHeaderGeometry = Record<string, InspectorHeaderElementGeometry | null>;
@@ -116,6 +122,12 @@ async function readInspectorHeaderGeometry(page: Page) {
             flex: style.flex,
             gridTemplateColumns: style.gridTemplateColumns,
             paddingInline: `${style.paddingLeft} ${style.paddingRight}`,
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderRadius: style.borderRadius,
+            borderBottomWidth: style.borderBottomWidth,
+            borderBottomStyle: style.borderBottomStyle,
+            borderBottomColor: style.borderBottomColor,
           },
         ];
       }),
@@ -374,6 +386,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await inspector.getByRole('tab', { name: 'Runtime' }).click();
     await expect(page.getByRole('region', { name: 'Utility: Diagnostics' })).toBeVisible();
     await expectInspectorGeometry(page, presentation);
+    await page.mouse.move(0, 0);
     await record('runtime');
 
     const geometryFor = (state: 'empty' | 'selected' | 'cleared' | 'runtime', selector: string) => {
@@ -393,6 +406,9 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       const tabs = geometryFor(state, '.utility-view-tabs');
       const details = geometryFor(state, '.utility-view-tabs [role="tab"]:first-child');
       const runtime = geometryFor(state, '.utility-view-tabs [role="tab"]:last-child');
+      expect(tabs.borderBottomWidth).toBe('1px');
+      expect(tabs.borderBottomStyle).toBe('solid');
+      expect(tabs.borderBottomColor).toBe('rgb(42, 43, 44)');
       expect(
         Math.abs(details.x - tabs.x),
         `${state} first tab starts at the tablist left edge`,
@@ -404,6 +420,19 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       expect(Math.abs(runtime.width - baselineRuntimeTab.width)).toBeLessThanOrEqual(1);
       expect(runtime.right).toBeLessThanOrEqual(tabs.right);
       expect(Math.abs(details.y - runtime.y)).toBeLessThanOrEqual(1);
+      const selectedTab = state === 'runtime' ? runtime : details;
+      const inactiveTab = state === 'runtime' ? details : runtime;
+      for (const tab of [selectedTab, inactiveTab]) {
+        expect(tab.borderRadius).toBe('0px');
+        expect(tab.borderBottomWidth).toBe('2px');
+        expect(tab.borderBottomStyle).toBe('solid');
+      }
+      expect(selectedTab.backgroundColor).toBe('rgb(36, 37, 38)');
+      expect(selectedTab.color).toBe('rgb(178, 165, 233)');
+      expect(selectedTab.borderBottomColor).toBe('rgb(178, 165, 233)');
+      expect(inactiveTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+      expect(inactiveTab.color).toBe('rgb(166, 166, 166)');
+      expect(inactiveTab.borderBottomColor).toBe('rgba(0, 0, 0, 0)');
       const textAlignment = tabTextAlignment[state];
       expect(textAlignment).toHaveLength(2);
       for (const alignment of textAlignment ?? []) {

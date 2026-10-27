@@ -15,20 +15,62 @@ html[data-palette='graphite'] .global-search kbd {
   border-radius: var(--workbench-radius-xs);
 }
 
-html[data-palette='graphite'] .caption-button,
 html[data-palette='graphite'] .player-tool-button {
   border-radius: var(--workbench-radius-md);
 }
 
-html[data-palette='graphite'] .caption-button:not(.caption-button-close):hover:not(:disabled) {
-  color: var(--text-primary);
-  background-color: var(--workbench-caption-hover);
-  box-shadow: inset 0 0 0 1px var(--workbench-control-boundary);
+html[data-palette='graphite'] .window-caption-controls .caption-button {
+  width: 46px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #a6a6a6;
+  background-color: transparent;
 }
 
 html[data-palette='graphite']
-  .caption-button:not(.caption-button-close):hover:active:not(:disabled) {
-  background-color: var(--workbench-control-pressed);
+  .window-caption-controls
+  .caption-button-minimize:hover:not(:disabled) {
+  outline: 0;
+  color: #d4d4d4;
+  background-color: #303135;
+}
+
+html[data-palette='graphite']
+  .window-caption-controls
+  .caption-button-minimize:active:not(:disabled) {
+  background-color: #404246;
+}
+
+html[data-palette='graphite'] .window-caption-controls .caption-button-zoom:hover:not(:disabled) {
+  outline: 0;
+  color: #ffffff;
+  background-color: #3b3d41;
+}
+
+html[data-palette='graphite'] .window-caption-controls .caption-button-zoom:active:not(:disabled) {
+  background-color: #404246;
+}
+
+html[data-palette='graphite'] .window-caption-controls .caption-button-close:hover:not(:disabled) {
+  outline: 0;
+  color: #ffffff;
+  background-color: #c42b36;
+}
+
+html[data-palette='graphite'] .window-caption-controls .caption-button-close:active:not(:disabled) {
+  background-color: #9e1f2a;
+}
+
+html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:not(:hover) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:hover {
+  outline: 0;
 }
 
 html[data-palette='graphite'] .global-search:focus-within {
@@ -514,13 +556,30 @@ html[data-palette='graphite'] .utility-view-tabs [role='tab'],
 html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
   min-height: 34px;
   padding-inline: 10px;
-  border-radius: var(--workbench-radius-sm);
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
 }
 
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
+  border-radius: var(--workbench-radius-sm);
+}
+
+html[data-palette='graphite'] .utility-view-tabs {
+  justify-content: flex-start;
+  gap: 0;
+  width: 100%;
+  border-bottom: 1px solid #2a2b2c;
+}
+
 html[data-palette='graphite'] .utility-view-tabs [role='tab'] {
+  min-height: 34px;
+  padding-inline: 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: #a6a6a6;
+  background-color: transparent;
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -528,11 +587,15 @@ html[data-palette='graphite'] .utility-view-tabs [role='tab'] {
   text-align: center;
 }
 
+html[data-palette='graphite'] .utility-view-tabs [role='tab']:hover {
+  color: #d4d4d4;
+  background-color: #303135;
+}
+
 html[data-palette='graphite'] .utility-view-tabs [role='tab'] > span {
   transform: translateY(1px);
 }
 
-html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true'],
 html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true'] {
   border-bottom-color: var(--accent);
   color: var(--accent);
@@ -775,11 +838,6 @@ html[data-palette='graphite'] .library-dialog-form input {
   font-size: 14px;
 }
 
-html[data-palette='graphite'] .caption-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
-}
-
 html[data-palette='graphite'] .settings-section select:focus-visible,
 html[data-palette='graphite'] .settings-section input:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -956,17 +1014,6 @@ html[data-palette='graphite']
   background-color: var(--workbench-control-pressed);
 }
 
-html[data-palette='graphite'] .caption-button-close:hover:not(:disabled) {
-  border-color: var(--danger-fill);
-  color: var(--on-danger);
-  background-color: var(--danger-fill);
-}
-
-html[data-palette='graphite'] .caption-button-close:hover:active:not(:disabled) {
-  border-color: var(--danger-fill-hover);
-  background-color: var(--danger-fill-hover);
-}
-
 html[data-palette='graphite'] .library-menu-item.is-danger {
   color: var(--danger-fg);
   background-color: transparent;
@@ -1009,15 +1056,15 @@ html[data-palette='graphite'] .settings-nav-item.is-active:hover {
 }
 
 html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true'] {
-  border-bottom-color: var(--selection-indicator);
-  color: var(--workbench-accent-ink);
-  background-color: transparent;
+  border-bottom-color: #b2a5e9;
+  color: #b2a5e9;
+  background-color: #242526;
 }
 
 html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true']:hover {
-  border-bottom-color: var(--selection-indicator);
-  color: var(--workbench-accent-ink-hover);
-  background-color: var(--workbench-control-hover);
+  border-bottom-color: #b2a5e9;
+  color: #b2a5e9;
+  background-color: #303135;
 }
 
 html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true'] {
@@ -1262,7 +1309,6 @@ html[data-palette='graphite']
     :is(
       .button:not(.button-primary):not(.button-danger),
       .icon-button:not(.button-primary):not(.button-danger),
-      .caption-button,
       .update-indicator,
       .library-menu-item,
       .library-nav-item:not(.is-active),
@@ -1281,7 +1327,6 @@ html[data-palette='graphite']
     :is(
       .button:not(.button-primary):not(.button-danger),
       .icon-button:not(.button-primary):not(.button-danger),
-      .caption-button,
       .update-indicator,
       .library-menu-item,
       .library-nav-item,
@@ -1416,11 +1461,31 @@ html[data-palette='graphite']
     outline-offset: 2px;
   }
 
-  html[data-palette='graphite'] .caption-button-close:hover:not(:disabled) {
-    forced-color-adjust: none;
-    border-color: Highlight;
+  html[data-palette='graphite'] .window-caption-controls .caption-button {
+    forced-color-adjust: auto;
+    border: 0;
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  html[data-palette='graphite'] .window-caption-controls .caption-button:hover:not(:disabled) {
+    border: 0;
+    outline: 0;
     color: HighlightText;
     background-color: Highlight;
+  }
+
+  html[data-palette='graphite'] .window-caption-controls .caption-button:active:not(:disabled) {
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:not(:hover) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  html[data-palette='graphite'] .window-caption-controls .caption-button:focus-visible:hover {
+    outline: 0;
   }
 
   html[data-palette='graphite']

@@ -108,7 +108,10 @@ async function colors(control: Locator) {
       foreground: style.color,
       background: style.backgroundColor,
       border: style.borderTopColor,
+      borderRadius: style.borderRadius,
       borderBottom: style.borderBottomColor,
+      borderBottomWidth: style.borderBottomWidth,
+      borderBottomStyle: style.borderBottomStyle,
       outlineColor: style.outlineColor,
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
@@ -507,28 +510,57 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const detailsTab = page.locator('.utility-view-tabs [role=tab][aria-selected=true]');
   await expect(detailsTab).toHaveAccessibleName('Details');
   const detailsStyle = await colors(detailsTab);
-  expect(sameColor(detailsStyle.background, transparent)).toBe(true);
+  expect(detailsStyle.borderRadius).toBe('0px');
+  expect(sameColor(detailsStyle.background, 'rgb(36, 37, 38)')).toBe(true);
   expect(detailsStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(detailsStyle.borderBottomWidth).toBe('2px');
+  expect(detailsStyle.borderBottomStyle).toBe('solid');
   expect(sameColor(detailsStyle.borderBottom, await token(page, '--selection-indicator'))).toBe(
     true,
   );
   expect(
     contrastRatio(detailsStyle.foreground, await token(page, '--workbench-inspector')),
   ).toBeGreaterThanOrEqual(3);
+
+  const runtimeTab = page.getByRole('tab', { name: 'Runtime' });
+  const runtimeRest = await colors(runtimeTab);
+  expect(runtimeRest.borderRadius).toBe('0px');
+  expect(sameColor(runtimeRest.background, transparent)).toBe(true);
+  expect(runtimeRest.foreground).toBe('rgb(166, 166, 166)');
+  expect(runtimeRest.borderBottomWidth).toBe('2px');
+  expect(runtimeRest.borderBottomStyle).toBe('solid');
+  expect(sameColor(runtimeRest.borderBottom, transparent)).toBe(true);
+  await runtimeTab.hover();
+  const runtimeInactiveHover = await colors(runtimeTab);
+  expect(sameColor(runtimeInactiveHover.background, 'rgb(48, 49, 53)')).toBe(true);
+  expect(runtimeInactiveHover.foreground).toBe('rgb(212, 212, 212)');
+  expect(runtimeInactiveHover.borderRadius).toBe('0px');
+  await page.mouse.move(0, 0);
+
+  await detailsTab.hover();
+  const detailsHover = await colors(detailsTab);
+  expect(sameColor(detailsHover.background, 'rgb(48, 49, 53)')).toBe(true);
+  expect(detailsHover.foreground).toBe('rgb(178, 165, 233)');
+  expect(detailsHover.borderBottomWidth).toBe('2px');
+  expect(sameColor(detailsHover.borderBottom, 'rgb(178, 165, 233)')).toBe(true);
+  await page.mouse.move(0, 0);
+
   await detailsTab.focus();
   await page.keyboard.press('ArrowRight');
-  const runtimeTab = page.getByRole('tab', { name: 'Runtime' });
   await expect(runtimeTab).toHaveAttribute('aria-selected', 'true');
   await expect(runtimeTab).toBeFocused();
   expect(await runtimeTab.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
   const runtimeFocus = await colors(runtimeTab);
-  expect(sameColor(runtimeFocus.background, transparent)).toBe(true);
+  expect(sameColor(runtimeFocus.background, 'rgb(36, 37, 38)')).toBe(true);
   expect(runtimeFocus.foreground).toBe('rgb(178, 165, 233)');
+  expect(runtimeFocus.borderRadius).toBe('0px');
+  expect(runtimeFocus.borderBottomWidth).toBe('2px');
+  expect(sameColor(runtimeFocus.borderBottom, 'rgb(178, 165, 233)')).toBe(true);
   expect(runtimeFocus.outlineWidth).toBe('2px');
   await runtimeTab.hover();
   const runtimeHover = await colors(runtimeTab);
-  expect(sameColor(runtimeHover.background, controlHover)).toBe(true);
-  expect(runtimeHover.foreground).toBe('rgb(192, 180, 241)');
+  expect(sameColor(runtimeHover.background, 'rgb(48, 49, 53)')).toBe(true);
+  expect(runtimeHover.foreground).toBe('rgb(178, 165, 233)');
   expect(
     contrastRatio(runtimeHover.foreground, await token(page, '--workbench-inspector')),
   ).toBeGreaterThanOrEqual(3);

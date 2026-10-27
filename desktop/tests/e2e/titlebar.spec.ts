@@ -177,7 +177,12 @@ async function expectPointerCenter(page: Page, locator: Locator) {
   await page.mouse.click(x, y);
 }
 
-async function expectVisibleCaptionHover(page: Page, locator: Locator) {
+async function expectVisibleCaptionHover(
+  page: Page,
+  locator: Locator,
+  expectedBackground: string,
+  expectedForeground: string,
+) {
   const bounds = await locator.boundingBox();
   expect(bounds).not.toBeNull();
   if (!bounds) throw new Error('Caption control has no hit target');
@@ -195,34 +200,85 @@ async function expectVisibleCaptionHover(page: Page, locator: Locator) {
   await locator.hover();
   const hover = await locator.evaluate((element) => {
     const style = getComputedStyle(element);
-    return { background: style.backgroundColor, boxShadow: style.boxShadow };
+    return {
+      background: style.backgroundColor,
+      foreground: style.color,
+      borderWidth: style.borderTopWidth,
+      borderStyle: style.borderTopStyle,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+    };
   });
-  expect(hover.background).toBe('rgb(59, 61, 65)');
-  expect(hover.boxShadow).not.toBe('none');
+  expect(hover.background).toBe(expectedBackground);
+  expect(hover.foreground).toBe(expectedForeground);
+  expect(hover.borderWidth).toBe('0px');
+  expect(hover.borderStyle).toBe('none');
+  expect(hover.borderRadius).toBe('0px');
+  expect(hover.boxShadow).toBe('none');
+  expect(hover.outlineWidth).toBe('0px');
+  expect(hover.outlineStyle).toBe('none');
 
   await page.mouse.move(320, 300);
   const rest = await locator.evaluate((element) => {
     const style = getComputedStyle(element);
-    return { background: style.backgroundColor, boxShadow: style.boxShadow };
+    return {
+      background: style.backgroundColor,
+      foreground: style.color,
+      borderWidth: style.borderTopWidth,
+      borderStyle: style.borderTopStyle,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+    };
   });
   expect(rest.background).toBe('rgba(0, 0, 0, 0)');
+  expect(rest.foreground).toBe('rgb(166, 166, 166)');
+  expect(rest.borderWidth).toBe('0px');
+  expect(rest.borderStyle).toBe('none');
+  expect(rest.borderRadius).toBe('0px');
   expect(rest.boxShadow).toBe('none');
 }
 
-test('Graphite Maximize and Restore have visible hover over the full safe hit target', async ({
+test('Graphite caption roles have flat hover over their full safe hit targets', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/?mockPlaybackDurationMs=120000&mockUpdateState=current');
+  const minimize = page.getByRole('button', { name: 'Minimize window' });
+  await expect(minimize).toHaveClass(/caption-button-minimize/);
+  await expectVisibleCaptionHover(page, minimize, 'rgb(48, 49, 53)', 'rgb(212, 212, 212)');
+
   const maximize = page.getByRole('button', { name: 'Maximize window' });
-  await expectVisibleCaptionHover(page, maximize);
+  await expect(maximize).toHaveClass(/caption-button-zoom/);
+  await expectVisibleCaptionHover(page, maximize, 'rgb(59, 61, 65)', 'rgb(255, 255, 255)');
   await maximize.click();
 
   const restore = page.getByRole('button', { name: 'Restore window' });
   await expect(restore).toBeVisible();
-  await expectVisibleCaptionHover(page, restore);
+  await expect(restore).toHaveClass(/caption-button-zoom/);
+  await expectVisibleCaptionHover(page, restore, 'rgb(59, 61, 65)', 'rgb(255, 255, 255)');
   await restore.click();
-  await expect(page.getByRole('button', { name: 'Maximize window' })).toBeVisible();
+  const restoredMaximize = page.getByRole('button', { name: 'Maximize window' });
+  await expect(restoredMaximize).toBeVisible();
+
+  const close = page.getByRole('button', { name: 'Close window' });
+  await expect(close).toHaveClass(/caption-button-close/);
+  await expectVisibleCaptionHover(page, close, 'rgb(196, 43, 54)', 'rgb(255, 255, 255)');
+
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  const keyboardFocus = await close.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      visible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset,
+    };
+  });
+  expect(keyboardFocus.visible).toBe(true);
+  expect(keyboardFocus.outlineWidth).toBe('2px');
+  expect(keyboardFocus.outlineOffset).toBe('-2px');
 });
 
 async function expectNonOverlappingGeometry(
