@@ -97,7 +97,12 @@ html[data-palette='graphite'] {
   --workbench-inspector: #191a1b;
   --chrome-surface: #191a1b;
   --workbench-hover: #222324;
-  --workbench-pressed: #303133;
+  --workbench-pressed: #414348;
+  --workbench-control-rest: transparent;
+  --workbench-control-hover: #35363a;
+  --workbench-control-pressed: #414348;
+  --workbench-control-disabled: #8b8c90;
+  --workbench-control-danger-hover: #452d32;
   --workbench-selected: #25242c;
   --workbench-divider: #2a2b2c;
   --workbench-pane-edge: #313336;
@@ -109,8 +114,8 @@ html[data-palette='graphite'] {
   --workbench-text-primary: #d4d4d4;
   --workbench-text-secondary: #a6a6a6;
   --workbench-text-tertiary: #929292;
-  --workbench-accent: #8270c7;
-  --workbench-accent-hover: #9281d4;
+  --workbench-accent: #b2a5e9;
+  --workbench-accent-hover: #c0b4f1;
   --workbench-focus: #b2a5e9;
   --workbench-search-surface: #202123;
   --workbench-search-idle-edge: #3d3f43;
@@ -142,24 +147,8 @@ html[data-palette='graphite'] {
   --type-metadata: 12px;
 }
 
-html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
-html[data-palette='graphite'] .icon-button.icon-button-boxed,
-html[data-palette='graphite'] .update-indicator {
-  border-color: var(--control-border);
-}
-
 html[data-palette='graphite'] .player-risk {
   font-size: 11px;
-}
-
-@media (forced-colors: active) {
-  html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
-  html[data-palette='graphite'] .icon-button.icon-button-boxed,
-  html[data-palette='graphite'] .update-indicator {
-    border-color: ButtonText;
-    color: ButtonText;
-    background: ButtonFace;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

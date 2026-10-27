@@ -28,8 +28,8 @@ const expected = {
   graphite: {
     controlBorder: '#72777d',
     selectionBg: '#25242c',
-    accent: '#8270c7',
-    accentHover: '#9281d4',
+    accent: '#b2a5e9',
+    accentHover: '#c0b4f1',
     borderStrong: '#393b3e',
     canvas: '#121314',
     surfaceRaised: '#242526',
@@ -105,7 +105,12 @@ const graphiteRoleTokens = {
   '--workbench-inspector': '#191a1b',
   '--chrome-surface': '#191a1b',
   '--workbench-hover': '#222324',
-  '--workbench-pressed': '#303133',
+  '--workbench-pressed': '#414348',
+  '--workbench-control-rest': 'transparent',
+  '--workbench-control-hover': '#35363a',
+  '--workbench-control-pressed': '#414348',
+  '--workbench-control-disabled': '#8b8c90',
+  '--workbench-control-danger-hover': '#452d32',
   '--workbench-selected': '#25242c',
   '--workbench-divider': '#2a2b2c',
   '--workbench-critical-edge': '#393b3e',
@@ -113,8 +118,8 @@ const graphiteRoleTokens = {
   '--workbench-text-primary': '#d4d4d4',
   '--workbench-text-secondary': '#a6a6a6',
   '--workbench-text-tertiary': '#929292',
-  '--workbench-accent': '#8270c7',
-  '--workbench-accent-hover': '#9281d4',
+  '--workbench-accent': '#b2a5e9',
+  '--workbench-accent-hover': '#c0b4f1',
   '--workbench-focus': '#b2a5e9',
   '--workbench-search-surface': '#202123',
   '--workbench-search-idle-edge': '#3d3f43',
@@ -386,8 +391,15 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       dangerFillHover: await resolvedTokenColor(page, '--danger-fill-hover'),
       focusRing: await resolvedTokenColor(page, '--focus-ring'),
     };
-    expect(contrastRatio(colors.onAccent, colors.accent)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(colors.onAccent, colors.accentHover)).toBeGreaterThanOrEqual(4.5);
+    if (palette === 'graphite') {
+      for (const surface of [colors.canvas, colors.surfaceRaised, colors.selectionBg]) {
+        expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors.accentHover, surface)).toBeGreaterThanOrEqual(4.5);
+      }
+    } else {
+      expect(contrastRatio(colors.onAccent, colors.accent)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.onAccent, colors.accentHover)).toBeGreaterThanOrEqual(4.5);
+    }
     expect(contrastRatio(colors.onDanger, colors.dangerFill)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.onDanger, colors.dangerFillHover)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.controlBorder, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
@@ -395,6 +407,11 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.accent, colors.selectionBg)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
+    if (palette === 'graphite') {
+      const dangerText = await resolvedTokenColor(page, '--danger-fg');
+      const dangerHover = await resolvedTokenColor(page, '--workbench-control-danger-hover');
+      expect(contrastRatio(dangerText, dangerHover)).toBeGreaterThanOrEqual(4.5);
+    }
   }
 
   await selectPalette(page, 'aurora');
@@ -442,7 +459,12 @@ test('Graphite is the new-install palette and persists through the appearance se
     '--surface-secondary': '#191a1b',
     '--surface-raised': '#242526',
     '--control-hover': '#222324',
-    '--control-pressed': '#303133',
+    '--control-pressed': '#414348',
+    '--workbench-control-rest': 'transparent',
+    '--workbench-control-hover': '#35363a',
+    '--workbench-control-pressed': '#414348',
+    '--workbench-control-disabled': '#8b8c90',
+    '--workbench-control-danger-hover': '#452d32',
     '--selection-bg': '#25242c',
     '--border-subtle': '#2a2b2c',
     '--border-strong': '#393b3e',
@@ -450,8 +472,8 @@ test('Graphite is the new-install palette and persists through the appearance se
     '--text-primary': '#d4d4d4',
     '--text-secondary': '#a6a6a6',
     '--text-tertiary': '#929292',
-    '--accent': '#8270c7',
-    '--accent-hover': '#9281d4',
+    '--accent': '#b2a5e9',
+    '--accent-hover': '#c0b4f1',
     '--on-accent': '#121314',
     '--focus-ring': '#b2a5e9',
   } as const;
@@ -508,10 +530,16 @@ test('Graphite is the new-install palette and persists through the appearance se
   expect(contrastRatio(colors.controlBorder, colors.canvas)).toBeGreaterThanOrEqual(3);
   expect(contrastRatio(colors.controlBorder, colors.panel)).toBeGreaterThanOrEqual(3);
   expect(contrastRatio(colors.controlBorder, colors.raised)).toBeGreaterThanOrEqual(3);
-  expect(contrastRatio(colors.accent, colors.selected)).toBeGreaterThanOrEqual(3);
-  expect(contrastRatio(colors.accent, colors.panel)).toBeGreaterThanOrEqual(3);
-  expect(contrastRatio(colors.onAccent, colors.accent)).toBeGreaterThanOrEqual(4.5);
-  expect(contrastRatio(colors.onAccent, colors.accentHover)).toBeGreaterThanOrEqual(4.5);
+  for (const surface of [
+    colors.canvas,
+    colors.panel,
+    colors.secondary,
+    colors.raised,
+    colors.selected,
+  ]) {
+    expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.accentHover, surface)).toBeGreaterThanOrEqual(4.5);
+  }
   expect(contrastRatio(colors.focus, colors.canvas)).toBeGreaterThanOrEqual(3);
   expect(contrastRatio(colors.focus, colors.panel)).toBeGreaterThanOrEqual(3);
 
@@ -520,12 +548,17 @@ test('Graphite is the new-install palette and persists through the appearance se
   await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
   await expect(styleValue(selectedRow, 'borderLeftColor')).resolves.toBe('rgba(0, 0, 0, 0)');
   const update = page.locator('.update-indicator');
-  await assertBorderUsesToken(page, update, '--control-border');
+  await expect(styleValue(update, 'borderTopColor')).resolves.toBe('rgba(0, 0, 0, 0)');
+  await expect(styleValue(update, 'backgroundColor')).resolves.toBe('rgba(0, 0, 0, 0)');
   await update.hover();
-  await assertBackgroundUsesToken(page, update, '--control-hover');
+  await assertBackgroundUsesToken(page, update, '--workbench-control-hover');
   const stop = page.getByRole('button', { name: 'Stop', exact: true });
   await expect(stop).toBeDisabled();
-  await expect.poll(() => stop.evaluate((button) => getComputedStyle(button).opacity)).toBe('0.58');
+  await expect.poll(() => stop.evaluate((button) => getComputedStyle(button).opacity)).toBe('1');
+  await expect(styleValue(stop, 'backgroundColor')).resolves.toBe('rgba(0, 0, 0, 0)');
+  await expect(styleValue(stop, 'color')).resolves.toBe(
+    await resolvedTokenColor(page, '--workbench-control-disabled'),
+  );
 
   const search = page.getByRole('searchbox', { name: 'Search All Songs' });
   await search.focus();

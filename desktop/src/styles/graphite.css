@@ -73,7 +73,7 @@ html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-bu
 html[data-palette='graphite']
   .icon-button.icon-button-boxed.library-collapse-button:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--control-hover);
+  background: var(--workbench-control-hover);
 }
 
 html[data-palette='graphite']
@@ -172,7 +172,7 @@ html[data-palette='graphite'] .library-more-button:hover,
 html[data-palette='graphite'] .library-more-button:focus-visible,
 html[data-palette='graphite'] .library-menu-item:hover,
 html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
-  background: var(--control-hover);
+  background: var(--workbench-control-hover);
 }
 
 html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
@@ -462,7 +462,7 @@ html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
 html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true'],
 html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true'] {
   border-bottom-color: var(--accent);
-  color: var(--text-primary);
+  color: var(--accent);
 }
 
 html[data-palette='graphite'] .song-details-view > *,
@@ -696,29 +696,6 @@ html[data-palette='graphite'] .admission-recovery-action {
 }
 
 /* Settings, menus, and dialogs share the same quiet surfaces and control edges. */
-html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
-html[data-palette='graphite'] .icon-button.icon-button-boxed,
-html[data-palette='graphite'] .update-indicator,
-html[data-palette='graphite'] .playlist-add-songs-button,
-html[data-palette='graphite'] .diagnostics-export-button {
-  border-color: var(--control-border);
-  background: var(--surface-raised);
-}
-
-html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger):hover:not(:disabled),
-html[data-palette='graphite'] .icon-button.icon-button-boxed:hover:not(:disabled),
-html[data-palette='graphite'] .update-indicator:hover,
-html[data-palette='graphite'] .playlist-add-songs-button:hover:not(:disabled),
-html[data-palette='graphite'] .diagnostics-export-button:hover:not(:disabled) {
-  background: var(--control-hover);
-}
-
-html[data-palette='graphite']
-  .button:not(.button-primary):not(.button-danger):active:not(:disabled),
-html[data-palette='graphite'] .icon-button.icon-button-boxed:active:not(:disabled) {
-  background: var(--control-pressed);
-}
-
 html[data-palette='graphite'] .settings-dialog,
 html[data-palette='graphite'] .library-dialog {
   border-color: var(--border-strong);
@@ -734,8 +711,7 @@ html[data-palette='graphite'] .settings-nav-item {
 
 html[data-palette='graphite'] .settings-nav-item.is-active {
   border-left-color: var(--accent);
-  color: var(--text-primary);
-  background: var(--selection-bg);
+  color: var(--accent);
 }
 
 html[data-palette='graphite'] .settings-section label:not(.checkbox-row),
@@ -880,5 +856,249 @@ html[data-palette='graphite'] .library-confirm-message {
 
   html[data-palette='graphite'] .global-search:has(input:focus-visible) {
     outline-color: Highlight;
+  }
+}
+
+/* Graphite controls share one transparent-rest interaction contract. */
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
+    [aria-disabled='true']
+  ) {
+  border-color: transparent;
+  background-color: var(--workbench-control-rest);
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
+    [aria-disabled='true']
+  ):hover {
+  color: var(--text-primary);
+  background-color: var(--workbench-control-hover);
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
+    [aria-disabled='true']
+  ):hover:active {
+  background-color: var(--workbench-control-pressed);
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: 2px;
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
+    [aria-selected='true'],
+    [aria-expanded='true'],
+    .is-active
+  ) {
+  color: var(--workbench-accent);
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
+    [aria-pressed='true'],
+    [aria-checked='true'],
+    .is-liked,
+    .is-on
+  ) {
+  color: var(--workbench-accent-hover);
+}
+
+html[data-palette='graphite']
+  body
+  :is(.button-primary, .player-primary-action):hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--workbench-accent);
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
+    [aria-selected='true'],
+    [aria-expanded='true'],
+    [aria-pressed='true'],
+    [aria-checked='true'],
+    .is-active,
+    .is-liked,
+    .is-on
+  ):hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--workbench-accent-hover);
+}
+
+html[data-palette='graphite'] body :is(.button-primary, .player-primary-action) {
+  color: var(--workbench-accent);
+}
+
+html[data-palette='graphite'] body :is(.button-danger, .library-menu-item.is-danger) {
+  color: var(--danger-fg);
+}
+
+html[data-palette='graphite']
+  body
+  :is(.button-danger, .library-menu-item.is-danger):hover:not(:disabled):not(
+    [aria-disabled='true']
+  ) {
+  color: var(--danger-fg);
+  background-color: var(--workbench-control-danger-hover);
+}
+
+html[data-palette='graphite']
+  body
+  .caption-button-close:hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--on-danger);
+  background-color: var(--danger-fill);
+}
+
+html[data-palette='graphite']
+  body
+  .caption-button-close:hover:active:not(:disabled):not([aria-disabled='true']) {
+  background-color: var(--danger-fill-hover);
+}
+
+/* Active navigation and tab states keep their edge markers without a tile fill. */
+html[data-palette='graphite'] body .library-nav-action-row.is-active {
+  background-color: transparent;
+}
+
+html[data-palette='graphite'] body .library-nav-action-row.is-active:hover {
+  background-color: var(--workbench-control-hover);
+}
+
+html[data-palette='graphite'] body .settings-nav-item.is-active {
+  border-left-color: var(--workbench-accent);
+  color: var(--workbench-accent);
+  background-color: transparent;
+}
+
+html[data-palette='graphite'] body .settings-nav-item.is-active:not(:disabled) {
+  border-left-color: var(--workbench-accent);
+}
+
+html[data-palette='graphite']
+  body
+  :is(.utility-view-tabs, .diagnostics-tabs)
+  [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--workbench-accent);
+  color: var(--workbench-accent);
+  background-color: transparent;
+}
+
+html[data-palette='graphite'] body .library-menu-item[data-focused='true'] {
+  color: var(--text-primary);
+  background-color: transparent;
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite']
+  body
+  :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
+    :disabled,
+    [aria-disabled='true']
+  ) {
+  border-color: transparent;
+  color: var(--workbench-control-disabled);
+  background-color: var(--workbench-control-rest);
+  cursor: default;
+  opacity: 1;
+}
+
+@media (forced-colors: active) {
+  html[data-palette='graphite']
+    body
+    :is(button, [role='button'], [role='tab'], [role='menuitem']):not(:disabled):not(
+      [aria-disabled='true']
+    ) {
+    forced-color-adjust: auto;
+    border-color: ButtonText;
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    body
+    :is(button, [role='button'], [role='tab'], [role='menuitem']):hover:not(:disabled):not(
+      [aria-disabled='true']
+    ) {
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite']
+    body
+    :is(button, [role='button'], [role='tab'], [role='menuitem']):is(
+      [aria-pressed='true'],
+      [aria-checked='true'],
+      [aria-expanded='true']
+    ):not(:disabled):not([aria-disabled='true']) {
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    body
+    :is(button, [role='button'], [role='tab'], [role='menuitem']):disabled,
+  html[data-palette='graphite']
+    body
+    :is(button, [role='button'], [role='tab'], [role='menuitem'])[aria-disabled='true'] {
+    border-color: GrayText;
+    color: GrayText;
+    background-color: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    body
+    :is(button, [role='button'], [role='tab'], [role='menuitem']):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  html[data-palette='graphite']
+    body
+    :is(.library-nav-item.is-active, .settings-nav-item.is-active):not(:disabled):not(
+      [aria-disabled='true']
+    ) {
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite'] body .library-nav-action-row.is-active,
+  html[data-palette='graphite'] body .library-nav-action-row.is-active:hover {
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  html[data-palette='graphite']
+    body
+    :is(.utility-view-tabs, .diagnostics-tabs)
+    [role='tab'][aria-selected='true']:not(:disabled):not([aria-disabled='true']) {
+    border-bottom-color: Highlight;
+    color: Highlight;
+    background-color: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    body
+    .library-menu-item[data-focused='true']:not(:disabled):not([aria-disabled='true']) {
+    color: HighlightText;
+    background-color: Highlight;
+    outline-color: Highlight;
+  }
+
+  html[data-palette='graphite'] body .caption-button-close:hover:not(:disabled) {
+    color: HighlightText;
+    background-color: Highlight;
   }
 }

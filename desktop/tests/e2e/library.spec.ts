@@ -1388,6 +1388,10 @@ test('dock and transport toggles show palette-specific active state without layo
       const tertiary = getComputedStyle(probe).color;
       probe.style.color = 'var(--text-secondary)';
       const secondary = getComputedStyle(probe).color;
+      probe.style.color = 'var(--workbench-control-disabled)';
+      const disabled = getComputedStyle(probe).color;
+      probe.style.backgroundColor = 'var(--workbench-control-hover)';
+      const controlHover = getComputedStyle(probe).backgroundColor;
       probe.remove();
       return {
         color: style.color,
@@ -1402,6 +1406,8 @@ test('dock and transport toggles show palette-specific active state without layo
         accentHover,
         tertiary,
         secondary,
+        disabled,
+        controlHover,
         palette: document.documentElement.dataset.palette,
       };
     });
@@ -1415,7 +1421,7 @@ test('dock and transport toggles show palette-specific active state without layo
       .toBe(before.primary);
     const after = await measureStyle(button);
     expect(after.color).toBe(after.primary);
-    expect(after.background).toBe('rgba(0, 0, 0, 0)');
+    expect(after.background).toBe(after.controlHover);
     expect(after.borderTop).toBe('0px');
     expect(after.x).toBe(before.x);
     expect(after.y).toBe(before.y);
@@ -1429,7 +1435,7 @@ test('dock and transport toggles show palette-specific active state without layo
   await page.mouse.move(0, 0);
   await expect
     .poll(async () => (await measureStyle(stop)).color, { timeout: 2_000 })
-    .toBe((await measureStyle(stop)).tertiary);
+    .toBe((await measureStyle(stop)).disabled);
   expect(await stop.isDisabled()).toBe(true);
   const stopBefore = await measureStyle(stop);
   const stopBox = await stop.boundingBox();
@@ -1437,7 +1443,7 @@ test('dock and transport toggles show palette-specific active state without layo
   await page.mouse.move(stopBox.x + stopBox.width / 2, stopBox.y + stopBox.height / 2);
   const stopAfter = await measureStyle(stop);
   expect(stopAfter.color).toBe(stopBefore.color);
-  expect(stopAfter.color).toBe(stopAfter.tertiary);
+  expect(stopAfter.color).toBe(stopAfter.disabled);
   expect(stopAfter.background).toBe('rgba(0, 0, 0, 0)');
   expect(stopAfter.borderTop).toBe('0px');
   expect(stopAfter.x).toBe(stopBefore.x);
@@ -1453,6 +1459,7 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
+  await page.mouse.move(0, 0);
   const activeShuffleBefore = await measureStyle(shuffle);
   expect(activeShuffleBefore.color).toBe(activeShuffleTone(activeShuffleBefore));
   expect(activeShuffleBefore.color).not.toBe(inactiveShuffle.color);
@@ -1465,6 +1472,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleAfter = await measureStyle(shuffle);
   expect(activeShuffleAfter.color).toBe(activeShuffleTone(activeShuffleAfter));
+  expect(activeShuffleAfter.background).toBe(activeShuffleAfter.controlHover);
 
   await shuffle.focus();
   await expect(shuffle).toBeFocused();
@@ -1490,7 +1498,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(hoveredAutoPlayTone(autoPlayBefore));
   const autoPlayHover = await measureStyle(autoPlay);
   expect(autoPlayHover.color).toBe(hoveredAutoPlayTone(autoPlayHover));
-  expect(autoPlayHover.background).toBe('rgba(0, 0, 0, 0)');
+  expect(autoPlayHover.background).toBe(autoPlayHover.controlHover);
   expect(autoPlayHover.borderTop).toBe('0px');
   expect(autoPlayHover.x).toBe(autoPlayBefore.x);
   expect(autoPlayHover.y).toBe(autoPlayBefore.y);
@@ -1509,6 +1517,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(autoPlayOff.primary);
   const autoPlayOffHover = await measureStyle(autoPlay);
   expect(autoPlayOffHover.color).toBe(autoPlayOffHover.primary);
+  expect(autoPlayOffHover.background).toBe(autoPlayOffHover.controlHover);
 
   await page.mouse.move(0, 0);
   await autoPlay.focus();

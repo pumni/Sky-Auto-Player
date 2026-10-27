@@ -312,7 +312,8 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
     expect(item.computed.search?.backgroundColor).toBe(expected.searchSurface);
     expect(item.computed.search?.borderColor).toBe(expected.searchEdge);
     expect(item.computed.search?.borderWidth).toBe('1px');
-    expect(item.computed.updateButton?.borderColor).toBe('rgb(114, 119, 125)');
+    expect(item.computed.updateButton?.borderColor).toBe('rgba(0, 0, 0, 0)');
+    expect(item.computed.updateButton?.backgroundColor).toBe('rgba(0, 0, 0, 0)');
     expect(item.computed.search?.fontSize).toBe('13px');
     expect(item.computed.input?.fontSize).toBe('13px');
     expect(item.accessibility.textContrastPlaceholderOnSearchFill).toBeGreaterThanOrEqual(4.5);
