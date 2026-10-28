@@ -1,24 +1,13 @@
-# Documentation-Scope Instructions
+# Documentation Context
 
-These instructions apply to edits under `docs/` in addition to
-[../AGENTS.md](../AGENTS.md). The documentation router is [INDEX.md](INDEX.md).
+Use [INDEX.md](INDEX.md) when a task needs a current technical contract.
 
-- Classify the document before editing it: **current contract/runbook**,
-  **task-specific method/reference**, or **revision-bound historical evidence**
-  (including ADRs, qualification results, and release records).
-- For a current contract, verify claims against current source, tests,
-  configuration, and the applicable security/release constraints. Update the
-  router when the responsible current document changes.
-- Historical evidence is not a standing instruction or an acceptance for HEAD.
-  Preserve recorded versions, SHA identities, measurements, decisions, and
-  superseded descriptions. Correct demonstrable factual errors with explicit
-  provenance; do not silently rewrite the history as current behavior.
-- Do not delete material, rename documented identifiers, or merge distinct
-  safety/timing/release contracts just to reduce context size. Move references
-  out of the always-read agent guide instead of deleting the information.
-- Prefer links to the single owning document over copying its requirements
-  across new agent files. Keep task-specific research and audit output
-  discoverable but out of automatic agent loading.
-- For agent-context audits use
-  [agent-context-maintenance.md](agent-context-maintenance.md); keep low-confidence
-  or model-specific style preferences as findings until behavior is tested.
+Historical ADRs, release records, and measurements preserve the decisions,
+source revisions, and conditions they actually describe; they are not
+instructions for current HEAD. Don't rewrite or delete that evidence merely
+to shorten agent context.
+
+For active contracts, resolve drift using current source/tests and the
+applicable security, timing, or release requirements. See
+[agent-context-maintenance.md](agent-context-maintenance.md) only for
+context-audit work.
