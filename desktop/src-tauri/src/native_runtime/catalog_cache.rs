@@ -379,17 +379,24 @@ impl NativeDesktopRuntime {
             };
             let previous = &projection.key;
             let len = key.ordered_song_ids.len();
+            let explicit_request = !key.request_song_ids.is_empty();
+            let request_identity_is_exact = if explicit_request {
+                !previous.request_song_ids.is_empty()
+                    && previous.request_song_ids == previous.ordered_song_ids
+                    && key.request_song_ids == key.ordered_song_ids
+            } else {
+                previous.request_song_ids.is_empty()
+            };
             if !(2..=super::MAX_CACHED_VIEWPORT_RESPONSE_ROWS).contains(&len)
                 || previous.ordered_song_ids.len() != len
-                || previous.request_song_ids != key.request_song_ids
-                || !key.request_song_ids.is_empty()
+                || !request_identity_is_exact
                 || previous.generation != key.generation
                 || previous.settings_revision != key.settings_revision
                 || previous.liked_membership_revision != key.liked_membership_revision
                 || previous.playlist_membership_revision != key.playlist_membership_revision
                 || previous.selected_song_id != key.selected_song_id
-                || key.selected_song_id.is_some()
                 || projection.response.items.len() != len
+                || !projection.response.accepted
                 || projection.response.generation != previous.generation
                 || projection.response.first_index != previous.first_index
                 || projection.response.last_index != previous.last_index

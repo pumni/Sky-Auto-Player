@@ -53,6 +53,22 @@ fn benchmark_request(
     })
 }
 
+fn production_benchmark_request(
+    generation: u64,
+    first: usize,
+    song_ids: Vec<String>,
+    selected_song_id: Option<String>,
+) -> serde_json::Value {
+    let last = first + song_ids.len() - 1;
+    serde_json::json!({
+        "generation": generation,
+        "firstIndex": first,
+        "lastIndex": last,
+        "selectedSongId": selected_song_id,
+        "songIds": song_ids
+    })
+}
+
 fn run_viewport(runtime: &NativeDesktopRuntime, request: &serde_json::Value) {
     std::hint::black_box(
         runtime
@@ -193,4 +209,107 @@ fn opt_in_package_b_viewport_projection_benchmark() {
         runtime.shutdown();
         fs::remove_dir_all(&root).expect("remove benchmark fixture");
     }
+}
+
+/// Explicit-ID requests mirror `librarySlice.ts::hydrateViewport`, including
+/// a stable selected ID. The 96-song fixture uses 40 visible rows so shift
+/// and shift-back are measurable; larger fixtures use the 200-row transfer cap.
+#[test]
+#[ignore = "opt-in Package B production-shape viewport benchmark"]
+fn opt_in_package_b_production_shape_viewport_benchmark() {
+    const COLD_SAMPLES: usize = 7;
+    const SHIFT_SAMPLES: usize = 7;
+    println!(
+        "package_b_production_bench layer=native-viewport-projection fixture=package-b-native-files-v1 seed=0x560 size_set=96,1000,10000 profile=release cold_samples={COLD_SAMPLES} shift_back_samples={SHIFT_SAMPLES} warm_samples=9 warm_sample_ms=25 selected=none,first,last,outside"
+    );
+    for size in [96_usize, 1_000, 10_000] {
+        let (root, runtime, generation, ids) = viewport_benchmark_fixture(size);
+        let width = if size == 96 { 40 } else { 200 };
+        let mut selected_cases = vec![
+            ("none", None),
+            ("first", Some(ids[0].clone())),
+            ("last", Some(ids[width - 1].clone())),
+        ];
+        if size > width {
+            selected_cases.push(("outside", Some(ids[width + 50].clone())));
+        }
+
+        for (placement, selected_song_id) in selected_cases {
+            let request = production_benchmark_request(
+                generation,
+                0,
+                ids[..width].to_vec(),
+                selected_song_id.clone(),
+            );
+            let shifted = production_benchmark_request(
+                generation,
+                1,
+                ids[1..=width].to_vec(),
+                selected_song_id,
+            );
+
+            let mut cold = Vec::with_capacity(COLD_SAMPLES);
+            for _ in 0..COLD_SAMPLES {
+                runtime.invalidate_analysis_cache();
+                cold.push(measure_once(&runtime, &request));
+            }
+            print_production_distribution(size, width, placement, "cold", COLD_SAMPLES, &mut cold);
+
+            runtime.invalidate_analysis_cache();
+            run_viewport(&runtime, &request);
+            let mut exact_warm = warm_distribution(|| run_viewport(&runtime, &request));
+            print_production_distribution(
+                size,
+                width,
+                placement,
+                "exact-warm",
+                exact_warm.len(),
+                &mut exact_warm,
+            );
+
+            let mut shift_samples = Vec::with_capacity(SHIFT_SAMPLES);
+            let mut back_samples = Vec::with_capacity(SHIFT_SAMPLES);
+            for _ in 0..SHIFT_SAMPLES {
+                run_viewport(&runtime, &request);
+                shift_samples.push(measure_once(&runtime, &shifted));
+                back_samples.push(measure_once(&runtime, &request));
+            }
+            print_production_distribution(
+                size,
+                width,
+                placement,
+                "shift-plus-one",
+                SHIFT_SAMPLES,
+                &mut shift_samples,
+            );
+            print_production_distribution(
+                size,
+                width,
+                placement,
+                "shift-back",
+                SHIFT_SAMPLES,
+                &mut back_samples,
+            );
+        }
+        runtime.shutdown();
+        fs::remove_dir_all(&root).expect("remove production benchmark fixture");
+    }
+}
+
+fn print_production_distribution(
+    size: usize,
+    width: usize,
+    placement: &str,
+    scenario: &str,
+    samples: usize,
+    values: &mut [f64],
+) {
+    values.sort_by(f64::total_cmp);
+    println!(
+        "package_b_production_projection size={size} width={width} selected={placement} scenario={scenario} samples={samples} p50_us={:.3} p90_us={:.3} min_us={:.3} max_us={:.3}",
+        values[values.len() / 2],
+        values[((values.len() - 1) as f64 * 0.9).ceil() as usize],
+        values[0],
+        values[values.len() - 1]
+    );
 }
