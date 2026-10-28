@@ -5,13 +5,14 @@ const key = 'sky.ui.workbench.v5';
 interface HomeKeyTrace {
   before: unknown;
   keyboardEvents: Array<Record<string, unknown>>;
+  resizeEvents: Array<Record<string, unknown>>;
   domMutations: Array<Record<string, unknown>>;
   preferenceWrites: Array<Record<string, unknown>>;
 }
 
 interface HomeKeyTraceController {
   trace: HomeKeyTrace;
-  snapshot: () => unknown;
+  snapshot: (measureGeometry?: boolean) => unknown;
   cleanup: () => void;
 }
 
@@ -38,7 +39,7 @@ async function installHomeKeyTrace(page: Page, selector: string) {
           className: typeof element.className === 'string' ? element.className : null,
         };
       };
-      const snapshot = () => {
+      const snapshot = (measureGeometry = false) => {
         const rawPreferences = localStorage.getItem(storageKey);
         let preferences: unknown;
         try {
@@ -46,18 +47,13 @@ async function installHomeKeyTrace(page: Page, selector: string) {
         } catch {
           preferences = 'invalid JSON';
         }
-        const width = (element: HTMLElement) => ({
-          css: getComputedStyle(element).width,
-          rect: Number(element.getBoundingClientRect().width.toFixed(2)),
-        });
-        return {
+        const state = {
           at: Number(performance.now().toFixed(2)),
           activeElement: describe(document.activeElement),
           focused: document.activeElement === separator,
           viewport: {
             innerWidth: window.innerWidth,
             workbenchWidth: workbench.dataset.workbenchWidth,
-            workbenchRect: Number(workbench.getBoundingClientRect().width.toFixed(2)),
           },
           separator: {
             ariaValueNow: separator.getAttribute('aria-valuenow'),
@@ -68,20 +64,33 @@ async function installHomeKeyTrace(page: Page, selector: string) {
           },
           reactStateProxy: {
             workbenchStyle: workbench.getAttribute('style'),
-            navigatorWidthVariable: getComputedStyle(workbench)
+            navigatorWidthVariable: workbench.style
               .getPropertyValue('--navigator-pane-width')
               .trim(),
-            navigatorPane: width(navigatorPane),
-            trackPane: width(trackPane),
+            navigatorPaneFlex: navigatorPane.style.flex,
             navigatorCollapsed: navigatorPane.classList.contains('is-collapsed'),
           },
           persistedV5: { raw: rawPreferences, parsed: preferences },
+        };
+        if (!measureGeometry) return state;
+        const width = (element: HTMLElement) => ({
+          css: getComputedStyle(element).width,
+          rect: Number(element.getBoundingClientRect().width.toFixed(2)),
+        });
+        return {
+          ...state,
+          cssGeometry: {
+            workbench: Number(workbench.getBoundingClientRect().width.toFixed(2)),
+            navigatorPane: width(navigatorPane),
+            trackPane: width(trackPane),
+          },
         };
       };
 
       const trace: HomeKeyTrace = {
         before: null,
         keyboardEvents: [],
+        resizeEvents: [],
         domMutations: [],
         preferenceWrites: [],
       };
@@ -112,6 +121,12 @@ async function installHomeKeyTrace(page: Page, selector: string) {
       };
       document.addEventListener('keydown', captureKeydown, true);
       document.addEventListener('keydown', bubbleKeydown);
+      const captureResize = () =>
+        trace.resizeEvents.push({
+          at: Number(performance.now().toFixed(2)),
+          state: snapshot(),
+        });
+      window.addEventListener('resize', captureResize);
 
       const trackedElements = new Map<Element, string>([
         [separator, 'separator'],
@@ -169,6 +184,7 @@ async function installHomeKeyTrace(page: Page, selector: string) {
           observer.disconnect();
           document.removeEventListener('keydown', captureKeydown, true);
           document.removeEventListener('keydown', bubbleKeydown);
+          window.removeEventListener('resize', captureResize);
           if (Storage.prototype.setItem === wrappedSetItem)
             Storage.prototype.setItem = originalSetItem;
         },
@@ -184,7 +200,11 @@ async function emitHomeKeyTrace(page: Page, info: TestInfo) {
       const windowWithTrace = window as HomeKeyTraceWindow;
       const controller = windowWithTrace.__workbenchHomeKeyTrace;
       if (!controller) throw new Error('D1 trace was not installed');
-      const result = { ...controller.trace, afterAssertion: controller.snapshot() };
+      const result = {
+        ...controller.trace,
+        afterAssertion: controller.snapshot(),
+        finalGeometry: controller.snapshot(true),
+      };
       controller.cleanup();
       delete windowWithTrace.__workbenchHomeKeyTrace;
       return result;
