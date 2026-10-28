@@ -345,6 +345,54 @@ fn blocked_presentation_hook(
 }
 
 #[cfg(feature = "tauri-test")]
+fn blocked_presentation_selection_hook() -> (
+    PlaybackPresentationTestHook,
+    mpsc::Receiver<PlaybackPresentationStage>,
+    PlaybackPresentationTestGate,
+    PlaybackPresentationTestGate,
+) {
+    let (stage_sender, stage_receiver) = mpsc::channel();
+    let before_selection_gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let after_selection_gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let hook_before_selection_gate = Arc::clone(&before_selection_gate);
+    let hook_after_selection_gate = Arc::clone(&after_selection_gate);
+    let before_selection_entered = Arc::new(AtomicBool::new(false));
+    let after_selection_entered = Arc::new(AtomicBool::new(false));
+    let hook: PlaybackPresentationTestHook = Arc::new(move |stage| {
+        let gate = match stage {
+            PlaybackPresentationStage::BeforeWorkSelection
+                if !before_selection_entered.swap(true, Ordering::AcqRel) =>
+            {
+                Some(&hook_before_selection_gate)
+            }
+            PlaybackPresentationStage::AfterWorkSelection
+                if !after_selection_entered.swap(true, Ordering::AcqRel) =>
+            {
+                Some(&hook_after_selection_gate)
+            }
+            _ => None,
+        };
+        let Some(gate) = gate else { return };
+        stage_sender
+            .send(stage)
+            .expect("presentation selection stage receiver");
+        let (released, changed) = &**gate;
+        let mut released = released.lock().expect("presentation selection gate");
+        while !*released {
+            released = changed
+                .wait(released)
+                .expect("presentation selection gate wait");
+        }
+    });
+    (
+        hook,
+        stage_receiver,
+        before_selection_gate,
+        after_selection_gate,
+    )
+}
+
+#[cfg(feature = "tauri-test")]
 fn release_test_gate(gate: &PlaybackPresentationTestGate) {
     let (released, changed) = &**gate;
     *released.lock().expect("test gate") = true;

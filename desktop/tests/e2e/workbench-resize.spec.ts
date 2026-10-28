@@ -296,6 +296,7 @@ test('wide and narrow drag geometry, overlay focus, and v5 preference survive vi
   );
   const navigatorSeparator = page.getByRole('separator', { name: 'Resize library navigator' });
   await navigatorSeparator.focus();
+  await expect(navigatorSeparator).toBeFocused();
   await page.keyboard.press('Home');
   await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '200');
   await page.keyboard.press('Shift+ArrowRight');

@@ -295,8 +295,8 @@ fn newer_snapshot_coalesces_a_frame_held_behind_an_older_critical_event() {
     let player = presentation_projection_session(0, 30_100_000, 30_200_000);
     let events = Arc::new(Mutex::new(NativeEventHub::default()));
     let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
-    let (test_hook, selection_entered, gate) =
-        blocked_presentation_hook(PlaybackPresentationStage::AfterWorkSelection);
+    let (test_hook, selection_stages, before_selection_gate, after_selection_gate) =
+        blocked_presentation_selection_hook();
     let active = attach_test_presentation(
         tracked_test_active(Arc::clone(&player), activity),
         &events,
@@ -305,13 +305,23 @@ fn newer_snapshot_coalesces_a_frame_held_behind_an_older_critical_event() {
     );
 
     let presentation = active.presentation.get().expect("presentation consumer");
+    // Keep the worker from selecting the critical event before its older snapshot is queued.
+    assert_eq!(
+        selection_stages.recv_timeout(Duration::from_secs(2)),
+        Ok(PlaybackPresentationStage::BeforeWorkSelection),
+        "pause the consumer before publishing the ordered pair"
+    );
     presentation
         .publish_state(&active, PlaybackEventState::Starting, None, None)
         .expect("critical event before the snapshot");
     assert!(presentation.publish_snapshot(&active, 1_000, 0, EnginePollStatus::Playing,));
-    selection_entered
-        .recv_timeout(Duration::from_secs(2))
-        .expect("consumer has selected the older critical event and taken its snapshot");
+    release_test_gate(&before_selection_gate);
+    assert_eq!(
+        selection_stages
+            .recv_timeout(Duration::from_secs(2))
+            .expect("consumer has selected the older critical event and taken its snapshot"),
+        PlaybackPresentationStage::AfterWorkSelection,
+    );
     assert!(
         presentation
             .queue
@@ -321,7 +331,7 @@ fn newer_snapshot_coalesces_a_frame_held_behind_an_older_critical_event() {
             .is_none()
     );
     assert!(presentation.publish_snapshot(&active, 2_000, 0, EnginePollStatus::Playing,));
-    release_test_gate(&gate);
+    release_test_gate(&after_selection_gate);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while events.lock().expect("event hub").buffered_for_test().len() < 2
