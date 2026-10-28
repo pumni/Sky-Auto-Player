@@ -1,6 +1,212 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
 
 const key = 'sky.ui.workbench.v5';
+
+interface HomeKeyTrace {
+  before: unknown;
+  keyboardEvents: Array<Record<string, unknown>>;
+  domMutations: Array<Record<string, unknown>>;
+  preferenceWrites: Array<Record<string, unknown>>;
+}
+
+interface HomeKeyTraceController {
+  trace: HomeKeyTrace;
+  snapshot: () => unknown;
+  cleanup: () => void;
+}
+
+interface HomeKeyTraceWindow extends Window {
+  __workbenchHomeKeyTrace?: HomeKeyTraceController;
+}
+
+async function installHomeKeyTrace(page: Page, selector: string) {
+  await page.evaluate(
+    ({ selector, storageKey }) => {
+      const separator = document.querySelector<HTMLElement>(selector);
+      const workbench = separator?.closest<HTMLElement>('.workbench');
+      const navigatorPane = workbench?.querySelector<HTMLElement>('.navigator-workbench-pane');
+      const trackPane = workbench?.querySelector<HTMLElement>('.track-browser-workbench-pane');
+      if (!separator || !workbench || !navigatorPane || !trackPane)
+        throw new Error('D1 trace targets are missing');
+
+      const describe = (element: Element | null) => {
+        if (!element) return null;
+        return {
+          tag: element.tagName,
+          role: element.getAttribute('role'),
+          label: element.getAttribute('aria-label'),
+          className: typeof element.className === 'string' ? element.className : null,
+        };
+      };
+      const snapshot = () => {
+        const rawPreferences = localStorage.getItem(storageKey);
+        let preferences: unknown = null;
+        try {
+          preferences = rawPreferences === null ? null : JSON.parse(rawPreferences);
+        } catch {
+          preferences = 'invalid JSON';
+        }
+        const width = (element: HTMLElement) => ({
+          css: getComputedStyle(element).width,
+          rect: Number(element.getBoundingClientRect().width.toFixed(2)),
+        });
+        return {
+          at: Number(performance.now().toFixed(2)),
+          activeElement: describe(document.activeElement),
+          focused: document.activeElement === separator,
+          viewport: {
+            innerWidth: window.innerWidth,
+            workbenchWidth: workbench.dataset.workbenchWidth,
+            workbenchRect: Number(workbench.getBoundingClientRect().width.toFixed(2)),
+          },
+          separator: {
+            ariaValueNow: separator.getAttribute('aria-valuenow'),
+            ariaValueMin: separator.getAttribute('aria-valuemin'),
+            ariaValueMax: separator.getAttribute('aria-valuemax'),
+            ariaDisabled: separator.getAttribute('aria-disabled'),
+            tabIndex: separator.tabIndex,
+          },
+          reactStateProxy: {
+            workbenchStyle: workbench.getAttribute('style'),
+            navigatorWidthVariable: getComputedStyle(workbench)
+              .getPropertyValue('--navigator-pane-width')
+              .trim(),
+            navigatorPane: width(navigatorPane),
+            trackPane: width(trackPane),
+            navigatorCollapsed: navigatorPane.classList.contains('is-collapsed'),
+          },
+          persistedV5: { raw: rawPreferences, parsed: preferences },
+        };
+      };
+
+      const trace: HomeKeyTrace = {
+        before: null,
+        keyboardEvents: [],
+        domMutations: [],
+        preferenceWrites: [],
+      };
+      trace.before = snapshot();
+      const captureKeydown = (event: Event) => {
+        const keyboardEvent = event as KeyboardEvent;
+        if (keyboardEvent.key !== 'Home' || keyboardEvent.target !== separator) return;
+        trace.keyboardEvents.push({
+          phase: 'document-capture',
+          key: keyboardEvent.key,
+          code: keyboardEvent.code,
+          defaultPrevented: keyboardEvent.defaultPrevented,
+          target: describe(keyboardEvent.target as Element | null),
+          state: snapshot(),
+        });
+        queueMicrotask(() =>
+          trace.keyboardEvents.push({
+            phase: 'post-dispatch-microtask',
+            key: keyboardEvent.key,
+            defaultPrevented: keyboardEvent.defaultPrevented,
+            state: snapshot(),
+          }),
+        );
+      };
+      const bubbleKeydown = (event: Event) => {
+        const keyboardEvent = event as KeyboardEvent;
+        if (keyboardEvent.key !== 'Home' || keyboardEvent.target !== separator) return;
+        trace.keyboardEvents.push({
+          phase: 'document-bubble-after-react',
+          key: keyboardEvent.key,
+          code: keyboardEvent.code,
+          defaultPrevented: keyboardEvent.defaultPrevented,
+          target: describe(keyboardEvent.target as Element | null),
+          state: snapshot(),
+        });
+      };
+      document.addEventListener('keydown', captureKeydown, true);
+      document.addEventListener('keydown', bubbleKeydown);
+
+      const trackedElements = new Map<Element, string>([
+        [separator, 'separator'],
+        [workbench, 'workbench'],
+        [navigatorPane, 'navigator-pane'],
+        [trackPane, 'track-pane'],
+      ]);
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          const target = trackedElements.get(record.target as Element);
+          if (!target || !record.attributeName) continue;
+          trace.domMutations.push({
+            at: Number(performance.now().toFixed(2)),
+            target,
+            attribute: record.attributeName,
+            oldValue: record.oldValue,
+            newValue: (record.target as Element).getAttribute(record.attributeName),
+            state: snapshot(),
+          });
+        }
+      });
+      observer.observe(workbench, {
+        attributes: true,
+        subtree: true,
+        attributeOldValue: true,
+        attributeFilter: [
+          'aria-valuenow',
+          'aria-valuemin',
+          'aria-valuemax',
+          'aria-disabled',
+          'tabindex',
+          'style',
+          'class',
+          'data-workbench-width',
+        ],
+      });
+
+      const originalSetItem = Storage.prototype.setItem;
+      const wrappedSetItem: typeof Storage.prototype.setItem = function (name, value) {
+        const result = originalSetItem.call(this, name, value);
+        if (this === window.localStorage && name === storageKey) {
+          trace.preferenceWrites.push({
+            at: Number(performance.now().toFixed(2)),
+            value,
+            state: snapshot(),
+          });
+        }
+        return result;
+      };
+      Storage.prototype.setItem = wrappedSetItem;
+      (window as HomeKeyTraceWindow).__workbenchHomeKeyTrace = {
+        trace,
+        snapshot,
+        cleanup: () => {
+          observer.disconnect();
+          document.removeEventListener('keydown', captureKeydown, true);
+          document.removeEventListener('keydown', bubbleKeydown);
+          if (Storage.prototype.setItem === wrappedSetItem)
+            Storage.prototype.setItem = originalSetItem;
+        },
+      };
+    },
+    { selector, storageKey: key },
+  );
+}
+
+async function emitHomeKeyTrace(page: Page, info: TestInfo) {
+  try {
+    const trace = await page.evaluate(() => {
+      const windowWithTrace = window as HomeKeyTraceWindow;
+      const controller = windowWithTrace.__workbenchHomeKeyTrace;
+      if (!controller) throw new Error('D1 trace was not installed');
+      const result = { ...controller.trace, afterAssertion: controller.snapshot() };
+      controller.cleanup();
+      delete windowWithTrace.__workbenchHomeKeyTrace;
+      return result;
+    });
+    console.info(`[D1_HOME_TRACE] ${JSON.stringify(trace)}`);
+    await info.attach('d1-home-key-state.json', {
+      body: JSON.stringify(trace, null, 2),
+      contentType: 'application/json',
+    });
+  } catch (error) {
+    console.error(`[D1_HOME_TRACE_CAPTURE_FAILED] ${String(error)}`);
+  }
+}
+
 async function seed(page: Page, width: number, collapsed = false) {
   await page.setViewportSize({ width, height: 768 });
   await page.goto('/');
@@ -257,7 +463,7 @@ for (const [viewport, inspector] of [
 
 test('wide and narrow drag geometry, overlay focus, and v5 preference survive viewport changes', async ({
   page,
-}) => {
+}, info) => {
   await seed(page, 1366);
   const separator = page.getByRole('separator', { name: 'Resize utility pane' });
   await separator.focus();
@@ -297,8 +503,13 @@ test('wide and narrow drag geometry, overlay focus, and v5 preference survive vi
   const navigatorSeparator = page.getByRole('separator', { name: 'Resize library navigator' });
   await navigatorSeparator.focus();
   await expect(navigatorSeparator).toBeFocused();
+  await installHomeKeyTrace(page, '[aria-label="Resize library navigator"]');
   await page.keyboard.press('Home');
-  await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '200');
+  try {
+    await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '200');
+  } finally {
+    await emitHomeKeyTrace(page, info);
+  }
   await page.keyboard.press('Shift+ArrowRight');
   await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '232');
 });
