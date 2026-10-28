@@ -1,8 +1,11 @@
 {
-  "source_head": "e15491a0653501499c4ccd51c1aa3ec147781825",
+  "source_head": "5b195359830ac6904b7b85f536b6f46556c35151",
+  "source_branch": "feat/builtin-library-paging",
+  "source_worktree_clean": true,
+  "build_command": "cargo +1.99.1 build --manifest-path desktop/src-tauri/Cargo.toml --locked --features packaged-assets --bin sky_desktop_shell",
   "executable": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\debug\\sky_desktop_shell.exe",
-  "executable_sha256": "1a985b3ea11e739a9554b93e6f1b68512d0cdc19ef5555912040fce9f4d26aba",
-  "captured_at_utc": "2026-10-28T17:32:19.953Z",
+  "executable_sha256": "a56c61bbbb9eca75719015e106da0d24f6df4cd521767ab3484054c60fa1144e",
+  "captured_at_utc": "2026-10-28T21:27:52.131Z",
   "host": {
     "platform": "win32",
     "os_release": "10.0.26300",
@@ -10,7 +13,7 @@
     "cpu": "AMD Ryzen 5 5500U with Radeon Graphics         ",
     "logical_processors": 12
   },
-  "harness": "Windows Tauri debug shell with packaged-assets and WebView2; 21 sequential warm samples; direct search_songs/set_library_viewport calls; no playback or gameplay input",
+  "harness": "Windows Tauri debug shell with packaged-assets and WebView2; 21 sequential exact-warm samples plus 21 alternating accepted base→shift+1→base pairs per available window; explicit ordered song IDs; no playback or gameplay input",
   "fixture": "Package D fixture v1: one deterministic one-note JSON user song per row; 96/1000/10000 user rows; built-in resource remains the verified 96-song catalog",
   "sizes": [
     {
@@ -24,13 +27,13 @@
           "window": "first",
           "offset": 0,
           "total": 192,
-          "first_measured_ms": 7,
+          "first_measured_ms": 6.9,
           "warm": {
             "count": 21,
-            "p50_ms": 6.4,
-            "p90_ms": 6.8,
-            "min_ms": 5.8,
-            "max_ms": 6.9
+            "p50_ms": 6.2,
+            "p90_ms": 6.5,
+            "min_ms": 5.7,
+            "max_ms": 6.7
           }
         },
         {
@@ -38,13 +41,13 @@
           "window": "first",
           "offset": 0,
           "total": 96,
-          "first_measured_ms": 6,
+          "first_measured_ms": 7.2,
           "warm": {
             "count": 21,
-            "p50_ms": 6.1,
-            "p90_ms": 6.4,
-            "min_ms": 5.6,
-            "max_ms": 6.9
+            "p50_ms": 6.4,
+            "p90_ms": 7.2,
+            "min_ms": 6,
+            "max_ms": 7.6
           }
         },
         {
@@ -52,13 +55,13 @@
           "window": "first",
           "offset": 0,
           "total": 96,
-          "first_measured_ms": 6.7,
+          "first_measured_ms": 6.9,
           "warm": {
             "count": 21,
-            "p50_ms": 6.2,
-            "p90_ms": 6.6,
-            "min_ms": 5.9,
-            "max_ms": 6.9
+            "p50_ms": 6.9,
+            "p90_ms": 7.1,
+            "min_ms": 6.1,
+            "max_ms": 7.6
           }
         }
       ],
@@ -68,27 +71,30 @@
           "window": "first",
           "offset": 0,
           "rows": 100,
-          "first_measured_ms": 582,
+          "window_width": 100,
+          "first_measured_ms": 602.7,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.1,
-            "min_ms": 6,
-            "max_ms": 7.3
+            "p50_ms": 6.7,
+            "p90_ms": 7.3,
+            "min_ms": 6.1,
+            "max_ms": 8.1
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.1,
-            "min_ms": 6.3,
-            "max_ms": 15
+            "p50_ms": 7.5,
+            "p90_ms": 8.3,
+            "min_ms": 6.5,
+            "max_ms": 13.9
           },
           "shift_back": {
             "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.3,
-            "min_ms": 6.2,
-            "max_ms": 7.5
+            "p50_ms": 7.4,
+            "p90_ms": 8.4,
+            "min_ms": 6.5,
+            "max_ms": 9.6
           }
         },
         {
@@ -96,27 +102,23 @@
           "window": "first",
           "offset": 0,
           "rows": 96,
-          "first_measured_ms": 366.5,
+          "window_width": 96,
+          "first_measured_ms": 391.2,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 7,
-            "p90_ms": 8.2,
-            "min_ms": 6,
-            "max_ms": 8.6
+            "p50_ms": 7.3,
+            "p90_ms": 7.9,
+            "min_ms": 6.3,
+            "max_ms": 8.1
           },
+          "shift_pair_count": 0,
           "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.5,
-            "p90_ms": 7,
-            "min_ms": 6.1,
-            "max_ms": 7.5
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           },
           "shift_back": {
-            "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7.3,
-            "min_ms": 5.9,
-            "max_ms": 7.5
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           }
         },
         {
@@ -124,73 +126,69 @@
           "window": "first",
           "offset": 0,
           "rows": 96,
-          "first_measured_ms": 6.6,
+          "window_width": 96,
+          "first_measured_ms": 7.4,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7.1,
-            "min_ms": 6,
-            "max_ms": 7.5
+            "p50_ms": 7.3,
+            "p90_ms": 7.7,
+            "min_ms": 6.4,
+            "max_ms": 8
           },
+          "shift_pair_count": 0,
           "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.9,
-            "min_ms": 5.8,
-            "max_ms": 8.9
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           },
           "shift_back": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.2,
-            "min_ms": 6.2,
-            "max_ms": 7.5
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           }
         }
       ],
       "memory": {
         "after_native_catalog_load": {
-          "v8_heap_bytes": 7414188,
-          "js_heap_used_bytes": 7414188,
+          "v8_heap_bytes": 7705200,
+          "js_heap_used_bytes": 7705200,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 8864,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 38346752,
-            "private_bytes": 7831552,
-            "handles": 331,
+            "working_set_bytes": 40308736,
+            "private_bytes": 7450624,
+            "handles": 353,
             "threads": 27
           }
         },
         "before_frontend_scroll_sweep": {
-          "v8_heap_bytes": 18310992,
-          "js_heap_used_bytes": 18310992,
+          "v8_heap_bytes": 17101676,
+          "js_heap_used_bytes": 17101676,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 4448,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 38866944,
-            "private_bytes": 8228864,
-            "handles": 331,
+            "working_set_bytes": 40894464,
+            "private_bytes": 8028160,
+            "handles": 353,
             "threads": 27
           }
         },
         "after_scroll_sweep_and_return": {
-          "v8_heap_bytes": 18363460,
-          "js_heap_used_bytes": 18363460,
+          "v8_heap_bytes": 17151588,
+          "js_heap_used_bytes": 17151588,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 4448,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 38866944,
-            "private_bytes": 8228864,
-            "handles": 331,
+            "working_set_bytes": 40894464,
+            "private_bytes": 8028160,
+            "handles": 353,
             "threads": 27
           }
         }
@@ -212,13 +210,13 @@
           "window": "first",
           "offset": 0,
           "total": 1096,
-          "first_measured_ms": 6.4,
+          "first_measured_ms": 6.8,
           "warm": {
             "count": 21,
-            "p50_ms": 6.4,
-            "p90_ms": 6.8,
-            "min_ms": 5.8,
-            "max_ms": 7.1
+            "p50_ms": 6.2,
+            "p90_ms": 6.4,
+            "min_ms": 5.9,
+            "max_ms": 6.5
           }
         },
         {
@@ -226,13 +224,13 @@
           "window": "middle",
           "offset": 400,
           "total": 1096,
-          "first_measured_ms": 6.6,
+          "first_measured_ms": 6.7,
           "warm": {
             "count": 21,
-            "p50_ms": 6.5,
-            "p90_ms": 6.8,
-            "min_ms": 5.8,
-            "max_ms": 7.1
+            "p50_ms": 6.1,
+            "p90_ms": 7,
+            "min_ms": 5.7,
+            "max_ms": 7.6
           }
         },
         {
@@ -240,13 +238,13 @@
           "window": "last",
           "offset": 900,
           "total": 1096,
-          "first_measured_ms": 6.9,
+          "first_measured_ms": 6.7,
           "warm": {
             "count": 21,
-            "p50_ms": 6.3,
-            "p90_ms": 6.9,
-            "min_ms": 5.9,
-            "max_ms": 7.1
+            "p50_ms": 6.8,
+            "p90_ms": 7.5,
+            "min_ms": 6.1,
+            "max_ms": 8.4
           }
         },
         {
@@ -254,13 +252,13 @@
           "window": "first",
           "offset": 0,
           "total": 1000,
-          "first_measured_ms": 6.4,
+          "first_measured_ms": 7.8,
           "warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7.1,
+            "p50_ms": 6.9,
+            "p90_ms": 7.2,
             "min_ms": 6.2,
-            "max_ms": 7.7
+            "max_ms": 8.3
           }
         },
         {
@@ -268,13 +266,13 @@
           "window": "middle",
           "offset": 400,
           "total": 1000,
-          "first_measured_ms": 8.1,
+          "first_measured_ms": 6.5,
           "warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7,
-            "min_ms": 6.1,
-            "max_ms": 7.9
+            "p50_ms": 6.8,
+            "p90_ms": 7.2,
+            "min_ms": 6.2,
+            "max_ms": 7.4
           }
         },
         {
@@ -282,13 +280,13 @@
           "window": "last",
           "offset": 900,
           "total": 1000,
-          "first_measured_ms": 7.3,
+          "first_measured_ms": 6.4,
           "warm": {
             "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.3,
-            "min_ms": 6,
-            "max_ms": 7.8
+            "p50_ms": 6.5,
+            "p90_ms": 7.1,
+            "min_ms": 5.9,
+            "max_ms": 8
           }
         },
         {
@@ -296,11 +294,11 @@
           "window": "first",
           "offset": 0,
           "total": 1000,
-          "first_measured_ms": 6.9,
+          "first_measured_ms": 6.8,
           "warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7.2,
+            "p50_ms": 6.8,
+            "p90_ms": 7,
             "min_ms": 6,
             "max_ms": 8
           }
@@ -310,13 +308,13 @@
           "window": "middle",
           "offset": 400,
           "total": 1000,
-          "first_measured_ms": 6.3,
+          "first_measured_ms": 8.6,
           "warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 6.9,
-            "min_ms": 5.9,
-            "max_ms": 7.1
+            "p50_ms": 6.8,
+            "p90_ms": 7.4,
+            "min_ms": 6.2,
+            "max_ms": 8.1
           }
         },
         {
@@ -327,10 +325,10 @@
           "first_measured_ms": 6.3,
           "warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7,
-            "min_ms": 6,
-            "max_ms": 7.7
+            "p50_ms": 6.7,
+            "p90_ms": 8,
+            "min_ms": 6.1,
+            "max_ms": 8.3
           }
         }
       ],
@@ -340,139 +338,154 @@
           "window": "first",
           "offset": 0,
           "rows": 100,
-          "first_measured_ms": 327.5,
+          "window_width": 100,
+          "first_measured_ms": 328,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7.2,
-            "min_ms": 6,
-            "max_ms": 7.7
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.5,
-            "min_ms": 6,
-            "max_ms": 8.9
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 6.9,
+            "p50_ms": 6.8,
             "p90_ms": 7.3,
-            "min_ms": 6,
-            "max_ms": 7.9
-          }
-        },
-        {
-          "query": "empty",
-          "window": "middle",
-          "offset": 400,
-          "rows": 100,
-          "first_measured_ms": 684.8,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.9,
-            "min_ms": 6.2,
-            "max_ms": 10
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.5,
-            "p90_ms": 7.1,
-            "min_ms": 6.2,
-            "max_ms": 13.8
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 6.5,
-            "p90_ms": 6.9,
-            "min_ms": 6.2,
+            "min_ms": 6.5,
             "max_ms": 7.6
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7,
+            "p90_ms": 7.5,
+            "min_ms": 6.4,
+            "max_ms": 9.8
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.1,
+            "p90_ms": 7.7,
+            "min_ms": 6.6,
+            "max_ms": 8.1
           }
         },
         {
           "query": "empty",
-          "window": "last",
-          "offset": 900,
-          "rows": 100,
-          "first_measured_ms": 785.4,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.7,
-            "min_ms": 6.3,
-            "max_ms": 7.9
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.1,
-            "min_ms": 6.4,
-            "max_ms": 15.1
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.8,
-            "min_ms": 6.1,
-            "max_ms": 8.6
-          }
-        },
-        {
-          "query": "short",
-          "window": "first",
-          "offset": 0,
-          "rows": 100,
-          "first_measured_ms": 141,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 6.6,
-            "p90_ms": 7,
-            "min_ms": 6.1,
-            "max_ms": 7.4
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.7,
-            "min_ms": 6.3,
-            "max_ms": 15.6
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.1,
-            "min_ms": 6.2,
-            "max_ms": 8.2
-          }
-        },
-        {
-          "query": "short",
           "window": "middle",
           "offset": 400,
           "rows": 100,
-          "first_measured_ms": 449.5,
+          "window_width": 100,
+          "first_measured_ms": 745.4,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.4,
+            "p50_ms": 7.1,
+            "p90_ms": 7.6,
             "min_ms": 6.3,
             "max_ms": 7.8
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.5,
-            "min_ms": 6.3,
-            "max_ms": 14.3
+            "p50_ms": 7.4,
+            "p90_ms": 8.8,
+            "min_ms": 6.6,
+            "max_ms": 14.9
           },
           "shift_back": {
             "count": 21,
+            "p50_ms": 7.2,
+            "p90_ms": 7.6,
+            "min_ms": 6.5,
+            "max_ms": 8
+          }
+        },
+        {
+          "query": "empty",
+          "window": "last",
+          "offset": 900,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 732,
+          "exact_warm": {
+            "count": 21,
+            "p50_ms": 7.1,
+            "p90_ms": 7.7,
+            "min_ms": 6.6,
+            "max_ms": 9
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.4,
+            "p90_ms": 7.8,
+            "min_ms": 6.9,
+            "max_ms": 14.7
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.3,
+            "p90_ms": 7.8,
+            "min_ms": 6.8,
+            "max_ms": 8.8
+          }
+        },
+        {
+          "query": "short",
+          "window": "first",
+          "offset": 0,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 149.2,
+          "exact_warm": {
+            "count": 21,
+            "p50_ms": 6.9,
+            "p90_ms": 7.6,
+            "min_ms": 6.5,
+            "max_ms": 8.7
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.3,
+            "p90_ms": 8,
+            "min_ms": 6.5,
+            "max_ms": 16.5
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.3,
+            "p90_ms": 8.6,
+            "min_ms": 6.6,
+            "max_ms": 8.9
+          }
+        },
+        {
+          "query": "short",
+          "window": "middle",
+          "offset": 400,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 439.8,
+          "exact_warm": {
+            "count": 21,
             "p50_ms": 7,
             "p90_ms": 7.5,
-            "min_ms": 6.2,
-            "max_ms": 7.7
+            "min_ms": 6.4,
+            "max_ms": 7.8
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.4,
+            "p90_ms": 8.1,
+            "min_ms": 6.6,
+            "max_ms": 15.3
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.2,
+            "p90_ms": 8,
+            "min_ms": 6.6,
+            "max_ms": 8.3
           }
         },
         {
@@ -480,27 +493,23 @@
           "window": "last",
           "offset": 900,
           "rows": 100,
-          "first_measured_ms": 440.5,
+          "window_width": 100,
+          "first_measured_ms": 429.4,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.3,
-            "min_ms": 6.1,
-            "max_ms": 7.4
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.2,
-            "min_ms": 6.5,
+            "p50_ms": 7,
+            "p90_ms": 7.7,
+            "min_ms": 6.4,
             "max_ms": 7.7
           },
+          "shift_pair_count": 0,
+          "shift_plus_one": {
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
+          },
           "shift_back": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.5,
-            "min_ms": 6.2,
-            "max_ms": 8.7
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           }
         },
         {
@@ -508,26 +517,29 @@
           "window": "first",
           "offset": 0,
           "rows": 100,
-          "first_measured_ms": 22.4,
+          "window_width": 100,
+          "first_measured_ms": 20,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.2,
-            "min_ms": 6.2,
-            "max_ms": 7.3
+            "p50_ms": 7,
+            "p90_ms": 7.5,
+            "min_ms": 6.4,
+            "max_ms": 10
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.6,
-            "min_ms": 6.2,
-            "max_ms": 8
+            "p50_ms": 7.5,
+            "p90_ms": 8.1,
+            "min_ms": 6.8,
+            "max_ms": 8.7
           },
           "shift_back": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.7,
-            "min_ms": 6.4,
+            "p50_ms": 7.4,
+            "p90_ms": 7.9,
+            "min_ms": 6.8,
             "max_ms": 7.9
           }
         },
@@ -536,27 +548,30 @@
           "window": "middle",
           "offset": 400,
           "rows": 100,
-          "first_measured_ms": 24.7,
+          "window_width": 100,
+          "first_measured_ms": 20.3,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 7,
-            "p90_ms": 7.4,
-            "min_ms": 6.3,
-            "max_ms": 8
+            "p50_ms": 7.2,
+            "p90_ms": 7.8,
+            "min_ms": 6.4,
+            "max_ms": 8.1
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.3,
-            "min_ms": 6.1,
-            "max_ms": 7.4
+            "p50_ms": 7.1,
+            "p90_ms": 7.9,
+            "min_ms": 6.7,
+            "max_ms": 8.7
           },
           "shift_back": {
             "count": 21,
-            "p50_ms": 6.7,
+            "p50_ms": 7.3,
             "p90_ms": 7.9,
-            "min_ms": 6.1,
-            "max_ms": 8.7
+            "min_ms": 6.7,
+            "max_ms": 9.9
           }
         },
         {
@@ -564,73 +579,69 @@
           "window": "last",
           "offset": 900,
           "rows": 100,
-          "first_measured_ms": 23,
+          "window_width": 100,
+          "first_measured_ms": 20.8,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 7.3,
-            "min_ms": 6.2,
-            "max_ms": 7.7
+            "p50_ms": 7.1,
+            "p90_ms": 7.6,
+            "min_ms": 6.7,
+            "max_ms": 9.9
           },
+          "shift_pair_count": 0,
           "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.4,
-            "min_ms": 6.2,
-            "max_ms": 7.7
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           },
           "shift_back": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 8.9,
-            "min_ms": 6.2,
-            "max_ms": 16.8
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           }
         }
       ],
       "memory": {
         "after_native_catalog_load": {
-          "v8_heap_bytes": 7624088,
-          "js_heap_used_bytes": 7624088,
+          "v8_heap_bytes": 7660648,
+          "js_heap_used_bytes": 7660648,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 50448,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 39518208,
-            "private_bytes": 9289728,
-            "handles": 329,
+            "working_set_bytes": 41492480,
+            "private_bytes": 9211904,
+            "handles": 353,
             "threads": 27
           }
         },
         "before_frontend_scroll_sweep": {
-          "v8_heap_bytes": 13670800,
-          "js_heap_used_bytes": 13670800,
+          "v8_heap_bytes": 14528428,
+          "js_heap_used_bytes": 14528428,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 46032,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 39915520,
-            "private_bytes": 8945664,
-            "handles": 328,
+            "working_set_bytes": 41807872,
+            "private_bytes": 9129984,
+            "handles": 352,
             "threads": 26
           }
         },
         "after_scroll_sweep_and_return": {
-          "v8_heap_bytes": 17980276,
-          "js_heap_used_bytes": 17980276,
+          "v8_heap_bytes": 18760004,
+          "js_heap_used_bytes": 18760004,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 46032,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 39923712,
-            "private_bytes": 8949760,
-            "handles": 328,
+            "working_set_bytes": 41877504,
+            "private_bytes": 9216000,
+            "handles": 352,
             "threads": 26
           }
         }
@@ -645,7 +656,7 @@
       "fixture_user_songs": 10000,
       "catalog_total": 10096,
       "builtin_total": 96,
-      "cold_start_fixture_search_ms": 6.3,
+      "cold_start_fixture_search_ms": 7.7,
       "search": [
         {
           "query": "empty",
@@ -656,9 +667,9 @@
           "warm": {
             "count": 21,
             "p50_ms": 6.6,
-            "p90_ms": 7.9,
-            "min_ms": 6,
-            "max_ms": 8.2
+            "p90_ms": 7.1,
+            "min_ms": 6.1,
+            "max_ms": 7.6
           }
         },
         {
@@ -666,13 +677,13 @@
           "window": "middle",
           "offset": 4900,
           "total": 10096,
-          "first_measured_ms": 6.7,
+          "first_measured_ms": 7.1,
           "warm": {
             "count": 21,
-            "p50_ms": 6.7,
-            "p90_ms": 8,
-            "min_ms": 5.8,
-            "max_ms": 8.1
+            "p50_ms": 6.6,
+            "p90_ms": 7.1,
+            "min_ms": 5.9,
+            "max_ms": 7.7
           }
         },
         {
@@ -680,97 +691,97 @@
           "window": "last",
           "offset": 9900,
           "total": 10096,
-          "first_measured_ms": 7.3,
+          "first_measured_ms": 6.5,
           "warm": {
             "count": 21,
-            "p50_ms": 6.3,
-            "p90_ms": 7.4,
+            "p50_ms": 6.7,
+            "p90_ms": 8.2,
+            "min_ms": 5.9,
+            "max_ms": 8.5
+          }
+        },
+        {
+          "query": "short",
+          "window": "first",
+          "offset": 0,
+          "total": 10000,
+          "first_measured_ms": 7.6,
+          "warm": {
+            "count": 21,
+            "p50_ms": 6.7,
+            "p90_ms": 7.5,
+            "min_ms": 6.2,
+            "max_ms": 8.2
+          }
+        },
+        {
+          "query": "short",
+          "window": "middle",
+          "offset": 4900,
+          "total": 10000,
+          "first_measured_ms": 7,
+          "warm": {
+            "count": 21,
+            "p50_ms": 6.9,
+            "p90_ms": 8.2,
+            "min_ms": 6,
+            "max_ms": 8.5
+          }
+        },
+        {
+          "query": "short",
+          "window": "last",
+          "offset": 9900,
+          "total": 10000,
+          "first_measured_ms": 6.7,
+          "warm": {
+            "count": 21,
+            "p50_ms": 6.5,
+            "p90_ms": 7.1,
+            "min_ms": 5.8,
+            "max_ms": 7.3
+          }
+        },
+        {
+          "query": "fuzzy",
+          "window": "first",
+          "offset": 0,
+          "total": 10000,
+          "first_measured_ms": 7.9,
+          "warm": {
+            "count": 21,
+            "p50_ms": 6.5,
+            "p90_ms": 6.9,
             "min_ms": 6,
             "max_ms": 7.8
           }
         },
         {
-          "query": "short",
-          "window": "first",
-          "offset": 0,
-          "total": 10000,
-          "first_measured_ms": 7.3,
-          "warm": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.6,
-            "min_ms": 5.9,
-            "max_ms": 8.3
-          }
-        },
-        {
-          "query": "short",
-          "window": "middle",
-          "offset": 4900,
-          "total": 10000,
-          "first_measured_ms": 7.1,
-          "warm": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.7,
-            "min_ms": 6.2,
-            "max_ms": 8.3
-          }
-        },
-        {
-          "query": "short",
-          "window": "last",
-          "offset": 9900,
-          "total": 10000,
-          "first_measured_ms": 7.7,
-          "warm": {
-            "count": 21,
-            "p50_ms": 6.4,
-            "p90_ms": 6.7,
-            "min_ms": 6,
-            "max_ms": 6.8
-          }
-        },
-        {
-          "query": "fuzzy",
-          "window": "first",
-          "offset": 0,
-          "total": 10000,
-          "first_measured_ms": 6.9,
-          "warm": {
-            "count": 21,
-            "p50_ms": 6.4,
-            "p90_ms": 6.8,
-            "min_ms": 5.9,
-            "max_ms": 8.2
-          }
-        },
-        {
           "query": "fuzzy",
           "window": "middle",
           "offset": 4900,
           "total": 10000,
-          "first_measured_ms": 6.8,
+          "first_measured_ms": 7.8,
           "warm": {
             "count": 21,
-            "p50_ms": 6.4,
-            "p90_ms": 6.9,
-            "min_ms": 6.1,
-            "max_ms": 7.1
-          }
-        },
-        {
-          "query": "fuzzy",
-          "window": "last",
-          "offset": 9900,
-          "total": 10000,
-          "first_measured_ms": 6.1,
-          "warm": {
-            "count": 21,
-            "p50_ms": 6.6,
+            "p50_ms": 6.5,
             "p90_ms": 7,
-            "min_ms": 6.3,
-            "max_ms": 7.6
+            "min_ms": 6,
+            "max_ms": 7.3
+          }
+        },
+        {
+          "query": "fuzzy",
+          "window": "last",
+          "offset": 9900,
+          "total": 10000,
+          "first_measured_ms": 6.3,
+          "warm": {
+            "count": 21,
+            "p50_ms": 6.4,
+            "p90_ms": 6.6,
+            "min_ms": 5.8,
+            "max_ms": 8.5
           }
         }
       ],
@@ -780,27 +791,30 @@
           "window": "first",
           "offset": 0,
           "rows": 100,
-          "first_measured_ms": 396.4,
+          "window_width": 100,
+          "first_measured_ms": 389,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 7.2,
-            "p90_ms": 8.1,
-            "min_ms": 6.2,
-            "max_ms": 8.7
+            "p50_ms": 6.9,
+            "p90_ms": 7.5,
+            "min_ms": 6.1,
+            "max_ms": 8.3
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 7.2,
-            "p90_ms": 8.7,
-            "min_ms": 6.1,
-            "max_ms": 9.5
+            "p50_ms": 7.6,
+            "p90_ms": 8.6,
+            "min_ms": 6.5,
+            "max_ms": 10.9
           },
           "shift_back": {
             "count": 21,
-            "p50_ms": 7.1,
-            "p90_ms": 8,
-            "min_ms": 6.6,
-            "max_ms": 8.4
+            "p50_ms": 7.6,
+            "p90_ms": 8.9,
+            "min_ms": 6.9,
+            "max_ms": 10.4
           }
         },
         {
@@ -808,195 +822,209 @@
           "window": "middle",
           "offset": 4900,
           "rows": 100,
-          "first_measured_ms": 797.2,
+          "window_width": 100,
+          "first_measured_ms": 764.1,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 7.2,
+            "p50_ms": 7,
             "p90_ms": 8.2,
-            "min_ms": 6.2,
-            "max_ms": 8.8
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 7,
-            "p90_ms": 7.5,
-            "min_ms": 6.4,
-            "max_ms": 15.8
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 7.2,
-            "p90_ms": 8.3,
-            "min_ms": 6.2,
-            "max_ms": 8.4
-          }
-        },
-        {
-          "query": "empty",
-          "window": "last",
-          "offset": 9900,
-          "rows": 100,
-          "first_measured_ms": 792.7,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 7,
-            "p90_ms": 8.1,
             "min_ms": 6.1,
             "max_ms": 9
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 7.1,
-            "p90_ms": 8.3,
-            "min_ms": 6.2,
-            "max_ms": 14.2
+            "p50_ms": 7.9,
+            "p90_ms": 8.7,
+            "min_ms": 6.6,
+            "max_ms": 15.3
           },
           "shift_back": {
             "count": 21,
-            "p50_ms": 7.5,
-            "p90_ms": 8.3,
+            "p50_ms": 7.8,
+            "p90_ms": 8.6,
             "min_ms": 6.3,
-            "max_ms": 8.9
+            "max_ms": 9.1
           }
         },
         {
-          "query": "short",
-          "window": "first",
-          "offset": 0,
-          "rows": 100,
-          "first_measured_ms": 166.3,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 7.1,
-            "p90_ms": 8.5,
-            "min_ms": 6.1,
-            "max_ms": 8.9
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.8,
-            "min_ms": 6.2,
-            "max_ms": 14.2
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.7,
-            "min_ms": 6.5,
-            "max_ms": 8.6
-          }
-        },
-        {
-          "query": "short",
-          "window": "middle",
-          "offset": 4900,
-          "rows": 100,
-          "first_measured_ms": 451.1,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 7.3,
-            "p90_ms": 8.5,
-            "min_ms": 6.3,
-            "max_ms": 8.7
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 7.3,
-            "p90_ms": 7.7,
-            "min_ms": 6.4,
-            "max_ms": 15
-          },
-          "shift_back": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.7,
-            "min_ms": 6.3,
-            "max_ms": 8
-          }
-        },
-        {
-          "query": "short",
+          "query": "empty",
           "window": "last",
           "offset": 9900,
           "rows": 100,
-          "first_measured_ms": 437.8,
+          "window_width": 100,
+          "first_measured_ms": 726.8,
           "exact_warm": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.5,
-            "min_ms": 6.4,
-            "max_ms": 8
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.7,
+            "p50_ms": 7.1,
+            "p90_ms": 8.1,
             "min_ms": 6.3,
             "max_ms": 8.4
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.4,
+            "p90_ms": 8.8,
+            "min_ms": 6.8,
+            "max_ms": 16.2
+          },
           "shift_back": {
             "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 8,
-            "min_ms": 6.2,
+            "p50_ms": 7.3,
+            "p90_ms": 8.4,
+            "min_ms": 6.5,
             "max_ms": 8.8
           }
         },
         {
-          "query": "fuzzy",
+          "query": "short",
           "window": "first",
           "offset": 0,
           "rows": 100,
-          "first_measured_ms": 24,
+          "window_width": 100,
+          "first_measured_ms": 150.1,
           "exact_warm": {
-            "count": 21,
-            "p50_ms": 7,
-            "p90_ms": 7.5,
-            "min_ms": 6.4,
-            "max_ms": 8.9
-          },
-          "shift_plus_one": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.5,
-            "min_ms": 6.3,
-            "max_ms": 7.5
-          },
-          "shift_back": {
             "count": 21,
             "p50_ms": 6.9,
-            "p90_ms": 7.4,
-            "min_ms": 6.3,
-            "max_ms": 8.2
-          }
-        },
-        {
-          "query": "fuzzy",
-          "window": "middle",
-          "offset": 4900,
-          "rows": 100,
-          "first_measured_ms": 22.2,
-          "exact_warm": {
-            "count": 21,
-            "p50_ms": 7,
             "p90_ms": 7.6,
             "min_ms": 6.3,
             "max_ms": 7.8
           },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
           "shift_plus_one": {
             "count": 21,
-            "p50_ms": 6.7,
+            "p50_ms": 7.6,
+            "p90_ms": 8,
+            "min_ms": 6.6,
+            "max_ms": 14.6
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.4,
+            "p90_ms": 8,
+            "min_ms": 6.6,
+            "max_ms": 8.7
+          }
+        },
+        {
+          "query": "short",
+          "window": "middle",
+          "offset": 4900,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 427.6,
+          "exact_warm": {
+            "count": 21,
+            "p50_ms": 7,
+            "p90_ms": 7.7,
+            "min_ms": 6.4,
+            "max_ms": 8.8
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.2,
+            "p90_ms": 7.7,
+            "min_ms": 6.5,
+            "max_ms": 15.5
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.9,
+            "p90_ms": 8.4,
+            "min_ms": 6.5,
+            "max_ms": 8.8
+          }
+        },
+        {
+          "query": "short",
+          "window": "last",
+          "offset": 9900,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 423.7,
+          "exact_warm": {
+            "count": 21,
+            "p50_ms": 6.9,
             "p90_ms": 7.4,
             "min_ms": 6.3,
             "max_ms": 8
           },
+          "shift_pair_count": 0,
+          "shift_plus_one": {
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
+          },
+          "shift_back": {
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
+          }
+        },
+        {
+          "query": "fuzzy",
+          "window": "first",
+          "offset": 0,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 22.8,
+          "exact_warm": {
+            "count": 21,
+            "p50_ms": 7.1,
+            "p90_ms": 7.6,
+            "min_ms": 6.5,
+            "max_ms": 8.7
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.7,
+            "p90_ms": 8.5,
+            "min_ms": 7,
+            "max_ms": 9.3
+          },
           "shift_back": {
             "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.5,
-            "min_ms": 6.3,
+            "p50_ms": 7.8,
+            "p90_ms": 8.4,
+            "min_ms": 6.5,
+            "max_ms": 9.2
+          }
+        },
+        {
+          "query": "fuzzy",
+          "window": "middle",
+          "offset": 4900,
+          "rows": 100,
+          "window_width": 100,
+          "first_measured_ms": 21.5,
+          "exact_warm": {
+            "count": 21,
+            "p50_ms": 7,
+            "p90_ms": 7.7,
+            "min_ms": 6.4,
             "max_ms": 8.8
+          },
+          "shift_pair_count": 21,
+          "ordered_overlap_rows": 99,
+          "shift_plus_one": {
+            "count": 21,
+            "p50_ms": 7.4,
+            "p90_ms": 8.1,
+            "min_ms": 6.7,
+            "max_ms": 8.8
+          },
+          "shift_back": {
+            "count": 21,
+            "p50_ms": 7.2,
+            "p90_ms": 8.1,
+            "min_ms": 6.7,
+            "max_ms": 9.3
           }
         },
         {
@@ -1004,74 +1032,70 @@
           "window": "last",
           "offset": 9900,
           "rows": 100,
-          "first_measured_ms": 23.5,
+          "window_width": 100,
+          "first_measured_ms": 21.6,
           "exact_warm": {
-            "count": 21,
-            "p50_ms": 6.8,
-            "p90_ms": 7.2,
-            "min_ms": 6.2,
-            "max_ms": 7.4
-          },
-          "shift_plus_one": {
             "count": 21,
             "p50_ms": 6.6,
             "p90_ms": 7.2,
-            "min_ms": 6.2,
-            "max_ms": 8.2
+            "min_ms": 6.3,
+            "max_ms": 8.1
+          },
+          "shift_pair_count": 0,
+          "shift_plus_one": {
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           },
           "shift_back": {
-            "count": 21,
-            "p50_ms": 6.9,
-            "p90_ms": 7.3,
-            "min_ms": 6.3,
-            "max_ms": 8.3
+            "status": "unavailable",
+            "reason": "one-row shift cannot preserve the original window width at the result-set end"
           }
         }
       ],
       "memory": {
         "after_native_catalog_load": {
-          "v8_heap_bytes": 7561792,
-          "js_heap_used_bytes": 7561792,
+          "v8_heap_bytes": 7523876,
+          "js_heap_used_bytes": 7523876,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 464448,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 50536448,
-            "private_bytes": 20955136,
-            "handles": 331,
+            "working_set_bytes": 50565120,
+            "private_bytes": 20860928,
+            "handles": 329,
             "threads": 27
           }
         },
         "before_frontend_scroll_sweep": {
-          "v8_heap_bytes": 13771932,
-          "js_heap_used_bytes": 13771932,
+          "v8_heap_bytes": 14197192,
+          "js_heap_used_bytes": 14197192,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 460032,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 50581504,
-            "private_bytes": 20824064,
-            "handles": 330,
+            "working_set_bytes": 50307072,
+            "private_bytes": 20131840,
+            "handles": 328,
             "threads": 26
           }
         },
         "after_scroll_sweep_and_return": {
-          "v8_heap_bytes": 10098680,
-          "js_heap_used_bytes": 10098680,
+          "v8_heap_bytes": 10432328,
+          "js_heap_used_bytes": 10432328,
           "dom_nodes": 528,
           "mounted_track_rows": 26,
           "table_scroll_height_px": 460032,
           "table_client_height_px": 686,
           "table_scroll_top_px": 0,
           "shell_process": {
-            "working_set_bytes": 50647040,
-            "private_bytes": 20901888,
-            "handles": 330,
-            "threads": 26
+            "working_set_bytes": 50454528,
+            "private_bytes": 20418560,
+            "handles": 329,
+            "threads": 27
           }
         }
       },
