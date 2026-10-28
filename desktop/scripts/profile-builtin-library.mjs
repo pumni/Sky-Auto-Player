@@ -26,6 +26,22 @@ const sourceHead = spawnSync('git', ['rev-parse', 'HEAD'], {
   cwd: root,
   encoding: 'utf8',
 }).stdout.trim();
+const sourceBranch = spawnSync('git', ['branch', '--show-current'], {
+  cwd: root,
+  encoding: 'utf8',
+}).stdout.trim();
+const sourceStatus = spawnSync('git', ['status', '--porcelain=v1'], {
+  cwd: root,
+  encoding: 'utf8',
+});
+if (sourceStatus.status !== 0) {
+  throw new Error(`Cannot verify source worktree status: ${sourceStatus.stderr.trim()}`);
+}
+if (sourceBranch !== 'feat/builtin-library-paging' || sourceStatus.stdout.trim()) {
+  throw new Error(
+    `Profile requires a clean committed feat/builtin-library-paging worktree; branch=${sourceBranch} status=${sourceStatus.stdout.trim()}`,
+  );
+}
 const exeSha256 = createHash('sha256').update(readFileSync(exe)).digest('hex');
 if (process.platform === 'win32') {
   const activeShells = spawnSync(
@@ -119,6 +135,32 @@ async function invokeTiming(page, command, params, count = 1) {
   );
 }
 
+function validateViewportResponse(response, request, expectedIds, phase) {
+  const width = request.lastIndex - request.firstIndex + 1;
+  if (!response?.accepted) throw new Error(`${phase} viewport response was not accepted`);
+  if (
+    response.generation !== request.generation ||
+    response.first_index !== request.firstIndex ||
+    response.last_index !== request.lastIndex ||
+    response.selected_song_id !== request.selectedSongId
+  ) {
+    throw new Error(`${phase} viewport response identity did not match its request`);
+  }
+  const actualIds = response.items.map((item) => item.song_id);
+  if (width !== expectedIds.length || actualIds.length !== width) {
+    throw new Error(
+      `${phase} viewport response width mismatch: expected ${width}, got ${actualIds.length}`,
+    );
+  }
+  if (actualIds.some((songId, index) => songId !== expectedIds[index])) {
+    throw new Error(`${phase} viewport response ordered IDs did not match its request`);
+  }
+  if (new Set(actualIds).size !== actualIds.length) {
+    throw new Error(`${phase} viewport response contained duplicate song IDs`);
+  }
+  return actualIds;
+}
+
 async function pageMetrics(page, cdp, shellPid) {
   const [heap, performanceMetrics, dom, shell] = await Promise.all([
     cdp.send('Runtime.getHeapUsage').catch(() => null),
@@ -171,6 +213,10 @@ function ensureOwnedTempPath(path) {
 
 const report = {
   source_head: sourceHead,
+  source_branch: sourceBranch,
+  source_worktree_clean: true,
+  build_command:
+    'cargo +1.99.1 build --manifest-path desktop/src-tauri/Cargo.toml --locked --features packaged-assets --bin sky_desktop_shell',
   executable: exe,
   executable_sha256: exeSha256,
   captured_at_utc: new Date().toISOString(),
@@ -182,7 +228,7 @@ const report = {
     logical_processors: cpus().length,
   },
   harness:
-    'Windows Tauri debug shell with packaged-assets and WebView2; 21 sequential warm samples; direct search_songs/set_library_viewport calls; no playback or gameplay input',
+    'Windows Tauri debug shell with packaged-assets and WebView2; 21 sequential exact-warm samples plus 21 alternating accepted base→shift+1→base pairs per available window; explicit ordered song IDs; no playback or gameplay input',
   fixture:
     'Package D fixture v1: one deterministic one-note JSON user song per row; 96/1000/10000 user rows; built-in resource remains the verified 96-song catalog',
   sizes: [],
@@ -406,42 +452,76 @@ for (const size of widths) {
           songIds: ids,
         };
         const coldViewport = await invokeTiming(page, 'set_library_viewport', viewportRequest);
-        if (!coldViewport.response.accepted || coldViewport.response.items.length !== ids.length) {
-          throw new Error(`Viewport response was incomplete at offset ${offset}`);
-        }
-        const actualIds = coldViewport.response.items.map((item) => item.song_id);
-        if (actualIds.some((songId, index) => songId !== ids[index])) {
-          throw new Error(`Viewport response identity mismatch at offset ${offset}`);
-        }
+        validateViewportResponse(coldViewport.response, viewportRequest, ids, 'cold');
         const warmViewport = await invokeTiming(
           page,
           'set_library_viewport',
           viewportRequest,
           samples,
         );
-        const shiftedRows = await search(query, offset + 1);
-        const shiftedIds = shiftedRows.items.slice(0, ids.length).map((item) => item.song_id);
-        const shiftedRequest = {
-          ...viewportRequest,
-          firstIndex: offset + 1,
-          lastIndex: offset + shiftedIds.length,
-          songIds: shiftedIds,
-        };
-        const shift = await invokeTiming(page, 'set_library_viewport', shiftedRequest, samples);
-        const back = await invokeTiming(page, 'set_library_viewport', viewportRequest, samples);
-        if (!shift.response.accepted || !back.response.accepted) {
-          throw new Error(`Adjacent viewport shift was rejected at offset ${offset}`);
-        }
-        sizeReport.viewport.push({
+        validateViewportResponse(warmViewport.response, viewportRequest, ids, 'exact warm');
+        const viewportCase = {
           query: queryName,
           window: offset === 0 ? 'first' : offset === last ? 'last' : 'middle',
           offset,
           rows: ids.length,
+          window_width: ids.length,
           first_measured_ms: Number(coldViewport.timings[0].toFixed(3)),
           exact_warm: distribution(warmViewport.timings),
-          shift_plus_one: distribution(shift.timings),
-          shift_back: distribution(back.timings),
-        });
+        };
+        if (offset + ids.length >= total) {
+          const unavailable = {
+            status: 'unavailable',
+            reason: 'one-row shift cannot preserve the original window width at the result-set end',
+          };
+          viewportCase.shift_pair_count = 0;
+          viewportCase.shift_plus_one = unavailable;
+          viewportCase.shift_back = unavailable;
+        } else {
+          const shiftedRows = await search(query, offset + 1);
+          if (shiftedRows.total !== total || shiftedRows.items.length !== ids.length) {
+            throw new Error(
+              `Shifted search window changed total or width at offset ${offset}: total=${shiftedRows.total} rows=${shiftedRows.items.length}`,
+            );
+          }
+          const shiftedIds = shiftedRows.items.map((item) => item.song_id);
+          const overlapWidth = ids.length - 1;
+          if (
+            overlapWidth <= 0 ||
+            ids.slice(1).some((songId, index) => shiftedIds[index] !== songId)
+          ) {
+            throw new Error(
+              `Shifted search window did not have the expected ordered overlap at offset ${offset}`,
+            );
+          }
+          const shiftedRequest = {
+            ...viewportRequest,
+            firstIndex: offset + 1,
+            lastIndex: offset + ids.length,
+            songIds: shiftedIds,
+          };
+          const shiftTimings = [];
+          const backTimings = [];
+          for (let pair = 0; pair < samples; pair += 1) {
+            const shift = await invokeTiming(page, 'set_library_viewport', shiftedRequest);
+            validateViewportResponse(
+              shift.response,
+              shiftedRequest,
+              shiftedIds,
+              `shift ${pair + 1}`,
+            );
+            shiftTimings.push(shift.timings[0]);
+
+            const back = await invokeTiming(page, 'set_library_viewport', viewportRequest);
+            validateViewportResponse(back.response, viewportRequest, ids, `shift-back ${pair + 1}`);
+            backTimings.push(back.timings[0]);
+          }
+          viewportCase.shift_pair_count = samples;
+          viewportCase.ordered_overlap_rows = overlapWidth;
+          viewportCase.shift_plus_one = distribution(shiftTimings);
+          viewportCase.shift_back = distribution(backTimings);
+        }
+        sizeReport.viewport.push(viewportCase);
       }
     }
 
