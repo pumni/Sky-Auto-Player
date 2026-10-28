@@ -91,6 +91,7 @@ const PLAYBACK_PRESENTATION_CRITICAL_CAPACITY: usize = 64;
 const MAX_CACHED_CATALOG_SEARCH_ORDERS: usize = 8;
 const MAX_CACHED_CATALOG_SEARCH_INDICES: usize = 100_000;
 const MAX_CACHED_SONG_ANALYSES: usize = 128;
+const MAX_CACHED_VIEWPORT_RESPONSE_ROWS: usize = 200;
 const MAX_ACTIVE_SONG_ANALYSES: usize = 2;
 const MAX_QUEUED_SONG_ANALYSES: usize = 64;
 const DRY_RUN_TERMINAL_NONE: u8 = 0;
@@ -133,12 +134,15 @@ pub(crate) struct NativeDesktopRuntime {
     #[cfg(test)]
     catalog_search_order_test_computations: AtomicU64,
     #[cfg(test)]
+    viewport_projection_test_hits: AtomicU64,
+    #[cfg(test)]
     analysis_test_order: Mutex<Vec<String>>,
     cached_catalog: Mutex<Option<CatalogCache>>,
     catalog: Mutex<CatalogState>,
     catalog_load: Mutex<CatalogLoadState>,
     catalog_search_cache: Mutex<CatalogSearchCache>,
     analysis_cache: Mutex<AnalysisCacheState>,
+    viewport_projection: Mutex<Option<ViewportResponseProjection>>,
     analysis_admission: Mutex<AnalysisAdmissionState>,
     analysis_admission_changed: Condvar,
     analysis_revision: AtomicU64,
@@ -423,12 +427,15 @@ impl NativeDesktopRuntime {
             #[cfg(test)]
             catalog_search_order_test_computations: AtomicU64::new(0),
             #[cfg(test)]
+            viewport_projection_test_hits: AtomicU64::new(0),
+            #[cfg(test)]
             analysis_test_order: Mutex::new(Vec::new()),
             cached_catalog: Mutex::new(None),
             catalog: Mutex::new(CatalogState::default()),
             catalog_load: Mutex::new(CatalogLoadState::default()),
             catalog_search_cache: Mutex::new(CatalogSearchCache::default()),
             analysis_cache: Mutex::new(AnalysisCacheState::default()),
+            viewport_projection: Mutex::new(None),
             analysis_admission: Mutex::new(AnalysisAdmissionState::default()),
             analysis_admission_changed: Condvar::new(),
             analysis_revision: AtomicU64::new(0),
@@ -727,6 +734,7 @@ impl NativeDesktopRuntime {
                 .lock()
                 .map_err(|_| "native catalog search cache lock poisoned".to_string())?
                 .invalidate_liked();
+            self.invalidate_viewport_projection();
         }
         if before.playback_defaults != snapshot.playback_defaults {
             self.invalidate_analysis_cache();
@@ -1097,7 +1105,8 @@ mod catalog_reconcile;
 use catalog_cache::AnalysisTestGate;
 use catalog_cache::{
     AnalysisAdmissionState, AnalysisCacheState, AnalysisKey, AnalysisPriority, AnalysisRequest,
-    CatalogSearchCache, CatalogSearchKey, CatalogSearchScope,
+    CatalogSearchCache, CatalogSearchKey, CatalogSearchScope, ViewportProjectionKey,
+    ViewportResponseProjection,
 };
 mod playback;
 #[cfg(test)]

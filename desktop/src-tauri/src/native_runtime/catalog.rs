@@ -563,6 +563,7 @@ impl NativeDesktopRuntime {
             .lock()
             .map_err(|_| "native catalog search cache lock poisoned".to_string())?
             .invalidate_playlists();
+        self.invalidate_viewport_projection();
         Ok(())
     }
 
@@ -780,7 +781,7 @@ impl NativeDesktopRuntime {
 
     pub(super) fn search(&self, request: CatalogSearchRequest) -> Result<CatalogSearchDto, String> {
         self.ensure_catalog_loaded()?;
-        let (settings, liked_revision, analysis_revision) = self.catalog_settings_snapshot()?;
+        let (settings, liked_revision, _, analysis_revision) = self.catalog_settings_snapshot()?;
         let (playlist_ids, playlist_revision) = match &request.source {
             LibrarySource::Smart {
                 id: CatalogSourceId::Liked,
@@ -1016,7 +1017,7 @@ impl NativeDesktopRuntime {
         let path = PathBuf::from(&entry.canonical_path);
         let title = entry.row.title;
         let song_id = entry.row.song_id;
-        let (settings, _, settings_revision) = self.catalog_settings_snapshot()?;
+        let (settings, _, _, settings_revision) = self.catalog_settings_snapshot()?;
         let policy = self.timing_policy(
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
@@ -1068,7 +1069,7 @@ impl NativeDesktopRuntime {
             return Err("catalog viewport contains too many metadata hydration IDs".into());
         }
         let viewport_revision = self.begin_viewport_request()?;
-        let (entries, selected_entry) = {
+        let (entries, selected_entry, ordered_song_ids) = {
             let catalog = self
                 .catalog
                 .lock()
@@ -1141,15 +1142,59 @@ impl NativeDesktopRuntime {
                         .map_err(catalog_error)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            (entries, selected_entry)
+            let ordered_song_ids = entries
+                .iter()
+                .map(|entry| entry.0.clone())
+                .collect::<Vec<_>>();
+            (entries, selected_entry, ordered_song_ids)
         };
-        let (settings, like_revision, settings_revision) = self.catalog_settings_snapshot()?;
+        let (settings, like_revision, playlist_revision, settings_revision) =
+            self.catalog_settings_snapshot()?;
+        let projection_key = super::ViewportProjectionKey {
+            generation: request.generation,
+            settings_revision,
+            liked_membership_revision: like_revision,
+            playlist_membership_revision: playlist_revision,
+            first_index: request.first_index,
+            last_index: request.last_index,
+            selected_song_id: request.selected_song_id.clone(),
+            request_song_ids: request.song_ids.clone(),
+            ordered_song_ids,
+        };
+        if let Some(response) =
+            self.cached_viewport_projection(&projection_key, viewport_revision)?
+        {
+            return Ok(response);
+        }
+        if self
+            .viewport_revision
+            .load(std::sync::atomic::Ordering::Acquire)
+            != viewport_revision
+        {
+            return Ok(CatalogViewportDto {
+                accepted: false,
+                generation: request.generation,
+                first_index: request.first_index,
+                last_index: request.last_index,
+                selected_song_id: request.selected_song_id,
+                items: Vec::new(),
+            });
+        }
+        let shifted_rows = self.shifted_viewport_rows(&projection_key, viewport_revision)?;
         let policy = self.timing_policy(
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
             settings.playback_defaults.timing_margin_us,
         )?;
-        let mut analysis_entries = entries.clone();
+        let mut analysis_entries = if let Some(shift) = &shifted_rows {
+            entries
+                .iter()
+                .filter(|entry| entry.0 == shift.entering_song_id)
+                .cloned()
+                .collect()
+        } else {
+            entries.clone()
+        };
         if let Some(selected) = selected_entry {
             if let Some(index) = analysis_entries
                 .iter()
@@ -1160,7 +1205,13 @@ impl NativeDesktopRuntime {
             analysis_entries.insert(0, selected);
         }
         let selected_id = request.selected_song_id.as_deref();
+        let selected_analysis_key = selected_id.map(|song_id| super::AnalysisKey {
+            song_id: song_id.to_owned(),
+            generation: request.generation,
+            settings_revision,
+        });
         let mut analyses = std::collections::HashMap::with_capacity(analysis_entries.len());
+        let mut analyses_since_selected_refresh = 0_usize;
         let mut incomplete = false;
         for (song_id, title, path) in &analysis_entries {
             let key = super::AnalysisKey {
@@ -1185,6 +1236,16 @@ impl NativeDesktopRuntime {
             }) {
                 Ok(analysis) => {
                     analyses.insert(song_id.clone(), analysis);
+                    if let Some(selected_key) = &selected_analysis_key {
+                        analyses_since_selected_refresh += 1;
+                        if selected_id == Some(song_id.as_str())
+                            || analyses_since_selected_refresh
+                                >= super::MAX_CACHED_SONG_ANALYSES / 2
+                        {
+                            self.touch_analysis_cache(selected_key)?;
+                            analyses_since_selected_refresh = 0;
+                        }
+                    }
                 }
                 Err(error)
                     if error == "catalog analysis queue is full"
@@ -1199,8 +1260,12 @@ impl NativeDesktopRuntime {
                 }
             }
         }
-        let (latest_settings, latest_like_revision, latest_analysis_revision) =
-            self.catalog_settings_snapshot()?;
+        let (
+            latest_settings,
+            latest_like_revision,
+            latest_playlist_revision,
+            latest_analysis_revision,
+        ) = self.catalog_settings_snapshot()?;
         let generation_is_current = self
             .catalog
             .lock()
@@ -1214,35 +1279,57 @@ impl NativeDesktopRuntime {
                 .load(std::sync::atomic::Ordering::Acquire)
                 == viewport_revision
             && latest_like_revision == like_revision
+            && latest_playlist_revision == playlist_revision
             && latest_analysis_revision == settings_revision
             && generation_is_current;
-        let items = if accepted {
+        let row_dto =
+            |song_id: String, title: String, analysis: &CachedSongAnalysis| CatalogRowDto {
+                liked: latest_settings.liked_songs.contains(&song_id),
+                song_id,
+                title,
+                format_label: analysis.metadata.format_label.clone(),
+                duration_us: analysis.metadata.duration_us,
+                note_count: analysis.metadata.note_count,
+                risk_level: analysis.metadata.risk_level.clone(),
+                metadata_state: analysis.metadata.state.into(),
+            };
+        let items = if !accepted {
+            Vec::new()
+        } else if let Some(mut shifted_rows) = shifted_rows {
+            let (song_id, title, _) = entries
+                .iter()
+                .find(|entry| entry.0 == shifted_rows.entering_song_id)
+                .expect("shifted viewport has one entering catalog row");
+            let analysis = analyses
+                .get(song_id)
+                .expect("shifted viewport analyzed its entering row");
+            shifted_rows.reusable_rows.insert(
+                shifted_rows.insertion_index,
+                row_dto(song_id.clone(), title.clone(), analysis),
+            );
+            shifted_rows.reusable_rows
+        } else {
             entries
                 .into_iter()
                 .filter_map(|(song_id, title, _)| {
-                    analyses.get(&song_id).map(|analysis| CatalogRowDto {
-                        liked: latest_settings.liked_songs.contains(&song_id),
-                        song_id,
-                        title,
-                        format_label: analysis.metadata.format_label.clone(),
-                        duration_us: analysis.metadata.duration_us,
-                        note_count: analysis.metadata.note_count,
-                        risk_level: analysis.metadata.risk_level.clone(),
-                        metadata_state: analysis.metadata.state.into(),
-                    })
+                    analyses
+                        .get(&song_id)
+                        .map(|analysis| row_dto(song_id, title, analysis))
                 })
                 .collect()
-        } else {
-            Vec::new()
         };
-        Ok(CatalogViewportDto {
+        let response = CatalogViewportDto {
             accepted,
             generation: request.generation,
             first_index: request.first_index,
             last_index: request.last_index,
             selected_song_id: request.selected_song_id,
             items,
-        })
+        };
+        if accepted {
+            self.publish_viewport_projection(projection_key, response.clone(), viewport_revision)?;
+        }
+        Ok(response)
     }
 
     pub(super) fn set_song_liked(
@@ -1276,6 +1363,7 @@ impl NativeDesktopRuntime {
                 .lock()
                 .map_err(|_| "native catalog search cache lock poisoned".to_string())?
                 .invalidate_liked();
+            self.invalidate_viewport_projection();
         }
         let liked_total = self
             .catalog

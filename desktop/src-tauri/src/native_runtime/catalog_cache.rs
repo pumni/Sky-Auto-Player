@@ -1,4 +1,5 @@
 use super::{CachedSongAnalysis, MaterializedTimingPolicy, NativeDesktopRuntime};
+use crate::commands::{CatalogRowDto, CatalogViewportDto};
 use sky_app_core::catalog::CatalogSearchOrder;
 use sky_app_core::settings::ApplicationSettings;
 use std::collections::{HashMap, VecDeque};
@@ -34,6 +35,31 @@ pub(super) struct CatalogSearchCache {
     pub(super) cached_indices: usize,
     pub(super) liked_membership_revision: u64,
     pub(super) playlist_membership_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ViewportProjectionKey {
+    pub(super) generation: u64,
+    pub(super) settings_revision: u64,
+    pub(super) liked_membership_revision: u64,
+    pub(super) playlist_membership_revision: u64,
+    pub(super) first_index: u64,
+    pub(super) last_index: i64,
+    pub(super) selected_song_id: Option<String>,
+    pub(super) request_song_ids: Vec<String>,
+    pub(super) ordered_song_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ViewportResponseProjection {
+    pub(super) key: ViewportProjectionKey,
+    pub(super) response: CatalogViewportDto,
+}
+
+pub(super) struct ShiftedViewportRows {
+    pub(super) reusable_rows: Vec<CatalogRowDto>,
+    pub(super) entering_song_id: String,
+    pub(super) insertion_index: usize,
 }
 
 impl CatalogSearchCache {
@@ -150,6 +176,13 @@ impl AnalysisCacheState {
             self.entries.remove(&oldest);
         }
     }
+
+    pub(super) fn touch(&mut self, key: &AnalysisKey) {
+        self.next_access = self.next_access.wrapping_add(1);
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.last_access = self.next_access;
+        }
+    }
 }
 
 pub(super) struct AnalysisFlight {
@@ -246,7 +279,7 @@ impl Drop for AnalysisPermit<'_> {
 impl NativeDesktopRuntime {
     pub(super) fn catalog_settings_snapshot(
         &self,
-    ) -> Result<(ApplicationSettings, u64, u64), String> {
+    ) -> Result<(ApplicationSettings, u64, u64, u64), String> {
         let service = self
             .settings
             .lock()
@@ -258,8 +291,189 @@ impl NativeDesktopRuntime {
         Ok((
             service.snapshot().clone(),
             search_cache.liked_membership_revision,
+            search_cache.playlist_membership_revision,
             self.analysis_revision.load(Ordering::Acquire),
         ))
+    }
+
+    fn catalog_viewport_revisions(&self) -> Result<(u64, u64, u64), String> {
+        let _settings = self
+            .settings
+            .lock()
+            .map_err(|_| "native settings lock poisoned".to_string())?;
+        let search_cache = self
+            .catalog_search_cache
+            .lock()
+            .map_err(|_| "native catalog search cache lock poisoned".to_string())?;
+        Ok((
+            search_cache.liked_membership_revision,
+            search_cache.playlist_membership_revision,
+            self.analysis_revision.load(Ordering::Acquire),
+        ))
+    }
+
+    fn viewport_projection_is_current(
+        &self,
+        key: &ViewportProjectionKey,
+        viewport_revision: u64,
+    ) -> Result<bool, String> {
+        if self.viewport_revision.load(Ordering::Acquire) != viewport_revision {
+            return Ok(false);
+        }
+        let (liked_revision, playlist_revision, settings_revision) =
+            self.catalog_viewport_revisions()?;
+        if liked_revision != key.liked_membership_revision
+            || playlist_revision != key.playlist_membership_revision
+            || settings_revision != key.settings_revision
+        {
+            return Ok(false);
+        }
+        let generation = self
+            .catalog
+            .lock()
+            .map_err(|_| "native catalog lock poisoned".to_string())?
+            .index
+            .generation();
+        Ok(generation == key.generation
+            && self.viewport_revision.load(Ordering::Acquire) == viewport_revision)
+    }
+
+    pub(super) fn cached_viewport_projection(
+        &self,
+        key: &ViewportProjectionKey,
+        viewport_revision: u64,
+    ) -> Result<Option<CatalogViewportDto>, String> {
+        let projection = self
+            .viewport_projection
+            .lock()
+            .map_err(|_| "native viewport projection lock poisoned".to_string())?
+            .as_ref()
+            .filter(|projection| projection.key == *key)
+            .cloned();
+        let Some(projection) = projection else {
+            return Ok(None);
+        };
+        if projection.response.items.len() > super::MAX_CACHED_VIEWPORT_RESPONSE_ROWS
+            || !self.viewport_projection_is_current(key, viewport_revision)?
+        {
+            return Ok(None);
+        }
+        #[cfg(test)]
+        self.viewport_projection_test_hits
+            .fetch_add(1, Ordering::AcqRel);
+        Ok(Some(projection.response))
+    }
+
+    pub(super) fn shifted_viewport_rows(
+        &self,
+        key: &ViewportProjectionKey,
+        viewport_revision: u64,
+    ) -> Result<Option<ShiftedViewportRows>, String> {
+        let reusable = {
+            let projection = self
+                .viewport_projection
+                .lock()
+                .map_err(|_| "native viewport projection lock poisoned".to_string())?;
+            let Some(projection) = projection.as_ref() else {
+                return Ok(None);
+            };
+            let previous = &projection.key;
+            let len = key.ordered_song_ids.len();
+            if !(2..=super::MAX_CACHED_VIEWPORT_RESPONSE_ROWS).contains(&len)
+                || previous.ordered_song_ids.len() != len
+                || previous.request_song_ids != key.request_song_ids
+                || !key.request_song_ids.is_empty()
+                || previous.generation != key.generation
+                || previous.settings_revision != key.settings_revision
+                || previous.liked_membership_revision != key.liked_membership_revision
+                || previous.playlist_membership_revision != key.playlist_membership_revision
+                || previous.selected_song_id != key.selected_song_id
+                || key.selected_song_id.is_some()
+                || projection.response.items.len() != len
+                || projection.response.generation != previous.generation
+                || projection.response.first_index != previous.first_index
+                || projection.response.last_index != previous.last_index
+                || projection.response.selected_song_id != previous.selected_song_id
+                || !projection
+                    .response
+                    .items
+                    .iter()
+                    .zip(&previous.ordered_song_ids)
+                    .all(|(row, song_id)| row.song_id == *song_id)
+            {
+                return Ok(None);
+            }
+            let forward = previous.first_index.checked_add(1) == Some(key.first_index)
+                && previous.last_index.checked_add(1) == Some(key.last_index)
+                && previous.ordered_song_ids[1..] == key.ordered_song_ids[..len - 1];
+            if forward {
+                Some(ShiftedViewportRows {
+                    reusable_rows: projection.response.items.iter().skip(1).cloned().collect(),
+                    entering_song_id: key.ordered_song_ids[len - 1].clone(),
+                    insertion_index: len - 1,
+                })
+            } else {
+                let backward = key.first_index.checked_add(1) == Some(previous.first_index)
+                    && key.last_index.checked_add(1) == Some(previous.last_index)
+                    && key.ordered_song_ids[1..] == previous.ordered_song_ids[..len - 1];
+                backward.then(|| ShiftedViewportRows {
+                    reusable_rows: projection
+                        .response
+                        .items
+                        .iter()
+                        .take(len - 1)
+                        .cloned()
+                        .collect(),
+                    entering_song_id: key.ordered_song_ids[0].clone(),
+                    insertion_index: 0,
+                })
+            }
+        };
+        let Some(reusable) = reusable else {
+            return Ok(None);
+        };
+        if !self.viewport_projection_is_current(key, viewport_revision)? {
+            return Ok(None);
+        }
+        Ok(Some(reusable))
+    }
+
+    pub(super) fn publish_viewport_projection(
+        &self,
+        key: ViewportProjectionKey,
+        response: CatalogViewportDto,
+        viewport_revision: u64,
+    ) -> Result<(), String> {
+        if response.items.len() > super::MAX_CACHED_VIEWPORT_RESPONSE_ROWS
+            || key.request_song_ids.len() > super::MAX_CACHED_VIEWPORT_RESPONSE_ROWS
+            || key.ordered_song_ids.len() > super::MAX_CACHED_VIEWPORT_RESPONSE_ROWS
+            || !response.accepted
+            || !self.viewport_projection_is_current(&key, viewport_revision)?
+        {
+            return Ok(());
+        }
+        let mut projection = self
+            .viewport_projection
+            .lock()
+            .map_err(|_| "native viewport projection lock poisoned".to_string())?;
+        if self.viewport_revision.load(Ordering::Acquire) == viewport_revision {
+            *projection = Some(ViewportResponseProjection { key, response });
+        }
+        Ok(())
+    }
+
+    pub(super) fn invalidate_viewport_projection(&self) {
+        if let Ok(mut projection) = self.viewport_projection.lock() {
+            *projection = None;
+        }
+    }
+
+    pub(super) fn touch_analysis_cache(&self, key: &AnalysisKey) -> Result<(), String> {
+        self.analysis_cache
+            .lock()
+            .map_err(|_| "native analysis cache lock poisoned".to_string())?
+            .touch(key);
+        Ok(())
     }
 
     fn analysis_cache_get(&self, key: &AnalysisKey) -> Result<Option<CachedSongAnalysis>, String> {
@@ -587,5 +801,6 @@ impl NativeDesktopRuntime {
         if let Ok(mut cache) = self.analysis_cache.lock() {
             cache.entries.clear();
         }
+        self.invalidate_viewport_projection();
     }
 }
