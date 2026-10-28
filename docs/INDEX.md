@@ -38,6 +38,8 @@ architecture or claims that current HEAD passed historic qualification:
   and [v4-release-execution-topology.md](v4-release-execution-topology.md).
 - [powershell-dependency-ledger.md](powershell-dependency-ledger.md):
   migration dependency ledger; inspect actual scripts/workflows for current callers.
+- [Graphite final polish evidence](evidence/graphite-final-ui-polish/README.md):
+  revision-bound UI acceptance captures, not a native Windows geometry guarantee.
 - [maintenance-test-pipeline-report.md](maintenance-test-pipeline-report.md),
   [dispatch-forensics-cost-qualification.md](dispatch-forensics-cost-qualification.md),
   [final-down-admission-qualification.md](final-down-admission-qualification.md):
