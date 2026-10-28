@@ -11,14 +11,16 @@ invariants that must not be discarded because an implementation differs.
   [native dispatch](rt-dispatch-architecture.md) for real-time boundaries.
 - **Timing and playback:** [timing principles](timing-principles.md),
   [hold frames](hold-frame-model.md), [presets](tuning-presets.md);
-  [timing observation semantics](rt-dispatch-timing-evidence.md).
+  [timing observation semantics](rt-dispatch-timing-evidence.md)
+  (field definitions are current; dated qualification results are historical).
 - **Desktop UI:** [workbench](desktop-workbench.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Security:** [SECURITY.md](../SECURITY.md).
 - **Packaging and updater:** [distribution](distribution-and-update.md),
   [Tauri packaging](v4-tauri-packaging.md).
 - **Release operations:** [release authority](v4-release-authority.md),
-  [execution topology](v4-release-execution-topology.md),
+  [execution topology](v4-release-execution-topology.md)
+  (active runbook; dated v4.2.0 compatibility proof is historical),
   [updater key custody](v4-updater-key-custody.md),
   [Authenticode](v4-authenticode-provider-seam.md).
 - **CI and development:** [CI topology](ci-validation-topology.md),

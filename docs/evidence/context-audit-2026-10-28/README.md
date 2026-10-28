@@ -161,3 +161,76 @@ Claude comparative evaluation, Windows native acceptance, Rust test suite,
 performance benchmark, or Claude `/doctor prompt-audit` was executed.
 The relative-link checks and GitHub branch diff do not establish model
 quality gains. The review record stays historical, outside startup context.
+
+## Third review — documentation volume and context exposure (2026-10-28)
+
+**Reviewed branch HEAD:** `95f834d44670909165cc98aea8664170454f945d`.
+This review inspected the structure and opening/status of all 109 tracked
+`docs/` Markdown files, including all 70 nested ADR/evidence/release files,
+and examined the substantive section ownership of current timing,
+architecture, CI, and release documents. It did not re-prove every technical
+claim against the production binary or run a model behavior benchmark.
+
+### Inventory
+
+| Role | Files | Bytes | Retrieval policy |
+| --- | ---: | ---: | --- |
+| Current contracts, task references, and context navigation | 24 | 269,109 | Retrieve only for the task |
+| Historical reports retained at `docs/` root | 15 | 248,101 | Provenance/reproduction only |
+| ADRs, evidence, and release records in subdirectories | 70 | 299,069 | Provenance/reproduction only |
+| **Total** | **109** | **816,279** | **Not 109 automatically loaded prompts** |
+
+The repository tracks two agent instruction files: root `AGENTS.md` and
+`docs/AGENTS.md`. The latter is scoped to documentation work; other
+Markdown files do not become startup instructions simply by existing.
+User-level agent settings and tool-provided context were out of scope.
+
+### Findings and decisions
+
+- **D-01 (high):** 85 files and 547,170 bytes are revision-specific
+  records. **Keep** them and their stable paths; deleting them does not
+  reduce routine prompt tokens when agents do not read them.
+- **D-02 (high):** `rt-dispatch-timing-evidence.md` (528 lines)
+  combines current observation/schema semantics with dated Windows A/B
+  results (2026-10-18) and issue #475 experiments.
+  **Clarify** this mixed authority in `docs/INDEX.md`; do not rewrite
+  evidence or change telemetry semantics.
+- **D-03 (high):** `v4-release-execution-topology.md` (508 lines)
+  combines active release procedures with dated v4.2.0 compatibility proof
+  (2026-10-26). **Clarify** in the router; preserve release integrity.
+- **D-04 (medium):** `rt-dispatch-architecture.md`,
+  `timing-principles.md`, and `hold-frame-model.md`
+  contain several lexically similar passages about Down admission,
+  physical floors, and timing observations. Their ownership differs.
+  **Retain** until a proven contradiction or measured lookup cost
+  justifies consolidation; naive deduplication could alter a safety rule.
+- **D-05 (high):** Release authority, execution topology, and updater
+  custody runbooks have distinct safety-critical responsibilities.
+  **Do not** shorten them mechanically or put them into always-on context.
+- **D-06 (high):** Historical status materially changes interpretation:
+  `r3-keyboard-final-evidence.md` describes an evidence checkpoint that
+  was **not qualified for merge**. Old v3 release notes may mention a
+  then-current latest release. **Retain** dates and source SHAs.
+- **D-07 (high):** Root `AGENTS.md` is already concise; no tracked rule
+  requires reading all docs before every edit. **Do not** introduce a
+  mandatory summary agent, extra skills, model-specific rituals, or
+  an automatic whole-repository ingest.
+
+### Review outcome and limits
+
+The only additional implementation change is a two-location clarification
+in the on-demand documentation router. No docs were relocated, deleted,
+compressed, or automatically loaded; no Rust/React/CI/security/release
+implementation was modified. New links and changed-file whitespace were
+checked before commit, and the branch diff was reviewed against `main`.
+No Codex/Claude A/B task runs, native Windows timing qualification, or
+`cargo xtask check all` were executed in this documentation review.
+
+Any later cleanup should be justified by measured task retrieval failures,
+incorrect conclusions caused by dated reports, or proven contradictions,
+not raw Markdown file count or token estimates.
+
+Sources:
+[OpenAI — Rethinking skills and prompts](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra);
+[Anthropic — Effective context engineering](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents);
+[Codex AGENTS.md guidance](https://developers.openai.com/cookbook/examples/gpt-5/codex_prompting_guide).
