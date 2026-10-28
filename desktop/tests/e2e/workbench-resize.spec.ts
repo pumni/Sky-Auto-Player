@@ -1,256 +1,6 @@
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const key = 'sky.ui.workbench.v5';
-
-interface HomeKeyTrace {
-  before: unknown;
-  keyboardEvents: Array<Record<string, unknown>>;
-  focusEvents: Array<Record<string, unknown>>;
-  resizeEvents: Array<Record<string, unknown>>;
-  domMutations: Array<Record<string, unknown>>;
-  preferenceWrites: Array<Record<string, unknown>>;
-}
-
-interface HomeKeyTraceController {
-  trace: HomeKeyTrace;
-  snapshot: (measureGeometry?: boolean) => unknown;
-  cleanup: () => void;
-}
-
-interface HomeKeyTraceWindow extends Window {
-  __workbenchHomeKeyTrace?: HomeKeyTraceController;
-}
-
-async function installHomeKeyTrace(page: Page, selector: string) {
-  await page.evaluate(
-    ({ selector, storageKey }) => {
-      const separator = document.querySelector<HTMLElement>(selector);
-      const workbench = separator?.closest<HTMLElement>('.workbench');
-      const navigatorPane = workbench?.querySelector<HTMLElement>('.navigator-workbench-pane');
-      const trackPane = workbench?.querySelector<HTMLElement>('.track-browser-workbench-pane');
-      if (!separator || !workbench || !navigatorPane || !trackPane)
-        throw new Error('D1 trace targets are missing');
-
-      const describe = (element: Element | null) => {
-        if (!element) return null;
-        return {
-          tag: element.tagName,
-          role: element.getAttribute('role'),
-          label: element.getAttribute('aria-label'),
-          className: typeof element.className === 'string' ? element.className : null,
-        };
-      };
-      const snapshot = (measureGeometry = false) => {
-        const currentSeparator = document.querySelector<HTMLElement>(selector);
-        const inspectedSeparator = currentSeparator ?? separator;
-        const rawPreferences = localStorage.getItem(storageKey);
-        let preferences: unknown;
-        try {
-          preferences = rawPreferences === null ? null : JSON.parse(rawPreferences);
-        } catch {
-          preferences = 'invalid JSON';
-        }
-        const state = {
-          at: Number(performance.now().toFixed(2)),
-          activeElement: describe(document.activeElement),
-          focused: document.activeElement === currentSeparator,
-          originalSeparatorConnected: separator.isConnected,
-          currentSeparatorIsOriginal: currentSeparator === separator,
-          viewport: {
-            innerWidth: window.innerWidth,
-            workbenchWidth: workbench.dataset.workbenchWidth,
-          },
-          separator: {
-            ariaValueNow: inspectedSeparator.getAttribute('aria-valuenow'),
-            ariaValueMin: inspectedSeparator.getAttribute('aria-valuemin'),
-            ariaValueMax: inspectedSeparator.getAttribute('aria-valuemax'),
-            ariaDisabled: inspectedSeparator.getAttribute('aria-disabled'),
-            tabIndex: inspectedSeparator.tabIndex,
-          },
-          reactStateProxy: {
-            workbenchStyle: workbench.getAttribute('style'),
-            navigatorWidthVariable: workbench.style
-              .getPropertyValue('--navigator-pane-width')
-              .trim(),
-            navigatorPaneFlex: navigatorPane.style.flex,
-            navigatorCollapsed: navigatorPane.classList.contains('is-collapsed'),
-          },
-          persistedV5: { raw: rawPreferences, parsed: preferences },
-        };
-        if (!measureGeometry) return state;
-        const width = (element: HTMLElement) => ({
-          css: getComputedStyle(element).width,
-          rect: Number(element.getBoundingClientRect().width.toFixed(2)),
-        });
-        return {
-          ...state,
-          cssGeometry: {
-            workbench: Number(workbench.getBoundingClientRect().width.toFixed(2)),
-            navigatorPane: width(navigatorPane),
-            trackPane: width(trackPane),
-          },
-        };
-      };
-
-      const trace: HomeKeyTrace = {
-        before: null,
-        keyboardEvents: [],
-        focusEvents: [],
-        resizeEvents: [],
-        domMutations: [],
-        preferenceWrites: [],
-      };
-      trace.before = snapshot();
-      const captureKeydown = (event: Event) => {
-        const keyboardEvent = event as KeyboardEvent;
-        if (keyboardEvent.key !== 'Home') return;
-        trace.keyboardEvents.push({
-          phase: 'window-capture',
-          key: keyboardEvent.key,
-          code: keyboardEvent.code,
-          defaultPrevented: keyboardEvent.defaultPrevented,
-          target: describe(keyboardEvent.target instanceof Element ? keyboardEvent.target : null),
-          targetIsCurrentSeparator: keyboardEvent.target === document.querySelector(selector),
-          state: snapshot(),
-        });
-      };
-      const bubbleKeydown = (event: Event) => {
-        const keyboardEvent = event as KeyboardEvent;
-        if (keyboardEvent.key !== 'Home') return;
-        trace.keyboardEvents.push({
-          phase: 'window-bubble-after-react',
-          key: keyboardEvent.key,
-          code: keyboardEvent.code,
-          defaultPrevented: keyboardEvent.defaultPrevented,
-          target: describe(keyboardEvent.target instanceof Element ? keyboardEvent.target : null),
-          targetIsCurrentSeparator: keyboardEvent.target === document.querySelector(selector),
-          state: snapshot(),
-        });
-      };
-      window.addEventListener('keydown', captureKeydown, true);
-      window.addEventListener('keydown', bubbleKeydown);
-      const captureFocus = (event: Event) => {
-        const focusEvent = event as FocusEvent;
-        const currentSeparator = document.querySelector(selector);
-        if (
-          focusEvent.target !== separator &&
-          focusEvent.target !== currentSeparator &&
-          focusEvent.relatedTarget !== separator &&
-          focusEvent.relatedTarget !== currentSeparator
-        )
-          return;
-        trace.focusEvents.push({
-          type: focusEvent.type,
-          at: Number(performance.now().toFixed(2)),
-          target: describe(focusEvent.target instanceof Element ? focusEvent.target : null),
-          relatedTarget: describe(
-            focusEvent.relatedTarget instanceof Element ? focusEvent.relatedTarget : null,
-          ),
-          state: snapshot(),
-        });
-      };
-      document.addEventListener('focusin', captureFocus, true);
-      document.addEventListener('focusout', captureFocus, true);
-      const captureResize = () =>
-        trace.resizeEvents.push({
-          at: Number(performance.now().toFixed(2)),
-          state: snapshot(),
-        });
-      window.addEventListener('resize', captureResize);
-
-      const trackedElements = new Map<Element, string>([
-        [separator, 'separator'],
-        [workbench, 'workbench'],
-        [navigatorPane, 'navigator-pane'],
-        [trackPane, 'track-pane'],
-      ]);
-      const observer = new MutationObserver((records) => {
-        for (const record of records) {
-          const target = trackedElements.get(record.target as Element);
-          if (!target || !record.attributeName) continue;
-          trace.domMutations.push({
-            at: Number(performance.now().toFixed(2)),
-            target,
-            attribute: record.attributeName,
-            oldValue: record.oldValue,
-            newValue: (record.target as Element).getAttribute(record.attributeName),
-            state: snapshot(),
-          });
-        }
-      });
-      observer.observe(workbench, {
-        attributes: true,
-        subtree: true,
-        attributeOldValue: true,
-        attributeFilter: [
-          'aria-valuenow',
-          'aria-valuemin',
-          'aria-valuemax',
-          'aria-disabled',
-          'tabindex',
-          'style',
-          'class',
-          'data-workbench-width',
-        ],
-      });
-
-      const originalSetItem = Storage.prototype.setItem;
-      const wrappedSetItem: typeof Storage.prototype.setItem = function (name, value) {
-        const result = originalSetItem.call(this, name, value);
-        if (this === window.localStorage && name === storageKey) {
-          trace.preferenceWrites.push({
-            at: Number(performance.now().toFixed(2)),
-            value,
-            state: snapshot(),
-          });
-        }
-        return result;
-      };
-      Storage.prototype.setItem = wrappedSetItem;
-      (window as HomeKeyTraceWindow).__workbenchHomeKeyTrace = {
-        trace,
-        snapshot,
-        cleanup: () => {
-          observer.disconnect();
-          window.removeEventListener('keydown', captureKeydown, true);
-          window.removeEventListener('keydown', bubbleKeydown);
-          document.removeEventListener('focusin', captureFocus, true);
-          document.removeEventListener('focusout', captureFocus, true);
-          window.removeEventListener('resize', captureResize);
-          if (Storage.prototype.setItem === wrappedSetItem)
-            Storage.prototype.setItem = originalSetItem;
-        },
-      };
-    },
-    { selector, storageKey: key },
-  );
-}
-
-async function emitHomeKeyTrace(page: Page, info: TestInfo) {
-  try {
-    const trace = await page.evaluate(() => {
-      const windowWithTrace = window as HomeKeyTraceWindow;
-      const controller = windowWithTrace.__workbenchHomeKeyTrace;
-      if (!controller) throw new Error('D1 trace was not installed');
-      const result = {
-        ...controller.trace,
-        afterAssertion: controller.snapshot(),
-        finalGeometry: controller.snapshot(true),
-      };
-      controller.cleanup();
-      delete windowWithTrace.__workbenchHomeKeyTrace;
-      return result;
-    });
-    console.info(`[D1_HOME_TRACE] ${JSON.stringify(trace)}`);
-    await info.attach('d1-home-key-state.json', {
-      body: JSON.stringify(trace, null, 2),
-      contentType: 'application/json',
-    });
-  } catch (error) {
-    console.error(`[D1_HOME_TRACE_CAPTURE_FAILED] ${String(error)}`);
-  }
-}
-
 async function seed(page: Page, width: number, collapsed = false) {
   await page.setViewportSize({ width, height: 768 });
   await page.goto('/');
@@ -507,7 +257,7 @@ for (const [viewport, inspector] of [
 
 test('wide and narrow drag geometry, overlay focus, and v5 preference survive viewport changes', async ({
   page,
-}, info) => {
+}) => {
   await seed(page, 1366);
   const separator = page.getByRole('separator', { name: 'Resize utility pane' });
   await separator.focus();
@@ -545,15 +295,14 @@ test('wide and narrow drag geometry, overlay focus, and v5 preference survive vi
     },
   );
   const navigatorSeparator = page.getByRole('separator', { name: 'Resize library navigator' });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1024');
+  await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '300');
+  await expect(navigatorSeparator).toHaveAttribute('tabindex', '0');
+  await expect(navigatorSeparator).not.toHaveAttribute('aria-disabled', 'true');
   await navigatorSeparator.focus();
   await expect(navigatorSeparator).toBeFocused();
-  await installHomeKeyTrace(page, '[aria-label="Resize library navigator"]');
   await page.keyboard.press('Home');
-  try {
-    await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '200');
-  } finally {
-    await emitHomeKeyTrace(page, info);
-  }
+  await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '200');
   await page.keyboard.press('Shift+ArrowRight');
   await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '232');
 });
