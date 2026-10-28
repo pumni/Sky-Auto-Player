@@ -4,16 +4,18 @@ This map follows the pre-change inventory in [`assertion-ownership-before.md`](a
 
 ## Owners
 
-| Owner | Declarations | Assertions owned after the split |
-| --- | ---: | --- |
-| `desktop/tests/e2e/library.spec.ts` | 18 | Search and selection; playlist creation, import, and membership; selected-versus-Now-Playing identity; row actions; virtualized paging, keyboard traversal, and mounted `aria-activedescendant`; long-title containment. |
-| `desktop/tests/e2e/library-layout.spec.ts` | 5 | Independent fixed Library and Track Browser geometry across all six palette IDs; Graphite color and header behavior; compact rail keyboard access; full row/tile geometry; v5 automatic compact preference. |
-| `desktop/tests/e2e/workbench-layout.spec.ts` | 8 | Minimum viewport bounds; dock/overlay behavior; viewport geometry matrix; centered titlebar and Player Bar; separator persistence; accessibility and focus. |
-| `desktop/tests/e2e/playback.spec.ts` | 21 | Transport affordances and geometry; natural finish and Auto Play handoffs; frozen playback context; selected-versus-playing; dry-run and physical labeling; Stop, Shuffle, and duplicate-start behavior; immediate startup failures. |
-| `desktop/tests/e2e/playback-recovery.spec.ts` | 3 | Status Retry, explicit Stop during recovery, and authoritative no-session recovery. `page.clock` is installed before the app is navigated to, then the mock timeout is advanced by 15 seconds. |
-| `desktop/tests/e2e/settings-diagnostics.spec.ts` | 9 | Settings, profile, modal accessibility, palette round-trip, diagnostics pane/drawer and resize, update states, and calibration. |
+| Owner                                            | Declarations | Assertions owned after the split                                                                                                                                                                                                     |
+| ------------------------------------------------ | -----------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `desktop/tests/e2e/library.spec.ts`              |           18 | Search and selection; playlist creation, import, and membership; selected-versus-Now-Playing identity; row actions; virtualized paging, keyboard traversal, and mounted `aria-activedescendant`; long-title containment.             |
+| `desktop/tests/e2e/library-layout.spec.ts`       |            5 | Independent fixed Library and Track Browser geometry across all six palette IDs; Graphite color and header behavior; compact rail keyboard access; full row/tile geometry; v5 automatic compact preference.                          |
+| `desktop/tests/e2e/workbench-layout.spec.ts`     |            8 | Minimum viewport bounds; dock/overlay behavior; viewport geometry matrix; centered titlebar and Player Bar; separator persistence; accessibility and focus.                                                                          |
+| `desktop/tests/e2e/playback.spec.ts`             |           21 | Transport affordances and geometry; natural finish and Auto Play handoffs; frozen playback context; selected-versus-playing; dry-run and physical labeling; Stop, Shuffle, and duplicate-start behavior; immediate startup failures. |
+| `desktop/tests/e2e/playback-recovery.spec.ts`    |            3 | Status Retry, explicit Stop during recovery, and authoritative no-session recovery. `page.clock` is installed before the app is navigated to, then the mock timeout is advanced by 15 seconds.                                       |
+| `desktop/tests/e2e/settings-diagnostics.spec.ts` |            9 | Settings, profile, modal accessibility, palette round-trip, diagnostics pane/drawer and resize, update states, and calibration.                                                                                                      |
 
 The other owners listed in the before map remain in place: the integrated workbench smoke, six-palette appearance/contrast and modal focus, Graphite appearance and row affordances, native caption browser checks, opt-in visual evidence, production bundle lazy-chunk smoke, and Rust feature/security checks.
+
+Repeated 2/4-worker timing, environment, pass/skip counts, and the final repository gate are recorded in [`runtime-comparison.md`](runtime-comparison.md).
 
 ## Retained coverage and ownership changes
 
@@ -28,12 +30,12 @@ The other owners listed in the before map remain in place: the integrated workbe
 
 ## Assertion inventory
 
-| Behavior contract | Owner after Wave D |
-| --- | --- |
-| Appearance color roles, contrast, forced colors, reduced motion | `palette-appearance.spec.ts`, `graphite-appearance-regression.spec.ts`, `graphite-final-ui-polish.spec.ts` |
-| Shared Library and workbench geometry, six-palette parity, resize and v5 persistence | `library-layout.spec.ts`, `workbench-layout.spec.ts`, `workbench-resize.spec.ts`, `workbench.spec.ts` |
-| Library search/CRUD/import, virtual keyboard and ARIA descendant | `library.spec.ts` |
-| Playback ownership, selected-vs-playing, explicit Stop and recovery | `playback.spec.ts`, `playback-recovery.spec.ts`, `workbench-state-regression.spec.ts` |
-| Browser titlebar safe area and 40 logical px native caption evidence | `titlebar.spec.ts`, `docs/evidence/issue-554/` |
-| Production lazy-chunk smoke | `desktop/tests/e2e-bundle/bundle.spec.ts` and its runner |
-| Rust feature matrix and input/security boundary | `cargo xtask check all`, Rust integration tests, and static checks |
+| Behavior contract                                                                    | Owner after Wave D                                                                                         |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Appearance color roles, contrast, forced colors, reduced motion                      | `palette-appearance.spec.ts`, `graphite-appearance-regression.spec.ts`, `graphite-final-ui-polish.spec.ts` |
+| Shared Library and workbench geometry, six-palette parity, resize and v5 persistence | `library-layout.spec.ts`, `workbench-layout.spec.ts`, `workbench-resize.spec.ts`, `workbench.spec.ts`      |
+| Library search/CRUD/import, virtual keyboard and ARIA descendant                     | `library.spec.ts`                                                                                          |
+| Playback ownership, selected-vs-playing, explicit Stop and recovery                  | `playback.spec.ts`, `playback-recovery.spec.ts`, `workbench-state-regression.spec.ts`                      |
+| Browser titlebar safe area and 40 logical px native caption evidence                 | `titlebar.spec.ts`, `docs/evidence/issue-554/`                                                             |
+| Production lazy-chunk smoke                                                          | `desktop/tests/e2e-bundle/bundle.spec.ts` and its runner                                                   |
+| Rust feature matrix and input/security boundary                                      | `cargo xtask check all`, Rust integration tests, and static checks                                         |
