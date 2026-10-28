@@ -13,6 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 pub(super) enum CatalogSearchScope {
     All,
     Liked,
+    Builtin,
     Playlist(String),
 }
 

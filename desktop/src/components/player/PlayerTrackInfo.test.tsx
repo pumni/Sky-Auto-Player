@@ -45,6 +45,45 @@ describe('PlayerTrackInfo', () => {
     expect(selectRowAtIndex(store.getState().library, 1)?.liked).toBe(false);
   });
 
+  it('keeps selection independent across built-in page playback and offers a valid now-playing jump', async () => {
+    const bridge = createMockBridge({ startDelayMs: 5, playbackDurationMs: 120_000 });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    const selected = selectRowAtIndex(store.getState().library, 99);
+    if (!selected) throw new Error('last built-in row on page one was not loaded');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().nextPlayback());
+    if (store.getState().playback.prepared?.admission === 'confirmation_required') {
+      await act(async () => store.getState().startPreparedPlayback('proceed'));
+      await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    }
+    const playing = store.getState().playback.currentSong;
+    expect(store.getState().playback.context?.currentIndex).toBe(100);
+    expect(store.getState().playback.context?.currentSongId).toBe(playing?.songId);
+    const playingContext = store.getState().playback.context;
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+
+    render(<PlayerTrackInfo useStore={store} />);
+    const showNowPlaying = screen.getByRole('button', { name: /Show now playing/ });
+    await act(async () => fireEvent.click(showNowPlaying));
+    expect(store.getState().library.builtinPage.committedPage).toBe(2);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(store.getState().playback.currentSong?.songId).toBe(playing?.songId);
+    expect(store.getState().playback.context).toEqual(playingContext);
+    expect(selectRowAtIndex(store.getState().library, 100)?.song_id).toBe(playing?.songId);
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    expect(screen.queryByRole('button', { name: /Show now playing/ })).toBeNull();
+    expect(store.getState().playback.currentSong?.songId).toBe(playing?.songId);
+    await act(async () => store.getState().stopPlayback());
+  });
+
   it('uses the pinned selected summary after its browser page is evicted', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());

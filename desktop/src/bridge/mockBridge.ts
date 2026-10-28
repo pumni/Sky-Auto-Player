@@ -161,6 +161,8 @@ function initialSettings(): Settings {
 
 export interface MockBridgeOptions {
   catalogRows?: SearchResult['items'];
+  builtinSongIds?: readonly string[];
+  builtinAvailable?: boolean;
   searchDelayMs?: number;
   diagnosticsBackendStatus?: DiagnosticsBackend;
   readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
@@ -204,6 +206,11 @@ export interface MockBridgeOptions {
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
   const catalogRows = options.catalogRows ?? rows;
+  const builtinSongIds = options.builtinSongIds ? new Set(options.builtinSongIds) : null;
+  const builtinRows = builtinSongIds
+    ? catalogRows.filter((item) => builtinSongIds.has(item.song_id))
+    : catalogRows;
+  const builtinAvailable = options.builtinAvailable ?? true;
   const searchDelayMs = Math.max(0, Math.min(options.searchDelayMs ?? 0, 5_000));
   const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
   const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
@@ -564,15 +571,20 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (searchDelayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, searchDelayMs));
       }
+      if (request.source.kind === 'smart' && request.source.id === 'builtin' && !builtinAvailable) {
+        throw new Error('builtin songs are unavailable');
+      }
       const query = request.query.trim().toLocaleLowerCase();
       const sourceRows =
         request.source.kind === 'smart' && request.source.id === 'liked'
           ? allRows().filter((item) => likedSongIds.has(item.song_id))
-          : request.source.kind === 'playlist'
-            ? allRows().filter((item) =>
-                playlistMembership.get(request.source.id)?.has(item.song_id),
-              )
-            : catalogRows;
+          : request.source.kind === 'smart' && request.source.id === 'builtin'
+            ? builtinRows
+            : request.source.kind === 'playlist'
+              ? allRows().filter((item) =>
+                  playlistMembership.get(request.source.id)?.has(item.song_id),
+                )
+              : catalogRows;
       const filtered = query
         ? sourceRows.filter((item) => item.title.toLocaleLowerCase().includes(query))
         : sourceRows;
@@ -649,6 +661,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     },
     async listLibraryNavigation(): Promise<LibraryNavigation> {
       return {
+        builtin_available: builtinAvailable,
+        builtin_song_count: builtinAvailable ? builtinRows.length : 0,
         playlists: playlists.map((playlist) => ({ ...playlist })),
       };
     },

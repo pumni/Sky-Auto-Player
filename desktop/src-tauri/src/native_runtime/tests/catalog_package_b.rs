@@ -44,6 +44,80 @@ fn package_b_native_fixture(
     (root, runtime, generation, ids)
 }
 
+#[test]
+fn builtin_smart_source_uses_native_builtin_membership_only() {
+    let (root, runtime, generation, ids) = package_b_native_fixture("builtin-membership", 2);
+    {
+        let mut catalog = runtime.catalog.lock().expect("catalog lock");
+        catalog.library_membership = ids.iter().cloned().collect();
+        catalog.builtin_membership = [ids[0].clone()].into_iter().collect();
+        catalog.builtin_status =
+            sky_native_adapters::BuiltinCatalogStatus::Available { song_count: 1 };
+    }
+
+    let navigation = runtime
+        .dispatch("library.list_playlists", serde_json::json!({}))
+        .expect("library navigation");
+    assert_eq!(navigation["builtin_available"], true);
+    assert_eq!(navigation["builtin_song_count"], 1);
+
+    let builtin = runtime
+        .dispatch(
+            "catalog.search",
+            serde_json::json!({
+                "query": "",
+                "offset": 0,
+                "limit": 100,
+                "generation": generation,
+                "source": {"kind": "smart", "id": "builtin"}
+            }),
+        )
+        .expect("built-in membership search");
+    assert_eq!(builtin["total"], 1);
+    assert_eq!(builtin["items"][0]["song_id"], ids[0]);
+
+    let all = runtime
+        .dispatch(
+            "catalog.search",
+            serde_json::json!({
+                "query": "",
+                "offset": 0,
+                "limit": 100,
+                "generation": generation,
+                "source": {"kind": "smart", "id": "all"}
+            }),
+        )
+        .expect("all-library search");
+    assert_eq!(all["total"], 2);
+
+    runtime.catalog.lock().expect("catalog lock").builtin_status =
+        sky_native_adapters::BuiltinCatalogStatus::Unavailable {
+            code: sky_native_adapters::BuiltinCatalogFailureCode::ResourceUnavailable,
+        };
+    let unavailable = runtime
+        .dispatch("library.list_playlists", serde_json::json!({}))
+        .expect("unavailable built-in navigation");
+    assert_eq!(unavailable["builtin_available"], false);
+    assert_eq!(unavailable["builtin_song_count"], 0);
+    assert!(
+        runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query": "",
+                    "offset": 0,
+                    "limit": 100,
+                    "generation": generation,
+                    "source": {"kind": "smart", "id": "builtin"}
+                }),
+            )
+            .is_err()
+    );
+
+    runtime.shutdown();
+    let _ = fs::remove_dir_all(root);
+}
+
 fn package_b_viewport(
     generation: u64,
     index: usize,

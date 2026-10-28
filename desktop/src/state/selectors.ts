@@ -160,10 +160,35 @@ export function playbackContextMatchesLibrary(
   return Boolean(
     context?.valid &&
     context.generation === library.generation &&
+    context.membershipRevision === library.membershipRevision &&
     context.query === library.query &&
     context.source.kind === library.searchSource.kind &&
     context.source.id === library.searchSource.id,
   );
+}
+
+export function selectNowPlayingIndex(
+  store: Pick<DesktopStore, 'library' | 'playback'>,
+): number | null {
+  const { library, playback } = store;
+  const context = playback.context;
+  const currentSong = playback.currentSong;
+  if (
+    !playbackContextMatchesLibrary(context, library) ||
+    library.source.kind !== 'smart' ||
+    library.source.id !== 'builtin' ||
+    library.searchSource.kind !== 'smart' ||
+    library.searchSource.id !== 'builtin' ||
+    !currentSong ||
+    context.currentSongId !== currentSong.songId ||
+    context.total !== library.resultTotal ||
+    !Number.isSafeInteger(context.currentIndex) ||
+    context.currentIndex < 0 ||
+    context.currentIndex >= library.resultTotal
+  ) {
+    return null;
+  }
+  return context.currentIndex;
 }
 
 export function selectNowPlayingSongId(

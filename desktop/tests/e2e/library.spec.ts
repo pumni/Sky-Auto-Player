@@ -22,6 +22,77 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
+test('Built-in Songs pages keep local row semantics and adapt to the browser container', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
+  const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
+  await expect(grid).toHaveAttribute('aria-rowcount', '101');
+  await expect(page.locator('.builtin-pager-status')).toContainText('Page 1 of 5');
+  await expect(page.locator('.builtin-pager-wide')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Page 3' }).click();
+  const pageThree = page.getByRole('grid', { name: 'Built-in Songs, page 3' });
+  await expect(pageThree).toHaveAttribute('aria-rowcount', '101');
+  await pageThree.focus();
+  await page.keyboard.press('Home');
+  await expect(page.getByRole('row', { name: /Song 201/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.keyboard.press('End');
+  await expect(page.getByRole('row', { name: /Song 300/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+
+  await page.getByRole('button', { name: 'Go to page' }).click();
+  const jump = page.getByRole('textbox', { name: 'Go to page' });
+  await jump.fill('0');
+  await jump.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Enter a whole page number from 1 to 5');
+  await jump.press('Escape');
+  await expect(page.getByRole('textbox', { name: 'Go to page' })).toHaveCount(0);
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Go to page' }).click();
+  await page.getByRole('textbox', { name: 'Go to page' }).fill('5');
+  await page.getByRole('textbox', { name: 'Go to page' }).press('Enter');
+  const pageFive = page.getByRole('grid', { name: 'Built-in Songs, page 5' });
+  await expect(pageFive).toHaveAttribute('aria-rowcount', '101');
+  await pageFive.focus();
+  await page.keyboard.press('End');
+  await expect(page.getByRole('row', { name: /Song 500/ })).toHaveAttribute('aria-rowindex', '101');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+  await expect(page.getByRole('button', { name: 'Page 5' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect
+    .poll(() =>
+      page
+        .getByRole('button', { name: 'Page 5' })
+        .evaluate((button) => getComputedStyle(button).outlineStyle),
+    )
+    .toBe('solid');
+  await page.setViewportSize({ width: 800, height: 560 });
+  await expect(page.locator('.builtin-pager-narrow')).toBeVisible();
+  await expect(page.locator('.builtin-pager-wide')).toBeHidden();
+  const geometry = await page.evaluate(() => ({
+    browserWidth:
+      document.querySelector<HTMLElement>('.track-browser-workbench-pane')?.clientWidth ?? 0,
+    browserScrollWidth:
+      document.querySelector<HTMLElement>('.track-browser-workbench-pane')?.scrollWidth ?? 0,
+    documentWidth: document.documentElement.scrollWidth,
+  }));
+  expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
+  expect(geometry.documentWidth).toBeLessThanOrEqual(800);
+});
+
 test('rapid A-B-A search keeps the newest query results visible', async ({ page }) => {
   await page.goto('/?mockSearchDelayMs=1000');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();

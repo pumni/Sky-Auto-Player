@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { PlaylistAddSongsMenu, type PlaylistImportFeedback } from './PlaylistAddSongsMenu';
 import { TrackTable } from './TrackTable';
+import { BuiltinPager } from './BuiltinPager';
 import { formatSongCount } from './trackFormatting';
 
 interface TrackBrowserProps {
@@ -19,6 +20,9 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
 
 function TrackBrowserContent({ useStore }: TrackBrowserProps) {
   const source = useStore((store: DesktopStore) => store.library.source);
+  const builtinAvailable = useStore(
+    (store: DesktopStore) => store.libraryNavigation.builtinAvailable,
+  );
   const query = useStore((store: DesktopStore) => store.library.query);
   const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
   const loading = useStore((store: DesktopStore) => store.library.loading);
@@ -33,9 +37,11 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
     if (store.library.source.kind === 'playlist') {
       return store.libraryNavigation.playlistsById.get(store.library.source.id)?.name ?? 'Playlist';
     }
-    return store.library.source.id === 'liked' ? 'Liked Songs' : 'All Songs';
+    if (store.library.source.id === 'liked') return 'Liked Songs';
+    return store.library.source.id === 'builtin' ? 'Built-in Songs' : 'All Songs';
   });
   const isPlaylist = source.kind === 'playlist';
+  const isBuiltin = source.kind === 'smart' && source.id === 'builtin';
   const isPlaylistAddMode = isPlaylist && playlistAddMode?.playlistId === source.id;
   const heading = isPlaylistAddMode ? `Add songs to ${sourceName}` : sourceName;
   const hasSearch = query.trim().length > 0;
@@ -46,23 +52,31 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
       ? hasSearch
         ? `No songs in ${sourceName} match your search`
         : 'This playlist is empty'
-      : source.id === 'liked'
+      : source.id === 'builtin'
         ? hasSearch
-          ? 'No Liked Songs match your search'
-          : 'No liked songs yet'
-        : hasSearch
-          ? 'No songs match your search'
-          : 'Your catalog is empty';
+          ? 'No Built-in Songs match your search'
+          : 'No Built-in Songs are available'
+        : source.id === 'liked'
+          ? hasSearch
+            ? 'No Liked Songs match your search'
+            : 'No liked songs yet'
+          : hasSearch
+            ? 'No songs match your search'
+            : 'Your catalog is empty';
 
   const noResultsMessage = isPlaylistAddMode
     ? 'Try a different search, or go back to the playlist.'
     : source.kind === 'playlist' && !hasSearch
       ? 'Browse All Songs to add catalog songs, or use Add songs to import local files or a folder.'
-      : source.kind === 'smart' && source.id === 'liked' && !hasSearch
-        ? 'Like a song anywhere in the catalog to save it here.'
-        : source.kind === 'smart' && source.id === 'all' && !hasSearch
-          ? 'Create or open a playlist to collect songs or import local sheet files and folders.'
-          : 'Try another search or clear the current search.';
+      : source.kind === 'smart' && source.id === 'builtin' && !hasSearch
+        ? builtinAvailable
+          ? 'The built-in song catalog is empty.'
+          : 'Built-in songs are unavailable in this installation.'
+        : source.kind === 'smart' && source.id === 'liked' && !hasSearch
+          ? 'Like a song anywhere in the catalog to save it here.'
+          : source.kind === 'smart' && source.id === 'all' && !hasSearch
+            ? 'Create or open a playlist to collect songs or import local sheet files and folders.'
+            : 'Try another search or clear the current search.';
 
   const importFeedbackText = importFeedback
     ? importFeedback.state === 'pending'
@@ -170,7 +184,10 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           )}
         </div>
       ) : (
-        <TrackTable useStore={useStore} />
+        <>
+          <TrackTable useStore={useStore} />
+          {isBuiltin && <BuiltinPager useStore={useStore} />}
+        </>
       )}
     </section>
   );

@@ -115,5 +115,11 @@ describe('GlobalSearch', () => {
       'placeholder',
       'Search Liked Songs…',
     );
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    expect(screen.getByRole('searchbox', { name: 'Search Built-in Songs' })).toHaveAttribute(
+      'placeholder',
+      'Search Built-in Songs…',
+    );
   });
 });

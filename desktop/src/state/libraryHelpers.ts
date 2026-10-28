@@ -112,6 +112,8 @@ export function navigationFromDto(navigation: LibraryNavigation): LibraryNavigat
   );
   return {
     loadState: 'ready',
+    builtinAvailable: navigation.builtin_available,
+    builtinSongCount: navigation.builtin_song_count,
     playlistOrder: navigation.playlists.map((playlist) => playlist.id),
     playlistsById,
     pendingMutations: new Set(),

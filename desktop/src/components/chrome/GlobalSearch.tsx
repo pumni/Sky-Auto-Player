@@ -25,7 +25,9 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
       ? `Search ${playlistName ?? 'playlist'}`
       : source.id === 'liked'
         ? 'Search Liked Songs'
-        : 'Search All Songs';
+        : source.id === 'builtin'
+          ? 'Search Built-in Songs'
+          : 'Search All Songs';
   return (
     <SearchInput
       key={playlistAddMode?.playlistId ?? 'library'}

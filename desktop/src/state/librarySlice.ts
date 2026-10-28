@@ -8,7 +8,7 @@ import type {
   SongRow,
 } from '../bridge/DesktopBridge';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
-import { selectRowAtIndex, selectSongById } from './selectors';
+import { playbackContextMatchesLibrary, selectRowAtIndex, selectSongById } from './selectors';
 import {
   activeLibraryPageOffsets,
   cacheDetail,
@@ -43,6 +43,9 @@ export type LibrarySliceActions = Pick<
   | 'search'
   | 'selectSong'
   | 'setViewport'
+  | 'navigateBuiltinPage'
+  | 'retryBuiltinPage'
+  | 'showNowPlaying'
   | 'selectLibrarySource'
   | 'openPlaylistAdd'
   | 'exitPlaylistAdd'
@@ -95,6 +98,9 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   let likeMutationSequence = 0;
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
   let catalogReadyRecorded = false;
+  let builtinPageIntentSequence = 0;
+  let builtinFocusSequence = 0;
+  let pendingBuiltinFocus: { intentId: number; index: number; id: number } | null = null;
 
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
@@ -435,6 +441,178 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     }
   };
 
+  const navigateBuiltinPage = async (page: number, focusIndex?: number): Promise<void> => {
+    const current = get().library;
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      current.source.kind !== 'smart' ||
+      current.source.id !== 'builtin' ||
+      current.searchSource.kind !== 'smart' ||
+      current.searchSource.id !== 'builtin' ||
+      current.playlistAddMode !== null ||
+      current.resultTotal <= 0
+    ) {
+      return;
+    }
+    const pageCount = Math.ceil(current.resultTotal / pageSize);
+    if (page > pageCount) return;
+
+    const intentId = Math.max(builtinPageIntentSequence, current.builtinPage.intentId) + 1;
+    builtinPageIntentSequence = intentId;
+    pendingBuiltinFocus = null;
+    const focusId = focusIndex === undefined ? null : ++builtinFocusSequence;
+    if (page === current.builtinPage.committedPage) {
+      const latest = get().library;
+      set({
+        library: {
+          ...latest,
+          builtinPage: {
+            ...latest.builtinPage,
+            pendingPage: null,
+            intentId,
+            failedPage: null,
+            ...(focusIndex !== undefined && focusId !== null
+              ? { focusNowPlaying: { id: focusId, index: focusIndex } }
+              : {}),
+          },
+        },
+      });
+      return;
+    }
+
+    const offset = (page - 1) * pageSize;
+    const requestGeneration = current.generation;
+    const requestSearchGeneration = current.searchRequestGeneration;
+    const requestMembershipRevision = current.membershipRevision;
+    const requestSource = current.searchSource;
+    const requestQuery = current.query;
+    if (focusIndex !== undefined && focusId !== null) {
+      pendingBuiltinFocus = { intentId, index: focusIndex, id: focusId };
+    }
+    set({
+      library: {
+        ...current,
+        builtinPage: {
+          ...current.builtinPage,
+          pendingPage: page,
+          intentId,
+          failedPage: null,
+        },
+      },
+    });
+
+    try {
+      const result = await loadPage(
+        requestQuery,
+        requestSource,
+        offset,
+        requestGeneration,
+        requestSearchGeneration,
+        false,
+      );
+      const latest = get().library;
+      if (
+        latest.builtinPage.intentId !== intentId ||
+        latest.builtinPage.pendingPage !== page ||
+        latest.searchRequestGeneration !== requestSearchGeneration ||
+        latest.generation !== requestGeneration ||
+        latest.membershipRevision !== requestMembershipRevision ||
+        membershipRevisionFor(latest.searchSource) !== requestMembershipRevision ||
+        latest.query !== requestQuery ||
+        sourceKey(latest.searchSource) !== sourceKey(requestSource) ||
+        latest.source.kind !== 'smart' ||
+        latest.source.id !== 'builtin' ||
+        latest.playlistAddMode !== null
+      ) {
+        return;
+      }
+      const responseIds = new Set(result.items.map((row) => row.song_id));
+      if (
+        latest.resultTotal !== result.total ||
+        result.generation !== requestGeneration ||
+        result.offset !== offset ||
+        result.limit !== pageSize ||
+        result.items.length !== Math.min(pageSize, result.total - offset) ||
+        responseIds.size !== result.items.length
+      ) {
+        invalidateSourceCache(requestSource);
+        pendingBuiltinFocus = null;
+        set({
+          library: {
+            ...latest,
+            builtinPage: {
+              ...latest.builtinPage,
+              pendingPage: null,
+              failedPage: page,
+            },
+          },
+        });
+        return;
+      }
+
+      const pages = new Map<number, readonly SongRow[]>([[offset, result.items]]);
+      const indexById = new Map<string, number>();
+      let selectedSongSummary = latest.selectedSongSummary;
+      let selectedSongIndex = latest.selectedSongIndex;
+      result.items.forEach((row, index) => {
+        indexById.set(row.song_id, offset + index);
+        if (row.song_id === latest.selectedSongId) {
+          selectedSongSummary = row;
+          selectedSongIndex = offset + index;
+        }
+      });
+      const focus = pendingBuiltinFocus?.intentId === intentId ? pendingBuiltinFocus : null;
+      pendingBuiltinFocus = null;
+      set({
+        library: {
+          ...latest,
+          pages,
+          indexById,
+          indexMembershipRevision: latest.membershipRevision,
+          selectedSongSummary,
+          selectedSongIndex,
+          visibleRange: { first: offset, last: offset + result.items.length - 1 },
+          builtinPage: {
+            ...latest.builtinPage,
+            committedPage: page,
+            pendingPage: null,
+            failedPage: null,
+            ...(focus ? { focusNowPlaying: { id: focus.id, index: focus.index } } : {}),
+          },
+        },
+      });
+    } catch {
+      const latest = get().library;
+      if (
+        latest.builtinPage.intentId !== intentId ||
+        latest.builtinPage.pendingPage !== page ||
+        latest.searchRequestGeneration !== requestSearchGeneration ||
+        latest.generation !== requestGeneration ||
+        latest.membershipRevision !== requestMembershipRevision ||
+        membershipRevisionFor(latest.searchSource) !== requestMembershipRevision ||
+        latest.query !== requestQuery ||
+        sourceKey(latest.searchSource) !== sourceKey(requestSource) ||
+        latest.source.kind !== 'smart' ||
+        latest.source.id !== 'builtin' ||
+        latest.playlistAddMode !== null
+      ) {
+        return;
+      }
+      pendingBuiltinFocus = null;
+      set({
+        library: {
+          ...latest,
+          builtinPage: {
+            ...latest.builtinPage,
+            pendingPage: null,
+            failedPage: page,
+          },
+        },
+      });
+    }
+  };
+
   const hydrateViewport = async (
     first: number,
     last: number,
@@ -565,6 +743,9 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const syncCatalogGeneration = async (generation: number): Promise<void> => {
     const current = get().library;
     if (generation <= current.generation) return;
+    const pageIntentId = Math.max(builtinPageIntentSequence, current.builtinPage.intentId) + 1;
+    builtinPageIntentSequence = pageIntentId;
+    pendingBuiltinFocus = null;
     invalidateStaleGenerations(generation);
     context.nextDetailRequestToken();
     const playback = get().playback;
@@ -574,6 +755,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       library: {
         ...current,
         generation,
+        builtinPage: {
+          committedPage: 1,
+          pendingPage: null,
+          intentId: pageIntentId,
+          failedPage: null,
+          focusNowPlaying: null,
+        },
         pages: new Map(),
         indexById: new Map(),
         membershipRevision: membershipRevisionFor(current.searchSource),
@@ -653,12 +841,30 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const clearBrowserSelection = scopeChanged;
       if (clearBrowserSelection) context.nextDetailRequestToken();
       const token = current.searchRequestGeneration + 1;
+      const pageIntentId = scopeChanged
+        ? Math.max(builtinPageIntentSequence, current.builtinPage.intentId) + 1
+        : current.builtinPage.intentId;
+      if (scopeChanged) {
+        builtinPageIntentSequence = pageIntentId;
+        pendingBuiltinFocus = null;
+      }
       set({
         library: {
           ...current,
           source: nextSource,
           searchSource: nextSearchSource,
           query: nextQuery,
+          ...(scopeChanged
+            ? {
+                builtinPage: {
+                  committedPage: 1,
+                  pendingPage: null,
+                  intentId: pageIntentId,
+                  failedPage: null,
+                  focusNowPlaying: null,
+                },
+              }
+            : {}),
           membershipRevision: scopeChanged
             ? membershipRevisionFor(nextSearchSource)
             : current.membershipRevision,
@@ -697,6 +903,17 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             likedTotal: result.liked_total,
             resultTotal: result.total,
             generation: result.generation,
+            ...(generationChanged
+              ? {
+                  builtinPage: {
+                    committedPage: 1,
+                    pendingPage: null,
+                    intentId: Math.max(builtinPageIntentSequence, latest.builtinPage.intentId) + 1,
+                    failedPage: null,
+                    focusNowPlaying: null,
+                  },
+                }
+              : {}),
             membershipRevision: membershipRevisionFor(nextSearchSource),
             indexMembershipRevision: generationChanged ? -1 : latest.indexMembershipRevision,
             selectedSongId: generationChanged ? null : latest.selectedSongId,
@@ -865,6 +1082,39 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         return;
       }
       await hydrateViewport(first, last, scope);
+    },
+
+    async navigateBuiltinPage(page) {
+      await navigateBuiltinPage(page);
+    },
+
+    async retryBuiltinPage() {
+      const failedPage = get().library.builtinPage.failedPage;
+      if (failedPage !== null) await navigateBuiltinPage(failedPage);
+    },
+
+    async showNowPlaying() {
+      const current = get();
+      const library = current.library;
+      const playbackContext = current.playback.context;
+      const currentSong = current.playback.currentSong;
+      if (
+        !playbackContextMatchesLibrary(playbackContext, library) ||
+        library.source.kind !== 'smart' ||
+        library.source.id !== 'builtin' ||
+        library.searchSource.kind !== 'smart' ||
+        library.searchSource.id !== 'builtin' ||
+        !currentSong ||
+        playbackContext.currentSongId !== currentSong.songId ||
+        playbackContext.total !== library.resultTotal ||
+        !Number.isSafeInteger(playbackContext.currentIndex) ||
+        playbackContext.currentIndex < 0 ||
+        playbackContext.currentIndex >= library.resultTotal
+      ) {
+        return;
+      }
+      const page = Math.floor(playbackContext.currentIndex / pageSize) + 1;
+      await navigateBuiltinPage(page, playbackContext.currentIndex);
     },
 
     async loadLibraryNavigation() {

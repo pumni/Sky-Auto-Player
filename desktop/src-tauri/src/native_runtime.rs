@@ -1101,6 +1101,7 @@ mod calibration;
 mod catalog;
 mod catalog_cache;
 mod catalog_reconcile;
+mod catalog_search;
 #[cfg(test)]
 use catalog_cache::AnalysisTestGate;
 use catalog_cache::{

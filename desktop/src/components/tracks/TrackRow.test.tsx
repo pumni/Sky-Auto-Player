@@ -269,7 +269,7 @@ describe('Track Browser primitives', () => {
       signalPageRequested = resolve;
     });
     bridge.searchSongs = async (request) => {
-      if (request.offset === 200) {
+      if (request.offset === 100) {
         signalPageRequested();
         await pageRelease;
       }
@@ -277,8 +277,8 @@ describe('Track Browser primitives', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const selected = selectRowAtIndex(store.getState().library, 199);
-    if (!selected) throw new Error('mock library page does not include index 199');
+    const selected = selectRowAtIndex(store.getState().library, 99);
+    if (!selected) throw new Error('mock library page does not include index 99');
     await act(async () => store.getState().selectSong(selected.song_id));
 
     render(<TrackTable useStore={store} />);
@@ -288,9 +288,9 @@ describe('Track Browser primitives', () => {
     await act(async () => fireEvent.keyDown(grid, { key: 'ArrowDown' }));
 
     await act(async () => releasePage());
-    await waitFor(() => expect(selectRowAtIndex(store.getState().library, 201)).not.toBeNull());
-    const expected = selectRowAtIndex(store.getState().library, 201);
-    if (!expected) throw new Error('mock library page does not include index 201');
+    await waitFor(() => expect(selectRowAtIndex(store.getState().library, 101)).not.toBeNull());
+    const expected = selectRowAtIndex(store.getState().library, 101);
+    if (!expected) throw new Error('mock library page does not include index 101');
     await waitFor(() => expect(store.getState().library.selectedSongId).toBe(expected.song_id));
     await waitFor(() =>
       expect(grid).toHaveAttribute('aria-activedescendant', `song-row-${expected.song_id}`),

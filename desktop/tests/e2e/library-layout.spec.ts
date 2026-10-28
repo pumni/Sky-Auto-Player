@@ -71,7 +71,7 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
     expect(expanded.headingMinHeight).toBe('36px');
     expect(expanded.headingMarginBottom).toBe('8px');
     expect(expanded.primaryRowGap).toBe('4px');
-    expect(expanded.rows).toHaveLength(4);
+    expect(expanded.rows).toHaveLength(5);
     for (const row of expanded.rows) {
       expect(row.row.height).toBe(42);
       expect(row.icon.width).toBe(24);
@@ -278,7 +278,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
-  await expect(collapsedLabels).toHaveCount(2);
+  await expect(collapsedLabels).toHaveCount(3);
   expect(
     await collapsedLabels.evaluateAll((items) =>
       items.every((item) => {
@@ -527,7 +527,7 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
   expect(Math.abs(expanded.heading.x - expanded.sectionHeading.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(expanded.footerCenter - expanded.pane.centerX)).toBeLessThanOrEqual(1);
   expect(Math.abs(expanded.dividerInsets[0] - expanded.dividerInsets[1])).toBeLessThanOrEqual(1);
-  expect(expanded.rows).toHaveLength(4);
+  expect(expanded.rows).toHaveLength(5);
   for (const row of expanded.rows) {
     expect(row.icon.width).toBeCloseTo(24, 0);
     expect(Math.abs(row.icon.x - expanded.heading.x)).toBeLessThanOrEqual(1);

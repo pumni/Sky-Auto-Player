@@ -29,6 +29,7 @@ pub enum CatalogSourceId {
     #[default]
     All,
     Liked,
+    Builtin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -582,6 +583,8 @@ pub struct LibraryPlaylistSummaryDto {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LibraryNavigationDto {
+    pub builtin_available: bool,
+    pub builtin_song_count: u64,
     pub playlists: Vec<LibraryPlaylistSummaryDto>,
 }
 

@@ -215,6 +215,16 @@ body.is-resizing * {
   background: var(--control-hover);
 }
 
+.library-nav-item:disabled {
+  color: var(--workbench-control-disabled);
+  cursor: not-allowed;
+}
+
+.library-nav-item:disabled:hover {
+  color: var(--workbench-control-disabled);
+  background: transparent;
+}
+
 .library-nav-item.is-active {
   color: var(--text-primary);
   background: var(--selection-bg);

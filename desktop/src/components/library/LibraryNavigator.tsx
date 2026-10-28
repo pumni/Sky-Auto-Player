@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Heart, Music2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Heart, Library, Music2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { PlaylistCreateDialog } from './PlaylistCreateDialog';
@@ -22,6 +22,12 @@ export function LibraryNavigator({
 }: LibraryNavigatorProps) {
   const catalogTotal = useStore((store: DesktopStore) => store.library.catalogTotal);
   const likedTotal = useStore((store: DesktopStore) => store.library.likedTotal);
+  const builtinAvailable = useStore(
+    (store: DesktopStore) => store.libraryNavigation.builtinAvailable,
+  );
+  const builtinSongCount = useStore(
+    (store: DesktopStore) => store.libraryNavigation.builtinSongCount,
+  );
   const source = useStore((store: DesktopStore) => store.library.source);
   const navigation = useStore((store: DesktopStore) => store.libraryNavigation);
   const selectLibrarySource = useStore((store: DesktopStore) => store.selectLibrarySource);
@@ -87,6 +93,17 @@ export function LibraryNavigator({
           onPress={() => void selectLibrarySource({ kind: 'smart', id: 'all' })}
         >
           All Songs
+        </LibraryNavItem>
+        <LibraryNavItem
+          collapsed={collapsed}
+          label={builtinAvailable ? 'Built-in Songs' : 'Built-in Songs unavailable'}
+          active={source.kind === 'smart' && source.id === 'builtin'}
+          count={builtinSongCount}
+          disabled={!builtinAvailable}
+          icon={<Library size={18} />}
+          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
+        >
+          Built-in Songs
         </LibraryNavItem>
       </div>
 
