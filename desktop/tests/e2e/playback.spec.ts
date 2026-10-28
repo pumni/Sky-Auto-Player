@@ -44,14 +44,15 @@ test('Player Bar communicates the no-selection state without actionable playback
   await page.keyboard.press('Escape');
 });
 
-test('five transport controls and right dock keep their order and geometry at supported sizes', async ({
+test('five transport controls keep geometry at desktop and Chromium fallback sizes', async ({
   page,
 }) => {
-  for (const viewport of [
+  const supportedDesktopViewports = [
     { width: 1200, height: 760 },
     { width: 800, height: 560 },
-    { width: 640, height: 448 },
-  ]) {
+  ];
+  const chromiumResponsiveFallbackViewports = [{ width: 640, height: 448 }];
+  for (const viewport of [...supportedDesktopViewports, ...chromiumResponsiveFallbackViewports]) {
     await page.setViewportSize(viewport);
     await page.goto('/');
     const player = page.getByRole('contentinfo', { name: 'Player controls' });
@@ -792,16 +793,16 @@ test('starting never exposes Pause and transport fits the supported narrow viewp
   await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 });
 
-test('target startup failures keep their actionable message at supported viewports', async ({
+test('target startup failures remain actionable at desktop and Chromium fallback sizes', async ({
   page,
 }) => {
-  for (const viewport of [
+  const supportedDesktopViewports = [
     { width: 1200, height: 760 },
     { width: 1280, height: 720 },
     { width: 800, height: 560 },
-    // A physical 800 px Windows client area at 125% DPI exposes a 640 CSS px viewport.
-    { width: 640, height: 448 },
-  ]) {
+  ];
+  const chromiumResponsiveFallbackViewports = [{ width: 640, height: 448 }];
+  for (const viewport of [...supportedDesktopViewports, ...chromiumResponsiveFallbackViewports]) {
     await page.setViewportSize(viewport);
     await page.goto('/?mockStartFailure=target_not_found');
     const player = await startSelectedSong(page);

@@ -11,6 +11,12 @@ export const palettes = [
 ] as const;
 export type PaletteId = (typeof palettes)[number];
 
+// Independent E2E oracle for the approved Inspector breakpoint. Keep this
+// separate from the production layout helper so browser tests can detect drift.
+export function expectedUtilityPresentation(viewportWidth: number): 'docked' | 'overlay' {
+  return viewportWidth >= 764 ? 'docked' : 'overlay';
+}
+
 export async function expectNoSeriousAccessibilityViolations(page: Page) {
   const results = await new AxeBuilder({ page }).analyze();
   expect(

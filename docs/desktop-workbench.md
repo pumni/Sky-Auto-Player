@@ -17,6 +17,18 @@ then caps that target to the available width; at very narrow widths the availabl
 make the actual overlay narrower than 288 px. The overlay stays inside the workbench row, above the
 Track Browser, and clear of the Player Dock.
 
+## Desktop minimum and responsive fallback
+
+The Tauri main window minimum is configured as 800×560 logical pixels. The Inspector is docked at
+that minimum. The overlay below 764 CSS pixels remains a responsive fallback; the current native
+minimum prevents reaching that width by ordinary desktop resizing. E2E cases below 800×560 use
+Playwright's Chromium viewport emulation and verify responsive behavior only, not a supported native
+window size or live Windows geometry.
+
+At 125% Windows display scaling, 800 logical pixels map to about 1000 physical pixels. A Playwright
+`deviceScaleFactor` of 1.25 only emulates browser device scale and does not model the native window
+minimum or establish live DPI behavior.
+
 The overlay is non-modal. It is a labelled `region`, does not dim the application, does not trap
 focus, and does not cover the title bar or Player Dock. The user can continue to use visible Track
 Browser rows underneath or beside it. Selecting a row updates the open Song Details view and leaves

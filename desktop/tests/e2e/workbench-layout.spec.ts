@@ -1,6 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
+import { readFileSync } from 'node:fs';
 import {
+  expectedUtilityPresentation,
   expectNoSeriousAccessibilityViolations,
   expectWorkbenchWithinBounds,
   readPlayerBarGeometry,
@@ -59,10 +60,25 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('minimum dockable viewport keeps the Inspector inside the actual client rectangle', async ({
+test('configured Tauri minimum keeps Inspector docked in the Chromium UI contract check', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 800, height: 560 });
+  const tauriConfig = JSON.parse(
+    readFileSync(new URL('../../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+  ) as {
+    app: {
+      windows: Array<{ label: string; minWidth?: number; minHeight?: number }>;
+    };
+  };
+  const mainWindow = tauriConfig.app.windows.find((window) => window.label === 'main');
+  if (mainWindow?.minWidth === undefined || mainWindow.minHeight === undefined) {
+    throw new Error('Tauri main window minimum dimensions are not configured');
+  }
+  const minimumViewport = { width: mainWindow.minWidth, height: mainWindow.minHeight };
+  expect(minimumViewport).toEqual({ width: 800, height: 560 });
+
+  // setViewportSize checks CSS layout against config; it does not exercise a native window or DPI.
+  await page.setViewportSize(minimumViewport);
   await page.goto('/');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
@@ -80,21 +96,27 @@ test('minimum dockable viewport keeps the Inspector inside the actual client rec
   if (navigator) expect(Math.round(navigator.width)).toBe(48);
 });
 
-test('narrow Inspector overlays the workbench without shrinking the Track Browser', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 763, height: 540 });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open utility panel' }).click();
-  await expect(page.locator('.utility-workbench-pane')).toBeVisible();
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
-  await expectWorkbenchWithinBounds(page);
+test('Chromium fallback emulation uses overlay below the docked threshold', async ({ page }) => {
+  // These widths are Chromium responsive simulations below Tauri's 800×560 minimum.
+  for (const viewport of [
+    { width: 763, height: 540 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.evaluate(() => window.localStorage.clear());
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open utility panel' }).click();
+    await expect(page.locator('.utility-workbench-pane')).toBeVisible();
+    await expect(page.locator('.workbench')).toHaveAttribute(
+      'data-utility-presentation',
+      expectedUtilityPresentation(viewport.width),
+    );
+    await expectWorkbenchWithinBounds(page);
+  }
 });
 
-test('desktop workbench fits the supported viewport matrix', async ({ page }) => {
+test('Chromium checks layout at Tauri-supported desktop dimensions', async ({ page }) => {
   for (const viewport of [
-    { width: 640, height: 448 },
-    { width: 780, height: 540 },
     { width: 800, height: 560 },
     { width: 900, height: 600 },
     { width: 1024, height: 640 },
@@ -120,10 +142,9 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
     expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
 
     await page.getByRole('button', { name: 'Open utility panel' }).click();
-    const expectedMode = getUtilityPresentationMode(viewport.width, true, 'graphite');
     await expect(page.locator('.workbench')).toHaveAttribute(
       'data-utility-presentation',
-      expectedMode,
+      expectedUtilityPresentation(viewport.width),
     );
     await expect(
       page.getByRole('region', { name: 'Utility: Song Details', exact: true }),
@@ -202,16 +223,16 @@ test('Titlebar Search uses the available center axis and Player controls stay vi
   }
 });
 
-test('Player Bar keeps a centered controls row and separate timeline at supported viewports', async ({
+test('Player Bar geometry covers native desktop and Chromium fallback emulation', async ({
   page,
 }) => {
-  for (const viewport of [
+  const supportedDesktopViewports = [
     { width: 1200, height: 760 },
     { width: 1280, height: 720 },
     { width: 800, height: 560 },
-    // Match the logical viewport of an 800×560 Tauri client area at 125% DPI.
-    { width: 640, height: 448 },
-  ]) {
+  ];
+  const chromiumResponsiveFallbackViewports = [{ width: 640, height: 448 }];
+  for (const viewport of [...supportedDesktopViewports, ...chromiumResponsiveFallbackViewports]) {
     await page.setViewportSize(viewport);
     await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=1200');
     const player = page.getByRole('contentinfo', { name: 'Player controls' });
