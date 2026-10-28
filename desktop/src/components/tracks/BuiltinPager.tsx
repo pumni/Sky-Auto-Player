@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useId, useRef, useState, type KeyboardEvent, type SubmitEvent } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { LIBRARY_PAGE_SIZE } from '../../state/store';
 
@@ -32,18 +32,25 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
   const [jumpError, setJumpError] = useState<string | null>(null);
   const jumpTriggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const jumpPopoverId = useId();
+  const jumpInputId = useId();
+  const jumpErrorId = useId();
   const pageCount = Math.ceil(total / LIBRARY_PAGE_SIZE);
 
-  if (total <= LIBRARY_PAGE_SIZE) return null;
+  if (total === 0) return null;
 
   const firstRow = (page - 1) * LIBRARY_PAGE_SIZE + 1;
   const lastRow = Math.min(page * LIBRARY_PAGE_SIZE, total);
+  const rangeStatus = `Showing ${firstRow}–${lastRow} of ${total} songs.`;
   const status =
     pendingPage === null
-      ? `Showing ${firstRow}–${lastRow} of ${total} songs. Page ${page} of ${pageCount}.`
-      : `Showing ${firstRow}–${lastRow} of ${total} songs. Loading page ${pendingPage} of ${pageCount}.`;
+      ? pageCount === 1
+        ? rangeStatus
+        : `${rangeStatus} Page ${page} of ${pageCount}.`
+      : `${rangeStatus} Loading page ${pendingPage} of ${pageCount}.`;
 
-  const openJump = () => {
+  const openJump = (trigger: HTMLButtonElement) => {
+    jumpTriggerRef.current = trigger;
     setJumpOpen(true);
     setJumpValue('');
     setJumpError(null);
@@ -57,7 +64,7 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
     window.setTimeout(() => jumpTriggerRef.current?.focus(), 0);
   };
 
-  const submitJump = (event: FormEvent<HTMLFormElement>) => {
+  const submitJump = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!/^[1-9]\d*$/.test(jumpValue)) {
       setJumpError(`Enter a whole page number from 1 to ${pageCount}.`);
@@ -68,8 +75,11 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
       setJumpError(`Enter a whole page number from 1 to ${pageCount}.`);
       return;
     }
-    closeJump();
-    void navigate(target);
+    setJumpOpen(false);
+    setJumpValue('');
+    setJumpError(null);
+    await navigate(target);
+    window.setTimeout(() => jumpTriggerRef.current?.focus(), 0);
   };
 
   const onJumpKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -78,33 +88,53 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
     closeJump();
   };
 
-  const pageButtons = pageItems(pageCount, page).map((item, index) =>
-    typeof item === 'number' ? (
+  const pageButtons = pageItems(pageCount, page).map((item, index) => {
+    if (typeof item !== 'number') {
+      return (
+        <span key={`${item}-${index}`} className="builtin-pager-ellipsis" aria-hidden="true">
+          …
+        </span>
+      );
+    }
+    const isCurrent = item === page;
+    return (
       <button
         key={item}
+        ref={isCurrent ? jumpTriggerRef : undefined}
         className="builtin-pager-page"
         type="button"
-        aria-label={`Page ${item}`}
-        aria-current={item === page ? 'page' : undefined}
-        onClick={() => void navigate(item)}
+        aria-label={
+          isCurrent ? `${item} / ${pageCount}, Page ${item} of ${pageCount}` : `Page ${item}`
+        }
+        aria-current={isCurrent ? 'page' : undefined}
+        aria-expanded={isCurrent ? jumpOpen : undefined}
+        aria-controls={isCurrent && jumpOpen ? jumpPopoverId : undefined}
+        onClick={isCurrent ? (event) => openJump(event.currentTarget) : () => void navigate(item)}
       >
-        {item}
+        {isCurrent ? (
+          <>
+            <span className="builtin-pager-current-wide">
+              {item} / {pageCount}
+            </span>
+            <span className="builtin-pager-current-narrow">
+              Page {item} of {pageCount}
+            </span>
+          </>
+        ) : (
+          item
+        )}
       </button>
-    ) : (
-      <span key={`${item}-${index}`} className="builtin-pager-ellipsis" aria-hidden="true">
-        …
-      </span>
-    ),
-  );
+    );
+  });
 
   return (
     <div className="builtin-pager-wrap">
-      <nav
-        className="builtin-pager"
-        aria-label="Built-in Songs pages"
-        aria-busy={pendingPage !== null}
-      >
-        <div className="builtin-pager-wide">
+      {pageCount > 1 && (
+        <nav
+          className="builtin-pager"
+          aria-label="Built-in Songs pages"
+          aria-busy={pendingPage !== null}
+        >
           <button
             className="builtin-pager-control"
             type="button"
@@ -142,68 +172,42 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
           >
             Last
           </button>
-        </div>
-        <div className="builtin-pager-narrow">
-          <button
-            className="builtin-pager-control"
-            type="button"
-            aria-label="Previous page"
-            disabled={page === 1}
-            onClick={() => void navigate(page - 1)}
-          >
-            Previous
-          </button>
-          <span>
-            Page {page} of {pageCount}
-          </span>
-          <button
-            className="builtin-pager-control"
-            type="button"
-            aria-label="Next page"
-            disabled={page === pageCount}
-            onClick={() => void navigate(page + 1)}
-          >
-            Next
-          </button>
-        </div>
-        <button
-          ref={jumpTriggerRef}
-          className="builtin-pager-jump-trigger"
-          type="button"
-          onClick={openJump}
-        >
-          Go to page
-        </button>
-        {jumpOpen && (
-          <form className="builtin-pager-jump" noValidate onSubmit={submitJump}>
-            <label htmlFor="builtin-page-jump">Go to page</label>
-            <input
-              ref={inputRef}
-              id="builtin-page-jump"
-              type="text"
-              inputMode="numeric"
-              pattern="[1-9][0-9]*"
-              value={jumpValue}
-              aria-invalid={jumpError !== null}
-              aria-describedby={jumpError ? 'builtin-page-jump-error' : undefined}
-              onChange={(event) => {
-                setJumpValue(event.currentTarget.value);
-                setJumpError(null);
-              }}
-              onKeyDown={onJumpKeyDown}
-            />
-            <button type="submit">Go</button>
-            <button type="button" onClick={closeJump}>
-              Cancel
-            </button>
-          </form>
-        )}
-      </nav>
+          {jumpOpen && (
+            <form
+              id={jumpPopoverId}
+              className="builtin-pager-jump"
+              noValidate
+              onSubmit={submitJump}
+            >
+              <label htmlFor={jumpInputId}>Go to page</label>
+              <input
+                ref={inputRef}
+                id={jumpInputId}
+                type="text"
+                inputMode="numeric"
+                pattern="[1-9][0-9]*"
+                value={jumpValue}
+                aria-invalid={jumpError !== null}
+                aria-describedby={jumpError ? jumpErrorId : undefined}
+                onChange={(event) => {
+                  setJumpValue(event.currentTarget.value);
+                  setJumpError(null);
+                }}
+                onKeyDown={onJumpKeyDown}
+              />
+              <button type="submit">Go</button>
+              <button type="button" onClick={closeJump}>
+                Cancel
+              </button>
+            </form>
+          )}
+        </nav>
+      )}
       <p className="builtin-pager-status" role="status" aria-live="polite" aria-atomic="true">
         {status}
       </p>
       {jumpError && (
-        <p id="builtin-page-jump-error" className="builtin-pager-error" role="alert">
+        <p id={jumpErrorId} className="builtin-pager-error" role="alert">
           {jumpError}
         </p>
       )}

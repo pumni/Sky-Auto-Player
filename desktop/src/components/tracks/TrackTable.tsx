@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import {
   LIBRARY_PAGE_SIZE,
@@ -71,6 +71,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
   const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
   const resultTotal = useStore((store) => store.library.resultTotal);
   const committedPage = useStore((store) => store.library.builtinPage.committedPage);
+  const focusNowPlaying = useStore((store) => store.library.builtinPage.focusNowPlaying);
   const pendingPage = useStore((store) => store.library.builtinPage.pendingPage);
   const searchSource = useStore((store) => store.library.searchSource);
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
@@ -112,25 +113,30 @@ export function TrackTable({ useStore }: TrackTableProps) {
     void setViewport(pageOffset + first, pageOffset + last);
   }, [first, last, pageOffset, setViewport]);
 
-  useEffect(
-    () =>
-      useStore.subscribe(
-        (state) => state.library.builtinPage.focusNowPlaying,
-        (request) => {
-          if (!request || !isBuiltin) return;
-          const currentPageOffset =
-            (useStore.getState().library.builtinPage.committedPage - 1) * LIBRARY_PAGE_SIZE;
-          if (
-            request.index < currentPageOffset ||
-            request.index >= currentPageOffset + LIBRARY_PAGE_SIZE
-          ) {
-            return;
-          }
-          virtualizer.scrollToIndex(request.index - currentPageOffset, { align: 'center' });
+  useLayoutEffect(() => {
+    if (!isBuiltin || !focusNowPlaying) return;
+    const currentPageOffset = (committedPage - 1) * LIBRARY_PAGE_SIZE;
+    const localIndex = focusNowPlaying.index - currentPageOffset;
+    if (
+      focusNowPlaying.index < 0 ||
+      focusNowPlaying.index >= resultTotal ||
+      localIndex < 0 ||
+      localIndex >= rowCount
+    ) {
+      return;
+    }
+
+    virtualizer.scrollToIndex(localIndex, { align: 'center' });
+    const latest = useStore.getState().library;
+    if (latest.builtinPage.focusNowPlaying?.id === focusNowPlaying.id) {
+      useStore.setState({
+        library: {
+          ...latest,
+          builtinPage: { ...latest.builtinPage, focusNowPlaying: null },
         },
-      ),
-    [isBuiltin, useStore, virtualizer],
-  );
+      });
+    }
+  }, [committedPage, focusNowPlaying, isBuiltin, resultTotal, rowCount, useStore, virtualizer]);
 
   useEffect(() => {
     return useStore.subscribe(

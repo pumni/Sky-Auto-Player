@@ -31,7 +31,7 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
   await expect(grid).toHaveAttribute('aria-rowcount', '101');
   await expect(page.locator('.builtin-pager-status')).toContainText('Page 1 of 5');
-  await expect(page.locator('.builtin-pager-wide')).toBeVisible();
+  await expect(page.locator('.builtin-pager-current-wide')).toBeVisible();
 
   await page.getByRole('button', { name: 'Page 3' }).click();
   const pageThree = page.getByRole('grid', { name: 'Built-in Songs, page 3' });
@@ -48,40 +48,52 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     'true',
   );
 
-  await page.getByRole('button', { name: 'Go to page' }).click();
+  const pageThreeIndicator = page.getByRole('button', { name: 'Page 3 of 5' });
+  await pageThreeIndicator.focus();
+  await page.keyboard.press('Enter');
+  await expect(pageThreeIndicator).toHaveAttribute('aria-expanded', 'true');
   const jump = page.getByRole('textbox', { name: 'Go to page' });
-  await jump.fill('0');
-  await jump.press('Enter');
-  await expect(page.getByRole('alert')).toContainText('Enter a whole page number from 1 to 5');
+  await expect(jump).toBeFocused();
+  for (const invalidPage of ['0', '1.5', '6']) {
+    await jump.fill(invalidPage);
+    await jump.press('Enter');
+    await expect(page.getByRole('alert')).toContainText('Enter a whole page number from 1 to 5');
+  }
   await jump.press('Escape');
   await expect(page.getByRole('textbox', { name: 'Go to page' })).toHaveCount(0);
+  await expect(pageThreeIndicator).toBeFocused();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Go to page' }).click();
+  await pageThreeIndicator.focus();
+  await page.keyboard.press('Space');
   await page.getByRole('textbox', { name: 'Go to page' }).fill('5');
   await page.getByRole('textbox', { name: 'Go to page' }).press('Enter');
   const pageFive = page.getByRole('grid', { name: 'Built-in Songs, page 5' });
   await expect(pageFive).toHaveAttribute('aria-rowcount', '101');
+  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toBeFocused();
   await pageFive.focus();
   await page.keyboard.press('End');
   await expect(page.getByRole('row', { name: /Song 500/ })).toHaveAttribute('aria-rowindex', '101');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
-  await expect(page.getByRole('button', { name: 'Page 5' })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toHaveAttribute(
     'aria-current',
     'page',
   );
   await expect
     .poll(() =>
       page
-        .getByRole('button', { name: 'Page 5' })
+        .getByRole('button', { name: 'Page 5 of 5' })
         .evaluate((button) => getComputedStyle(button).outlineStyle),
     )
     .toBe('solid');
   await page.setViewportSize({ width: 800, height: 560 });
-  await expect(page.locator('.builtin-pager-narrow')).toBeVisible();
-  await expect(page.locator('.builtin-pager-wide')).toBeHidden();
+  await expect(page.locator('.builtin-pager-current-narrow')).toBeVisible();
+  await expect(page.locator('.builtin-pager-current-wide')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'First page' })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Last page' })).toBeHidden();
   const geometry = await page.evaluate(() => ({
     browserWidth:
       document.querySelector<HTMLElement>('.track-browser-workbench-pane')?.clientWidth ?? 0,
@@ -91,6 +103,127 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   }));
   expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
   expect(geometry.documentWidth).toBeLessThanOrEqual(800);
+
+  const expectCompactJumpToFit = async () => {
+    const indicator = page.getByRole('button', { name: 'Page 5 of 5' });
+    await indicator.focus();
+    await page.keyboard.press('Enter');
+    await expect(indicator).toHaveAttribute('aria-expanded', 'true');
+    const jump = page.getByRole('textbox', { name: 'Go to page' });
+    await expect(jump).toBeVisible();
+    const jumpGeometry = await jump.evaluate((input) => {
+      const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+      const table = pane?.querySelector<HTMLElement>('.track-table');
+      const player = document.querySelector<HTMLElement>('.player-bar');
+      const form = input.closest('form');
+      if (!pane || !table || !player || !form) return null;
+      const paneRect = pane.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+      const playerRect = player.getBoundingClientRect();
+      const formRect = form.getBoundingClientRect();
+      return {
+        paneLeft: paneRect.left,
+        paneRight: paneRect.right,
+        paneTop: paneRect.top,
+        paneBottom: paneRect.bottom,
+        formLeft: formRect.left,
+        formRight: formRect.right,
+        formTop: formRect.top,
+        formBottom: formRect.bottom,
+        tableBottom: tableRect.bottom,
+        playerTop: playerRect.top,
+        formWidth: form.clientWidth,
+        formScrollWidth: form.scrollWidth,
+      };
+    });
+    expect(jumpGeometry).not.toBeNull();
+    if (jumpGeometry) {
+      expect(jumpGeometry.formLeft).toBeGreaterThanOrEqual(jumpGeometry.paneLeft);
+      expect(jumpGeometry.formRight).toBeLessThanOrEqual(jumpGeometry.paneRight);
+      expect(jumpGeometry.formTop).toBeGreaterThanOrEqual(jumpGeometry.paneTop);
+      expect(jumpGeometry.formBottom).toBeLessThanOrEqual(jumpGeometry.paneBottom);
+      expect(jumpGeometry.formTop).toBeGreaterThanOrEqual(jumpGeometry.tableBottom);
+      expect(jumpGeometry.formBottom).toBeLessThanOrEqual(jumpGeometry.playerTop);
+      expect(jumpGeometry.formScrollWidth).toBeLessThanOrEqual(jumpGeometry.formWidth);
+    }
+    await jump.press('Escape');
+    await expect(indicator).toBeFocused();
+  };
+  await expectCompactJumpToFit();
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const browserPane = page.locator('.track-browser-workbench-pane');
+  await browserPane.evaluate((element) => {
+    element.style.flex = '0 0 520px';
+    element.style.minWidth = '0';
+  });
+  await expect(page.locator('.builtin-pager-current-narrow')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toBeVisible();
+  const pagerGeometry = await page.locator('.builtin-pager').evaluate((element) => ({
+    width: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(pagerGeometry.scrollWidth).toBeLessThanOrEqual(pagerGeometry.width);
+  await expectCompactJumpToFit();
+  await browserPane.evaluate((element) => {
+    element.style.removeProperty('flex');
+    element.style.removeProperty('min-width');
+  });
+});
+
+test('Show now playing scrolls to a deep built-in row across and within pages', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
+  await page.getByRole('button', { name: 'Page 2' }).click();
+
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const table = page.locator('.track-table');
+  const song175 = page.getByRole('row', { name: /Song 175/ });
+  await table.evaluate((element) => {
+    element.scrollTop = 74 * 46;
+  });
+  await expect(song175).toBeInViewport();
+  await song175.locator('.track-title-text').click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
+  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
+
+  const song180 = page.getByRole('row', { name: /Song 180/ });
+  await table.evaluate((element) => {
+    element.scrollTop = 79 * 46;
+  });
+  await expect(song180).toBeInViewport();
+  await song180.locator('.track-title-text').click();
+  await expect(song180).toHaveAttribute('aria-selected', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
+
+  await page.getByRole('button', { name: 'Page 1' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
+
+  await page.getByRole('button', { name: 'Show now playing, row 175' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+  await expect(song175).toBeInViewport();
+  await expect(song180).toHaveAttribute('aria-selected', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
+
+  await table.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
+  await page.getByRole('button', { name: 'Show now playing, row 175' }).click();
+  await expect(song175).toBeInViewport();
+  await expect(song180).toHaveAttribute('aria-selected', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
+
+  await page.getByRole('button', { name: 'Page 1' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
 test('rapid A-B-A search keeps the newest query results visible', async ({ page }) => {

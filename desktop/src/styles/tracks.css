@@ -299,15 +299,11 @@
   min-width: 0;
 }
 
-.builtin-pager-wide,
-.builtin-pager-narrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
+.builtin-pager-current-wide {
+  display: inline;
 }
 
-.builtin-pager-narrow {
+.builtin-pager-current-narrow {
   display: none;
 }
 
@@ -410,12 +406,19 @@
 }
 
 @container track-browser (max-width: 640px) {
-  .builtin-pager-wide {
+  .builtin-pager-control[aria-label='First page'],
+  .builtin-pager-control[aria-label='Last page'],
+  .builtin-pager-page:not([aria-current='page']),
+  .builtin-pager-ellipsis {
     display: none;
   }
 
-  .builtin-pager-narrow {
-    display: flex;
+  .builtin-pager-current-wide {
+    display: none;
+  }
+
+  .builtin-pager-current-narrow {
+    display: inline;
   }
 
   .builtin-pager-wrap {
