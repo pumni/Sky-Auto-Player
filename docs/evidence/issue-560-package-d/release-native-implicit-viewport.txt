@@ -1,0 +1,49 @@
+    Finished `release` profile [optimized] target(s) in 0.53s
+     Running unittests src\lib.rs (rust\target\package-d-bench\release\deps\sky_desktop_shell_lib-a2d5549fbe15dbb3.exe)
+
+running 1 test
+package_b_bench layer=native-viewport-projection fixture=package-b-native-files-v1 seed=0x560 size_set=96,1000,10000 profile=release cold_samples=7 shift_back_samples=7 warm_samples=9 warm_sample_ms=25 selected_detail_samples=7
+package_b_projection size=96 scenario=plain-cold samples=7 p50_us=6671.300 p90_us=7596.400 min_us=6532.100 max_us=7596.400
+package_b_projection size=96 scenario=plain-exact-warm samples=9 p50_us=175.233 p90_us=192.393 min_us=169.777 max_us=192.393
+package_b_projection size=96 scenario=shift-plus-one-and-back samples=0 unavailable=viewport-covers-catalog
+package_b_projection size=96 scenario=selected-first-cold samples=7 p50_us=6123.600 p90_us=7073.800 min_us=6061.800 max_us=7073.800
+package_b_projection size=96 scenario=selected-first-detail-after-hydration samples=7 p50_us=12.200 p90_us=39.800 min_us=11.100 max_us=39.800
+package_b_projection size=96 scenario=selected-first-exact-warm samples=9 p50_us=172.424 p90_us=183.100 min_us=170.759 max_us=183.100
+package_b_projection size=96 scenario=selected-last-cold samples=7 p50_us=6103.500 p90_us=6783.600 min_us=5865.800 max_us=6783.600
+package_b_projection size=96 scenario=selected-last-detail-after-hydration samples=7 p50_us=11.900 p90_us=12.400 min_us=11.200 max_us=12.400
+package_b_projection size=96 scenario=selected-last-exact-warm samples=9 p50_us=168.321 p90_us=170.437 min_us=167.287 max_us=170.437
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+package_b_projection size=1000 scenario=plain-cold samples=7 p50_us=13639.300 p90_us=15296.700 min_us=13113.000 max_us=15296.700
+package_b_projection size=1000 scenario=plain-exact-warm samples=9 p50_us=377.242 p90_us=432.959 min_us=363.514 max_us=432.959
+package_b_projection size=1000 scenario=shift-plus-one samples=7 p50_us=443.400 p90_us=761.300 min_us=428.500 max_us=761.300
+package_b_projection size=1000 scenario=shift-back samples=7 p50_us=434.100 p90_us=652.100 min_us=430.000 max_us=652.100
+package_b_projection size=1000 scenario=selected-first-cold samples=7 p50_us=14112.000 p90_us=14492.300 min_us=13222.600 max_us=14492.300
+package_b_projection size=1000 scenario=selected-first-detail-after-hydration samples=7 p50_us=14.500 p90_us=15.200 min_us=13.900 max_us=15.200
+package_b_projection size=1000 scenario=selected-first-exact-warm samples=9 p50_us=369.385 p90_us=393.648 min_us=360.249 max_us=393.648
+package_b_projection size=1000 scenario=selected-last-cold samples=7 p50_us=12489.000 p90_us=12908.200 min_us=12370.500 max_us=12908.200
+package_b_projection size=1000 scenario=selected-last-detail-after-hydration samples=7 p50_us=13.300 p90_us=13.400 min_us=12.500 max_us=13.400
+package_b_projection size=1000 scenario=selected-last-exact-warm samples=9 p50_us=353.727 p90_us=354.903 min_us=352.539 max_us=354.903
+package_b_projection size=1000 scenario=selected-outside-cold samples=7 p50_us=12235.600 p90_us=12959.300 min_us=11965.100 max_us=12959.300
+package_b_projection size=1000 scenario=selected-outside-detail-after-hydration samples=7 p50_us=13.100 p90_us=13.600 min_us=11.800 max_us=13.600
+package_b_projection size=1000 scenario=selected-outside-exact-warm samples=9 p50_us=366.058 p90_us=368.535 min_us=354.292 max_us=368.535
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+package_b_projection size=10000 scenario=plain-cold samples=7 p50_us=15319.800 p90_us=17458.000 min_us=15202.000 max_us=17458.000
+package_b_projection size=10000 scenario=plain-exact-warm samples=9 p50_us=366.258 p90_us=400.811 min_us=356.870 max_us=400.811
+package_b_projection size=10000 scenario=shift-plus-one samples=7 p50_us=404.100 p90_us=772.200 min_us=399.100 max_us=772.200
+package_b_projection size=10000 scenario=shift-back samples=7 p50_us=400.200 p90_us=538.100 min_us=393.700 max_us=538.100
+package_b_projection size=10000 scenario=selected-first-cold samples=7 p50_us=13216.200 p90_us=15190.500 min_us=12818.100 max_us=15190.500
+package_b_projection size=10000 scenario=selected-first-detail-after-hydration samples=7 p50_us=14.300 p90_us=17.200 min_us=13.400 max_us=17.200
+package_b_projection size=10000 scenario=selected-first-exact-warm samples=9 p50_us=371.262 p90_us=387.182 min_us=351.869 max_us=387.182
+package_b_projection size=10000 scenario=selected-last-cold samples=7 p50_us=13069.900 p90_us=13245.600 min_us=12587.000 max_us=13245.600
+package_b_projection size=10000 scenario=selected-last-detail-after-hydration samples=7 p50_us=13.200 p90_us=14.000 min_us=12.900 max_us=14.000
+package_b_projection size=10000 scenario=selected-last-exact-warm samples=9 p50_us=372.257 p90_us=398.992 min_us=357.497 max_us=398.992
+package_b_projection size=10000 scenario=selected-outside-cold samples=7 p50_us=12960.700 p90_us=16499.500 min_us=12583.800 max_us=16499.500
+package_b_projection size=10000 scenario=selected-outside-detail-after-hydration samples=7 p50_us=13.800 p90_us=21.400 min_us=12.100 max_us=21.400
+package_b_projection size=10000 scenario=selected-outside-exact-warm samples=9 p50_us=374.736 p90_us=407.368 min_us=360.991 max_us=407.368
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_benchmark::opt_in_package_b_viewport_projection_benchmark ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 318 filtered out; finished in 20.28s

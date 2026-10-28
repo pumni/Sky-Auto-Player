@@ -226,6 +226,65 @@ test('Show now playing scrolls to a deep built-in row across and within pages', 
   await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+test('Built-in playback crosses page boundaries without replacing selection', async ({ page }) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  await page
+    .getByRole('navigation', { name: 'Library' })
+    .getByRole('button', { name: /Built-in Songs/ })
+    .click();
+
+  const pageOne = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
+  const song100 = page.getByRole('row', { name: /Song 100/ });
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const table = page.locator('.track-table');
+  await expect(pageOne).toBeVisible();
+  await table.evaluate((element) => {
+    element.scrollTop = 99 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(song100).toBeInViewport();
+  await song100.locator('.track-title-text').click();
+  await expect(song100).toHaveAttribute('aria-selected', 'true');
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const initialProceed = player.getByRole('button', { name: 'Proceed with current settings' });
+  if (await initialProceed.isVisible().catch(() => false)) await initialProceed.click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 100');
+
+  await player.getByRole('button', { name: 'Next' }).click();
+  const nextProceed = page.getByRole('button', { name: 'Proceed with current settings' });
+  if (await nextProceed.isVisible().catch(() => false)) await nextProceed.click();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 101');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(pageOne).toBeVisible();
+  await expect(song100).toHaveAttribute('aria-selected', 'true');
+  await expect(song100).not.toHaveAttribute('aria-current', 'true');
+
+  await page.getByRole('button', { name: 'Show now playing, row 101' }).click();
+  const pageTwo = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
+  const song101 = page.getByRole('row', { name: /Song 101/ });
+  await expect(pageTwo).toBeVisible();
+  await expect(song101).toBeInViewport();
+  await expect(song101).toHaveAttribute('aria-current', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 101');
+
+  await page.getByRole('button', { name: 'Previous page' }).click();
+  await expect(pageOne).toBeVisible();
+  await table.evaluate((element) => {
+    element.scrollTop = 99 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(song100).toBeInViewport();
+  await expect(song100).toHaveAttribute('aria-selected', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 101');
+  await page.getByRole('button', { name: 'Show now playing, row 101' }).click();
+  await expect(pageTwo).toBeVisible();
+  await expect(song101).toBeInViewport();
+  await expect(song101).toHaveAttribute('aria-current', 'true');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 101');
+});
+
 test('rapid A-B-A search keeps the newest query results visible', async ({ page }) => {
   await page.goto('/?mockSearchDelayMs=1000');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();

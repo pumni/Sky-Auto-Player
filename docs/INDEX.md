@@ -16,6 +16,9 @@ revision-scoped; their presence here or in the repository does not make them cur
 - **Desktop UI and workbench layout:** [desktop-workbench.md](desktop-workbench.md) and
   [Graphite final polish evidence](evidence/graphite-final-ui-polish/README.md).
 - **Library and local import:** [library-v1-contract.md](library-v1-contract.md).
+- **Built-in library paging qualification:** [Issue #560 Package D evidence](evidence/issue-560-package-d/README.md)
+  records cross-layer regressions, Windows/Tauri profiling, resource verification, and the isolated
+  upgrade blocker for its reviewed source SHA.
 - **Security and distribution:** [../SECURITY.md](../SECURITY.md),
   [distribution-and-update.md](distribution-and-update.md),
   [v4-release-authority.md](v4-release-authority.md),

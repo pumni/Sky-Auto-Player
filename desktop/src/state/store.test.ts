@@ -246,6 +246,33 @@ describe('desktop store', () => {
     }
   });
 
+  it('builds Built-in Shuffle traversal from the full source rather than the visible page', () => {
+    const total = 500;
+    const originIndex = 99;
+    const traversal = createShuffleTraversal(total, originIndex, 'package-d-builtin-shuffle');
+    if (!traversal) throw new Error('Built-in shuffle traversal was not created');
+    const context: PlaybackContext = {
+      source: { kind: 'smart', id: 'builtin' },
+      query: '',
+      generation: 1,
+      total,
+      currentIndex: originIndex,
+      currentSongId: 'built-in-song-100',
+      shuffleTraversal: traversal,
+      dryRun: false,
+      membershipRevision: 0,
+      valid: true,
+    };
+
+    const order = Array.from({ length: total }, (_, position) =>
+      playbackContextIndexAt(context, position),
+    );
+    expect(order[0]).toBe(originIndex);
+    expect(order).toHaveLength(500);
+    expect(new Set(order).size).toBe(500);
+    expect(order.some((index) => index !== null && index >= 100)).toBe(true);
+  });
+
   it('boots, searches, selects a song, and applies a catalog event', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
@@ -3010,6 +3037,56 @@ describe('desktop store', () => {
     await act(async () => store.getState().startPreparedPlayback('proceed'));
     expect(store.getState().playback.currentSong?.title).toBe('Song 101');
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('auto-plays across a Built-in Songs page boundary using the full source context', async () => {
+    const rows = syntheticRows(500).map((row) => ({ ...row, risk_level: 'low' as const }));
+    const requests: SearchRequest[] = [];
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      builtinSongIds: rows.map((row) => row.song_id),
+      playbackDurationMs: 120,
+      startDelayMs: 5,
+    });
+    const originalSearch = bridge.searchSongs;
+    bridge.searchSongs = async (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    await act(async () => store.getState().setViewport(99, 99));
+
+    const selected = rowAt(store, 99);
+    if (!selected) throw new Error('last row in the first Built-in Songs page was not loaded');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+
+    await waitFor(() => {
+      expect(store.getState().playback.state).toBe('playing');
+      expect(store.getState().playback.currentSong?.songId).toBe(rows[100]?.song_id);
+    });
+
+    const context = store.getState().playback.context;
+    expect(context?.source).toEqual({ kind: 'smart', id: 'builtin' });
+    expect(context?.query).toBe('');
+    expect(context?.total).toBe(500);
+    expect(context?.currentIndex).toBe(100);
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
+    expect(store.getState().library.resultTotal).toBe(500);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(store.getState().library.selectedSongSummary?.song_id).toBe(selected.song_id);
+    expect(
+      requests.some(
+        (request) =>
+          request.source.kind === 'smart' &&
+          request.source.id === 'builtin' &&
+          request.offset === 100 &&
+          request.limit === 100,
+      ),
+    ).toBe(true);
   });
 
   it('keeps a next-song risk confirmation owned until confirm or cancel', async () => {

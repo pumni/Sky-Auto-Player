@@ -1,0 +1,71 @@
+   Compiling sky_dispatch_win32 v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_dispatch_win32)
+   Compiling sky_desktop_shell v4.2.0 (D:\Dev\Sky-Auto-Player\desktop\src-tauri)
+   Compiling sky_native_adapters v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_native_adapters)
+   Compiling sky_player v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_player)
+error[E0432]: unresolved import `sky_app_core::catalog::CatalogSearchOrder`
+ --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\catalog_cache.rs:3:5
+  |
+3 | use sky_app_core::catalog::CatalogSearchOrder;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^------------------
+  |                            |
+  |                            no `CatalogSearchOrder` in `catalog`
+
+error[E0599]: no method named `validate_search_window` found for struct `CatalogIndex` in the current scope
+  --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\catalog_search.rs:86:14
+   |
+84 | /         catalog
+85 | |             .index
+86 | |             .validate_search_window(
+   | |             -^^^^^^^^^^^^^^^^^^^^^^ method not found in `CatalogIndex`
+   | |_____________|
+   |
+
+error[E0599]: no associated function or constant named `is_fuzzy_search_query` found for struct `CatalogIndex` in the current scope
+   --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\catalog_search.rs:111:27
+    |
+111 |             CatalogIndex::is_fuzzy_search_query(&request.query).map_err(catalog_error)?;
+    |                           ^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `CatalogIndex`
+
+error[E0599]: no method named `page_from_search_order` found for struct `CatalogIndex` in the current scope
+   --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\catalog_search.rs:127:39
+    |
+127 |                         catalog.index.page_from_search_order(
+    |                         --------------^^^^^^^^^^^^^^^^^^^^^^ method not found in `CatalogIndex`
+
+error[E0599]: no method named `search_order_with_allowed_ids` found for struct `CatalogIndex` in the current scope
+   --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\catalog_search.rs:146:22
+    |
+144 |                   let order = catalog
+    |  _____________________________-
+145 | |                     .index
+146 | |                     .search_order_with_allowed_ids(
+    | |_____________________-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: there is a method `search_with_allowed_ids` with a similar name, but with different arguments
+   --> crates\sky_app_core\src\catalog.rs:292:4
+
+error[E0599]: no method named `page_from_search_order` found for struct `CatalogIndex` in the current scope
+   --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\catalog_search.rs:155:22
+    |
+153 |                   let page = catalog
+    |  ____________________________-
+154 | |                     .index
+155 | |                     .page_from_search_order(
+    | |                     -^^^^^^^^^^^^^^^^^^^^^^ method not found in `CatalogIndex`
+    | |_____________________|
+    |
+
+error[E0599]: no method named `search_order_with_allowed_ids` found for struct `CatalogIndex` in the current scope
+   --> D:\Dev\Sky-Auto-Player\desktop\src-tauri\src\native_runtime\tests\catalog_package_b.rs:487:10
+    |
+486 |       let order = catalog
+    |  _________________-
+487 | |         .search_order_with_allowed_ids(
+    | |_________-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: there is a method `search_with_allowed_ids` with a similar name, but with different arguments
+   --> crates\sky_app_core\src\catalog.rs:292:4
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `sky_desktop_shell` (lib test) due to 7 previous errors
