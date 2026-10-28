@@ -66,11 +66,13 @@ retained in the JSON. Representative query results:
 | 10,000 | fuzzy | 6.4/6.8 · 6.4/6.9 · 6.6/7.0 |
 
 The separate release-profile catalog-index harness includes ranking work for every sample. At
-10,000 rows its All-source WRatio query measured 133.9 ms p50 / 134.5 ms p90; Liked measured
-35.4/36.8 ms and playlist 55.3/55.6 ms. One-character All search measured 136.0/137.0 µs.
-These values retain the WRatio ranking contract; repeated order reuse is covered by the native
-cache tests. Complete All/Liked/playlist, empty/one-character/fuzzy first/middle/late p50/p90
-records are in [release-core-search-isolated.txt](release-core-search-isolated.txt).
+10,000 rows, the All-source WRatio query measured 133.872–133.999 ms p50 and 134.521–138.185 ms
+p90 across first/middle/late windows; Liked measured 35.468–35.615 / 35.775–35.895 ms and playlist
+56.310–56.371 / 56.453–57.782 ms. One-character All search measured 131.975–135.903 µs p50 and
+132.432–137.031 µs p90. These values retain the WRatio ranking contract; repeated order reuse is
+covered by the native cache tests. Complete All/Liked/playlist, empty/one-character/fuzzy
+first/middle/late p50/p90 records are in
+[release-core-search-isolated.txt](release-core-search-isolated.txt).
 
 ## Release-profile native measurements
 
@@ -80,17 +82,18 @@ shows p50 ranges across those placements; full p50/p90 values for every placemen
 exact-warm, shift +1, and shift-back phase are retained in
 [release-native-viewport-isolated.txt](release-native-viewport-isolated.txt).
 
-| Songs / viewport | Cold p50 range | Exact-warm p50 range | Shift +1 p50 range | Shift-back p50 range |
+| Songs / viewport | Cold p50 / p90 range | Exact-warm p50 / p90 range | Shift +1 p50 / p90 range | Shift-back p50 / p90 range |
 |---:|---:|---:|---:|---:|
-| 96 / 40 | 2.49–5.84 ms | 79–91 µs | 90–95 µs | 91–98 µs |
-| 1,000 / 200 | 13.21–17.08 ms | 388–521 µs | 451–909 µs | 424–1,249 µs |
-| 10,000 / 200 | 12.80–15.81 ms | 392–463 µs | 438–458 µs | 431–449 µs |
+| 96 / 40 | 2.49–5.84 / 2.96–9.18 ms | 79–91 / 84–167 µs | 90–95 / 339–404 µs | 91–98 / 100–121 µs |
+| 1,000 / 200 | 13.21–17.08 / 14.25–24.40 ms | 388–521 / 418–713 µs | 451–909 / 729–1,666 µs | 424–1,249 / 471–1,943 µs |
+| 10,000 / 200 | 12.80–15.81 / 13.13–18.81 ms | 392–463 / 420–522 µs | 438–458 / 672–676 µs | 431–449 / 450–666 µs |
 
-At 1,000/10,000 songs, p90 cold and shifted responses remain visible in the raw log (cold reaches
-24.40 ms p90; the selected-outside 1,000-row fixture reaches 1.67 ms shift p90 and 1.94 ms
-shift-back p90). The accepted Package B warm p50 target was within 2× Package A for all measured
-placements; current p50s also remain below that threshold. Approved A/B/C comparison data is
-available in the [Agent Lead Package B handoff](https://github.com/pumni/Sky-Auto-Player/issues/560#issuecomment-6472735431).
+Each cell gives the min–max across no selection/first/last/outside selection placements; all
+per-placement p50/p90 values, including the 96-song 9.18 ms cold p90 and 1,000-song shifted p90
+tails, remain in [release-native-viewport-isolated.txt](release-native-viewport-isolated.txt).
+The accepted Package B warm p50 target was within 2× Package A for all measured placements;
+current p50s also remain below that threshold. Approved A/B/C comparison data is available in the
+[Agent Lead Package B handoff](https://github.com/pumni/Sky-Auto-Player/issues/560#issuecomment-6472735431).
 
 Implicit-ID results are separate in
 [release-native-implicit-viewport.txt](release-native-implicit-viewport.txt); the 96-song shift
