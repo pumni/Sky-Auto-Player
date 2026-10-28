@@ -1,20 +1,14 @@
 # Technical Documentation
 
-This directory contains canonical technical specifications, architectural contracts, operational runbooks, and release records for Sky Auto Player.
+Start at [INDEX.md](INDEX.md) when a task requires a technical contract.
+It distinguishes active references from revision-bound records.
 
-The documentation router is:
+Current behavior comes from source, tests, and configuration at the
+checked-out SHA; security and release requirements also come from their
+respective contracts. Measurements and historical decisions are evidence
+only for the revisions and conditions they name.
 
-- [`INDEX.md`](INDEX.md) — The sole canonical router mapping system concerns to authoritative documents.
-
-The public website lives in [`site/`](../site/) and is built with Astro.
-
-## Structure
-
-- `adr/` — Architecture Decision Records for structural decisions.
-- `releases/` — Release-specific qualification and acceptance records.
-
-Some completed experiments, migration records, raw evidence, and performance baselines remain in
-this tree as bounded records. They describe the revisions and conditions stated in each record;
-they are not standing instructions or a source of current implementation behavior. For current
-behavior, use source, tests, and configuration at the checked-out SHA. Use [`INDEX.md`](INDEX.md) to
-find the current contract for a task. Git history preserves earlier revisions of tracked records.
+[ADRs](adr/), [evidence](evidence/), and [release records](releases/)
+remain available without being included in routine agent context.
+Documentation changes follow [AGENTS.md](AGENTS.md). The public Astro
+site is maintained in [site/](../site/).
