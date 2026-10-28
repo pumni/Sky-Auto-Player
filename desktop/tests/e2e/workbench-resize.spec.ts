@@ -161,19 +161,51 @@ test('all palette IDs share workbench geometry across the dock and overlay thres
 }) => {
   test.setTimeout(120_000);
   await seed(page, 1366);
-  for (const width of [1366, 1024, 800, 764, 763, 640]) {
+  for (const [width, expectedNavigator, expectedTracks] of [
+    [1366, 300, 662],
+    [1024, 200, 420],
+    [800, 48, 420],
+    [764, 48, 420],
+    [763, 300, 451],
+    [640, 48, 580],
+  ] as const) {
     await page.setViewportSize({ width, height: width === 640 ? 448 : 768 });
     const docked = width >= 764;
     const expectedInspector = docked
       ? Math.min(388, Math.max(0, width - 484))
       : Math.min(width - 16, Math.min(352, Math.max(288, Math.floor(width * 0.45))));
-    await expect
-      .poll(() =>
-        page
-          .locator('.utility-workbench-pane')
-          .evaluate((element) => element.getBoundingClientRect().width),
-      )
-      .toBe(expectedInspector);
+    const expectedLayout = {
+      workbenchWidth: String(width),
+      presentation: docked ? 'docked' : 'overlay',
+      navigator: expectedNavigator,
+      tracks: expectedTracks,
+      inspector: [width - 4 - expectedInspector, width - 4, expectedInspector],
+    };
+    const readStableLayout = () =>
+      page.evaluate(async () => {
+        const workbench = document.querySelector<HTMLElement>('.workbench');
+        const navigator = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+        const tracks = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+        const inspector = document.querySelector<HTMLElement>('.utility-workbench-pane');
+        const read = () => {
+          if (!workbench || !navigator || !tracks || !inspector) return null;
+          const inspectorBounds = inspector.getBoundingClientRect();
+          return {
+            workbenchWidth: workbench.dataset.workbenchWidth,
+            presentation: workbench.dataset.utilityPresentation,
+            navigator: navigator.getBoundingClientRect().width,
+            tracks: tracks.getBoundingClientRect().width,
+            inspector: [inspectorBounds.x, inspectorBounds.right, inspectorBounds.width],
+          };
+        };
+        const before = read();
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        return { before, after: read() };
+      });
+    await expect.poll(readStableLayout).toEqual({
+      before: expectedLayout,
+      after: expectedLayout,
+    });
     let sharedGeometry: unknown;
     for (const palette of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
       await page.locator('html').evaluate((root, value) => {
