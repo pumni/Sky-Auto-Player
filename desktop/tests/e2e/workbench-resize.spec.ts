@@ -40,7 +40,7 @@ async function installHomeKeyTrace(page: Page, selector: string) {
       };
       const snapshot = () => {
         const rawPreferences = localStorage.getItem(storageKey);
-        let preferences: unknown = null;
+        let preferences: unknown;
         try {
           preferences = rawPreferences === null ? null : JSON.parse(rawPreferences);
         } catch {
@@ -97,14 +97,6 @@ async function installHomeKeyTrace(page: Page, selector: string) {
           target: describe(keyboardEvent.target as Element | null),
           state: snapshot(),
         });
-        queueMicrotask(() =>
-          trace.keyboardEvents.push({
-            phase: 'post-dispatch-microtask',
-            key: keyboardEvent.key,
-            defaultPrevented: keyboardEvent.defaultPrevented,
-            state: snapshot(),
-          }),
-        );
       };
       const bubbleKeydown = (event: Event) => {
         const keyboardEvent = event as KeyboardEvent;
