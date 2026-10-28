@@ -1,7 +1,8 @@
 use super::{
-    CachedSongAnalysis, CatalogCompositionSnapshot, CatalogLoadClaim, CatalogLoadState,
-    CatalogLoadWork, CatalogMetadata, NativeDesktopRuntime, NativeLibraryImportRequest,
-    bounded_text, opaque_native_id, settings_error,
+    AnalysisKey, CachedSongAnalysis, CatalogCompositionSnapshot, CatalogLoadClaim,
+    CatalogLoadState, CatalogLoadWork, CatalogMetadata, CatalogSearchKey, CatalogSearchScope,
+    NativeDesktopRuntime, NativeLibraryImportRequest, bounded_text, opaque_native_id,
+    settings_error,
 };
 use crate::commands::{
     CatalogDetailRequest, CatalogReloadDto, CatalogRowDto, CatalogSearchDto, CatalogSearchRequest,
@@ -16,7 +17,7 @@ use crate::ui_events::{
 };
 use sha2::{Digest, Sha256};
 use sky_app_core::catalog::{
-    CatalogError, CatalogSourceIdentity, StableSongId, WRatioRanker, song_id_for_canonical_path,
+    CatalogError, CatalogIndex, CatalogSourceIdentity, StableSongId, WRatioRanker,
 };
 use sky_app_core::library::{ImportedSourceKind, ImportedSourceRef, LibraryError};
 use sky_app_core::settings::ApplicationSettings;
@@ -25,16 +26,14 @@ use sky_app_core::song::{
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_native_adapters::{
-    AppResources, BuiltinCatalogFailureCode, BuiltinCatalogStatus, CATALOG_CACHE_SCHEMA_VERSION,
-    CatalogCache, CatalogCacheEntry, CatalogCacheSource, CatalogCacheSourceKind,
-    CatalogComposition, ImportedSourceCatalogStatus,
+    AppResources, BuiltinCatalogFailureCode, BuiltinCatalogStatus, CatalogCache, CatalogCacheEntry,
+    CatalogCacheSourceKind, CatalogComposition, ImportedSourceCatalogStatus,
 };
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::UNIX_EPOCH;
 impl NativeDesktopRuntime {
     pub(crate) fn catalog_readiness(&self) -> Result<(CatalogReadiness, Option<u64>), String> {
         let state = self
@@ -257,111 +256,6 @@ impl NativeDesktopRuntime {
             .catalog_compose_barrier
             .lock()
             .expect("catalog compose barrier") = Some((entered, release));
-    }
-
-    fn catalog_cache_from_composition(
-        &self,
-        composition: &CatalogComposition,
-        source_fingerprint: &str,
-    ) -> Result<CatalogCache, String> {
-        // Size and mtime are persisted for cache metadata and diagnostics only.
-        // Reconciliation always comes from a complete CatalogComposer pass, so
-        // a same-size, same-mtime content mutation cannot be hidden by a
-        // metadata-only validity shortcut.
-        let mut sources = vec![
-            CatalogCacheSource {
-                source_id: "builtin".into(),
-                kind: CatalogCacheSourceKind::Builtin,
-                import_kind: None,
-                display_name: "Built-in library".into(),
-                available: matches!(
-                    composition.builtin_status,
-                    BuiltinCatalogStatus::Available { .. }
-                ),
-                song_ids: composition.builtin_membership.iter().cloned().collect(),
-            },
-            CatalogCacheSource {
-                source_id: "user".into(),
-                kind: CatalogCacheSourceKind::User,
-                import_kind: None,
-                display_name: "User library".into(),
-                available: true,
-                song_ids: composition.user_membership.iter().cloned().collect(),
-            },
-        ];
-        for status in &composition.imported_status {
-            sources.push(CatalogCacheSource {
-                source_id: status.source_id.clone(),
-                kind: CatalogCacheSourceKind::Imported,
-                import_kind: Some(status.kind),
-                display_name: status.display_name.clone(),
-                available: status.available,
-                song_ids: composition
-                    .imported_membership
-                    .get(&status.source_id)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect(),
-            });
-        }
-        let previous_cache = self.cached_catalog_snapshot()?;
-        let mut entries = Vec::with_capacity(composition.entries.len());
-        for entry in &composition.entries {
-            let song_id = match &entry.identity {
-                CatalogSourceIdentity::PathDerived => {
-                    song_id_for_canonical_path(&entry.canonical_path)
-                }
-                CatalogSourceIdentity::Stable(song_id) => song_id.as_str().to_owned(),
-            };
-            let (source_id, kind) = cache_source_for_song(composition, &song_id);
-            let previous_entry = previous_cache.as_ref().and_then(|cache| {
-                cache.entries.iter().find(|cached| {
-                    cached.canonical_path == entry.canonical_path && cached.song_id == song_id
-                })
-            });
-            let metadata = fs::metadata(&entry.canonical_path).ok();
-            let (file_size, modified_unix_ms) = if let Some(metadata) = metadata {
-                let modified_unix_ms = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-                    .or_else(|| previous_entry.map(|cached| cached.modified_unix_ms))
-                    .ok_or_else(|| "catalog cache metadata timestamp unavailable".to_string())?;
-                (metadata.len(), modified_unix_ms)
-            } else if let Some(previous_entry) = previous_entry {
-                (previous_entry.file_size, previous_entry.modified_unix_ms)
-            } else {
-                return Err("catalog cache metadata unavailable".into());
-            };
-            entries.push(CatalogCacheEntry {
-                source_id,
-                kind,
-                canonical_path: entry.canonical_path.clone(),
-                song_id,
-                title: entry.title.clone(),
-                file_size,
-                modified_unix_ms,
-            });
-        }
-        let cache_generation = self
-            .cached_catalog
-            .lock()
-            .ok()
-            .and_then(|cache| {
-                cache
-                    .as_ref()
-                    .map(|cache| cache.cache_generation.saturating_add(1).max(1))
-            })
-            .unwrap_or(1);
-        Ok(CatalogCache {
-            schema_version: CATALOG_CACHE_SCHEMA_VERSION,
-            cache_generation,
-            source_fingerprint: source_fingerprint.to_owned(),
-            sources,
-            entries,
-        })
     }
 
     fn catalog_composition_snapshot(&self) -> Result<CatalogCompositionSnapshot, String> {
@@ -652,6 +546,10 @@ impl NativeDesktopRuntime {
         drop(catalog);
         drop(prepare_publication);
         if invalidate {
+            self.catalog_search_cache
+                .lock()
+                .map_err(|_| "native catalog search cache lock poisoned".to_string())?
+                .invalidate_all();
             self.invalidate_analysis_cache();
         }
         if record_ready {
@@ -660,11 +558,12 @@ impl NativeDesktopRuntime {
         Ok((snapshot, library_total?))
     }
 
-    fn cached_catalog_snapshot(&self) -> Result<Option<CatalogCache>, String> {
-        self.cached_catalog
+    fn invalidate_playlist_search_orders(&self) -> Result<(), String> {
+        self.catalog_search_cache
             .lock()
-            .map_err(|_| "native catalog cache lock poisoned".to_string())
-            .map(|cache| cache.clone())
+            .map_err(|_| "native catalog search cache lock poisoned".to_string())?
+            .invalidate_playlists();
+        Ok(())
     }
 
     pub(crate) fn builtin_catalog_status(&self) -> Result<BuiltinCatalogStatus, String> {
@@ -730,12 +629,14 @@ impl NativeDesktopRuntime {
         request: LibraryCreatePlaylistRequest,
     ) -> Result<LibraryPlaylistSummaryDto, String> {
         let id = opaque_native_id()?;
-        let collection = self
+        let mut manifest = self
             .library_manifest
             .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
+            .map_err(|_| "native library manifest lock poisoned".to_string())?;
+        let collection = manifest
             .create_collection(id, request.name)
             .map_err(library_error)?;
+        drop(manifest);
         self.playlist_summary(collection)
     }
 
@@ -756,23 +657,32 @@ impl NativeDesktopRuntime {
         &self,
         request: LibraryPlaylistIdRequest,
     ) -> Result<bool, String> {
-        self.library_manifest
+        let mut manifest = self
+            .library_manifest
             .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
+            .map_err(|_| "native library manifest lock poisoned".to_string())?;
+        let deleted = manifest
             .delete_collection(&request.playlist_id)
-            .map_err(library_error)
+            .map_err(library_error)?;
+        if deleted {
+            self.invalidate_playlist_search_orders()?;
+        }
+        Ok(deleted)
     }
 
     pub(super) fn add_playlist_songs(
         &self,
         request: LibraryPlaylistSongsRequest,
     ) -> Result<LibraryPlaylistSummaryDto, String> {
-        let collection = self
+        let mut manifest = self
             .library_manifest
             .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
+            .map_err(|_| "native library manifest lock poisoned".to_string())?;
+        let collection = manifest
             .add_songs(&request.playlist_id, &request.song_ids)
             .map_err(library_error)?;
+        self.invalidate_playlist_search_orders()?;
+        drop(manifest);
         self.playlist_summary(collection)
     }
 
@@ -780,12 +690,15 @@ impl NativeDesktopRuntime {
         &self,
         request: LibraryPlaylistSongsRequest,
     ) -> Result<LibraryPlaylistSummaryDto, String> {
-        let collection = self
+        let mut manifest = self
             .library_manifest
             .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
+            .map_err(|_| "native library manifest lock poisoned".to_string())?;
+        let collection = manifest
             .remove_songs(&request.playlist_id, &request.song_ids)
             .map_err(library_error)?;
+        self.invalidate_playlist_search_orders()?;
+        drop(manifest);
         self.playlist_summary(collection)
     }
 
@@ -849,6 +762,7 @@ impl NativeDesktopRuntime {
             let playlist = manifest
                 .import_and_add_songs(&request.playlist_id, imports, &song_ids)
                 .map_err(library_error)?;
+            self.invalidate_playlist_search_orders()?;
             (playlist, has_new_import)
         };
 
@@ -866,14 +780,14 @@ impl NativeDesktopRuntime {
 
     pub(super) fn search(&self, request: CatalogSearchRequest) -> Result<CatalogSearchDto, String> {
         self.ensure_catalog_loaded()?;
-        let settings = self.settings_snapshot()?;
-        let playlist_ids: Option<BTreeSet<String>> = match &request.source {
+        let (settings, liked_revision, analysis_revision) = self.catalog_settings_snapshot()?;
+        let (playlist_ids, playlist_revision) = match &request.source {
             LibrarySource::Smart {
                 id: CatalogSourceId::Liked,
-            } => None,
+            } => (None, None),
             LibrarySource::Smart {
                 id: CatalogSourceId::All,
-            } => None,
+            } => (None, None),
             LibrarySource::Playlist { id } => {
                 if !sky_app_core::library::is_valid_collection_id(id) {
                     return Err("invalid_params: playlist source ID is invalid".into());
@@ -882,18 +796,22 @@ impl NativeDesktopRuntime {
                     .library_manifest
                     .lock()
                     .map_err(|_| "native library manifest lock poisoned".to_string())?;
-                Some(
-                    manifest
-                        .snapshot()
-                        .collections
-                        .iter()
-                        .find(|collection| collection.id == *id)
-                        .ok_or_else(|| "library playlist was not found".to_string())?
-                        .song_ids
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>(),
-                )
+                let ids = manifest
+                    .snapshot()
+                    .collections
+                    .iter()
+                    .find(|collection| collection.id == *id)
+                    .ok_or_else(|| "library playlist was not found".to_string())?
+                    .song_ids
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let playlist_revision = self
+                    .catalog_search_cache
+                    .lock()
+                    .map_err(|_| "native catalog search cache lock poisoned".to_string())?
+                    .playlist_membership_revision;
+                (Some(ids), Some(playlist_revision))
             }
         };
         let catalog = self
@@ -918,18 +836,114 @@ impl NativeDesktopRuntime {
             .index
             .count_allowed_ids(settings.liked_songs.ids(), request.generation)
             .map_err(catalog_error)?;
-        let page = catalog
+        catalog
             .index
-            .search_with_allowed_ids(
-                &WRatioRanker,
+            .validate_search_window(
                 &request.query,
                 request.offset as usize,
                 request.limit as usize,
                 request.generation,
-                allowed_ids,
             )
             .map_err(catalog_error)?;
-        let cache = self
+        let scope = match &request.source {
+            LibrarySource::Smart {
+                id: CatalogSourceId::Liked,
+            } => CatalogSearchScope::Liked,
+            LibrarySource::Smart {
+                id: CatalogSourceId::All,
+            } => CatalogSearchScope::All,
+            LibrarySource::Playlist { id } => CatalogSearchScope::Playlist(id.clone()),
+        };
+        let membership_revision = match &scope {
+            CatalogSearchScope::Liked => liked_revision,
+            CatalogSearchScope::Playlist(_) => playlist_revision.unwrap_or_default(),
+            CatalogSearchScope::All => 0,
+        };
+        let is_fuzzy =
+            CatalogIndex::is_fuzzy_search_query(&request.query).map_err(catalog_error)?;
+        let search_key = CatalogSearchKey {
+            generation: catalog.index.generation(),
+            scope: scope.clone(),
+            membership_revision,
+            query: request.query.clone(),
+        };
+        let page = if is_fuzzy {
+            let cache_hit = {
+                let mut cache = self
+                    .catalog_search_cache
+                    .lock()
+                    .map_err(|_| "native catalog search cache lock poisoned".to_string())?;
+                cache
+                    .get(&search_key)
+                    .map(|order| {
+                        catalog.index.page_from_search_order(
+                            order,
+                            &request.query,
+                            request.offset as usize,
+                            request.limit as usize,
+                            request.generation,
+                        )
+                    })
+                    .transpose()
+                    .map_err(catalog_error)?
+            };
+            if let Some(page) = cache_hit {
+                page
+            } else {
+                #[cfg(test)]
+                self.catalog_search_order_test_computations
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                let order = catalog
+                    .index
+                    .search_order_with_allowed_ids(
+                        &WRatioRanker,
+                        &request.query,
+                        request.generation,
+                        allowed_ids,
+                    )
+                    .map_err(catalog_error)?;
+                let page = catalog
+                    .index
+                    .page_from_search_order(
+                        &order,
+                        &request.query,
+                        request.offset as usize,
+                        request.limit as usize,
+                        request.generation,
+                    )
+                    .map_err(catalog_error)?;
+                let mut cache = self
+                    .catalog_search_cache
+                    .lock()
+                    .map_err(|_| "native catalog search cache lock poisoned".to_string())?;
+                let membership_is_current = match scope {
+                    CatalogSearchScope::Liked => {
+                        cache.liked_membership_revision == membership_revision
+                    }
+                    CatalogSearchScope::Playlist(_) => {
+                        cache.playlist_membership_revision == membership_revision
+                    }
+                    CatalogSearchScope::All => true,
+                };
+                if catalog.index.generation() == search_key.generation && membership_is_current {
+                    cache.insert(search_key, order);
+                }
+                page
+            }
+        } else {
+            catalog
+                .index
+                .search_with_allowed_ids(
+                    &WRatioRanker,
+                    &request.query,
+                    request.offset as usize,
+                    request.limit as usize,
+                    request.generation,
+                    allowed_ids,
+                )
+                .map_err(catalog_error)?
+        };
+        let mut cache = self
             .analysis_cache
             .lock()
             .map_err(|_| "native analysis cache lock poisoned".to_string())?;
@@ -938,8 +952,14 @@ impl NativeDesktopRuntime {
                 .items
                 .into_iter()
                 .map(|row| {
-                    let metadata = cache.get(&row.song_id).map(|value| &value.metadata);
+                    let analysis_key = AnalysisKey {
+                        song_id: row.song_id.clone(),
+                        generation: page.generation,
+                        settings_revision: analysis_revision,
+                    };
+                    let metadata = cache.get(&analysis_key).map(|value| value.metadata);
                     let format_label = metadata
+                        .as_ref()
                         .map(|value| value.format_label.clone())
                         .or_else(|| {
                             catalog
@@ -956,12 +976,14 @@ impl NativeDesktopRuntime {
                         song_id: row.song_id.clone(),
                         title: row.title,
                         format_label,
-                        duration_us: metadata.and_then(|value| value.duration_us),
-                        note_count: metadata.and_then(|value| value.note_count),
+                        duration_us: metadata.as_ref().and_then(|value| value.duration_us),
+                        note_count: metadata.as_ref().and_then(|value| value.note_count),
                         risk_level: metadata
+                            .as_ref()
                             .map(|value| value.risk_level.clone())
                             .unwrap_or_else(|| "unknown".into()),
                         metadata_state: metadata
+                            .as_ref()
                             .map(|value| value.state.into())
                             .unwrap_or_else(|| "pending".into()),
                     }
@@ -977,50 +999,63 @@ impl NativeDesktopRuntime {
 
     pub(super) fn detail(&self, request: CatalogDetailRequest) -> Result<SongDetailDto, String> {
         self.ensure_catalog_loaded()?;
-        let entry = {
+        let (entry, generation) = {
             let catalog = self
                 .catalog
                 .lock()
                 .map_err(|_| "native catalog lock poisoned".to_string())?;
-            catalog
-                .index
-                .entry_for_song_id(&request.song_id, request.generation)
-                .map_err(catalog_error)?
+            (
+                catalog
+                    .index
+                    .entry_for_song_id(&request.song_id, request.generation)
+                    .map_err(catalog_error)?
+                    .clone(),
+                catalog.index.generation(),
+            )
         };
-        if let Some(detail) = self
-            .analysis_cache
-            .lock()
-            .map_err(|_| "native analysis cache lock poisoned".to_string())?
-            .get(&request.song_id)
-            .and_then(|cached| cached.detail.clone())
-        {
-            return Ok(detail);
-        }
-
         let path = PathBuf::from(&entry.canonical_path);
-        let fallback = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or(&entry.row.title);
-        let settings = self.settings_snapshot()?;
+        let title = entry.row.title;
+        let song_id = entry.row.song_id;
+        let (settings, _, settings_revision) = self.catalog_settings_snapshot()?;
         let policy = self.timing_policy(
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
             settings.playback_defaults.timing_margin_us,
         )?;
-        let cached = self.analyze_song(
-            &path,
-            &entry.row.song_id,
-            &entry.row.title,
-            fallback,
-            &settings,
-            &policy,
-        )?;
+        let key = super::AnalysisKey {
+            song_id: song_id.clone(),
+            generation,
+            settings_revision,
+        };
+        let cached = self.analysis_for_request(super::AnalysisRequest {
+            key,
+            path: &path,
+            title: &title,
+            failure_format_label: &format_label_for_path(&path),
+            settings: &settings,
+            policy: &policy,
+            viewport_revision: None,
+            priority: super::AnalysisPriority::Selected,
+            cache_failures: false,
+        })?;
         let detail = cached
             .detail
             .clone()
             .ok_or_else(|| "song detail analysis was unavailable".to_string())?;
-        self.cache_analysis(&request.song_id, cached);
+        if self
+            .analysis_revision
+            .load(std::sync::atomic::Ordering::Acquire)
+            != settings_revision
+            || self
+                .catalog
+                .lock()
+                .map_err(|_| "native catalog lock poisoned".to_string())?
+                .index
+                .generation()
+                != generation
+        {
+            return Err("catalog detail analysis became stale".into());
+        }
         Ok(detail)
     }
 
@@ -1032,7 +1067,8 @@ impl NativeDesktopRuntime {
         if request.song_ids.len() > 2_000 {
             return Err("catalog viewport contains too many metadata hydration IDs".into());
         }
-        let entries = {
+        let viewport_revision = self.begin_viewport_request()?;
+        let (entries, selected_entry) = {
             let catalog = self
                 .catalog
                 .lock()
@@ -1076,14 +1112,27 @@ impl NativeDesktopRuntime {
             } else {
                 request.song_ids.clone()
             };
-            if let Some(song_id) = &request.selected_song_id {
-                catalog
-                    .index
-                    .canonical_path_for_song_id(song_id, Some(request.generation))
-                    .map_err(catalog_error)?;
-            }
-            song_ids
+            let selected_entry = if let Some(song_id) = &request.selected_song_id {
+                Some(
+                    catalog
+                        .index
+                        .entry_for_song_id(song_id, Some(request.generation))
+                        .map(|entry| {
+                            (
+                                entry.row.song_id.clone(),
+                                entry.row.title.clone(),
+                                entry.canonical_path.clone(),
+                            )
+                        })
+                        .map_err(catalog_error)?,
+                )
+            } else {
+                None
+            };
+            let mut seen = BTreeSet::new();
+            let entries = song_ids
                 .into_iter()
+                .filter(|song_id| seen.insert(song_id.clone()))
                 .map(|song_id| {
                     catalog
                         .index
@@ -1091,53 +1140,103 @@ impl NativeDesktopRuntime {
                         .map(|entry| (entry.row.song_id, entry.row.title, entry.canonical_path))
                         .map_err(catalog_error)
                 })
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            (entries, selected_entry)
         };
-        let settings = self.settings_snapshot()?;
+        let (settings, like_revision, settings_revision) = self.catalog_settings_snapshot()?;
         let policy = self.timing_policy(
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
             settings.playback_defaults.timing_margin_us,
         )?;
-        for (song_id, title, path) in &entries {
-            let already_cached = self
-                .analysis_cache
-                .lock()
-                .map_err(|_| "native analysis cache lock poisoned".to_string())?
-                .contains_key(song_id);
-            if already_cached {
-                continue;
+        let mut analysis_entries = entries.clone();
+        if let Some(selected) = selected_entry {
+            if let Some(index) = analysis_entries
+                .iter()
+                .position(|entry| entry.0 == selected.0)
+            {
+                analysis_entries.remove(index);
             }
-            let format_label = format_label_for_path(Path::new(path));
-            let analysis = self
-                .analyze_song(Path::new(path), song_id, title, title, &settings, &policy)
-                .unwrap_or_else(|_| CachedSongAnalysis {
-                    metadata: CatalogMetadata::error(format_label),
-                    detail: None,
-                });
-            self.cache_analysis(song_id, analysis);
+            analysis_entries.insert(0, selected);
         }
-        let cache = self
-            .analysis_cache
+        let selected_id = request.selected_song_id.as_deref();
+        let mut analyses = std::collections::HashMap::with_capacity(analysis_entries.len());
+        let mut incomplete = false;
+        for (song_id, title, path) in &analysis_entries {
+            let key = super::AnalysisKey {
+                song_id: song_id.clone(),
+                generation: request.generation,
+                settings_revision,
+            };
+            match self.analysis_for_request(super::AnalysisRequest {
+                key,
+                path: Path::new(path),
+                title,
+                failure_format_label: &format_label_for_path(Path::new(path)),
+                settings: &settings,
+                policy: &policy,
+                viewport_revision: Some(viewport_revision),
+                priority: if selected_id == Some(song_id.as_str()) {
+                    super::AnalysisPriority::Selected
+                } else {
+                    super::AnalysisPriority::Visible
+                },
+                cache_failures: true,
+            }) {
+                Ok(analysis) => {
+                    analyses.insert(song_id.clone(), analysis);
+                }
+                Err(error)
+                    if error == "catalog analysis queue is full"
+                        || error == "catalog analysis request was superseded" =>
+                {
+                    incomplete = true;
+                    break;
+                }
+                Err(_) => {
+                    incomplete = true;
+                    break;
+                }
+            }
+        }
+        let (latest_settings, latest_like_revision, latest_analysis_revision) =
+            self.catalog_settings_snapshot()?;
+        let generation_is_current = self
+            .catalog
             .lock()
-            .map_err(|_| "native analysis cache lock poisoned".to_string())?;
-        let items = entries
-            .into_iter()
-            .filter_map(|(song_id, title, _)| {
-                cache.get(&song_id).map(|analysis| CatalogRowDto {
-                    liked: settings.liked_songs.contains(&song_id),
-                    song_id,
-                    title,
-                    format_label: analysis.metadata.format_label.clone(),
-                    duration_us: analysis.metadata.duration_us,
-                    note_count: analysis.metadata.note_count,
-                    risk_level: analysis.metadata.risk_level.clone(),
-                    metadata_state: analysis.metadata.state.into(),
+            .map_err(|_| "native catalog lock poisoned".to_string())?
+            .index
+            .generation()
+            == request.generation;
+        let accepted = !incomplete
+            && self
+                .viewport_revision
+                .load(std::sync::atomic::Ordering::Acquire)
+                == viewport_revision
+            && latest_like_revision == like_revision
+            && latest_analysis_revision == settings_revision
+            && generation_is_current;
+        let items = if accepted {
+            entries
+                .into_iter()
+                .filter_map(|(song_id, title, _)| {
+                    analyses.get(&song_id).map(|analysis| CatalogRowDto {
+                        liked: latest_settings.liked_songs.contains(&song_id),
+                        song_id,
+                        title,
+                        format_label: analysis.metadata.format_label.clone(),
+                        duration_us: analysis.metadata.duration_us,
+                        note_count: analysis.metadata.note_count,
+                        risk_level: analysis.metadata.risk_level.clone(),
+                        metadata_state: analysis.metadata.state.into(),
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(CatalogViewportDto {
-            accepted: true,
+            accepted,
             generation: request.generation,
             first_index: request.first_index,
             last_index: request.last_index,
@@ -1165,12 +1264,19 @@ impl NativeDesktopRuntime {
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
+        let previous_likes = settings.snapshot().liked_songs.clone();
         settings
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
         settings
             .set_song_liked(&request.song_id, request.liked)
             .map_err(settings_error)?;
+        if previous_likes != settings.snapshot().liked_songs {
+            self.catalog_search_cache
+                .lock()
+                .map_err(|_| "native catalog search cache lock poisoned".to_string())?
+                .invalidate_liked();
+        }
         let liked_total = self
             .catalog
             .lock()
@@ -1185,19 +1291,7 @@ impl NativeDesktopRuntime {
         })
     }
 
-    pub(super) fn invalidate_analysis_cache(&self) {
-        if let Ok(mut cache) = self.analysis_cache.lock() {
-            cache.clear();
-        }
-    }
-
-    fn cache_analysis(&self, song_id: &str, analysis: CachedSongAnalysis) {
-        if let Ok(mut cache) = self.analysis_cache.lock() {
-            cache.insert(song_id.to_owned(), analysis);
-        }
-    }
-
-    fn analyze_song(
+    pub(super) fn analyze_song(
         &self,
         path: &Path,
         song_id: &str,
@@ -1339,27 +1433,6 @@ fn cached_entry_to_source(entry: &CatalogCacheEntry) -> sky_app_core::catalog::C
         title: entry.title.clone(),
         identity,
     }
-}
-
-fn cache_source_for_song(
-    composition: &CatalogComposition,
-    song_id: &str,
-) -> (String, CatalogCacheSourceKind) {
-    if composition.builtin_membership.contains(song_id) {
-        return ("builtin".into(), CatalogCacheSourceKind::Builtin);
-    }
-    if composition.user_membership.contains(song_id) {
-        return ("user".into(), CatalogCacheSourceKind::User);
-    }
-    if let Some(source_id) = composition
-        .imported_membership
-        .iter()
-        .filter_map(|(source_id, song_ids)| song_ids.contains(song_id).then_some(source_id))
-        .min()
-    {
-        return (source_id.clone(), CatalogCacheSourceKind::Imported);
-    }
-    ("user".into(), CatalogCacheSourceKind::User)
 }
 
 fn library_error(error: LibraryError) -> String {

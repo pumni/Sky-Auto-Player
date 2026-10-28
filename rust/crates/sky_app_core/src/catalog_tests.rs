@@ -10,6 +10,16 @@ impl FuzzyRanker for NoFuzzy {
     }
 }
 
+struct DuplicateRanker;
+impl FuzzyRanker for DuplicateRanker {
+    fn rank(&self, _query: &str, keys: &[String], _score_cutoff: f64) -> Vec<usize> {
+        if keys.len() < 3 {
+            return Vec::new();
+        }
+        vec![1, 1, 0, 2, 0, usize::MAX]
+    }
+}
+
 fn entry(path: &str, title: &str) -> CatalogSourceEntry {
     CatalogSourceEntry::path_derived(path, title)
 }
@@ -141,6 +151,47 @@ fn wratio_ranker_preserves_stable_ties_after_cutoff() {
     assert_eq!(
         ranker.rank("sky child", &keys, FUZZY_SCORE_CUTOFF),
         vec![0, 1]
+    );
+}
+
+#[test]
+fn search_orders_deduplicate_ranker_indices_in_first_seen_order_and_fence_keys() {
+    let mut catalog = CatalogIndex::default();
+    let snapshot = catalog
+        .replace_entries([
+            entry("C:/songs/a.json", "Alpha Song"),
+            entry("C:/songs/b.json", "Beta Song"),
+            entry("C:/songs/c.json", "Gamma Song"),
+        ])
+        .expect("catalog");
+    let order = catalog
+        .search_order_with_allowed_ids(&DuplicateRanker, "ranked", Some(snapshot.generation), None)
+        .expect("order");
+    assert_eq!(order.index_count(), 3);
+    let page = catalog
+        .page_from_search_order(&order, "ranked", 0, 10, Some(snapshot.generation))
+        .expect("page");
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|row| row.song_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            snapshot.items[1].song_id.as_str(),
+            snapshot.items[0].song_id.as_str(),
+            snapshot.items[2].song_id.as_str(),
+        ]
+    );
+    assert_eq!(
+        catalog.page_from_search_order(&order, "other", 0, 10, Some(snapshot.generation)),
+        Err(CatalogError::SearchOrderMismatch)
+    );
+    catalog
+        .replace_entries([entry("C:/songs/next.json", "Next Song")])
+        .expect("new generation");
+    assert_eq!(
+        catalog.page_from_search_order(&order, "ranked", 0, 10, Some(snapshot.generation)),
+        Err(CatalogError::StaleGeneration)
     );
 }
 

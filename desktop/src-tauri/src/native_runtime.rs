@@ -88,6 +88,11 @@ const PLAYBACK_JOIN_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const PLAYBACK_SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
 const EVENT_PUBLISHER_CLOSE_BUDGET: Duration = Duration::from_millis(50);
 const PLAYBACK_PRESENTATION_CRITICAL_CAPACITY: usize = 64;
+const MAX_CACHED_CATALOG_SEARCH_ORDERS: usize = 8;
+const MAX_CACHED_CATALOG_SEARCH_INDICES: usize = 100_000;
+const MAX_CACHED_SONG_ANALYSES: usize = 128;
+const MAX_ACTIVE_SONG_ANALYSES: usize = 2;
+const MAX_QUEUED_SONG_ANALYSES: usize = 64;
 const DRY_RUN_TERMINAL_NONE: u8 = 0;
 #[cfg(test)]
 type PlaybackJoinTestHook = Arc<dyn Fn(Duration) -> Result<bool, String> + Send + Sync>;
@@ -119,10 +124,25 @@ pub(crate) struct NativeDesktopRuntime {
     catalog_load_epoch: AtomicU64,
     #[cfg(test)]
     catalog_compose_barrier: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    #[cfg(test)]
+    analysis_test_gate: Mutex<Option<Arc<AnalysisTestGate>>>,
+    #[cfg(test)]
+    analysis_test_runs: AtomicU64,
+    #[cfg(test)]
+    analysis_test_queue_rejections: AtomicU64,
+    #[cfg(test)]
+    catalog_search_order_test_computations: AtomicU64,
+    #[cfg(test)]
+    analysis_test_order: Mutex<Vec<String>>,
     cached_catalog: Mutex<Option<CatalogCache>>,
     catalog: Mutex<CatalogState>,
     catalog_load: Mutex<CatalogLoadState>,
-    analysis_cache: Mutex<HashMap<String, CachedSongAnalysis>>,
+    catalog_search_cache: Mutex<CatalogSearchCache>,
+    analysis_cache: Mutex<AnalysisCacheState>,
+    analysis_admission: Mutex<AnalysisAdmissionState>,
+    analysis_admission_changed: Condvar,
+    analysis_revision: AtomicU64,
+    viewport_revision: AtomicU64,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
     calibration: Arc<NativeCalibrationService>,
@@ -195,6 +215,15 @@ struct CatalogLoadClaim {
 struct CatalogCompositionSnapshot {
     composition: CatalogComposition,
     source_fingerprint: String,
+}
+
+impl CachedSongAnalysis {
+    fn error(format_label: String) -> Self {
+        Self {
+            metadata: CatalogMetadata::error(format_label),
+            detail: None,
+        }
+    }
 }
 
 impl CatalogMetadata {
@@ -385,10 +414,25 @@ impl NativeDesktopRuntime {
             catalog_load_epoch: AtomicU64::new(0),
             #[cfg(test)]
             catalog_compose_barrier: Mutex::new(None),
+            #[cfg(test)]
+            analysis_test_gate: Mutex::new(None),
+            #[cfg(test)]
+            analysis_test_runs: AtomicU64::new(0),
+            #[cfg(test)]
+            analysis_test_queue_rejections: AtomicU64::new(0),
+            #[cfg(test)]
+            catalog_search_order_test_computations: AtomicU64::new(0),
+            #[cfg(test)]
+            analysis_test_order: Mutex::new(Vec::new()),
             cached_catalog: Mutex::new(None),
             catalog: Mutex::new(CatalogState::default()),
             catalog_load: Mutex::new(CatalogLoadState::default()),
-            analysis_cache: Mutex::new(HashMap::new()),
+            catalog_search_cache: Mutex::new(CatalogSearchCache::default()),
+            analysis_cache: Mutex::new(AnalysisCacheState::default()),
+            analysis_admission: Mutex::new(AnalysisAdmissionState::default()),
+            analysis_admission_changed: Condvar::new(),
+            analysis_revision: AtomicU64::new(0),
+            viewport_revision: AtomicU64::new(0),
             events,
             playback,
             calibration,
@@ -673,10 +717,20 @@ impl NativeDesktopRuntime {
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
+        let before = service.snapshot().clone();
         service
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
         let snapshot = service.snapshot().clone();
+        if before.liked_songs != snapshot.liked_songs {
+            self.catalog_search_cache
+                .lock()
+                .map_err(|_| "native catalog search cache lock poisoned".to_string())?
+                .invalidate_liked();
+        }
+        if before.playback_defaults != snapshot.playback_defaults {
+            self.invalidate_analysis_cache();
+        }
         let fingerprint = settings_fingerprint(&snapshot)?;
         if prepare_publication
             .settings_fingerprint
@@ -767,11 +821,11 @@ impl NativeDesktopRuntime {
             self.playback
                 .set_settings_fingerprint_locked(&mut prepare_publication, after_fingerprint);
         }
-        drop(settings);
-        drop(prepare_publication);
         if !preparation_safe_patch {
             self.invalidate_analysis_cache();
         }
+        drop(settings);
+        drop(prepare_publication);
         if candidate_invalidation_needed && let Some(update_service) = &self.update_service {
             let channel = match snapshot.update.channel {
                 sky_app_core::settings::UpdateChannel::Stable => {
@@ -1037,6 +1091,14 @@ impl NativeDesktopRuntime {
 
 mod calibration;
 mod catalog;
+mod catalog_cache;
+mod catalog_reconcile;
+#[cfg(test)]
+use catalog_cache::AnalysisTestGate;
+use catalog_cache::{
+    AnalysisAdmissionState, AnalysisCacheState, AnalysisKey, AnalysisPriority, AnalysisRequest,
+    CatalogSearchCache, CatalogSearchKey, CatalogSearchScope,
+};
 mod playback;
 #[cfg(test)]
 use playback::*;
