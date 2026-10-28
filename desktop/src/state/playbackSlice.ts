@@ -556,6 +556,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
   };
 
   const contextForSong = (library: LibraryState, songId: string): PlaybackContext | null => {
+    if (library.indexMembershipRevision !== library.membershipRevision) return null;
     const currentIndex =
       library.indexById.get(songId) ??
       (library.selectedSongId === songId ? (library.selectedSongIndex ?? undefined) : undefined);
@@ -612,7 +613,10 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       library.searchRequestGeneration,
       false,
     );
-    if (get().library.generation !== playbackContext.generation) {
+    if (
+      get().library.generation !== playbackContext.generation ||
+      !playbackContextIsCurrent(playbackContext)
+    ) {
       throw new Error('The Library changed while the adjacent song was being resolved.');
     }
     const row = result.items[index - result.offset];

@@ -87,6 +87,8 @@ export interface LibraryState {
   selectedSongId: string | null;
   selectedSongSummary: SongRow | null;
   selectedSongIndex: number | null;
+  membershipRevision: number;
+  indexMembershipRevision: number;
   visibleRange: { first: number; last: number };
   loading: boolean;
   searchRequestGeneration: number;
@@ -229,6 +231,7 @@ export const MAX_DIAGNOSTIC_SAMPLES = 600;
 export const MAX_DIAGNOSTIC_EVENTS = 500;
 export const MAX_DIAGNOSTIC_LINE_LENGTH = 4096;
 export const LIBRARY_PAGE_SIZE = 200;
+export const MAX_ACTIVE_LIBRARY_PAGES = 3;
 export const DETAIL_CACHE_LIMIT = 64;
 export const AUTO_PLAY_HANDOFF_MS = 450;
 

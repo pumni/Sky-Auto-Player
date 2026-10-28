@@ -207,11 +207,14 @@ export function TrackTable({ useStore }: TrackTableProps) {
   const onTableKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (resultTotal === 0 || event.target !== event.currentTarget) return;
     const state = useStore.getState();
-    const selectedIndex = state.library.selectedSongId
-      ? (state.library.indexById.get(state.library.selectedSongId) ??
-        state.library.selectedSongIndex ??
-        -1)
-      : -1;
+    const indexIsCurrent =
+      state.library.indexMembershipRevision === state.library.membershipRevision;
+    const selectedIndex =
+      state.library.selectedSongId && indexIsCurrent
+        ? (state.library.indexById.get(state.library.selectedSongId) ??
+          state.library.selectedSongIndex ??
+          -1)
+        : -1;
     const pendingNavigation = pendingKeyboardNavigation.current;
     const pendingMatchesCurrentResults =
       pendingNavigation !== null &&

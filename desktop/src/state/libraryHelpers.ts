@@ -4,20 +4,33 @@ import type {
   LibrarySource,
   SongRow,
 } from '../bridge/DesktopBridge';
-import { DETAIL_CACHE_LIMIT, LIBRARY_PAGE_SIZE } from './types';
+import { DETAIL_CACHE_LIMIT, LIBRARY_PAGE_SIZE, MAX_ACTIVE_LIBRARY_PAGES } from './types';
 import type { DetailEntry, LibraryNavigationState, LibraryState } from './types';
 
 export const sourceKey = (source: LibrarySource): string => JSON.stringify(source);
 
 export function activeLibraryPageOffsets(first: number, last: number, total: number): number[] {
-  const firstIndex = Math.max(0, first);
-  const lastIndex = Math.max(firstIndex, last);
-  const currentPage = Math.floor((firstIndex + lastIndex) / 2 / LIBRARY_PAGE_SIZE);
-  const lastPage = total > 0 ? Math.floor((total - 1) / LIBRARY_PAGE_SIZE) : currentPage + 1;
-  return [-1, 0, 1]
-    .map((delta) => currentPage + delta)
-    .filter((page) => page >= 0 && page <= lastPage)
-    .map((page) => page * LIBRARY_PAGE_SIZE);
+  if (total <= 0) return [];
+  const firstIndex = Math.min(Math.max(0, Math.floor(first)), total - 1);
+  const lastIndex = Math.min(Math.max(firstIndex, Math.floor(last)), total - 1);
+  const firstVisiblePage = Math.floor(firstIndex / LIBRARY_PAGE_SIZE);
+  const lastVisiblePage = Math.floor(lastIndex / LIBRARY_PAGE_SIZE);
+  const visiblePageCount = lastVisiblePage - firstVisiblePage + 1;
+  if (visiblePageCount > MAX_ACTIVE_LIBRARY_PAGES) {
+    throw new RangeError(
+      `The visible Library range spans ${visiblePageCount} pages; at most ${MAX_ACTIVE_LIBRARY_PAGES} can be active.`,
+    );
+  }
+
+  const lastCatalogPage = Math.floor((total - 1) / LIBRARY_PAGE_SIZE);
+  const activePageCount = Math.min(MAX_ACTIVE_LIBRARY_PAGES, lastCatalogPage + 1);
+  const unusedPages = activePageCount - visiblePageCount;
+  const centeredFirst = Math.max(0, firstVisiblePage - Math.floor(unusedPages / 2));
+  const activeFirstPage = Math.min(centeredFirst, lastCatalogPage - activePageCount + 1);
+  return Array.from(
+    { length: activePageCount },
+    (_, index) => (activeFirstPage + index) * LIBRARY_PAGE_SIZE,
+  );
 }
 
 export function retainActiveLibraryPages(
@@ -30,17 +43,19 @@ export function retainActiveLibraryPages(
 
   const pages = new Map<number, readonly SongRow[]>();
   const indexById = new Map<string, number>();
+  const indexIsCurrent = library.indexMembershipRevision === library.membershipRevision;
   for (const [offset, rows] of library.pages) {
     if (!activeOffsets.has(offset)) continue;
     pages.set(offset, rows);
-    rows.forEach((row, index) => indexById.set(row.song_id, offset + index));
+    if (indexIsCurrent) rows.forEach((row, index) => indexById.set(row.song_id, offset + index));
   }
-  return { ...library, pages, indexById };
+  return { ...library, pages, indexById: indexIsCurrent ? indexById : new Map() };
 }
 
 export function updateLoadedRows(library: LibraryState, updates: readonly SongRow[]): LibraryState {
   let pages: Map<number, readonly SongRow[]> | null = null;
   const changedPages = new Map<number, SongRow[]>();
+  const indexIsCurrent = library.indexMembershipRevision === library.membershipRevision;
   let selectedSongSummary = library.selectedSongSummary;
   let selectedSongIndex = library.selectedSongIndex;
 
@@ -48,7 +63,7 @@ export function updateLoadedRows(library: LibraryState, updates: readonly SongRo
     const index = library.indexById.get(row.song_id);
     if (library.selectedSongId === row.song_id) {
       selectedSongSummary = row;
-      if (index !== undefined) selectedSongIndex = index;
+      if (indexIsCurrent && index !== undefined) selectedSongIndex = index;
     }
     if (index !== undefined) {
       const offset = Math.floor(index / LIBRARY_PAGE_SIZE) * LIBRARY_PAGE_SIZE;

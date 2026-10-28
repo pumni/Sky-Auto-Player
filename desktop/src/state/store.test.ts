@@ -22,6 +22,7 @@ import {
   type PlaybackContext,
   selectSelectedDetail,
 } from './store';
+import { activeLibraryPageOffsets } from './libraryHelpers';
 import { MAX_CACHED_SEARCH_PAGES } from './librarySlice';
 import { LIBRARY_PAGE_SIZE } from './types';
 import { WORKBENCH_STORAGE_KEY } from './workbenchPreferences';
@@ -681,6 +682,65 @@ describe('desktop store', () => {
     expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
   });
 
+  it('does not reuse an evicted selected ordinal after an earlier Liked member is removed', async () => {
+    const rows = syntheticRows(3000);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      playbackDurationMs: 60_000,
+      startDelayMs: 1,
+    });
+    for (const row of rows) await bridge.setSongLiked({ songId: row.song_id, liked: true });
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    const earlierMember = rowAt(store, 5);
+    if (!earlierMember) throw new Error('early Liked member was not loaded');
+    await act(async () => store.getState().selectSong(earlierMember.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().setViewport(1490, 1510));
+    const selected = rowAt(store, 1500);
+    if (!selected) throw new Error('deep Liked member was not loaded');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    await act(async () => store.getState().setViewport(2500, 2510));
+    expect(store.getState().library.pages.has(1400)).toBe(false);
+    expect(store.getState().library.selectedSongIndex).toBe(1500);
+
+    try {
+      await act(async () => store.getState().setSongLiked(earlierMember.song_id, false));
+      expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+      expect(store.getState().library.selectedSongSummary?.song_id).toBe(selected.song_id);
+      expect(store.getState().library.selectedSongIndex).toBeNull();
+      expect(store.getState().library.indexMembershipRevision).toBe(
+        store.getState().library.membershipRevision,
+      );
+
+      await act(async () => store.getState().stopPlayback());
+      await waitFor(() => expect(store.getState().playback.sessionId).toBeNull());
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.preparedContext).toBeNull();
+      expect(store.getState().playback.error).toMatch(/Select a loaded Library row/);
+
+      await act(async () => store.getState().setViewport(1490, 1510));
+      const newSelectedIndex = 1499;
+      expect(rowAt(store, newSelectedIndex)?.song_id).toBe(selected.song_id);
+      expect(store.getState().library.selectedSongIndex).toBe(newSelectedIndex);
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.preparedContext?.currentIndex).toBe(newSelectedIndex);
+      await act(async () => store.getState().startPreparedPlayback('proceed'));
+      await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+      await act(async () => store.getState().nextPlayback());
+      expect(store.getState().playback.currentSong?.songId).toBe(rows[1501]!.song_id);
+      expect(store.getState().playback.context?.currentIndex).toBe(1500);
+    } finally {
+      await act(async () => store.getState().stopPlayback());
+    }
+  });
+
   it('clears browser selection when its source or playlist-add scope changes', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
@@ -793,6 +853,105 @@ describe('desktop store', () => {
     expect(store.getState().playback.currentSong?.title).toBe(selected.title);
     expect(store.getState().library.pages.size).toBeLessThanOrEqual(3);
     expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
+  });
+
+  it('keeps All-page reads and Next moving while a Like write is deferred', async () => {
+    const rows = syntheticRows(10_000);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      playbackDurationMs: 60_000,
+      startDelayMs: 1,
+    });
+    const originalSearch = bridge.searchSongs;
+    const requestedOffsets: number[] = [];
+    bridge.searchSongs = async (request) => {
+      if (request.query === '') requestedOffsets.push(request.offset);
+      return originalSearch(request);
+    };
+    const likeStarted = deferred<void>();
+    const releaseLike = deferred<Awaited<ReturnType<typeof bridge.setSongLiked>>>();
+    bridge.setSongLiked = async () => {
+      likeStarted.resolve();
+      return releaseLike.promise;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().setViewport(5190, 5200));
+    const playing = rowAt(store, 5199);
+    if (!playing) throw new Error('page-boundary playback row was not loaded');
+    await act(async () => store.getState().selectSong(playing.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    for (let offset = 5400; offset <= 7200; offset += LIBRARY_PAGE_SIZE) {
+      await act(async () => store.getState().setViewport(offset, offset));
+    }
+    await act(async () => store.getState().setViewport(9000, 9010));
+    expect(requestedOffsets.filter((offset) => offset === 5000)).toHaveLength(1);
+    expect(requestedOffsets.filter((offset) => offset === 5200)).toHaveLength(1);
+
+    const likePromise = store.getState().setSongLiked(playing.song_id, true);
+    await likeStarted.promise;
+    let viewportPromise: Promise<void> | undefined;
+    let nextPromise: Promise<void> | undefined;
+    try {
+      viewportPromise = store.getState().setViewport(5000, 5010);
+      await waitFor(
+        () => expect(requestedOffsets.filter((offset) => offset === 5000)).toHaveLength(2),
+        { timeout: 1_000 },
+      );
+      await viewportPromise;
+      expect(rowAt(store, 5199)?.liked).toBe(true);
+      expect(store.getState().library.likedTotal).toBe(1);
+
+      await act(async () => store.getState().setViewport(5190, 5199));
+      expect(rowAt(store, 5199)?.liked).toBe(true);
+      expect(store.getState().library.likedTotal).toBe(1);
+
+      nextPromise = store.getState().nextPlayback();
+      await waitFor(
+        () => expect(requestedOffsets.filter((offset) => offset === 5200)).toHaveLength(2),
+        { timeout: 1_000 },
+      );
+      await waitFor(() =>
+        expect(store.getState().playback.currentSong?.songId).toBe(rows[5200]!.song_id),
+      );
+      await nextPromise;
+      expect(store.getState().playback.context?.currentIndex).toBe(5200);
+    } finally {
+      releaseLike.resolve({ song_id: playing.song_id, liked: true, total: 1 });
+      await Promise.allSettled([likePromise, viewportPromise, nextPromise].filter(Boolean));
+      await act(async () => store.getState().stopPlayback());
+    }
+  });
+
+  it('rejects a visible range spanning four pages instead of omitting its last page', async () => {
+    const bridge = createMockBridge({ catalogRows: syntheticRows(800) });
+    const originalSearch = bridge.searchSongs;
+    const requestedOffsets: number[] = [];
+    bridge.searchSongs = async (request) => {
+      requestedOffsets.push(request.offset);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const before = store.getState().library;
+    const requestsBefore = requestedOffsets.length;
+
+    expect(activeLibraryPageOffsets(0, 599, 800)).toEqual([0, 200, 400]);
+    expect(() => activeLibraryPageOffsets(0, 650, 800)).toThrow(/spans 4 pages/);
+    await act(async () => store.getState().setViewport(0, 650));
+
+    const after = store.getState().library;
+    expect(after.error).toMatch(/spans 4 pages/);
+    expect(after.visibleRange).toEqual(before.visibleRange);
+    expect([...after.pages.keys()]).toEqual([...before.pages.keys()]);
+    expect([...after.indexById]).toEqual([...before.indexById]);
+    expect(requestedOffsets).toHaveLength(requestsBefore);
+
+    await act(async () => store.getState().setViewport(0, 20));
+    expect(store.getState().library.error).toBeNull();
   });
 
   it('reuses deep detail from the bounded song cache', async () => {

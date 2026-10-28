@@ -76,12 +76,22 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const { bridge, get, set } = context;
   const pageSize = LIBRARY_PAGE_SIZE;
   const pageCache = new Map<string, SearchResult>();
-  const pageRequests = new Map<string, Promise<SearchResult>>();
+  const pageRequests = new Map<
+    string,
+    {
+      promise: Promise<SearchResult>;
+      likeWriteRevision: number;
+      membershipRevision: number;
+    }
+  >();
   const viewportRequests = new Map<string, Promise<void>>();
   const pendingLikeWrites = new Set<Promise<unknown>>();
+  const pendingLikeStateBySongId = new Map<string, { liked: boolean; mutationSequence: number }>();
   const likeWriteTails = new Map<string, Promise<unknown>>();
   const latestLikeMutationBySongId = new Map<string, number>();
+  const membershipWritesBySource = new Map<string, { pending: number; revision: number }>();
   let likeMutationRevision = 0;
+  let likeWriteRevision = 0;
   let likeMutationSequence = 0;
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
   let catalogReadyRecorded = false;
@@ -89,12 +99,75 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
   const pageKey = (key: string, offset: number) => `${key}\u0000${offset}`;
+  const membershipRevisionFor = (source: LibrarySource): number =>
+    membershipWritesBySource.get(sourceKey(source))?.revision ?? 0;
+  const hasPendingMembershipWrite = (source: LibrarySource): boolean =>
+    (membershipWritesBySource.get(sourceKey(source))?.pending ?? 0) > 0;
 
-  const waitForLikeWrites = async (): Promise<void> => {
-    while (pendingLikeWrites.size > 0) {
-      await Promise.allSettled([...pendingLikeWrites]);
-    }
+  const beginMembershipMutation = (source: LibrarySource): void => {
+    const key = sourceKey(source);
+    const membership = membershipWritesBySource.get(key) ?? { pending: 0, revision: 0 };
+    const nextMembership = { pending: membership.pending + 1, revision: membership.revision + 1 };
+    membershipWritesBySource.set(key, nextMembership);
+    invalidateSourceCache(source);
+
+    const current = get().library;
+    if (sourceKey(current.searchSource) !== key) return;
+    set({
+      library: {
+        ...current,
+        membershipRevision: nextMembership.revision,
+        selectedSongIndex: null,
+        searchRequestGeneration: current.searchRequestGeneration + 1,
+      },
+    });
   };
+
+  const finishMembershipMutation = (source: LibrarySource): boolean => {
+    const key = sourceKey(source);
+    const membership = membershipWritesBySource.get(key) ?? { pending: 0, revision: 0 };
+    const pending = Math.max(0, membership.pending - 1);
+    const nextMembership = { pending, revision: membership.revision + 1 };
+    membershipWritesBySource.set(key, nextMembership);
+    invalidateSourceCache(source);
+
+    const current = get().library;
+    if (sourceKey(current.searchSource) === key) {
+      set({
+        library: {
+          ...current,
+          membershipRevision: nextMembership.revision,
+          selectedSongIndex: null,
+        },
+      });
+    }
+    return pending === 0;
+  };
+
+  const refreshMembershipSource = async (source: LibrarySource): Promise<void> => {
+    const current = get().library;
+    if (sourceKey(current.searchSource) === sourceKey(source)) await get().search();
+  };
+
+  const rebasePendingLikeState = (result: SearchResult): SearchResult => {
+    let items = result.items;
+    for (let index = 0; index < result.items.length; index += 1) {
+      const row = result.items[index]!;
+      const pending = pendingLikeStateBySongId.get(row.song_id);
+      if (!pending || row.liked === pending.liked) continue;
+      if (items === result.items) items = [...result.items];
+      items[index] = { ...row, liked: pending.liked };
+    }
+    const likedTotal = pendingLikeWrites.size > 0 ? get().library.likedTotal : result.liked_total;
+    if (items === result.items && likedTotal === result.liked_total) return result;
+    return { ...result, items, liked_total: likedTotal };
+  };
+
+  const rebasePendingLikeRows = (rows: readonly SongRow[]): SongRow[] =>
+    rows.map((row) => {
+      const pending = pendingLikeStateBySongId.get(row.song_id);
+      return pending && pending.liked !== row.liked ? { ...row, liked: pending.liked } : row;
+    });
 
   const getCachedPage = (key: string, offset: number): SearchResult | undefined => {
     const cacheKey = pageKey(key, offset);
@@ -200,13 +273,24 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     if (current.searchRequestGeneration !== token || current.generation !== result.generation) {
       return false;
     }
-    const activeOffsets = new Set(
-      activeLibraryPageOffsets(
-        current.visibleRange.first,
-        current.visibleRange.last,
-        current.resultTotal || result.total,
-      ),
-    );
+    if (
+      hasPendingMembershipWrite(current.searchSource) ||
+      current.membershipRevision !== membershipRevisionFor(current.searchSource)
+    ) {
+      return false;
+    }
+    let activeOffsets: Set<number>;
+    try {
+      activeOffsets = new Set(
+        activeLibraryPageOffsets(
+          current.visibleRange.first,
+          current.visibleRange.last,
+          current.resultTotal || result.total,
+        ),
+      );
+    } catch {
+      return false;
+    }
     if (!activeOffsets.has(result.offset)) return false;
 
     const retained = retainActiveLibraryPages(current);
@@ -234,6 +318,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         ...current,
         pages,
         indexById,
+        indexMembershipRevision: current.membershipRevision,
         selectedSongSummary,
         selectedSongIndex,
         catalogTotal:
@@ -269,46 +354,54 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       ...(generation > 0 ? { generation } : {}),
     };
     for (;;) {
-      if (pendingLikeWrites.size > 0) await waitForLikeWrites();
       const cached = getCachedPage(key, offset);
       if (cached) {
-        if (mergeIntoLibrary) mergePage(cached, token);
-        return cached;
+        const rebased = rebasePendingLikeState(cached);
+        if (mergeIntoLibrary) mergePage(rebased, token);
+        return rebased;
       }
 
-      const requestLikeRevision = likeMutationRevision;
       const inFlight = pageRequests.get(requestKey);
       if (inFlight) {
-        const result = await inFlight;
+        const result = await inFlight.promise;
         if (
           pageRequests.get(requestKey) !== inFlight ||
-          requestLikeRevision !== likeMutationRevision ||
-          pendingLikeWrites.size > 0
+          inFlight.likeWriteRevision !== likeWriteRevision ||
+          inFlight.membershipRevision !== membershipRevisionFor(source)
         ) {
           continue;
         }
-        if (mergeIntoLibrary) mergePage(result, token);
-        return result;
+        const rebased = rebasePendingLikeState(result);
+        if (mergeIntoLibrary) mergePage(rebased, token);
+        return rebased;
       }
 
+      const requestLikeWriteRevision = likeWriteRevision;
+      const requestMembershipRevision = membershipRevisionFor(source);
       const requestPromise = bridge.searchSongs(request);
-      pageRequests.set(requestKey, requestPromise);
+      const requestState = {
+        promise: requestPromise,
+        likeWriteRevision: requestLikeWriteRevision,
+        membershipRevision: requestMembershipRevision,
+      };
+      pageRequests.set(requestKey, requestState);
       try {
         const result = await requestPromise;
         if (
-          pageRequests.get(requestKey) !== requestPromise ||
-          requestLikeRevision !== likeMutationRevision ||
-          pendingLikeWrites.size > 0
+          pageRequests.get(requestKey) !== requestState ||
+          requestLikeWriteRevision !== likeWriteRevision ||
+          requestMembershipRevision !== membershipRevisionFor(source)
         ) {
           continue;
         }
-        if (result.generation >= get().library.generation) {
-          cachePage(cacheKey(source, query, result.generation), result);
+        const rebased = rebasePendingLikeState(result);
+        if (result.generation >= get().library.generation && !hasPendingMembershipWrite(source)) {
+          cachePage(cacheKey(source, query, result.generation), rebased);
         }
-        if (mergeIntoLibrary) mergePage(result, token);
-        return result;
+        if (mergeIntoLibrary) mergePage(rebased, token);
+        return rebased;
       } finally {
-        if (pageRequests.get(requestKey) === requestPromise) pageRequests.delete(requestKey);
+        if (pageRequests.get(requestKey) === requestState) pageRequests.delete(requestKey);
       }
     }
   };
@@ -347,6 +440,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     last: number,
     scope: {
       generation: number;
+      membershipRevision: number;
       searchRequestGeneration: number;
       source: LibrarySource;
       searchSource: LibrarySource;
@@ -355,6 +449,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   ): Promise<void> => {
     const isCurrentScope = (library: DesktopStore['library']): boolean =>
       library.generation === scope.generation &&
+      library.membershipRevision === scope.membershipRevision &&
+      membershipRevisionFor(library.searchSource) === scope.membershipRevision &&
       library.searchRequestGeneration === scope.searchRequestGeneration &&
       sourceKey(library.source) === sourceKey(scope.source) &&
       sourceKey(library.searchSource) === sourceKey(scope.searchSource) &&
@@ -363,7 +459,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       library.visibleRange.last === last;
 
     for (;;) {
-      if (pendingLikeWrites.size > 0) await waitForLikeWrites();
       const current = get().library;
       if (!isCurrentScope(current)) return;
 
@@ -379,6 +474,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         sourceKey(current.searchSource),
         current.query,
         current.generation,
+        current.membershipRevision,
         current.searchRequestGeneration,
         requestLikeRevision,
         first,
@@ -393,6 +489,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       }
 
       let staleLikeSnapshot = false;
+      const requestLikeWriteRevision = likeWriteRevision;
       const hydration = (async () => {
         try {
           const result = await bridge.setLibraryViewport({
@@ -406,7 +503,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           if (!isCurrentScope(latest)) return;
           if (
             requestLikeRevision !== likeMutationRevision ||
-            pendingLikeWrites.size > 0 ||
+            requestLikeWriteRevision !== likeWriteRevision ||
             latest.selectedSongId !== selectedSongId
           ) {
             staleLikeSnapshot = true;
@@ -425,7 +522,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
 
           const cachedSearchKey = cacheKey(latest.searchSource, latest.query, latest.generation);
           const updatesByPage = new Map<number, SongRow[]>();
-          for (const row of result.items) {
+          const rebasedItems = rebasePendingLikeRows(result.items);
+          for (const row of rebasedItems) {
             const index =
               latest.indexById.get(row.song_id) ??
               (latest.selectedSongId === row.song_id
@@ -446,7 +544,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             const cached = getCachedPage(cachedSearchKey, offset);
             if (cached) cachePage(cachedSearchKey, { ...cached, items });
           }
-          set({ library: updateLoadedRows(latest, result.items) });
+          set({ library: updateLoadedRows(latest, rebasedItems) });
         } catch {
           // Metadata hydration is best effort for a moving viewport. A later
           // viewport event retries the bounded request without blocking rows.
@@ -478,6 +576,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         generation,
         pages: new Map(),
         indexById: new Map(),
+        membershipRevision: membershipRevisionFor(current.searchSource),
+        indexMembershipRevision: -1,
         selectedSongId: null,
         selectedSongSummary: null,
         selectedSongIndex: null,
@@ -559,6 +659,10 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           source: nextSource,
           searchSource: nextSearchSource,
           query: nextQuery,
+          membershipRevision: scopeChanged
+            ? membershipRevisionFor(nextSearchSource)
+            : current.membershipRevision,
+          indexMembershipRevision: scopeChanged ? -1 : current.indexMembershipRevision,
           selectedSongId: clearBrowserSelection ? null : current.selectedSongId,
           selectedSongSummary: clearBrowserSelection ? null : current.selectedSongSummary,
           selectedSongIndex: clearBrowserSelection ? null : current.selectedSongIndex,
@@ -593,6 +697,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             likedTotal: result.liked_total,
             resultTotal: result.total,
             generation: result.generation,
+            membershipRevision: membershipRevisionFor(nextSearchSource),
+            indexMembershipRevision: generationChanged ? -1 : latest.indexMembershipRevision,
             selectedSongId: generationChanged ? null : latest.selectedSongId,
             selectedSongSummary: generationChanged ? null : latest.selectedSongSummary,
             selectedSongIndex: generationChanged ? null : latest.selectedSongIndex,
@@ -653,9 +759,12 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           error: null,
         } satisfies DetailEntry);
       const selectedSummary = selectSongById(current.library, songId);
-      const selectedIndex =
-        current.library.indexById.get(songId) ??
-        (current.library.selectedSongId === songId ? current.library.selectedSongIndex : null);
+      const indexIsCurrent =
+        current.library.indexMembershipRevision === current.library.membershipRevision;
+      const selectedIndex = indexIsCurrent
+        ? (current.library.indexById.get(songId) ??
+          (current.library.selectedSongId === songId ? current.library.selectedSongIndex : null))
+        : null;
       set({
         library: {
           ...current.library,
@@ -712,16 +821,31 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
 
     async setViewport(first, last) {
       const initial = get().library;
+      try {
+        activeLibraryPageOffsets(first, last, initial.resultTotal);
+      } catch (error) {
+        set({ library: { ...initial, error: errorMessage(error) } });
+        return;
+      }
       const ranged =
-        initial.visibleRange.first !== first || initial.visibleRange.last !== last
+        initial.visibleRange.first !== first ||
+        initial.visibleRange.last !== last ||
+        initial.error?.startsWith('The visible Library range spans ') === true
           ? { ...initial, visibleRange: { first, last } }
           : initial;
-      const retained = retainActiveLibraryPages(ranged, first, last);
+      const retained = retainActiveLibraryPages(
+        ranged.error?.startsWith('The visible Library range spans ')
+          ? { ...ranged, error: null }
+          : ranged,
+        first,
+        last,
+      );
       if (retained !== initial) set({ library: retained });
       const library = get().library;
       if (library.generation === 0 || first > last) return;
       const scope = {
         generation: library.generation,
+        membershipRevision: library.membershipRevision,
         searchRequestGeneration: library.searchRequestGeneration,
         source: library.source,
         searchSource: library.searchSource,
@@ -869,20 +993,20 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const key = `playlist:${playlistId}:song:${songId}:add`;
       if (!setLibraryMutationPending(key, true)) return;
       setLibraryError(null);
-      context.invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
+      const source: LibrarySource = { kind: 'playlist', id: playlistId };
+      context.invalidatePlaybackMembershipContext(source);
+      beginMembershipMutation(source);
       try {
         const summary = await bridge.addSongsToPlaylist(playlistId, [songId]);
         set({
           libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
         });
-        invalidateSourceCache({ kind: 'playlist', id: playlistId });
-        const active = get().library.source;
-        if (active.kind === 'playlist' && active.id === playlistId) await get().search();
       } catch (error) {
         setLibraryError(errorMessage(error));
         throw error;
       } finally {
         setLibraryMutationPending(key, false);
+        if (finishMembershipMutation(source)) await refreshMembershipSource(source);
       }
     },
 
@@ -890,13 +1014,14 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const key = `playlist:${playlistId}:song:${songId}:remove`;
       if (!setLibraryMutationPending(key, true)) return;
       setLibraryError(null);
-      context.invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
+      const source: LibrarySource = { kind: 'playlist', id: playlistId };
+      context.invalidatePlaybackMembershipContext(source);
+      beginMembershipMutation(source);
       try {
         const summary = await bridge.removeSongsFromPlaylist(playlistId, [songId]);
         set({
           libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
         });
-        invalidateSourceCache({ kind: 'playlist', id: playlistId });
         const active = get().library.source;
         if (active.kind === 'playlist' && active.id === playlistId) {
           if (get().library.selectedSongId === songId) {
@@ -911,13 +1036,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
               details: { bySongId: new Map() },
             });
           }
-          await get().search();
         }
       } catch (error) {
         setLibraryError(errorMessage(error));
         throw error;
       } finally {
         setLibraryMutationPending(key, false);
+        if (finishMembershipMutation(source)) await refreshMembershipSource(source);
       }
     },
 
@@ -991,11 +1116,12 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       if (previousLiked === liked) return;
       const mutationSequence = ++likeMutationSequence;
       const mutationRevision = ++likeMutationRevision;
+      const likedSource: LibrarySource = { kind: 'smart', id: 'liked' };
       latestLikeMutationBySongId.set(songId, mutationSequence);
-      context.invalidatePlaybackMembershipContext({ kind: 'smart', id: 'liked' });
+      pendingLikeStateBySongId.set(songId, { liked, mutationSequence });
+      context.invalidatePlaybackMembershipContext(likedSource);
       const optimistic = previous ? { ...previous, liked } : null;
       const likedDelta = liked ? 1 : -1;
-      invalidateSourceCache({ kind: 'smart', id: 'liked' });
       const optimisticLikedTotal = Math.max(0, current.likedTotal + likedDelta);
       patchCachedLike(songId, liked, optimisticLikedTotal);
       set({
@@ -1007,6 +1133,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           ? { ...get().playback, currentSong: { ...currentPlaybackSong, liked } }
           : get().playback,
       });
+      beginMembershipMutation(likedSource);
       const targetGeneration = currentPlaybackSong?.generation ?? current.generation;
       const generation = targetGeneration > 0 ? targetGeneration : undefined;
       const request = {
@@ -1023,20 +1150,28 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
 
       const clearWrite = () => {
         pendingLikeWrites.delete(write);
+        likeWriteRevision += 1;
         if (likeWriteTails.get(songId) === write) likeWriteTails.delete(songId);
       };
 
       try {
         const result = await write;
         clearWrite();
-        if (latestLikeMutationBySongId.get(songId) !== mutationSequence) return;
+        const membershipRefresh = finishMembershipMutation(likedSource);
+        if (latestLikeMutationBySongId.get(songId) !== mutationSequence) {
+          if (membershipRefresh) await refreshMembershipSource(likedSource);
+          return;
+        }
         latestLikeMutationBySongId.delete(songId);
+        if (pendingLikeStateBySongId.get(songId)?.mutationSequence === mutationSequence) {
+          pendingLikeStateBySongId.delete(songId);
+        }
         if (mutationRevision === likeMutationRevision && pendingLikeWrites.size === 0) {
           set({ library: { ...get().library, likedTotal: result.total } });
           patchCachedLikedTotal(result.total);
         }
         const library = get().library;
-        if (library.source.kind === 'smart' && library.source.id === 'liked') {
+        if (sourceKey(library.searchSource) === sourceKey(likedSource)) {
           if (!liked && get().library.selectedSongId === songId) {
             context.nextDetailRequestToken();
             set({
@@ -1049,12 +1184,19 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
               details: { bySongId: new Map() },
             });
           }
-          await get().search();
         }
+        if (membershipRefresh) await refreshMembershipSource(likedSource);
       } catch (error) {
         clearWrite();
-        if (latestLikeMutationBySongId.get(songId) !== mutationSequence) return;
+        const membershipRefresh = finishMembershipMutation(likedSource);
+        if (latestLikeMutationBySongId.get(songId) !== mutationSequence) {
+          if (membershipRefresh) await refreshMembershipSource(likedSource);
+          return;
+        }
         latestLikeMutationBySongId.delete(songId);
+        if (pendingLikeStateBySongId.get(songId)?.mutationSequence === mutationSequence) {
+          pendingLikeStateBySongId.delete(songId);
+        }
         const message = errorMessage(error);
         const latest = get().library;
         const row = selectSongById(latest, songId);
@@ -1075,7 +1217,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           library: {
             ...rollback,
             likedTotal: rollbackTotal,
-            error: message,
           },
           playback:
             playbackSong && shouldRollback
@@ -1085,6 +1226,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
                 }
               : latestPlayback,
         });
+        if (membershipRefresh) await refreshMembershipSource(likedSource);
+        set({ library: { ...get().library, error: message } });
       }
     },
 
