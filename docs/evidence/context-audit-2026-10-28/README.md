@@ -137,3 +137,27 @@ to validate agent behavior rather than relying on prompt self-report.
   This public skill is not the proprietary Claude Code command implementation.
 - [OpenAI on model-era agent instruction cleanup](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra).
 - [Claude Code AGENTS.md instructions](https://code.claude.com/docs/en/claude-md).
+
+## Follow-up review — model autonomy (2026-10-28)
+
+The branch was re-reviewed against current OpenAI guidance for GPT-6 Astra,
+Anthropic's context engineering guidance, and Claude Code project-instruction
+loading. The first audit's own changes contained avoidable workflow scaffolding:
+its root guide repeated navigation rules, its expanded router listed too much
+information per task, and its on-demand audit guide imposed a seven-step
+process even though capable models can choose how to investigate.
+
+This follow-up trims the root guide to project invariants, task-triggered
+references, and verification boundaries; narrows the docs-specific guide;
+simplifies the router; and replaces the fixed audit recipe with questions
+and outcome-based review. Optional behavior probes remain available but are
+not startup instructions or a mandatory routine-test battery. Security,
+timing, release integrity, and the Rust/Bun-only toolchain remain protected
+by their owner documents and the existing repository checks.
+
+**Limits:** This was a source/documentation-structure review, not a semantic
+requalification of every sentence of 105 Markdown files. No live Codex/
+Claude comparative evaluation, Windows native acceptance, Rust test suite,
+performance benchmark, or Claude `/doctor prompt-audit` was executed.
+The relative-link checks and GitHub branch diff do not establish model
+quality gains. The review record stays historical, outside startup context.
