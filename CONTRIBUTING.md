@@ -12,9 +12,13 @@ keeps process proportional to the risk of the boundary being changed.
 - [`AGENTS.md`](AGENTS.md) is a concise repository/agent guide; it is not a replacement for source,
   tests, or task-specific investigation.
 
-Do not preload historical plans or archives. Existing documentation describes the current system and
-should normally be preserved, but an intentional contribution may change a documented architecture
-or contract; update the active documentation in the same change when that happens.
+Do not preload historical plans or archives. Follow the current/historical distinction in
+[`docs/INDEX.md`](docs/INDEX.md) and the documentation scope guidance in
+[`docs/AGENTS.md`](docs/AGENTS.md). When an intentional contribution changes a supported
+architecture or contract, update the owning current document in the same change. Preserve
+revision-scoped qualification, measurement, and release records as historical evidence.
+Audit agent instructions with [`docs/agent-context-maintenance.md`](docs/agent-context-maintenance.md)
+when the model, tooling, or repository contracts change.
 
 ## Required naming rule
 

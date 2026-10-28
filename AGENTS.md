@@ -1,46 +1,56 @@
-# Sky Auto Player — Repository Guide
+# Sky Auto Player — Repository Instructions
 
-Windows 11 music-sheet player for Sky: Children of the Light. The desktop application reads JSON,
-skysheet, and TXT sheets and emits gameplay keyboard input through Windows `SendInput`.
+Sky Auto Player is a Windows 11 music-sheet player for Sky: Children of the Light.
+The Tauri 2 / React desktop uses Rust-native playback and sends gameplay input
+only through Windows `SendInput`. Supported sheet imports are JSON, skysheet,
+and JSON-compatible TXT.
 
-## Scope and external actions
+## Scope and evidence
 
-Keep work within the requested task. Do not create, publish, close, merge, retarget, or otherwise
-mutate remote branches, pull requests, issues, releases, or other externally visible project state
-unless the user's current request explicitly authorizes that action. Ordinary local work within the
-requested scope does not need separate authorization.
+- Work within the requested outcome. Do not create, publish, merge, close, retarget,
+  or otherwise mutate remote branches, pull requests, issues, releases, or other
+  externally visible project state unless the current request authorizes it.
+- Inspect the relevant implementation, direct tests, and configuration before
+  changing behavior. At the checked-out SHA, those establish current behavior;
+  historical plans, ADRs, and qualification reports establish only their recorded
+  revisions and conditions.
+- Use [docs/INDEX.md](docs/INDEX.md) to find task-specific contracts. Read only
+  the documents needed for the task; do not preload the entire documentation tree.
+  Consult [docs/agent-context-maintenance.md](docs/agent-context-maintenance.md)
+  when auditing or changing agent instructions or documentation authority.
 
-## Security and input boundary
+## Security and architecture
 
-- Never modify game files, access another process's memory, bypass anti-cheat, inject code, attach a
-  debugger, or install process/input hooks.
-- Gameplay keystroke simulation uses Windows `SendInput` only. Do not introduce other injection
-  mechanisms.
-- Validate external and user inputs; fail closed on ambiguous or malformed security-sensitive data.
-- [`SECURITY.md`](SECURITY.md) is canonical for the security contract; `cargo xtask check static`
-  enforces it.
+- Do not access game or other process memory, modify game files, attach debuggers,
+  inject DLLs, install process/input hooks, or bypass anti-cheat mechanisms.
+- Gameplay input is dispatched through the existing Windows `SendInput` boundary
+  only. Validate untrusted inputs and fail closed when security-sensitive data
+  or target identity is ambiguous. [SECURITY.md](SECURITY.md) is authoritative
+  for this boundary; `cargo xtask check static` enforces repository checks.
+- Domain and orchestration crates remain independent of Win32/input effects.
+  Follow [docs/architecture.md](docs/architecture.md) for ownership and
+  [docs/rt-dispatch-architecture.md](docs/rt-dispatch-architecture.md) for
+  real-time dispatch constraints.
+- The supported product and repository tooling are Rust/Bun native. Do not add
+  a Python product runtime or repository toolchain.
+- Release and updater integrity follow
+  [docs/distribution-and-update.md](docs/distribution-and-update.md) and the
+  applicable release runbooks. Do not weaken their checks for convenience.
 
-## Architecture and current behavior
+## Changes and validation
 
-- Domain and orchestration crates stay independent of Win32 details and direct `SendInput`; see
-  [`docs/architecture.md`](docs/architecture.md) and boundary tests for exact ownership.
-- The supported product and repository tooling are Rust/Bun native. Do not reintroduce Python into
-  the product runtime or repository tooling.
-- Native updater and release integrity contracts follow
-  [`docs/distribution-and-update.md`](docs/distribution-and-update.md).
-- Current source, tests, and configuration at the checked-out SHA establish implementation
-  behavior. Use [`docs/INDEX.md`](docs/INDEX.md) to find relevant current contracts and scoped
-  historical evidence.
-- Active names describe lasting behavior, not implementation sequence; schema/version identifiers
-  and immutable historical or external contracts are exceptions. `cargo xtask check static` audits
-  this policy.
-
-## Validation
-
-- Run focused checks while editing. Before review, run `cargo xtask check all` once against the final
-  relevant source state; it includes static, Rust, desktop, and native desktop checks.
-- Record exact commands, HEAD and relevant input identity, exit code, and coverage. Report only
-  checks that actually ran and identify skipped checks.
-- Do not repeat full performance baselines or native acceptance without a new behavior or
-  performance change. Run packaging, Windows timing/latency acceptance, release, and benchmark
-  workflows only when the changed boundary requires them.
+- Prefer durable responsibility-based names for maintained code, tests,
+  configuration, and scripts. Phase numbers are appropriate only for actual
+  version/schema IDs or immutable historical/external references; the static
+  audit enforces this distinction.
+- Update the relevant *current* documentation when implementation contracts
+  change. Preserve revision-bound evidence and release records as history.
+  Documentation work under `docs/` also follows [docs/AGENTS.md](docs/AGENTS.md).
+- During development, run focused checks for affected boundaries. Before review,
+  run `cargo xtask check all` once on the final relevant source state; it covers
+  static, Rust, desktop, and native desktop checks. Do not repeatedly run whole
+  groups or native performance/packaging qualification without a changed boundary.
+- Record the exact commands, HEAD/input identity, exit codes, and coverage for
+  checks actually run. Report skipped or unavailable checks explicitly; do not
+  present source inspection, mocks, or historical measurements as current native
+  Windows validation.
