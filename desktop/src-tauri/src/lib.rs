@@ -791,7 +791,7 @@ mod ipc_tests {
         let main = &windows[0];
         assert_eq!(main["label"], "main");
         assert_eq!(main["visible"], false);
-        assert_eq!(main["backgroundColor"], json!([11, 16, 24, 255]));
+        assert_eq!(main["backgroundColor"], json!([18, 19, 20, 255]));
 
         let flags = super::main_window_state_flags();
         assert!(flags.contains(tauri_plugin_window_state::StateFlags::SIZE));

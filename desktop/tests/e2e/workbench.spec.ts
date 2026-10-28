@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
+import { expectedUtilityPresentation } from './testHelpers';
 
 const workbenchStorageKey = 'sky.ui.workbench.v5';
 
@@ -30,8 +30,6 @@ type InspectorHeaderGeometry = Record<string, InspectorHeaderElementGeometry | n
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
-  await page.evaluate(() => window.localStorage.clear());
-  await page.reload();
 });
 
 async function expectNoSeriousAccessibilityViolations(page: Page) {
@@ -211,18 +209,24 @@ async function startMockPlayback(page: Page) {
   return player;
 }
 
-test('Inspector presentation preserves the workbench across the logical viewport matrix', async ({
+test('Inspector presentation covers desktop sizes and Chromium-only narrow emulation', async ({
   page,
 }) => {
-  for (const viewport of [
+  const supportedDesktopViewports = [
     { width: 1920, height: 1080 },
     { width: 1366, height: 768 },
     { width: 1024, height: 640 },
     { width: 900, height: 600 },
     { width: 800, height: 560 },
+  ];
+  // Playwright can emulate widths below Tauri's 800 px minimum; desktop resizing cannot reach them.
+  const chromiumResponsiveFallbackViewports = [
     { width: 780, height: 540 },
+    { width: 764, height: 540 },
+    { width: 763, height: 540 },
     { width: 640, height: 448 },
-  ]) {
+  ];
+  for (const viewport of [...supportedDesktopViewports, ...chromiumResponsiveFallbackViewports]) {
     await page.setViewportSize(viewport);
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
@@ -230,7 +234,7 @@ test('Inspector presentation preserves the workbench across the logical viewport
     const trigger = page.locator('.player-utility-button');
     await trigger.click();
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    const mode = getUtilityPresentationMode(viewport.width, true, 'graphite');
+    const mode = expectedUtilityPresentation(viewport.width);
     await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', mode);
     const details = page.getByRole('region', { name: 'Utility: Song Details' });
     await expect(details).toBeVisible();
@@ -252,7 +256,7 @@ test('Inspector presentation preserves the workbench across the logical viewport
   }
 });
 
-test('compact Inspector supports focus restoration, resize continuity, and outside row selection', async ({
+test('Chromium fallback emulation keeps compact Inspector interactions usable', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 640, height: 448 });
@@ -319,7 +323,7 @@ test('compact Inspector supports focus restoration, resize continuity, and outsi
   await expect(trigger).toBeFocused();
 });
 
-test('Inspector header geometry stays stable across empty, selected, cleared, and Runtime states', async ({
+test('Inspector header geometry stays stable at desktop and Chromium fallback widths', async ({
   page,
 }) => {
   for (const viewport of [
@@ -336,7 +340,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await expect(inspector).toBeVisible();
     await inspector.getByRole('tab', { name: 'Details' }).click();
     await expect(page.getByText('Select a song to view details.')).toBeVisible();
-    const presentation = getUtilityPresentationMode(viewport.width, true, 'graphite');
+    const presentation = expectedUtilityPresentation(viewport.width);
     await expectInspectorGeometry(page, presentation);
     await page.mouse.move(0, 0);
 
@@ -354,12 +358,12 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
       tabTextAlignment[state] = await readInspectorTabTextAlignment(page);
     };
     await record('empty');
-    if (viewport.width === 1366) {
+    if (process.env.WORKBENCH_INSPECTOR_CAPTURE === '1' && viewport.width === 1366) {
       await page.screenshot({
         path: 'test-results/final-polish-k-inspector-empty-1366x768.png',
         animations: 'disabled',
       });
-    } else {
+    } else if (process.env.WORKBENCH_INSPECTOR_CAPTURE === '1') {
       await page.screenshot({
         path: 'test-results/frozen-spec-inspector-compact-640x448.png',
         animations: 'disabled',
@@ -371,7 +375,7 @@ test('Inspector header geometry stays stable across empty, selected, cleared, an
     await expect(inspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
     await expectInspectorGeometry(page, presentation);
     await record('selected');
-    if (viewport.width === 1366) {
+    if (process.env.WORKBENCH_INSPECTOR_CAPTURE === '1' && viewport.width === 1366) {
       await page.screenshot({
         path: 'test-results/final-polish-k-inspector-selected-1366x768.png',
         animations: 'disabled',
@@ -733,9 +737,7 @@ test('resizing never rewrites persisted widths or the user open preference', asy
 
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
-      const expectedMode = utilityOpen
-        ? getUtilityPresentationMode(viewport.width, true, 'graphite')
-        : 'closed';
+      const expectedMode = utilityOpen ? expectedUtilityPresentation(viewport.width) : 'closed';
       await expect(page.locator('.workbench')).toHaveAttribute(
         'data-utility-presentation',
         expectedMode,
@@ -938,10 +940,8 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await expect(trigger).toBeFocused();
 });
 
-test('640 by 448 CSS logical pixels remain usable at 125 percent device scale', async ({
-  browser,
-  page,
-}) => {
+test('Chromium fallback emulation stays usable at DPR 1.25', async ({ browser, page }) => {
+  // Playwright's DPR setting is browser emulation, not Windows DPI or native-window evidence.
   const baseUrl = new URL('/', page.url()).toString();
   const context = await browser.newContext({
     viewport: { width: 640, height: 448 },

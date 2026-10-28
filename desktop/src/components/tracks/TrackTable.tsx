@@ -24,6 +24,31 @@ function libraryScopeKey(library: DesktopStore['library']): string {
   ]);
 }
 
+function sameLibrarySource(
+  left: DesktopStore['library']['source'],
+  right: DesktopStore['library']['source'],
+) {
+  return left.kind === right.kind && left.id === right.id;
+}
+
+function sameLibraryScope(left: DesktopStore['library'], right: DesktopStore['library']): boolean {
+  return (
+    left.query === right.query &&
+    sameLibrarySource(left.source, right.source) &&
+    sameLibrarySource(left.searchSource, right.searchSource) &&
+    left.playlistAddMode?.playlistId === right.playlistAddMode?.playlistId
+  );
+}
+
+function sameLibraryForKeyboardNavigation(
+  left: DesktopStore['library'],
+  right: DesktopStore['library'],
+): boolean {
+  return (
+    sameLibraryScope(left, right) && left.searchRequestGeneration === right.searchRequestGeneration
+  );
+}
+
 interface PendingKeyboardNavigation {
   id: number;
   index: number;
@@ -69,40 +94,39 @@ export function TrackTable({ useStore }: TrackTableProps) {
   }, [first, last, setViewport]);
 
   useEffect(() => {
-    const previousLibrary = useStore.getState().library;
-    let previousScopeKey = libraryScopeKey(previousLibrary);
-    let previousSearchRequestGeneration = previousLibrary.searchRequestGeneration;
-    return useStore.subscribe((state) => {
-      const nextScopeKey = libraryScopeKey(state.library);
-      const scopeChanged = nextScopeKey !== previousScopeKey;
-      const searchRequestChanged =
-        state.library.searchRequestGeneration !== previousSearchRequestGeneration;
-      if (!scopeChanged && !searchRequestChanged) return;
-      previousScopeKey = nextScopeKey;
-      previousSearchRequestGeneration = state.library.searchRequestGeneration;
-      keyboardNavigationId.current += 1;
-      pendingKeyboardNavigation.current = null;
-      setKeyboardIndex(null);
-      if (scopeChanged && parentRef.current) parentRef.current.scrollTop = 0;
-    });
+    return useStore.subscribe(
+      (state) => state.library,
+      (library, previousLibrary) => {
+        const scopeChanged = !sameLibraryScope(library, previousLibrary);
+        const searchRequestChanged =
+          library.searchRequestGeneration !== previousLibrary.searchRequestGeneration;
+        if (!scopeChanged && !searchRequestChanged) return;
+        keyboardNavigationId.current += 1;
+        pendingKeyboardNavigation.current = null;
+        setKeyboardIndex(null);
+        if (scopeChanged && parentRef.current) parentRef.current.scrollTop = 0;
+      },
+      { equalityFn: sameLibraryForKeyboardNavigation },
+    );
   }, [useStore]);
 
   useEffect(() => {
-    let previousSongId = useStore.getState().playback.currentSong?.songId ?? null;
-    return useStore.subscribe((state) => {
-      const nextSongId = state.playback.currentSong?.songId ?? null;
-      if (nextSongId === previousSongId) return;
-      previousSongId = nextSongId;
-      if (!nextSongId || selectNowPlayingSongId(state) !== nextSongId) return;
-      const context = state.playback.context;
-      if (
-        context &&
-        context.currentSongId === nextSongId &&
-        playbackContextMatchesLibrary(context, state.library)
-      ) {
-        virtualizer.scrollToIndex(context.currentIndex, { align: 'auto' });
-      }
-    });
+    return useStore.subscribe(
+      (state) => state.playback.currentSong?.songId ?? null,
+      (nextSongId) => {
+        if (!nextSongId) return;
+        const state = useStore.getState();
+        if (selectNowPlayingSongId(state) !== nextSongId) return;
+        const context = state.playback.context;
+        if (
+          context &&
+          context.currentSongId === nextSongId &&
+          playbackContextMatchesLibrary(context, state.library)
+        ) {
+          virtualizer.scrollToIndex(context.currentIndex, { align: 'auto' });
+        }
+      },
+    );
   }, [useStore, virtualizer]);
 
   useEffect(() => {
@@ -120,7 +144,10 @@ export function TrackTable({ useStore }: TrackTableProps) {
       if (activeDescendant) grid.setAttribute('aria-activedescendant', activeDescendant);
       else grid.removeAttribute('aria-activedescendant');
     };
-    const unsubscribe = useStore.subscribe(syncActiveDescendant);
+    const unsubscribe = useStore.subscribe(
+      (state) => state.library.selectedSongId,
+      syncActiveDescendant,
+    );
     // Virtual rows can unmount without a store selection change when the viewport moves.
     const observer = new MutationObserver(syncActiveDescendant);
     observer.observe(grid, { childList: true, subtree: true });

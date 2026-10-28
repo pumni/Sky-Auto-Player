@@ -1,4 +1,5 @@
 import { LoaderCircle, Pause, Play, Shuffle, SkipBack, SkipForward, Square } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import type { DesktopStoreHook } from '../../state/store';
 import {
   nextPlaybackPosition,
@@ -13,9 +14,21 @@ interface PlayerTransportProps {
 }
 
 export function PlayerTransport({ useStore }: PlayerTransportProps) {
-  const playback = useStore((store) => store.playback);
+  const playback = useStore(
+    useShallow((store) => ({
+      shuffleEnabled: store.playback.shuffleEnabled,
+      state: store.playback.state,
+      sessionId: store.playback.sessionId,
+      hasCurrentSong: store.playback.currentSong !== null,
+      context: store.playback.context,
+      startRequestId: store.playback.startRequestId,
+      transportOperation: store.playback.transportOperation,
+      prepared: store.playback.prepared,
+      error: store.playback.error,
+      statusRetryPending: store.playback.statusRetryPending,
+    })),
+  );
   const selectedSongId = useStore((store) => store.library.selectedSongId);
-  const selectedRow = useStore((store) => selectSongById(store.library, selectedSongId));
   const libraryGeneration = useStore((store) => store.library.generation);
   const prepare = useStore((store) => store.prepareSelectedPlayback);
   const start = useStore((store) => store.startPreparedPlayback);
@@ -49,28 +62,29 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     recoveryPending ||
     (hasSession && ['starting', 'stopping', 'finished', 'failed'].includes(playback.state));
   const primaryCanStartPrepared = playback.prepared?.admission === 'ready';
-  const primaryCanPlay = Boolean(selectedSongId || (playback.currentSong && contextCurrent));
+  const primaryCanPlay = Boolean(selectedSongId || (playback.hasCurrentSong && contextCurrent));
   const stopCanAct =
     hasSession && ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
-  const timelineSongExists = Boolean(playback.currentSong || selectedSongId);
-  const selectedDurationUs =
-    playback.currentSong?.durationUs ??
-    selectedRow?.duration_us ??
-    playback.snapshot?.total_us ??
-    0;
-  const totalUs = playback.snapshot?.total_us ?? selectedDurationUs;
-  const snapshotCurrent = playback.snapshot?.session_id === playback.sessionId;
-  const currentUs = Math.min(
-    Math.max(0, snapshotCurrent ? (playback.snapshot?.current_us ?? 0) : 0),
-    totalUs || 0,
-  );
-  const canPrevious =
-    contextCurrent && previousPlaybackPosition(playback.context!, currentUs) !== null;
-  const progressLabel = !timelineSongExists
-    ? 'Playback progress unavailable until a song is selected'
-    : totalUs
-      ? `Playback progress, ${formatPlayerDuration(currentUs)} of ${formatPlayerDuration(totalUs)}`
-      : 'Playback progress unavailable';
+  const canPrevious = useStore((store) => {
+    const context = store.playback.context;
+    if (!context || !context.valid || context.generation !== store.library.generation) {
+      return false;
+    }
+    const snapshot = store.playback.snapshot;
+    const snapshotCurrent = snapshot?.session_id === store.playback.sessionId;
+    const selectedSongId = store.library.selectedSongId;
+    const selectedDurationUs =
+      store.playback.currentSong?.durationUs ??
+      selectSongById(store.library, selectedSongId)?.duration_us ??
+      snapshot?.total_us ??
+      0;
+    const totalUs = snapshot?.total_us ?? selectedDurationUs;
+    const currentUs = Math.min(
+      Math.max(0, snapshotCurrent ? (snapshot?.current_us ?? 0) : 0),
+      totalUs || 0,
+    );
+    return previousPlaybackPosition(context, currentUs) !== null;
+  });
 
   const transportStatus = (() => {
     switch (playback.transportOperation) {
@@ -207,31 +221,61 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           <Square size={12} aria-hidden="true" />
         </button>
       </div>
-      <div
-        className={`player-timeline${timelineSongExists ? '' : ' is-disabled'}`}
-        aria-label={progressLabel}
-      >
-        <div className="player-timeline-label-row">
-          <div
-            className={`player-timeline-labels${transportStatus ? ' is-hidden' : ''}`}
-            aria-hidden={!timelineSongExists || transportStatus !== null}
-          >
-            <span>{timelineSongExists ? formatPlayerDuration(currentUs) : ''}</span>
-            <span>{timelineSongExists ? formatPlayerDuration(totalUs) : ''}</span>
-          </div>
-          {transportStatus && (
-            <span className="player-transport-status" role="status">
-              {transportStatus}
-            </span>
-          )}
+      <PlayerTransportTimeline useStore={useStore} transportStatus={transportStatus} />
+    </div>
+  );
+}
+
+function PlayerTransportTimeline({
+  useStore,
+  transportStatus,
+}: PlayerTransportProps & { transportStatus: string | null }) {
+  const selectedSongId = useStore((store) => store.library.selectedSongId);
+  const selectedRow = useStore((store) => selectSongById(store.library, selectedSongId));
+  const hasCurrentSong = useStore((store) => store.playback.currentSong !== null);
+  const currentSongDurationUs = useStore((store) => store.playback.currentSong?.durationUs ?? null);
+  const sessionId = useStore((store) => store.playback.sessionId);
+  const snapshotSessionId = useStore((store) => store.playback.snapshot?.session_id ?? null);
+  const snapshotCurrentUs = useStore((store) => store.playback.snapshot?.current_us ?? 0);
+  const snapshotTotalUs = useStore((store) => store.playback.snapshot?.total_us ?? null);
+
+  const timelineSongExists = Boolean(hasCurrentSong || selectedSongId);
+  const selectedDurationUs =
+    currentSongDurationUs ?? selectedRow?.duration_us ?? snapshotTotalUs ?? 0;
+  const totalUs = snapshotTotalUs ?? selectedDurationUs;
+  const snapshotCurrent = snapshotSessionId === sessionId;
+  const currentUs = Math.min(Math.max(0, snapshotCurrent ? snapshotCurrentUs : 0), totalUs || 0);
+  const progressLabel = !timelineSongExists
+    ? 'Playback progress unavailable until a song is selected'
+    : totalUs
+      ? `Playback progress, ${formatPlayerDuration(currentUs)} of ${formatPlayerDuration(totalUs)}`
+      : 'Playback progress unavailable';
+
+  return (
+    <div
+      className={`player-timeline${timelineSongExists ? '' : ' is-disabled'}`}
+      aria-label={progressLabel}
+    >
+      <div className="player-timeline-label-row">
+        <div
+          className={`player-timeline-labels${transportStatus ? ' is-hidden' : ''}`}
+          aria-hidden={!timelineSongExists || transportStatus !== null}
+        >
+          <span>{timelineSongExists ? formatPlayerDuration(currentUs) : ''}</span>
+          <span>{timelineSongExists ? formatPlayerDuration(totalUs) : ''}</span>
         </div>
-        <progress
-          value={timelineSongExists ? currentUs : 0}
-          max={timelineSongExists ? totalUs || 1 : 1}
-          aria-label={progressLabel}
-          aria-disabled={!timelineSongExists}
-        />
+        {transportStatus && (
+          <span className="player-transport-status" role="status">
+            {transportStatus}
+          </span>
+        )}
       </div>
+      <progress
+        value={timelineSongExists ? currentUs : 0}
+        max={timelineSongExists ? totalUs || 1 : 1}
+        aria-label={progressLabel}
+        aria-disabled={!timelineSongExists}
+      />
     </div>
   );
 }

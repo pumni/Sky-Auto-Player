@@ -25,7 +25,18 @@ function formatEventTime(timestamp: number): string {
   });
 }
 
-function playbackStatusLabel(playback: DesktopStore['playback']): string {
+type PlaybackSummaryState = Pick<
+  DesktopStore['playback'],
+  | 'error'
+  | 'sessionId'
+  | 'startRequestId'
+  | 'state'
+  | 'statusRetryPending'
+  | 'transportOperation'
+  | 'prepared'
+>;
+
+function playbackStatusLabel(playback: PlaybackSummaryState): string {
   const issue = playbackIssuePresentation(playback);
   const statusConcern = playbackSessionStatusConcern(playback);
   if (statusConcern === 'recoverable_status') {
@@ -73,17 +84,38 @@ function playbackStatusLabel(playback: DesktopStore['playback']): string {
   }
 }
 
-function PlaybackSessionSummary({ playback }: { playback: DesktopStore['playback'] }) {
+function PlaybackSessionSummary({ useStore }: DiagnosticsViewProps) {
+  const error = useStore((store) => store.playback.error);
+  const sessionId = useStore((store) => store.playback.sessionId);
+  const startRequestId = useStore((store) => store.playback.startRequestId);
+  const state = useStore((store) => store.playback.state);
+  const statusRetryPending = useStore((store) => store.playback.statusRetryPending);
+  const transportOperation = useStore((store) => store.playback.transportOperation);
+  const prepared = useStore((store) => store.playback.prepared);
+  const currentSongId = useStore((store) => store.playback.currentSong?.songId ?? null);
+  const currentSongTitle = useStore((store) => store.playback.currentSong?.title);
+  const hasCurrentSong = useStore((store) => store.playback.currentSong !== null);
+  const dryRun = useStore(
+    (store) => store.playback.context?.dryRun ?? store.playback.prepared?.config.dry_run ?? null,
+  );
+  const playback: PlaybackSummaryState = {
+    error,
+    sessionId,
+    startRequestId,
+    state,
+    statusRetryPending,
+    transportOperation,
+    prepared,
+  };
   const status = playbackStatusLabel(playback);
   const isActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
   const sessionStatusConcern = playbackSessionStatusConcern(playback);
-  const dryRun = playback.context?.dryRun ?? playback.prepared?.config.dry_run ?? null;
   const hasPlaybackContext =
     playback.state !== 'idle' ||
     playback.transportOperation !== null ||
     playback.startRequestId !== null ||
     playback.prepared !== null ||
-    playback.currentSong !== null ||
+    hasCurrentSong ||
     playback.error !== null;
 
   if (!hasPlaybackContext) return null;
@@ -91,20 +123,19 @@ function PlaybackSessionSummary({ playback }: { playback: DesktopStore['playback
   return (
     <section className="diagnostics-playback-summary" aria-label="Playback identity and status">
       <strong>Playback status: {status}</strong>
-      {playback.currentSong && (
+      {hasCurrentSong && (
         <span>
           {sessionStatusConcern !== null
             ? 'Last confirmed session song'
             : isActive
               ? 'Now Playing'
               : 'Last session song'}
-          : {playback.currentSong.title}
+          : {currentSongTitle}
         </span>
       )}
-      {playback.prepared?.song &&
-        playback.prepared.song.song_id !== playback.currentSong?.songId && (
-          <span>Prepared: {playback.prepared.song.title}</span>
-        )}
+      {playback.prepared?.song && playback.prepared.song.song_id !== currentSongId && (
+        <span>Prepared: {playback.prepared.song.title}</span>
+      )}
       {dryRun !== null && (isActive || playback.prepared) && (
         <span>Mode: {dryRun ? 'Dry run · no physical input sent' : 'Physical input'}</span>
       )}
@@ -259,7 +290,34 @@ function TimingPlot({
 
 export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const diagnostics = useStore((store: DesktopStore) => store.diagnostics);
-  const playback = useStore((store: DesktopStore) => store.playback);
+  const sessionId = useStore((store: DesktopStore) => store.playback.sessionId);
+  const playbackState = useStore((store: DesktopStore) => store.playback.state);
+  const playbackStartPending = useStore(
+    (store: DesktopStore) => store.playback.startRequestId !== null,
+  );
+  const transportOperation = useStore((store: DesktopStore) => store.playback.transportOperation);
+  const preparedAdmission = useStore(
+    (store: DesktopStore) => store.playback.prepared?.admission ?? null,
+  );
+  const playbackError = useStore((store: DesktopStore) => store.playback.error);
+  const playbackStatus = useStore((store: DesktopStore) =>
+    playbackStatusLabel({
+      error: store.playback.error,
+      sessionId: store.playback.sessionId,
+      startRequestId: store.playback.startRequestId,
+      state: store.playback.state,
+      statusRetryPending: store.playback.statusRetryPending,
+      transportOperation: store.playback.transportOperation,
+      prepared: store.playback.prepared,
+    }),
+  );
+  const playbackIsActive = useStore((store: DesktopStore) =>
+    ['starting', 'playing', 'paused', 'stopping'].includes(store.playback.state),
+  );
+  const dryRun = useStore(
+    (store: DesktopStore) =>
+      store.playback.context?.dryRun ?? store.playback.prepared?.config.dry_run ?? false,
+  );
   const exportSenderTrace = useStore((store: DesktopStore) => store.exportSenderTrace);
   const [traceExporting, setTraceExporting] = useState(false);
   const [traceExportError, setTraceExportError] = useState<string | null>(null);
@@ -270,15 +328,12 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const scrollRef = useScrollVisibility<HTMLDivElement>();
   const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
-  const playbackIsActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
-  const nativeSessionActive =
-    diagnostics.enabled && playbackIsActive && playback.sessionId !== null;
-  const activeSession = nativeSessionActive && latest?.session_id === playback.sessionId;
-  const dryRun = playback.context?.dryRun ?? playback.prepared?.config.dry_run ?? false;
+  const nativeSessionActive = diagnostics.enabled && playbackIsActive && sessionId !== null;
+  const activeSession = nativeSessionActive && latest?.session_id === sessionId;
   const backendMetricsAvailable = latest !== undefined && latest.backend_status !== 'unavailable';
   const visibleTraceExportIdentity =
     traceExportIdentity !== null &&
-    (playback.sessionId === null || playback.sessionId === traceExportIdentity.session)
+    (sessionId === null || sessionId === traceExportIdentity.session)
       ? traceExportIdentity
       : null;
   const playerMetric = (value: number): string =>
@@ -409,7 +464,7 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
           {diagnostics.error}
         </p>
       )}
-      {diagnostics.enabled && <PlaybackSessionSummary playback={playback} />}
+      {diagnostics.enabled && <PlaybackSessionSummary useStore={useStore} />}
       <div className="diagnostics-export">
         <button
           className="diagnostics-export-button"
@@ -450,20 +505,16 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
             />
           ) : !nativeSessionActive ? (
             <DiagnosticsEmptyState
-              title={
-                playback.state === 'finished'
-                  ? 'No active playback session'
-                  : playbackStatusLabel(playback)
-              }
+              title={playbackState === 'finished' ? 'No active playback session' : playbackStatus}
               detail={
-                playback.startRequestId !== null || playback.transportOperation === 'starting'
+                playbackStartPending || transportOperation === 'starting'
                   ? 'Waiting for native playback confirmation before showing session diagnostics.'
-                  : playback.transportOperation === 'preparing'
+                  : transportOperation === 'preparing'
                     ? 'Playback is being prepared; session diagnostics appear after it starts.'
-                    : playback.prepared?.admission === 'confirmation_required'
+                    : preparedAdmission === 'confirmation_required'
                       ? 'Review and confirm playback before a native session can start.'
-                      : playback.state === 'failed'
-                        ? (playback.error ??
+                      : playbackState === 'failed'
+                        ? (playbackError ??
                           'Playback failed before an active session was confirmed.')
                         : 'Runtime timing and input-health metrics appear when playback starts.'
               }

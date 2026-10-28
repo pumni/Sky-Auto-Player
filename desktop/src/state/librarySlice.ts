@@ -76,6 +76,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const pageSize = LIBRARY_PAGE_SIZE;
   const pageCache = new Map<string, SearchResult>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
+  const viewportRequests = new Map<string, Promise<void>>();
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
   let catalogReadyRecorded = false;
 
@@ -479,7 +480,9 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
 
     async setViewport(first, last) {
       const library = get().library;
-      set({ library: { ...library, visibleRange: { first, last } } });
+      if (library.visibleRange.first !== first || library.visibleRange.last !== last) {
+        set({ library: { ...library, visibleRange: { first, last } } });
+      }
       if (library.generation === 0 || first > last) return;
       await ensureRange(first, last, library.searchRequestGeneration);
       const current = get().library;
@@ -494,42 +497,64 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         const row = selectRowAtIndex(current, index);
         if (row) songIds.push(row.song_id);
       }
-      try {
-        const result = await bridge.setLibraryViewport({
-          generation: current.generation,
-          firstIndex: first,
-          lastIndex: last,
-          selectedSongId: current.selectedSongId,
-          songIds,
-        });
-        if (result.generation !== get().library.generation) return;
-        if (result.items.length === 0) return;
-        const latest = get().library;
-        const cachedSearchKey = cacheKey(latest.searchSource, latest.query, latest.generation);
-        const updatesByPage = new Map<number, SongRow[]>();
-        for (const row of result.items) {
-          const index = latest.indexById.get(row.song_id);
-          if (index === undefined) continue;
-          const offset = Math.floor(index / pageSize) * pageSize;
-          let items = updatesByPage.get(offset);
-          if (!items) {
-            const cached = getCachedPage(cachedSearchKey, offset);
-            if (!cached) continue;
-            items = [...cached.items];
-            updatesByPage.set(offset, items);
+      const requestKey = JSON.stringify([
+        sourceKey(current.source),
+        sourceKey(current.searchSource),
+        current.query,
+        current.generation,
+        first,
+        last,
+        current.selectedSongId,
+        songIds,
+      ]);
+      const pendingRequest = viewportRequests.get(requestKey);
+      if (pendingRequest) return pendingRequest;
+
+      const hydration = (async () => {
+        try {
+          const result = await bridge.setLibraryViewport({
+            generation: current.generation,
+            firstIndex: first,
+            lastIndex: last,
+            selectedSongId: current.selectedSongId,
+            songIds,
+          });
+          if (result.generation !== get().library.generation || result.items.length === 0) return;
+          const latest = get().library;
+          const cachedSearchKey = cacheKey(latest.searchSource, latest.query, latest.generation);
+          const updatesByPage = new Map<number, SongRow[]>();
+          for (const row of result.items) {
+            const index = latest.indexById.get(row.song_id);
+            if (index === undefined) continue;
+            const offset = Math.floor(index / pageSize) * pageSize;
+            let items = updatesByPage.get(offset);
+            if (!items) {
+              const cached = getCachedPage(cachedSearchKey, offset);
+              if (!cached) continue;
+              items = [...cached.items];
+              updatesByPage.set(offset, items);
+            }
+            items[index - offset] = row;
           }
-          items[index - offset] = row;
+          for (const [offset, items] of updatesByPage) {
+            const cached = getCachedPage(cachedSearchKey, offset);
+            if (cached) cachePage(cachedSearchKey, { ...cached, items });
+          }
+          set({
+            library: updateLoadedRows(latest, result.items),
+          });
+        } catch {
+          // Metadata hydration is best effort for a moving viewport. A later
+          // viewport event retries the bounded request without blocking rows.
         }
-        for (const [offset, items] of updatesByPage) {
-          const cached = getCachedPage(cachedSearchKey, offset);
-          if (cached) cachePage(cachedSearchKey, { ...cached, items });
+      })();
+      viewportRequests.set(requestKey, hydration);
+      try {
+        await hydration;
+      } finally {
+        if (viewportRequests.get(requestKey) === hydration) {
+          viewportRequests.delete(requestKey);
         }
-        set({
-          library: updateLoadedRows(latest, result.items),
-        });
-      } catch {
-        // Metadata hydration is best effort for a moving viewport. A later
-        // viewport event retries the bounded request without blocking rows.
       }
     },
 

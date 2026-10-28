@@ -1,0 +1,23 @@
+{
+  "sourceRevision": "f07a2ebaf561918b90567e49bbc69b611618ad56",
+  "branch": "codex/ui-unification-workbench-performance-20261027",
+  "captures": [
+    {
+      "file": "browser-mock-1366x768-populated.png",
+      "viewport": "1366x768 CSS px",
+      "state": "Expanded navigator, selected track, dry-run playback, docked Details Inspector"
+    },
+    {
+      "file": "browser-mock-800x560-compact.png",
+      "viewport": "800x560 CSS px",
+      "state": "Collapsed navigator, selected track, dry-run playback"
+    },
+    {
+      "file": "browser-mock-640x448-overlay.png",
+      "viewport": "640x448 CSS px",
+      "state": "Selected track, dry-run playback, Details Inspector overlay"
+    }
+  ],
+  "geometryFile": "browser-mock-geometry.json",
+  "captureCommand": "bun run test:e2e -- tests/e2e/visual-evidence.spec.ts tests/e2e/palette-appearance.spec.ts --grep \"captures selected Graphite workspace evidence views on request|Settings modal geometry, roles, and focus order are shared across palettes\" --workers=1"
+}

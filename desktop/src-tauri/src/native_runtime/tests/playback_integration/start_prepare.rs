@@ -204,7 +204,7 @@ fn native_prepared_ids_are_random_lowercase_hex_and_eviction_is_fifo() {
 }
 
 #[test]
-fn fingerprint_serialization_matches_python_canonicalization() {
+fn settings_fingerprint_excludes_appearance_and_auto_play() {
     let mut settings = sky_app_core::settings::ApplicationSettings::default();
     settings.playback_defaults.hold_frames = 1.25;
     settings.playback_defaults.tempo_scale = 0.95;
@@ -212,10 +212,16 @@ fn fingerprint_serialization_matches_python_canonicalization() {
     settings.telemetry_enabled = true;
     let default_settings_fingerprint =
         settings_fingerprint(&settings).expect("settings fingerprint");
-    // New settings use Graphite, which is part of the existing fingerprint payload.
+    // Palette and Auto Play do not affect a prepared schedule's identity.
     assert_eq!(
         default_settings_fingerprint,
-        "73e9c1c107100df2167fd6cfc7365c62207d5b946ac05996323896e2c9ddd939"
+        "dba3b575ae5967affc8a3d71f6aa4cadf9cec6104eff40ccdc83d5dfd6a8b46d"
+    );
+    let mut palette_changed = settings.clone();
+    palette_changed.palette = "slate".into();
+    assert_eq!(
+        default_settings_fingerprint,
+        settings_fingerprint(&palette_changed).expect("palette is not timing identity")
     );
     let mut auto_play_changed = settings.clone();
     auto_play_changed.playback_behavior.auto_play = false;
@@ -224,6 +230,12 @@ fn fingerprint_serialization_matches_python_canonicalization() {
         settings_fingerprint(&auto_play_changed).expect("Auto Play is not timing identity")
     );
     let mut changed_settings = settings.clone();
+    changed_settings.telemetry_enabled = false;
+    assert_ne!(
+        default_settings_fingerprint,
+        settings_fingerprint(&changed_settings).expect("unclassified settings remain distinct")
+    );
+    changed_settings = settings.clone();
     changed_settings.playback_defaults.timing_margin_us = 900;
     assert_ne!(
         default_settings_fingerprint,
@@ -611,7 +623,7 @@ fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_anal
     entered.wait();
     runtime
         .patch_settings(crate::commands::SettingsPatch {
-            palette: None,
+            palette: Some("slate".into()),
             telemetry_enabled: None,
             verbose_hud: None,
             playback_defaults: Some(crate::commands::PlaybackPatch {
@@ -640,6 +652,100 @@ fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_anal
             .expect("prepared cache")
             .is_empty()
     );
+
+    runtime.shutdown();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn palette_only_patch_preserves_inflight_prepare_and_native_start_token() {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sky-prepare-palette-race-{suffix}"));
+    fs::create_dir_all(root.join("songs")).expect("songs root");
+    fs::write(root.join("config.json"), r#"{"schema_version":5}"#).expect("config");
+    fs::write(
+        root.join("songs/demo.json"),
+        r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
+    )
+    .expect("song");
+    let runtime = Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime"));
+    let generation = catalog_generation(&runtime);
+    let search = runtime
+        .dispatch(
+            "catalog.search",
+            serde_json::json!({"query":"demo","offset":0,"limit":10,"generation":generation}),
+        )
+        .expect("search");
+    let song_id = search["items"][0]["song_id"]
+        .as_str()
+        .expect("song ID")
+        .to_owned();
+    let request = crate::commands::PlaybackPrepareRequest {
+        song_id,
+        generation,
+        config: PlaybackConfigDto {
+            hold_frames: 1.0,
+            timing_margin_us: 800,
+            tempo_scale: 1.0,
+            fps: 60,
+            dry_run: true,
+        },
+    };
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let entered_hook = Arc::clone(&entered);
+    let release_hook = Arc::clone(&release);
+    *runtime
+        .playback
+        .prepare_before_model_test_hook
+        .lock()
+        .expect("model hook") = Some(Arc::new(move || {
+        entered_hook.wait();
+        release_hook.wait();
+    }));
+
+    let prepare_runtime = Arc::clone(&runtime);
+    let prepare = thread::spawn(move || prepare_runtime.prepare_playback(request));
+    entered.wait();
+    runtime
+        .patch_settings(crate::commands::SettingsPatch {
+            palette: Some("slate".into()),
+            telemetry_enabled: None,
+            verbose_hud: None,
+            playback_defaults: None,
+            auto_play: None,
+            update_preferences: None,
+        })
+        .expect("palette mutation completes while analysis is paused");
+    assert_eq!(
+        runtime
+            .reload_settings_snapshot()
+            .expect("settings snapshot")
+            .palette,
+        "slate"
+    );
+    release.wait();
+
+    let prepared = prepare
+        .join()
+        .expect("Prepare worker")
+        .expect("palette patch preserves in-flight preparation");
+    let prepared_id = prepared.prepared_id.as_ref().expect("prepared ID");
+    let decisions =
+        if prepared.admission == crate::commands::PlaybackAdmission::ConfirmationRequired {
+            serde_json::json!([{"decision":"proceed","accepted":true}])
+        } else {
+            serde_json::json!([])
+        };
+    runtime
+        .dispatch(
+            "playback.start",
+            serde_json::json!({"preparedId":prepared_id,"decisions":decisions}),
+        )
+        .expect("native token remains valid after appearance-only patch");
 
     runtime.shutdown();
     let _ = fs::remove_dir_all(root);
@@ -678,6 +784,17 @@ fn auto_play_patch_keeps_prepared_native_playback_valid() {
             )
             .expect("prepare");
     let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
+    let palette_updated = runtime
+        .patch_settings(crate::commands::SettingsPatch {
+            palette: Some("slate".into()),
+            telemetry_enabled: None,
+            verbose_hud: None,
+            playback_defaults: None,
+            auto_play: None,
+            update_preferences: None,
+        })
+        .expect("palette settings patch");
+    assert_eq!(palette_updated.palette, "slate");
     let updated = runtime
         .patch_settings(crate::commands::SettingsPatch {
             palette: None,
@@ -705,6 +822,73 @@ fn auto_play_patch_keeps_prepared_native_playback_valid() {
             )
             .is_ok()
     );
+    runtime.shutdown();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn mixed_palette_and_timing_patch_rejects_stale_native_prepared_token() {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sky-mixed-settings-native-{suffix}"));
+    fs::create_dir_all(root.join("songs")).expect("songs root");
+    fs::write(root.join("config.json"), r#"{"schema_version":5}"#).expect("config");
+    fs::write(
+        root.join("songs/demo.json"),
+        r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
+    )
+    .expect("song");
+    let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+    let generation = catalog_generation(&runtime);
+    let search = runtime
+        .dispatch(
+            "catalog.search",
+            serde_json::json!({"query":"demo","offset":0,"limit":10,"generation":generation}),
+        )
+        .expect("search");
+    let prepared = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({
+                "songId": search["items"][0]["song_id"],
+                "generation": generation,
+                "config": {"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}
+            }),
+        )
+        .expect("prepare");
+    let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
+    let decisions = if prepared["admission"] == "confirmation_required" {
+        serde_json::json!([{"decision":"proceed","accepted":true}])
+    } else {
+        serde_json::json!([])
+    };
+
+    runtime
+        .patch_settings(crate::commands::SettingsPatch {
+            palette: Some("slate".into()),
+            telemetry_enabled: None,
+            verbose_hud: None,
+            playback_defaults: Some(crate::commands::PlaybackPatch {
+                hold_frames: None,
+                timing_margin_us: None,
+                tempo_scale: Some(0.9),
+                fps: None,
+            }),
+            auto_play: None,
+            update_preferences: None,
+        })
+        .expect("mixed palette and timing mutation");
+
+    let start = runtime
+        .dispatch(
+            "playback.start",
+            serde_json::json!({"preparedId":prepared_id,"decisions":decisions}),
+        )
+        .expect_err("mixed timing patch must invalidate the native token");
+    assert!(start.contains("stale or already consumed"), "{start}");
+
     runtime.shutdown();
     let _ = fs::remove_dir_all(root);
 }

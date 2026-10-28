@@ -1,10 +1,13 @@
 import AxeBuilder from '@axe-core/playwright';
+import { mkdirSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { palettes, selectPalette, type PaletteId } from './testHelpers';
 
-const palettes = ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
-type Palette = (typeof palettes)[number];
+type Palette = PaletteId;
 
-const auroraTokenNames = [
+const paletteTokenNames = [
   '--canvas',
   '--surface-panel',
   '--surface-raised',
@@ -12,6 +15,7 @@ const auroraTokenNames = [
   '--control-pressed',
   '--selection-bg',
   '--selection-indicator',
+  '--selection-row-indicator',
   '--border-subtle',
   '--border-strong',
   '--control-border',
@@ -20,6 +24,12 @@ const auroraTokenNames = [
   '--text-tertiary',
   '--accent',
   '--accent-hover',
+  '--accent-fill',
+  '--accent-fill-hover',
+  '--accent-fill-pressed',
+  '--accent-ink',
+  '--accent-ink-hover',
+  '--primary-fill',
   '--on-accent',
   '--focus-ring',
 ] as const;
@@ -30,18 +40,24 @@ const expected = {
     selectionBg: '#25242c',
     accent: '#b2a5e9',
     accentHover: '#c0b4f1',
+    accentFill: '#705eae',
+    accentFillHover: '#7564b4',
+    accentFillPressed: '#6553a0',
     borderStrong: '#393b3e',
     canvas: '#121314',
     surfaceRaised: '#242526',
-    onAccent: '#121314',
+    onAccent: '#ffffff',
     focusRing: '#b2a5e9',
     onDanger: '#ffffff',
   },
   aurora: {
     controlBorder: '#617390',
     selectionBg: '#152132',
-    accent: '#785ddd',
-    accentHover: '#825bdb',
+    accent: '#9b8cff',
+    accentHover: '#b4a8ff',
+    accentFill: '#785ddd',
+    accentFillHover: '#825bdb',
+    accentFillPressed: '#6647bd',
     borderStrong: '#33445e',
     canvas: '#0b1018',
     surfaceRaised: '#151e2b',
@@ -54,6 +70,9 @@ const expected = {
     selectionBg: '#2d343d',
     accent: '#a0b8d5',
     accentHover: '#c4d0df',
+    accentFill: '#a0b8d5',
+    accentFillHover: '#c4d0df',
+    accentFillPressed: '#88a4c4',
     borderStrong: '#58616d',
     canvas: '#17191d',
     surfaceRaised: '#292d33',
@@ -64,8 +83,11 @@ const expected = {
   slate: {
     controlBorder: '#6a8699',
     selectionBg: '#2a3d4a',
-    accent: '#6ca7d8',
-    accentHover: '#83b8e3',
+    accent: '#a8dded',
+    accentHover: '#c1f0fb',
+    accentFill: '#6ca7d8',
+    accentFillHover: '#83b8e3',
+    accentFillPressed: '#568fbe',
     borderStrong: '#486274',
     canvas: '#10171d',
     surfaceRaised: '#20313d',
@@ -76,8 +98,11 @@ const expected = {
   cyberpunk: {
     controlBorder: '#976595',
     selectionBg: '#3a274a',
-    accent: '#d95abf',
-    accentHover: '#ef78d4',
+    accent: '#f4a8e3',
+    accentHover: '#ffd0f2',
+    accentFill: '#d95abf',
+    accentFillHover: '#ef78d4',
+    accentFillPressed: '#c954b1',
     borderStrong: '#654872',
     canvas: '#130f1d',
     surfaceRaised: '#291c37',
@@ -88,8 +113,11 @@ const expected = {
   classic: {
     controlBorder: '#897864',
     selectionBg: '#352c21',
-    accent: '#c99242',
-    accentHover: '#e0aa5b',
+    accent: '#e8c17a',
+    accentHover: '#f2dca5',
+    accentFill: '#c99242',
+    accentFillHover: '#e0aa5b',
+    accentFillPressed: '#a87832',
     borderStrong: '#695845',
     canvas: '#171512',
     surfaceRaised: '#2c261f',
@@ -120,6 +148,10 @@ const graphiteRoleTokens = {
   '--workbench-text-tertiary': '#929292',
   '--workbench-accent': '#b2a5e9',
   '--workbench-accent-hover': '#c0b4f1',
+  '--workbench-accent-fill': '#705eae',
+  '--workbench-accent-fill-hover': '#7564b4',
+  '--workbench-accent-fill-pressed': '#6553a0',
+  '--workbench-toggle-on': '#b68cff',
   '--workbench-focus': '#b2a5e9',
   '--workbench-search-surface': '#202123',
   '--workbench-search-idle-edge': '#3d3f43',
@@ -179,21 +211,16 @@ function contrastRatio(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-async function selectPalette(page: Page, palette: Palette) {
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await dialog.getByLabel('Color palette').selectOption(palette);
-  await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
-  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
-  await dialog.getByRole('button', { name: 'Close settings' }).click();
-  await expect(dialog).toBeHidden();
-}
-
-async function token(page: Page, name: string): Promise<string> {
+async function tokenValues(page: Page, names: readonly string[]): Promise<Record<string, string>> {
   return page.evaluate(
-    (tokenName) => getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim(),
-    name,
+    (tokenNames) =>
+      Object.fromEntries(
+        tokenNames.map((name) => [
+          name,
+          getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+        ]),
+      ),
+    [...names],
   );
 }
 
@@ -206,6 +233,27 @@ async function resolvedTokenColor(page: Page, name: string): Promise<string> {
     probe.remove();
     return color;
   }, name);
+}
+
+async function resolvedTokenColors<const Names extends readonly string[]>(
+  page: Page,
+  names: Names,
+): Promise<Record<Names[number], string>> {
+  return page.evaluate(
+    (tokenNames) => {
+      const probe = document.createElement('span');
+      document.body.append(probe);
+      const colors = Object.fromEntries(
+        tokenNames.map((name) => {
+          probe.style.color = `var(${name})`;
+          return [name, getComputedStyle(probe).color];
+        }),
+      );
+      probe.remove();
+      return colors;
+    },
+    [...names],
+  ) as Promise<Record<Names[number], string>>;
 }
 
 async function styleValue(
@@ -313,7 +361,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   for (const palette of palettes) {
     await page.goto('/');
     await selectPalette(page, palette);
-    const expectedGutter = palette === 'graphite' ? 4 : 8;
+    const expectedGutter = 4;
     await expect(page.locator('.workbench')).toHaveAttribute(
       'data-workbench-gap',
       String(expectedGutter),
@@ -351,7 +399,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     });
     expect(geometry.gutter).toBe(expectedGutter);
     expect(geometry.solverGutter).toBe(expectedGutter);
-    expect(geometry.titlebarHeight).toBe(palette === 'graphite' ? 40 : 48);
+    expect(geometry.titlebarHeight).toBe(40);
     expect(geometry.navigator).toMatchObject({ x: expectedGutter, width: 240 });
     expect(geometry.track?.x).toBe(expectedGutter * 2 + 240);
     expect(geometry.track?.right).toBe(1366 - expectedGutter);
@@ -360,46 +408,63 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(geometry.separatorWidths).toEqual([expectedGutter]);
 
     const values = expected[palette];
-    for (const [name, value] of Object.entries({
+    const expectedTokenValues = {
       '--control-border': values.controlBorder,
       '--selection-bg': values.selectionBg,
-      '--accent': values.accent,
-      '--accent-hover': values.accentHover,
+      '--accent': palette === 'graphite' ? values.accent : values.accentFill,
+      '--accent-hover': palette === 'graphite' ? values.accentHover : values.accentFillHover,
+      '--accent-fill': values.accentFill,
+      '--accent-fill-hover': values.accentFillHover,
+      '--accent-fill-pressed': values.accentFillPressed,
+      '--accent-ink': values.accent,
+      '--accent-ink-hover': values.accentHover,
+      '--selection-row-indicator': palette === 'graphite' ? 'transparent' : values.accent,
+      '--primary-fill': values.accentFill,
       '--border-strong': values.borderStrong,
-    })) {
-      await expect.poll(() => token(page, name)).toBe(value);
-    }
-    if (palette === 'graphite') {
-      for (const [name, value] of Object.entries(graphiteRoleTokens)) {
-        await expect.poll(() => token(page, name)).toBe(value);
-      }
-    }
-    for (const [name, value] of Object.entries(stableStatusTokens)) {
-      await expect.poll(() => token(page, name)).toBe(value);
-    }
-
-    const colors = {
-      accent: await resolvedTokenColor(page, '--accent'),
-      accentHover: await resolvedTokenColor(page, '--accent-hover'),
-      controlBorder: await resolvedTokenColor(page, '--control-border'),
-      selectionBg: await resolvedTokenColor(page, '--selection-bg'),
-      canvas: await resolvedTokenColor(page, '--canvas'),
-      surfaceRaised: await resolvedTokenColor(page, '--surface-raised'),
-      onAccent: await resolvedTokenColor(page, '--on-accent'),
-      onDanger: await resolvedTokenColor(page, '--on-danger'),
-      dangerFill: await resolvedTokenColor(page, '--danger-fill'),
-      dangerFillHover: await resolvedTokenColor(page, '--danger-fill-hover'),
-      focusRing: await resolvedTokenColor(page, '--focus-ring'),
+      ...(palette === 'graphite' ? graphiteRoleTokens : {}),
+      ...stableStatusTokens,
     };
-    if (palette === 'graphite') {
-      for (const surface of [colors.canvas, colors.surfaceRaised, colors.selectionBg]) {
-        expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
-        expect(contrastRatio(colors.accentHover, surface)).toBeGreaterThanOrEqual(4.5);
-      }
-    } else {
-      expect(contrastRatio(colors.onAccent, colors.accent)).toBeGreaterThanOrEqual(4.5);
-      expect(contrastRatio(colors.onAccent, colors.accentHover)).toBeGreaterThanOrEqual(4.5);
+    await expect
+      .poll(() => tokenValues(page, Object.keys(expectedTokenValues)))
+      .toEqual(expectedTokenValues);
+
+    const resolvedColors = await resolvedTokenColors(page, [
+      '--accent-ink',
+      '--accent-ink-hover',
+      '--accent-fill',
+      '--accent-fill-hover',
+      '--control-border',
+      '--selection-bg',
+      '--canvas',
+      '--surface-raised',
+      '--on-accent',
+      '--on-danger',
+      '--danger-fill',
+      '--danger-fill-hover',
+      '--focus-ring',
+      ...(palette === 'graphite' ? ['--danger-fg', '--workbench-control-danger-hover'] : []),
+    ] as const);
+    const colors = {
+      accent: resolvedColors['--accent-ink'],
+      accentHover: resolvedColors['--accent-ink-hover'],
+      accentFill: resolvedColors['--accent-fill'],
+      accentFillHover: resolvedColors['--accent-fill-hover'],
+      controlBorder: resolvedColors['--control-border'],
+      selectionBg: resolvedColors['--selection-bg'],
+      canvas: resolvedColors['--canvas'],
+      surfaceRaised: resolvedColors['--surface-raised'],
+      onAccent: resolvedColors['--on-accent'],
+      onDanger: resolvedColors['--on-danger'],
+      dangerFill: resolvedColors['--danger-fill'],
+      dangerFillHover: resolvedColors['--danger-fill-hover'],
+      focusRing: resolvedColors['--focus-ring'],
+    };
+    for (const surface of [colors.canvas, colors.surfaceRaised, colors.selectionBg]) {
+      expect(contrastRatio(colors.accent, surface)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.accentHover, surface)).toBeGreaterThanOrEqual(4.5);
     }
+    expect(contrastRatio(colors.onAccent, colors.accentFill)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.onAccent, colors.accentFillHover)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.onDanger, colors.dangerFill)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.onDanger, colors.dangerFillHover)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.controlBorder, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
@@ -408,27 +473,24 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.focusRing, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
     if (palette === 'graphite') {
-      const dangerText = await resolvedTokenColor(page, '--danger-fg');
-      const dangerHover = await resolvedTokenColor(page, '--workbench-control-danger-hover');
+      const dangerText = resolvedColors['--danger-fg'];
+      const dangerHover = resolvedColors['--workbench-control-danger-hover'];
       expect(contrastRatio(dangerText, dangerHover)).toBeGreaterThanOrEqual(4.5);
     }
   }
 
+  await selectPalette(page, 'graphite');
+  const defaultTokens = await tokenValues(page, paletteTokenNames);
   await selectPalette(page, 'aurora');
-  const auroraTokens = await Promise.all(auroraTokenNames.map((name) => token(page, name)));
 
   await page.locator('html').evaluate((root) => root.removeAttribute('data-palette'));
   await expect(page.locator('html')).not.toHaveAttribute('data-palette');
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
-  for (const [index, name] of auroraTokenNames.entries()) {
-    await expect.poll(() => token(page, name)).toBe(auroraTokens[index]);
-  }
+  await expect.poll(() => tokenValues(page, paletteTokenNames)).toEqual(defaultTokens);
   await selectPalette(page, 'aurora');
 });
 
-test('Graphite is the new-install palette and persists through the appearance settings surface', async ({
-  page,
-}) => {
+test('Dark mode is the new-install palette and keeps the graphite setting ID', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -441,7 +503,7 @@ test('Graphite is the new-install palette and persists through the appearance se
   const palette = settings.getByLabel('Color palette');
   await expect(palette).toHaveValue('graphite');
   await expect(palette.locator('option')).toHaveCount(6);
-  await expect(palette.locator('option[value="graphite"]')).toHaveCount(1);
+  await expect(palette.locator('option[value="graphite"]')).toHaveText('Dark mode');
   await palette.selectOption('slate');
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'slate');
   await palette.selectOption('graphite');
@@ -477,21 +539,18 @@ test('Graphite is the new-install palette and persists through the appearance se
     '--on-accent': '#ffffff',
     '--focus-ring': '#b2a5e9',
   } as const;
-  for (const [name, value] of Object.entries(graphiteTokens)) {
-    await expect.poll(() => token(page, name)).toBe(value);
-  }
-  for (const [name, value] of Object.entries(stableStatusTokens)) {
-    await expect.poll(() => token(page, name)).toBe(value);
-  }
-  for (const [name, value] of Object.entries({
+  const expectedGraphiteTokens = {
+    ...graphiteTokens,
+    ...stableStatusTokens,
     '--type-body': '13px',
     '--type-page-heading': '18px',
     '--type-section-heading': '14px',
     '--type-control-label': '13px',
     '--type-metadata': '12px',
-  })) {
-    await expect.poll(() => token(page, name)).toBe(value);
-  }
+  };
+  await expect
+    .poll(() => tokenValues(page, Object.keys(expectedGraphiteTokens)))
+    .toEqual(expectedGraphiteTokens);
 
   const colors = {
     canvas: await resolvedTokenColor(page, '--canvas'),
@@ -579,6 +638,180 @@ test('Graphite is the new-install palette and persists through the appearance se
   await expectForcedColor(page, forcedSelectedRow, 'color', 'HighlightText');
 });
 
+test('Settings modal geometry, roles, and focus order are shared across palettes', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+
+  const trigger = page.getByRole('button', { name: 'Open settings' });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(dialog).toBeVisible();
+  const navigation = dialog.getByRole('navigation', { name: 'Settings categories' });
+  await navigation.getByRole('button', { name: 'Appearance', exact: true }).click();
+  const paletteSelect = dialog.getByRole('combobox', { name: 'Color palette' });
+  const closeButton = dialog.getByRole('button', { name: 'Close settings' });
+  const focusTargets = [
+    { name: 'Close settings', locator: closeButton },
+    {
+      name: 'Playback',
+      locator: navigation.getByRole('button', { name: 'Playback', exact: true }),
+    },
+    {
+      name: 'Appearance',
+      locator: navigation.getByRole('button', { name: 'Appearance', exact: true }),
+    },
+    {
+      name: 'Diagnostics',
+      locator: navigation.getByRole('button', { name: 'Diagnostics', exact: true }),
+    },
+    { name: 'Updates', locator: navigation.getByRole('button', { name: 'Updates', exact: true }) },
+    {
+      name: 'Advanced',
+      locator: navigation.getByRole('button', { name: 'Advanced', exact: true }),
+    },
+    { name: 'About', locator: navigation.getByRole('button', { name: 'About', exact: true }) },
+    { name: 'Color palette', locator: paletteSelect },
+  ];
+  let reference:
+    | {
+        rectangles: Record<string, { x: number; y: number; width: number; height: number }>;
+        roles: unknown;
+        focusOrder: string[];
+      }
+    | undefined;
+  const dialogSurfaceColors = new Set<string>();
+  const observations: Array<{
+    palette: Palette;
+    rectangles: Record<string, { x: number; y: number; width: number; height: number }>;
+    roles: unknown;
+    focusOrder: string[];
+    dialogSurface: string;
+  }> = [];
+  const captureMatrix =
+    process.env.GRAPHITE_WORKSPACE_CAPTURE === 'candidate' &&
+    process.env.GRAPHITE_WORKSPACE_CAPTURE_VIEWS?.split(',')
+      .map((view) => view.trim())
+      .includes('modal');
+  const evidenceDirectory = resolve(process.cwd(), 'test-results/graphite-workspace-checkpoint');
+  if (captureMatrix) mkdirSync(evidenceDirectory, { recursive: true });
+
+  for (const palette of palettes) {
+    await paletteSelect.selectOption(palette);
+    await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+    await expect(dialog.getByRole('region', { name: 'Appearance' })).toBeVisible();
+
+    const snapshot = await dialog.evaluate((element) => {
+      const rect = (selector: string) => {
+        const target =
+          selector === '.settings-dialog'
+            ? (element as HTMLElement)
+            : element.querySelector<HTMLElement>(selector);
+        if (!target) throw new Error(`Settings modal is missing ${selector}`);
+        const bounds = target.getBoundingClientRect();
+        return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+      };
+      const navigationElement = element.querySelector<HTMLElement>('.settings-nav');
+      const paletteElement = element.querySelector<HTMLSelectElement>('.settings-section select');
+      const paletteLabel = paletteElement?.labels?.[0]?.textContent?.trim() ?? null;
+      return {
+        rectangles: {
+          dialog: rect('.settings-dialog'),
+          heading: rect('.dialog-heading'),
+          layout: rect('.settings-layout'),
+          navigation: rect('.settings-nav'),
+          content: rect('.settings-content'),
+          section: rect('.settings-section'),
+          palette: rect('.settings-section select'),
+        },
+        roles: {
+          dialog: { role: element.getAttribute('role'), name: element.getAttribute('aria-label') },
+          navigation: {
+            role: navigationElement?.getAttribute('role') ?? 'navigation',
+            name: navigationElement?.getAttribute('aria-label') ?? '',
+            categories: Array.from(navigationElement?.querySelectorAll('button') ?? []).map(
+              (button) => ({
+                role: button.getAttribute('role') ?? 'button',
+                name: button.textContent?.trim() ?? '',
+                current: button.getAttribute('aria-current'),
+              }),
+            ),
+          },
+          appearance: {
+            role: 'region',
+            name:
+              element.querySelector<HTMLElement>('.settings-section h3')?.textContent?.trim() ?? '',
+          },
+          palette: { role: 'combobox', name: paletteLabel },
+        },
+        dialogSurface: getComputedStyle(element).backgroundColor,
+      };
+    });
+    dialogSurfaceColors.add(snapshot.dialogSurface);
+
+    await dialog.evaluate((element) => (element as HTMLElement).focus());
+    await expect(dialog).toBeFocused();
+    const focusOrder: string[] = [];
+    for (const target of focusTargets) {
+      await page.keyboard.press('Tab');
+      await expect(target.locator).toBeFocused();
+      focusOrder.push(target.name);
+    }
+    await page.keyboard.press('Tab');
+    await expect(closeButton).toBeFocused();
+    focusOrder.push('Close settings');
+    observations.push({ palette, ...snapshot, focusOrder });
+    if (captureMatrix) {
+      await page.screenshot({
+        path: resolve(evidenceDirectory, `candidate-settings-modal-${palette}-800x560.png`),
+        animations: 'disabled',
+      });
+    }
+
+    if (reference) {
+      expect(snapshot.roles).toEqual(reference.roles);
+      expect(focusOrder).toEqual(reference.focusOrder);
+      for (const [name, rectangle] of Object.entries(snapshot.rectangles)) {
+        const referenceRectangle = reference.rectangles[name];
+        expect(referenceRectangle, `${palette} ${name} rectangle`).toBeDefined();
+        if (!referenceRectangle) throw new Error(`${name} modal rectangle has no reference`);
+        expect(Math.abs(rectangle.x - referenceRectangle.x)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(rectangle.y - referenceRectangle.y)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(rectangle.width - referenceRectangle.width)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(rectangle.height - referenceRectangle.height)).toBeLessThanOrEqual(0.5);
+      }
+    } else {
+      reference = {
+        rectangles: snapshot.rectangles,
+        roles: snapshot.roles,
+        focusOrder,
+      };
+    }
+  }
+
+  expect(dialogSurfaceColors.size).toBeGreaterThan(1);
+  if (captureMatrix) {
+    await writeFile(
+      resolve(evidenceDirectory, 'candidate-settings-modal-six-palette.json'),
+      `${JSON.stringify(
+        {
+          sourceRevision: process.env.GRAPHITE_EVIDENCE_SOURCE_SHA ?? null,
+          viewport: { width: 800, height: 560 },
+          observations,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+  await closeButton.click();
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test('semantic consumers and interaction states use the locked hierarchy', async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -603,7 +836,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await expect(selectedRow).toHaveCount(1);
   await expect(selectedRow).toHaveClass(/is-selected/);
   await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
-  await assertBorderUsesToken(page, selectedRow, '--accent', 'borderLeftColor');
+  await assertBorderUsesToken(page, selectedRow, '--selection-row-indicator', 'borderLeftColor');
   await assertBackgroundUsesToken(
     page,
     page.locator('.library-nav-item.is-active'),
@@ -627,7 +860,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   );
   await page.mouse.down();
   await expect(styleValue(separatorLine, 'borderLeftColor')).resolves.toBe(
-    await resolvedTokenColor(page, '--accent'),
+    await resolvedTokenColor(page, '--accent-ink'),
   );
   await page.mouse.up();
 
@@ -682,7 +915,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await assertBackgroundUsesToken(page, update, '--surface-raised');
   await update.hover();
   await assertBackgroundUsesToken(page, update, '--control-hover');
-  await assertBackgroundUsesToken(page, page.locator('.update-indicator-dot'), '--accent');
+  await assertBackgroundUsesToken(page, page.locator('.update-indicator-dot'), '--accent-ink');
 
   const navigator = page.getByRole('navigation', { name: 'Library' });
   const collapseNavigator = navigator.getByRole('button', { name: 'Collapse library navigator' });
@@ -720,9 +953,9 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await assertBackgroundUsesToken(page, cancel, '--control-hover');
   await pressAndReadBackground(page, cancel, await resolvedTokenColor(page, '--control-pressed'));
   const primary = createDialog.getByRole('button', { name: 'Create' });
-  await assertBackgroundUsesToken(page, primary, '--accent');
+  await assertBackgroundUsesToken(page, primary, '--primary-fill');
   await primary.hover();
-  await assertBackgroundUsesToken(page, primary, '--accent-hover');
+  await assertBackgroundUsesToken(page, primary, '--primary-fill-hover');
   await createDialog.getByLabel('Playlist name').fill('Palette Contract');
   await primary.click();
   await page.getByRole('button', { name: 'More actions for Palette Contract' }).click();

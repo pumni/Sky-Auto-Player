@@ -360,11 +360,13 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   const player = await startDryRunWithSelection(page);
   const details = await openInspector(page);
   await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
-  mkdirSync(resolve(process.cwd(), 'test-results'), { recursive: true });
-  await page.screenshot({
-    path: resolve(process.cwd(), 'test-results/graphite-workbench-1366x768.png'),
-    animations: 'disabled',
-  });
+  if (process.env.GRAPHITE_ROW_LAYOUT_CAPTURE === '1') {
+    mkdirSync(resolve(process.cwd(), 'test-results'), { recursive: true });
+    await page.screenshot({
+      path: resolve(process.cwd(), 'test-results/graphite-workbench-1366x768.png'),
+      animations: 'disabled',
+    });
+  }
   await page.setViewportSize({ width: 789, height: 555 });
   await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '789');
   await page.keyboard.press('/');
@@ -375,10 +377,12 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   await expect.poll(() => nativeLikeHoveredRow.evaluate((row) => row.matches(':hover'))).toBe(true);
   const nativeLikeGeometry = await readGeometry(page, 'native-like-789x555');
   expectRowGeometry(nativeLikeGeometry);
-  await page.screenshot({
-    path: resolve(process.cwd(), 'test-results/graphite-workbench-789x555.png'),
-    animations: 'disabled',
-  });
+  if (process.env.GRAPHITE_ROW_LAYOUT_CAPTURE === '1') {
+    await page.screenshot({
+      path: resolve(process.cwd(), 'test-results/graphite-workbench-789x555.png'),
+      animations: 'disabled',
+    });
+  }
   await page.setViewportSize({ width: 1366, height: 768 });
   await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1366');
   const scrollbarSimulation = await page.addStyleTag({

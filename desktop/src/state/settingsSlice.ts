@@ -48,14 +48,14 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           if (patch.autoPlay !== undefined && patch.autoPlay !== get().settings?.auto_play) {
             context.onAutoPlayChanged();
           }
-          const autoPlayOnly =
-            patch.autoPlay !== undefined &&
-            patch.palette === undefined &&
-            patch.telemetryEnabled === undefined &&
-            patch.verboseHud === undefined &&
-            patch.playbackDefaults === undefined &&
-            patch.updatePreferences === undefined;
-          const cancelPreparing = !autoPlayOnly && playback.transportOperation === 'preparing';
+          const patchFields = Object.entries(patch)
+            .filter(([, value]) => value !== undefined && value !== null)
+            .map(([field]) => field);
+          const preparationSafePatch =
+            patchFields.length > 0 &&
+            patchFields.every((field) => field === 'palette' || field === 'autoPlay');
+          const cancelPreparing =
+            !preparationSafePatch && playback.transportOperation === 'preparing';
           if (cancelPreparing) context.clearOperationFromEvent();
           set({
             settings,
@@ -63,9 +63,9 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             settingsError: null,
             playback: {
               ...playback,
-              prepared: autoPlayOnly ? playback.prepared : null,
-              preparedIdentity: autoPlayOnly ? playback.preparedIdentity : null,
-              preparedContext: autoPlayOnly ? playback.preparedContext : null,
+              prepared: preparationSafePatch ? playback.prepared : null,
+              preparedIdentity: preparationSafePatch ? playback.preparedIdentity : null,
+              preparedContext: preparationSafePatch ? playback.preparedContext : null,
               transportOperation: cancelPreparing ? null : playback.transportOperation,
             },
           });

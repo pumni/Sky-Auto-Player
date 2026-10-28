@@ -26,7 +26,7 @@ const categories: Array<{ id: SettingsCategory; label: string }> = [
 ];
 
 const palettes: Array<{ id: PaletteId; label: string }> = [
-  { id: 'graphite', label: 'Graphite' },
+  { id: 'graphite', label: 'Dark mode' },
   { id: 'aurora', label: 'Aurora' },
   { id: 'minimalist', label: 'Minimalist' },
   { id: 'slate', label: 'Slate' },

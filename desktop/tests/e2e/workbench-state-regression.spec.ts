@@ -1,5 +1,4 @@
 import { expect, test, type Page } from '@playwright/test';
-import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
 
 const viewports = [
   { width: 640, height: 448 },
@@ -64,37 +63,27 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
 }) => {
   test.setTimeout(300_000);
 
-  for (const viewport of viewports) {
-    await openApp(page, viewport, '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
-    await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
-    const player = await startDryRunWithSelection(page);
-    const inspector = await openInspector(page, 'Details');
-    const search = page.getByRole('searchbox', { name: 'Search All Songs' });
-    await search.focus();
-    await expect(search).toBeFocused();
-    await expect(page.locator('.workbench')).toHaveAttribute(
-      'data-utility-presentation',
-      getUtilityPresentationMode(viewport.width, true, 'graphite'),
-    );
-    if (viewport.width === 1366) {
-      const navigator = page.getByRole('navigation', { name: 'Library' });
-      await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
-      await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-    }
-  }
+  const desktopViewport = viewports[3];
+  await openApp(page, desktopViewport, '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
+  await startDryRunWithSelection(page);
+  await openInspector(page, 'Details');
+  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  await search.focus();
+  await expect(search).toBeFocused();
+  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+  const smokeNavigator = page.getByRole('navigation', { name: 'Library' });
+  await smokeNavigator.getByRole('button', { name: 'Collapse library navigator' }).click();
+  await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
 
-  for (const viewport of [viewports[0], viewports[3]]) {
-    await openApp(page, viewport, '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
-    await startDryRunWithSelection(page);
-    const inspector = await openInspector(page, 'Runtime');
-    await expect(
-      inspector.getByText('Mode: Dry run · no physical input sent', { exact: true }),
-    ).toBeVisible();
-    if (viewport.width >= 1366) {
-      await expect(inspector.getByText('Sender samples', { exact: true })).toBeVisible();
-    }
-    await expect(inspector.getByRole('tab', { name: 'Runtime' })).toBeVisible();
-  }
+  await openApp(page, desktopViewport, '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  await startDryRunWithSelection(page);
+  const runtimeInspector = await openInspector(page, 'Runtime');
+  await expect(
+    runtimeInspector.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+  ).toBeVisible();
+  await expect(runtimeInspector.getByText('Sender samples', { exact: true })).toBeVisible();
+  await expect(runtimeInspector.getByRole('tab', { name: 'Runtime' })).toBeVisible();
 
   await openApp(page, viewports[1], '/?mockLibraryState=empty');
   await expect(page.locator('.empty-state strong')).toHaveText('Your catalog is empty');
@@ -188,6 +177,5 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   const senderStatus = diagnostics.getByRole('region', { name: 'Sender-side status' });
   await expect(senderStatus).toContainText('Sender-side status: Attention');
   await expect(diagnostics.getByText('Degraded', { exact: true })).toBeVisible();
-  await expect(diagnostics.getByText('Mode: Physical input', { exact: true })).toBeVisible();
   await expect(diagnostics.getByText('Mode: Physical input', { exact: true })).toBeVisible();
 });

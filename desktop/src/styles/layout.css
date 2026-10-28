@@ -16,10 +16,6 @@ body {
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-  background: var(--canvas);
-}
-
-html[data-palette='graphite'] .app-shell {
   background: var(--chrome-surface);
 }
 
@@ -42,8 +38,8 @@ html[data-palette='graphite'] .app-shell {
   height: 48px;
   margin-bottom: 8px;
   border-radius: var(--radius-region);
-  color: var(--on-accent);
-  background: var(--accent);
+  color: var(--on-primary);
+  background: var(--primary-fill);
   font-size: 24px;
 }
 

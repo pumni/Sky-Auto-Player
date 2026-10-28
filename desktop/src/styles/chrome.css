@@ -7,7 +7,7 @@
   height: var(--titlebar-height);
   padding: 0;
   border-bottom: 0;
-  background: var(--canvas);
+  background: var(--chrome-surface);
 }
 
 .app-titlebar-leading {
@@ -54,22 +54,21 @@
   width: 100%;
   max-width: 520px;
   min-width: 0;
-  height: 34px;
+  height: 32px;
   gap: 8px;
   padding: 0 9px;
   color: var(--text-tertiary);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
-  background: var(--canvas);
+  background: var(--workbench-search-surface);
+  flex-basis: min(480px, 42vw);
+  border-color: var(--workbench-search-idle-edge);
 }
 
 .global-search:focus-within {
-  border-color: var(--focus-ring);
-}
-
-html[data-palette='graphite'] .global-search:focus-within {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  border-color: var(--workbench-search-idle-edge);
+  outline: 0;
+  box-shadow: none;
 }
 
 .global-search input {
@@ -89,7 +88,7 @@ html[data-palette='graphite'] .global-search:focus-within {
   padding: 0 5px;
   color: var(--text-tertiary);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--workbench-radius-xs);
   font-size: 11px;
   line-height: 18px;
 }
@@ -131,6 +130,11 @@ html[data-palette='graphite'] .global-search:focus-within {
   background: transparent;
 }
 
+.app-titlebar-actions
+  .icon-button.icon-button:active:hover:not(:disabled):not([aria-disabled='true']) {
+  background: transparent;
+}
+
 .app-titlebar-actions .update-indicator {
   position: relative;
 }
@@ -142,7 +146,7 @@ html[data-palette='graphite'] .global-search:focus-within {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-ink);
   box-shadow: 0 0 0 2px var(--canvas);
   pointer-events: none;
 }
@@ -190,17 +194,17 @@ html[data-palette='graphite'] .global-search:focus-within {
   padding: 0;
   border: 0;
   border-radius: 0;
-  color: var(--text-secondary);
+  color: var(--caption-text);
   background: transparent;
 }
 
 .caption-button:hover {
-  color: var(--text-primary);
-  background: var(--control-hover);
+  color: var(--caption-text);
+  background: var(--caption-hover);
 }
 
 .caption-button:active {
-  background: var(--control-pressed);
+  background: var(--caption-pressed);
 }
 
 .caption-button:focus-visible {
@@ -209,12 +213,12 @@ html[data-palette='graphite'] .global-search:focus-within {
 }
 
 .caption-button-close:hover {
-  color: #fff;
-  background: #c42b36;
+  color: var(--caption-close-text);
+  background: var(--caption-close-hover);
 }
 
 .caption-button-close:active {
-  background: #9e1f2a;
+  background: var(--caption-close-pressed);
 }
 
 @media (max-width: 1100px) {
@@ -239,12 +243,94 @@ html[data-palette='graphite'] .global-search:focus-within {
     outline-offset: -2px;
   }
 
-  html[data-palette='graphite'] .global-search:focus-within {
-    outline-color: Highlight;
-  }
-
   .caption-button-close:hover {
     color: HighlightText;
     background: Highlight;
+  }
+
+  .global-search:has(input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  .window-caption-controls .caption-button {
+    forced-color-adjust: auto;
+    border: 0;
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  .window-caption-controls .caption-button:hover:not(:disabled) {
+    border: 0;
+    outline: 0;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  .window-caption-controls .caption-button:active:not(:disabled) {
+    background-color: Highlight;
+  }
+
+  .window-caption-controls .caption-button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+.window-caption-controls .caption-button {
+  width: 46px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--text-secondary);
+  background-color: transparent;
+}
+
+.window-caption-controls .caption-button-minimize:hover:not(:disabled) {
+  outline: 0;
+  color: var(--text-primary);
+  background-color: var(--caption-hover);
+}
+
+.window-caption-controls .caption-button-minimize:active:not(:disabled) {
+  background-color: var(--workbench-control-pressed);
+}
+
+.window-caption-controls .caption-button-zoom:hover:not(:disabled) {
+  outline: 0;
+  color: var(--text-secondary);
+  background-color: transparent;
+}
+
+.window-caption-controls .caption-button-zoom:active:not(:disabled) {
+  color: var(--text-secondary);
+  background-color: transparent;
+}
+
+.window-caption-controls .caption-button-close:hover:not(:disabled) {
+  outline: 0;
+  color: var(--caption-close-text);
+  background-color: var(--caption-close-hover);
+}
+
+.window-caption-controls .caption-button-close:active:not(:disabled) {
+  background-color: var(--caption-close-pressed);
+}
+
+.window-caption-controls .caption-button:focus-visible:not(:disabled) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.global-search:has(input:focus-visible) {
+  outline: 2px solid var(--workbench-search-focus);
+  outline-offset: 1px;
+}
+
+@media (forced-colors: active) {
+  .global-search:has(input:focus-visible) {
+    outline-color: Highlight;
   }
 }

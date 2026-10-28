@@ -1,0 +1,124 @@
+{
+  "sourceSha": "f07a2ebaf561918b90567e49bbc69b611618ad56",
+  "executable": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\debug\\sky_desktop_shell.exe",
+  "executableSha256": "1C394BCFF7E2B115CB0B4633BDFF8D2D3B017043AC5D9C4EEF57CF01F640EB2F",
+  "os": "Microsoft Windows 11 Home build 26300",
+  "windowDpi": 120,
+  "monitorPhysicalRects": [
+    "0,0,1920,1080"
+  ],
+  "monitorCount": 1,
+  "initialState": {
+    "step": "start-after-SW_RESTORE",
+    "rect": "913,322,1913,1022",
+    "client": "0,0,982,690",
+    "origin": "922,323",
+    "zoomed": false,
+    "iconic": false,
+    "visible": true
+  },
+  "snapHover": {
+    "point": "1818,348",
+    "hitClass": "SkyAutoPlayerSnap",
+    "screenshot": "native-125-snap-hover.png"
+  },
+  "clickBelowTitlebar": {
+    "point": "1413,374",
+    "titlebarLogicalHeight": 40,
+    "titlebarPhysicalHeight": 50,
+    "physicalPixelsBelowTitlebar": 1,
+    "physicalCursorAfter": "1413,374",
+    "hitClass": "Chrome_RenderWidgetHostHWND",
+    "hitProcess": "msedgewebview2.exe",
+    "hitPid": 19412,
+    "hitParentProcess": "sky_desktop_shell.exe",
+    "hitParentPid": 19988,
+    "hitBelongsToAppProcessTree": true,
+    "uiaName": "TAURI_DRAG_RESIZE_WINDOW",
+    "uiaType": "ControlType.Pane",
+    "sendInputEvents": 2,
+    "focusedName": "Sky Auto Player",
+    "focusedType": "ControlType.Document"
+  },
+  "maximizeClick": {
+    "point": "1818,348",
+    "sendInputEvents": 2,
+    "state": {
+      "step": "after-caption-maximize",
+      "rect": "-9,-9,1929,1089",
+      "client": "0,0,1920,1079",
+      "origin": "0,0",
+      "zoomed": true,
+      "iconic": false,
+      "visible": true
+    }
+  },
+  "restoreClick": {
+    "point": "1834,25",
+    "sendInputEvents": 2,
+    "state": {
+      "step": "after-caption-restore",
+      "rect": "913,322,1913,1022",
+      "client": "0,0,982,690",
+      "origin": "922,323",
+      "zoomed": false,
+      "iconic": false,
+      "visible": true
+    }
+  },
+  "minimizeClick": {
+    "point": "1760,348",
+    "sendInputEvents": 2,
+    "state": {
+      "step": "after-caption-minimize",
+      "rect": "-32000,-32000,-31801,-31966",
+      "client": "0,0,181,24",
+      "origin": "-31991,-31999",
+      "zoomed": false,
+      "iconic": true,
+      "visible": true
+    }
+  },
+  "restoreAfterMinimize": {
+    "step": "after-SW_RESTORE",
+    "rect": "913,322,1913,1022",
+    "client": "0,0,982,690",
+    "origin": "922,323",
+    "zoomed": false,
+    "iconic": false,
+    "visible": true
+  },
+  "dragInput": {
+    "startPhysical": "1584,348",
+    "endPhysical": "1644,308",
+    "requestedDeltaPhysical": "60,-40",
+    "windowDeltaPhysical": "48,-32",
+    "sendInputEvents": 2,
+    "method": "SetPhysicalCursorPos for each physical cursor movement; SendInput left button down/up"
+  },
+  "afterDrag": {
+    "step": "after-drag",
+    "rect": "961,290,1961,990",
+    "client": "0,0,982,690",
+    "origin": "970,291",
+    "zoomed": false,
+    "iconic": false,
+    "visible": true
+  },
+  "foregroundPidAfterDrag": 19988,
+  "focusAfterDragName": "Minimize window",
+  "focusAfterDragType": "ControlType.Button",
+  "postDragScreenshot": "native-125-after-drag.png",
+  "otherDpi": "Not available in this session; pending",
+  "secondMonitor": "N/A: one display",
+  "appProcessId": 19988,
+  "dragDistanceCrossCheck": {
+    "method": "SendInput absolute desktop mouse movement and left button down/up",
+    "cursorStartPhysical": "1632,316",
+    "cursorEndPhysical": "1572,356",
+    "requestedDeltaPhysical": "-60,+40",
+    "windowDeltaPhysical": "-36,+37",
+    "windowRectBefore": "961,290,1961,990",
+    "windowRectAfter": "925,327,1925,1027"
+  }
+}

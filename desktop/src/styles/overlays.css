@@ -6,7 +6,7 @@
   place-items: center;
   overflow: auto;
   padding: 16px;
-  background: rgb(3 6 12 / 72%);
+  background: var(--overlay-backdrop);
 }
 
 .settings-dialog {
@@ -20,7 +20,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-dialog);
   background: var(--surface-panel);
-  box-shadow: 0 18px 60px rgb(0 0 0 / 35%);
+  box-shadow: 0 18px 60px var(--shadow-dialog);
 }
 
 .dialog-heading {
@@ -55,15 +55,15 @@
 }
 
 .settings-nav-item {
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 10px;
   border: 0;
   border-left: 2px solid transparent;
   border-radius: var(--radius-control);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   background: transparent;
   text-align: left;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .settings-nav-item:hover {
@@ -73,8 +73,9 @@
 
 .settings-nav-item.is-active {
   border-left-color: var(--selection-indicator);
-  color: var(--text-primary);
+  color: var(--workbench-accent-ink);
   background: var(--selection-bg);
+  background-color: var(--selection-bg);
 }
 
 .settings-content {
@@ -151,6 +152,15 @@
   background: var(--control-pressed);
 }
 
+.settings-dialog .icon-button.icon-button-boxed:active:not(:disabled) {
+  background: var(--control-pressed);
+}
+
+.settings-dialog
+  .icon-button.icon-button-boxed:hover:active:not(:disabled):not([aria-disabled='true']) {
+  background: var(--control-pressed);
+}
+
 .auto-play-switch-copy {
   display: grid;
   gap: 4px;
@@ -217,7 +227,7 @@
 }
 
 .checkbox-row input {
-  accent-color: var(--accent);
+  accent-color: var(--accent-fill);
 }
 
 .settings-subsection {
@@ -372,7 +382,7 @@
 
 .calibration-copy progress {
   width: 100%;
-  accent-color: var(--accent);
+  accent-color: var(--accent-fill);
 }
 
 .calibration-result-icon {
@@ -407,7 +417,7 @@
 }
 
 .spin {
-  color: var(--accent);
+  color: var(--accent-ink);
   animation: diagnostics-spin 1.2s linear infinite;
 }
 
@@ -439,4 +449,35 @@
   .spin {
     animation: none;
   }
+}
+
+.profile-fields label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.profile-fields select {
+  font-size: 12px;
+}
+
+.profile-test-explanation {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-section label:not(.checkbox-row),
+.checkbox-row {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.settings-section select:focus-visible,
+.settings-section input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.settings-nav-item.is-active:hover {
+  background-color: var(--workbench-selected-control-hover);
 }

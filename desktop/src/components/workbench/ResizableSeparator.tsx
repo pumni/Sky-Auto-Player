@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react';
 
 interface ResizableSeparatorProps {
   label: string;
@@ -11,6 +19,9 @@ interface ResizableSeparatorProps {
   direction?: 1 | -1;
   onChange: (value: number) => void;
   onCommit?: (value: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDragChange?: (value: number) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -27,10 +38,20 @@ export function ResizableSeparator({
   disabled = false,
   onChange,
   onCommit,
+  onDragStart,
+  onDragEnd,
+  onDragChange,
 }: ResizableSeparatorProps) {
   const separatorRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ pointerId: number; startX: number; startValue: number } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startValue: number;
+    lastX: number;
+  } | null>(null);
   const dragValueRef = useRef(value);
+  const frameRef = useRef<number | null>(null);
+  const latestRef = useRef({ min, max, direction, onChange, onDragChange });
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
@@ -39,19 +60,66 @@ export function ResizableSeparator({
     return () => document.body.classList.remove('is-resizing');
   }, [dragging]);
 
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      dragRef.current = null;
+      document.body.classList.remove('is-resizing');
+    },
+    [],
+  );
+
+  const applyLatest = useCallback(() => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const { min, max, direction, onChange, onDragChange } = latestRef.current;
+    const next = clamp(drag.startValue + direction * (drag.lastX - drag.startX), min, max);
+    if (next === dragValueRef.current) return;
+    dragValueRef.current = next;
+    separatorRef.current?.setAttribute('aria-valuenow', String(next));
+    (onDragChange ?? onChange)(next);
+  }, []);
+
+  const schedule = useCallback(() => {
+    if (frameRef.current !== null || !dragRef.current) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      applyLatest();
+    });
+  }, [applyLatest]);
+
+  // Parent renders refresh handlers without cancelling or postponing a frame.
+  // Only a real bounds change can require a frame without new pointer input.
+  useLayoutEffect(() => {
+    const previous = latestRef.current;
+    latestRef.current = { min, max, direction, onChange, onDragChange };
+    if (previous.min !== min || previous.max !== max || previous.direction !== direction)
+      schedule();
+  }, [min, max, direction, onChange, onDragChange, schedule]);
+
   const finishDrag = () => {
     if (!dragRef.current) return;
+    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    frameRef.current = null;
+    applyLatest();
     dragRef.current = null;
     setDragging(false);
     onCommit?.(dragValueRef.current);
+    onDragEnd?.();
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (disabled || event.button !== 0) return;
+    if (disabled || event.button !== 0 || dragRef.current) return;
     event.preventDefault();
-    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startValue: value };
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startValue: value,
+      lastX: event.clientX,
+    };
     dragValueRef.current = value;
     setDragging(true);
+    onDragStart?.();
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -59,13 +127,11 @@ export function ResizableSeparator({
     if (disabled) return;
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const next = clamp(drag.startValue + direction * (event.clientX - drag.startX), min, max);
-    dragValueRef.current = next;
-    onChange(next);
+    drag.lastX = event.clientX;
+    schedule();
   };
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
-    if (disabled) return;
     if (dragRef.current?.pointerId !== event.pointerId) return;
     finishDrag();
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -105,13 +171,18 @@ export function ResizableSeparator({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={finishDrag}
-      onLostPointerCapture={finishDrag}
+      onPointerCancel={(event) => {
+        if (dragRef.current?.pointerId === event.pointerId) finishDrag();
+      }}
+      onLostPointerCapture={(event) => {
+        if (dragRef.current?.pointerId === event.pointerId) finishDrag();
+      }}
       onDoubleClick={() => {
         if (disabled) return;
-        dragValueRef.current = defaultValue;
-        onChange(defaultValue);
-        onCommit?.(defaultValue);
+        const next = clamp(defaultValue, min, max);
+        dragValueRef.current = next;
+        onChange(next);
+        onCommit?.(next);
       }}
       onKeyDown={onKeyDown}
     >

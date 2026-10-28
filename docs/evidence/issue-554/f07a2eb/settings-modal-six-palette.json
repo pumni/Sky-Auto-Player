@@ -1,0 +1,663 @@
+{
+  "sourceRevision": "f07a2ebaf561918b90567e49bbc69b611618ad56",
+  "viewport": {
+    "width": 800,
+    "height": 560
+  },
+  "observations": [
+    {
+      "palette": "graphite",
+      "rectangles": {
+        "dialog": {
+          "x": 16,
+          "y": 33.59375,
+          "width": 768,
+          "height": 492.796875
+        },
+        "heading": {
+          "x": 37,
+          "y": 54.59375,
+          "width": 726,
+          "height": 44.390625
+        },
+        "layout": {
+          "x": 37,
+          "y": 114.984375,
+          "width": 726,
+          "height": 357.015625
+        },
+        "navigation": {
+          "x": 37,
+          "y": 115.984375,
+          "width": 152,
+          "height": 355.015625
+        },
+        "content": {
+          "x": 189,
+          "y": 115.984375,
+          "width": 574,
+          "height": 355.015625
+        },
+        "section": {
+          "x": 209,
+          "y": 115.984375,
+          "width": 538,
+          "height": 164.078125
+        },
+        "palette": {
+          "x": 209,
+          "y": 194.671875,
+          "width": 538,
+          "height": 34
+        }
+      },
+      "roles": {
+        "dialog": {
+          "role": "dialog",
+          "name": "Settings"
+        },
+        "navigation": {
+          "role": "navigation",
+          "name": "Settings categories",
+          "categories": [
+            {
+              "role": "button",
+              "name": "Playback",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Appearance",
+              "current": "page"
+            },
+            {
+              "role": "button",
+              "name": "Diagnostics",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Updates",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Advanced",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "About",
+              "current": null
+            }
+          ]
+        },
+        "appearance": {
+          "role": "region",
+          "name": "Appearance"
+        },
+        "palette": {
+          "role": "combobox",
+          "name": "Color paletteDark modeAuroraMinimalistSlateCyberpunkClassic"
+        }
+      },
+      "dialogSurface": "rgb(25, 26, 27)",
+      "focusOrder": [
+        "Close settings",
+        "Playback",
+        "Appearance",
+        "Diagnostics",
+        "Updates",
+        "Advanced",
+        "About",
+        "Color palette",
+        "Close settings"
+      ]
+    },
+    {
+      "palette": "aurora",
+      "rectangles": {
+        "dialog": {
+          "x": 16,
+          "y": 33.59375,
+          "width": 768,
+          "height": 492.796875
+        },
+        "heading": {
+          "x": 37,
+          "y": 54.59375,
+          "width": 726,
+          "height": 44.390625
+        },
+        "layout": {
+          "x": 37,
+          "y": 114.984375,
+          "width": 726,
+          "height": 357.015625
+        },
+        "navigation": {
+          "x": 37,
+          "y": 115.984375,
+          "width": 152,
+          "height": 355.015625
+        },
+        "content": {
+          "x": 189,
+          "y": 115.984375,
+          "width": 574,
+          "height": 355.015625
+        },
+        "section": {
+          "x": 209,
+          "y": 115.984375,
+          "width": 538,
+          "height": 164.078125
+        },
+        "palette": {
+          "x": 209,
+          "y": 194.671875,
+          "width": 538,
+          "height": 34
+        }
+      },
+      "roles": {
+        "dialog": {
+          "role": "dialog",
+          "name": "Settings"
+        },
+        "navigation": {
+          "role": "navigation",
+          "name": "Settings categories",
+          "categories": [
+            {
+              "role": "button",
+              "name": "Playback",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Appearance",
+              "current": "page"
+            },
+            {
+              "role": "button",
+              "name": "Diagnostics",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Updates",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Advanced",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "About",
+              "current": null
+            }
+          ]
+        },
+        "appearance": {
+          "role": "region",
+          "name": "Appearance"
+        },
+        "palette": {
+          "role": "combobox",
+          "name": "Color paletteDark modeAuroraMinimalistSlateCyberpunkClassic"
+        }
+      },
+      "dialogSurface": "rgb(16, 23, 34)",
+      "focusOrder": [
+        "Close settings",
+        "Playback",
+        "Appearance",
+        "Diagnostics",
+        "Updates",
+        "Advanced",
+        "About",
+        "Color palette",
+        "Close settings"
+      ]
+    },
+    {
+      "palette": "minimalist",
+      "rectangles": {
+        "dialog": {
+          "x": 16,
+          "y": 33.59375,
+          "width": 768,
+          "height": 492.796875
+        },
+        "heading": {
+          "x": 37,
+          "y": 54.59375,
+          "width": 726,
+          "height": 44.390625
+        },
+        "layout": {
+          "x": 37,
+          "y": 114.984375,
+          "width": 726,
+          "height": 357.015625
+        },
+        "navigation": {
+          "x": 37,
+          "y": 115.984375,
+          "width": 152,
+          "height": 355.015625
+        },
+        "content": {
+          "x": 189,
+          "y": 115.984375,
+          "width": 574,
+          "height": 355.015625
+        },
+        "section": {
+          "x": 209,
+          "y": 115.984375,
+          "width": 538,
+          "height": 164.078125
+        },
+        "palette": {
+          "x": 209,
+          "y": 194.671875,
+          "width": 538,
+          "height": 34
+        }
+      },
+      "roles": {
+        "dialog": {
+          "role": "dialog",
+          "name": "Settings"
+        },
+        "navigation": {
+          "role": "navigation",
+          "name": "Settings categories",
+          "categories": [
+            {
+              "role": "button",
+              "name": "Playback",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Appearance",
+              "current": "page"
+            },
+            {
+              "role": "button",
+              "name": "Diagnostics",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Updates",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Advanced",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "About",
+              "current": null
+            }
+          ]
+        },
+        "appearance": {
+          "role": "region",
+          "name": "Appearance"
+        },
+        "palette": {
+          "role": "combobox",
+          "name": "Color paletteDark modeAuroraMinimalistSlateCyberpunkClassic"
+        }
+      },
+      "dialogSurface": "rgb(32, 35, 40)",
+      "focusOrder": [
+        "Close settings",
+        "Playback",
+        "Appearance",
+        "Diagnostics",
+        "Updates",
+        "Advanced",
+        "About",
+        "Color palette",
+        "Close settings"
+      ]
+    },
+    {
+      "palette": "slate",
+      "rectangles": {
+        "dialog": {
+          "x": 16,
+          "y": 33.59375,
+          "width": 768,
+          "height": 492.796875
+        },
+        "heading": {
+          "x": 37,
+          "y": 54.59375,
+          "width": 726,
+          "height": 44.390625
+        },
+        "layout": {
+          "x": 37,
+          "y": 114.984375,
+          "width": 726,
+          "height": 357.015625
+        },
+        "navigation": {
+          "x": 37,
+          "y": 115.984375,
+          "width": 152,
+          "height": 355.015625
+        },
+        "content": {
+          "x": 189,
+          "y": 115.984375,
+          "width": 574,
+          "height": 355.015625
+        },
+        "section": {
+          "x": 209,
+          "y": 115.984375,
+          "width": 538,
+          "height": 164.078125
+        },
+        "palette": {
+          "x": 209,
+          "y": 194.671875,
+          "width": 538,
+          "height": 34
+        }
+      },
+      "roles": {
+        "dialog": {
+          "role": "dialog",
+          "name": "Settings"
+        },
+        "navigation": {
+          "role": "navigation",
+          "name": "Settings categories",
+          "categories": [
+            {
+              "role": "button",
+              "name": "Playback",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Appearance",
+              "current": "page"
+            },
+            {
+              "role": "button",
+              "name": "Diagnostics",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Updates",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Advanced",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "About",
+              "current": null
+            }
+          ]
+        },
+        "appearance": {
+          "role": "region",
+          "name": "Appearance"
+        },
+        "palette": {
+          "role": "combobox",
+          "name": "Color paletteDark modeAuroraMinimalistSlateCyberpunkClassic"
+        }
+      },
+      "dialogSurface": "rgb(23, 35, 44)",
+      "focusOrder": [
+        "Close settings",
+        "Playback",
+        "Appearance",
+        "Diagnostics",
+        "Updates",
+        "Advanced",
+        "About",
+        "Color palette",
+        "Close settings"
+      ]
+    },
+    {
+      "palette": "cyberpunk",
+      "rectangles": {
+        "dialog": {
+          "x": 16,
+          "y": 33.59375,
+          "width": 768,
+          "height": 492.796875
+        },
+        "heading": {
+          "x": 37,
+          "y": 54.59375,
+          "width": 726,
+          "height": 44.390625
+        },
+        "layout": {
+          "x": 37,
+          "y": 114.984375,
+          "width": 726,
+          "height": 357.015625
+        },
+        "navigation": {
+          "x": 37,
+          "y": 115.984375,
+          "width": 152,
+          "height": 355.015625
+        },
+        "content": {
+          "x": 189,
+          "y": 115.984375,
+          "width": 574,
+          "height": 355.015625
+        },
+        "section": {
+          "x": 209,
+          "y": 115.984375,
+          "width": 538,
+          "height": 164.078125
+        },
+        "palette": {
+          "x": 209,
+          "y": 194.671875,
+          "width": 538,
+          "height": 34
+        }
+      },
+      "roles": {
+        "dialog": {
+          "role": "dialog",
+          "name": "Settings"
+        },
+        "navigation": {
+          "role": "navigation",
+          "name": "Settings categories",
+          "categories": [
+            {
+              "role": "button",
+              "name": "Playback",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Appearance",
+              "current": "page"
+            },
+            {
+              "role": "button",
+              "name": "Diagnostics",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Updates",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Advanced",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "About",
+              "current": null
+            }
+          ]
+        },
+        "appearance": {
+          "role": "region",
+          "name": "Appearance"
+        },
+        "palette": {
+          "role": "combobox",
+          "name": "Color paletteDark modeAuroraMinimalistSlateCyberpunkClassic"
+        }
+      },
+      "dialogSurface": "rgb(29, 21, 41)",
+      "focusOrder": [
+        "Close settings",
+        "Playback",
+        "Appearance",
+        "Diagnostics",
+        "Updates",
+        "Advanced",
+        "About",
+        "Color palette",
+        "Close settings"
+      ]
+    },
+    {
+      "palette": "classic",
+      "rectangles": {
+        "dialog": {
+          "x": 16,
+          "y": 33.59375,
+          "width": 768,
+          "height": 492.796875
+        },
+        "heading": {
+          "x": 37,
+          "y": 54.59375,
+          "width": 726,
+          "height": 44.390625
+        },
+        "layout": {
+          "x": 37,
+          "y": 114.984375,
+          "width": 726,
+          "height": 357.015625
+        },
+        "navigation": {
+          "x": 37,
+          "y": 115.984375,
+          "width": 152,
+          "height": 355.015625
+        },
+        "content": {
+          "x": 189,
+          "y": 115.984375,
+          "width": 574,
+          "height": 355.015625
+        },
+        "section": {
+          "x": 209,
+          "y": 115.984375,
+          "width": 538,
+          "height": 164.078125
+        },
+        "palette": {
+          "x": 209,
+          "y": 194.671875,
+          "width": 538,
+          "height": 34
+        }
+      },
+      "roles": {
+        "dialog": {
+          "role": "dialog",
+          "name": "Settings"
+        },
+        "navigation": {
+          "role": "navigation",
+          "name": "Settings categories",
+          "categories": [
+            {
+              "role": "button",
+              "name": "Playback",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Appearance",
+              "current": "page"
+            },
+            {
+              "role": "button",
+              "name": "Diagnostics",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Updates",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "Advanced",
+              "current": null
+            },
+            {
+              "role": "button",
+              "name": "About",
+              "current": null
+            }
+          ]
+        },
+        "appearance": {
+          "role": "region",
+          "name": "Appearance"
+        },
+        "palette": {
+          "role": "combobox",
+          "name": "Color paletteDark modeAuroraMinimalistSlateCyberpunkClassic"
+        }
+      },
+      "dialogSurface": "rgb(33, 29, 24)",
+      "focusOrder": [
+        "Close settings",
+        "Playback",
+        "Appearance",
+        "Diagnostics",
+        "Updates",
+        "Advanced",
+        "About",
+        "Color palette",
+        "Close settings"
+      ]
+    }
+  ]
+}

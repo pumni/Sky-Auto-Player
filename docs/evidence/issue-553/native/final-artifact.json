@@ -1,0 +1,10 @@
+{
+  "frontendSource": "fd416e459d0260878bc7f9edcb67a7c6e236375e",
+  "frontendEntry": "/assets/index-DO4F7-Ha.js",
+  "frontendEntrySha256": "0712cb87353e6201dcd23814c5eb2fabf3afa8f57441be42d2d608e8f95effec",
+  "cssAsset": "/startup.css",
+  "cssSha256": "ff529118ff06b45a19766d8d49340f2ff42423b65caa62bcdf6ef816f004137e",
+  "instrumentedHtmlSha256": "99b940894051da18b0a10e9ff742be699073c0974ddd6c3f69e91be84fa295b9",
+  "measurementPreloadSha256": "0be7fdfb97efa6da4c2cf172af5aed5b7ff2842f39ab56df863a63cd07f14955",
+  "nativeExecutableSha256": "8b4f8805fba9109104748d36aa10519fe8ab2b08ce48216c3fa175897a5cb537"
+}
