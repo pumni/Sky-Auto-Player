@@ -5,6 +5,7 @@ const key = 'sky.ui.workbench.v5';
 interface HomeKeyTrace {
   before: unknown;
   keyboardEvents: Array<Record<string, unknown>>;
+  focusEvents: Array<Record<string, unknown>>;
   resizeEvents: Array<Record<string, unknown>>;
   domMutations: Array<Record<string, unknown>>;
   preferenceWrites: Array<Record<string, unknown>>;
@@ -40,6 +41,8 @@ async function installHomeKeyTrace(page: Page, selector: string) {
         };
       };
       const snapshot = (measureGeometry = false) => {
+        const currentSeparator = document.querySelector<HTMLElement>(selector);
+        const inspectedSeparator = currentSeparator ?? separator;
         const rawPreferences = localStorage.getItem(storageKey);
         let preferences: unknown;
         try {
@@ -50,17 +53,19 @@ async function installHomeKeyTrace(page: Page, selector: string) {
         const state = {
           at: Number(performance.now().toFixed(2)),
           activeElement: describe(document.activeElement),
-          focused: document.activeElement === separator,
+          focused: document.activeElement === currentSeparator,
+          originalSeparatorConnected: separator.isConnected,
+          currentSeparatorIsOriginal: currentSeparator === separator,
           viewport: {
             innerWidth: window.innerWidth,
             workbenchWidth: workbench.dataset.workbenchWidth,
           },
           separator: {
-            ariaValueNow: separator.getAttribute('aria-valuenow'),
-            ariaValueMin: separator.getAttribute('aria-valuemin'),
-            ariaValueMax: separator.getAttribute('aria-valuemax'),
-            ariaDisabled: separator.getAttribute('aria-disabled'),
-            tabIndex: separator.tabIndex,
+            ariaValueNow: inspectedSeparator.getAttribute('aria-valuenow'),
+            ariaValueMin: inspectedSeparator.getAttribute('aria-valuemin'),
+            ariaValueMax: inspectedSeparator.getAttribute('aria-valuemax'),
+            ariaDisabled: inspectedSeparator.getAttribute('aria-disabled'),
+            tabIndex: inspectedSeparator.tabIndex,
           },
           reactStateProxy: {
             workbenchStyle: workbench.getAttribute('style'),
@@ -90,6 +95,7 @@ async function installHomeKeyTrace(page: Page, selector: string) {
       const trace: HomeKeyTrace = {
         before: null,
         keyboardEvents: [],
+        focusEvents: [],
         resizeEvents: [],
         domMutations: [],
         preferenceWrites: [],
@@ -97,30 +103,54 @@ async function installHomeKeyTrace(page: Page, selector: string) {
       trace.before = snapshot();
       const captureKeydown = (event: Event) => {
         const keyboardEvent = event as KeyboardEvent;
-        if (keyboardEvent.key !== 'Home' || keyboardEvent.target !== separator) return;
+        if (keyboardEvent.key !== 'Home') return;
         trace.keyboardEvents.push({
-          phase: 'document-capture',
+          phase: 'window-capture',
           key: keyboardEvent.key,
           code: keyboardEvent.code,
           defaultPrevented: keyboardEvent.defaultPrevented,
-          target: describe(keyboardEvent.target as Element | null),
+          target: describe(keyboardEvent.target instanceof Element ? keyboardEvent.target : null),
+          targetIsCurrentSeparator: keyboardEvent.target === document.querySelector(selector),
           state: snapshot(),
         });
       };
       const bubbleKeydown = (event: Event) => {
         const keyboardEvent = event as KeyboardEvent;
-        if (keyboardEvent.key !== 'Home' || keyboardEvent.target !== separator) return;
+        if (keyboardEvent.key !== 'Home') return;
         trace.keyboardEvents.push({
-          phase: 'document-bubble-after-react',
+          phase: 'window-bubble-after-react',
           key: keyboardEvent.key,
           code: keyboardEvent.code,
           defaultPrevented: keyboardEvent.defaultPrevented,
-          target: describe(keyboardEvent.target as Element | null),
+          target: describe(keyboardEvent.target instanceof Element ? keyboardEvent.target : null),
+          targetIsCurrentSeparator: keyboardEvent.target === document.querySelector(selector),
           state: snapshot(),
         });
       };
-      document.addEventListener('keydown', captureKeydown, true);
-      document.addEventListener('keydown', bubbleKeydown);
+      window.addEventListener('keydown', captureKeydown, true);
+      window.addEventListener('keydown', bubbleKeydown);
+      const captureFocus = (event: Event) => {
+        const focusEvent = event as FocusEvent;
+        const currentSeparator = document.querySelector(selector);
+        if (
+          focusEvent.target !== separator &&
+          focusEvent.target !== currentSeparator &&
+          focusEvent.relatedTarget !== separator &&
+          focusEvent.relatedTarget !== currentSeparator
+        )
+          return;
+        trace.focusEvents.push({
+          type: focusEvent.type,
+          at: Number(performance.now().toFixed(2)),
+          target: describe(focusEvent.target instanceof Element ? focusEvent.target : null),
+          relatedTarget: describe(
+            focusEvent.relatedTarget instanceof Element ? focusEvent.relatedTarget : null,
+          ),
+          state: snapshot(),
+        });
+      };
+      document.addEventListener('focusin', captureFocus, true);
+      document.addEventListener('focusout', captureFocus, true);
       const captureResize = () =>
         trace.resizeEvents.push({
           at: Number(performance.now().toFixed(2)),
@@ -182,8 +212,10 @@ async function installHomeKeyTrace(page: Page, selector: string) {
         snapshot,
         cleanup: () => {
           observer.disconnect();
-          document.removeEventListener('keydown', captureKeydown, true);
-          document.removeEventListener('keydown', bubbleKeydown);
+          window.removeEventListener('keydown', captureKeydown, true);
+          window.removeEventListener('keydown', bubbleKeydown);
+          document.removeEventListener('focusin', captureFocus, true);
+          document.removeEventListener('focusout', captureFocus, true);
           window.removeEventListener('resize', captureResize);
           if (Storage.prototype.setItem === wrappedSetItem)
             Storage.prototype.setItem = originalSetItem;
