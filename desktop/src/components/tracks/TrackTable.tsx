@@ -45,7 +45,9 @@ function sameLibraryForKeyboardNavigation(
   right: DesktopStore['library'],
 ): boolean {
   return (
-    sameLibraryScope(left, right) && left.searchRequestGeneration === right.searchRequestGeneration
+    sameLibraryScope(left, right) &&
+    left.searchRequestGeneration === right.searchRequestGeneration &&
+    left.generation === right.generation
   );
 }
 
@@ -98,13 +100,15 @@ export function TrackTable({ useStore }: TrackTableProps) {
       (state) => state.library,
       (library, previousLibrary) => {
         const scopeChanged = !sameLibraryScope(library, previousLibrary);
+        const generationChanged = library.generation !== previousLibrary.generation;
         const searchRequestChanged =
           library.searchRequestGeneration !== previousLibrary.searchRequestGeneration;
-        if (!scopeChanged && !searchRequestChanged) return;
+        if (!scopeChanged && !searchRequestChanged && !generationChanged) return;
         keyboardNavigationId.current += 1;
         pendingKeyboardNavigation.current = null;
         setKeyboardIndex(null);
-        if (scopeChanged && parentRef.current) parentRef.current.scrollTop = 0;
+        if ((scopeChanged || generationChanged) && parentRef.current)
+          parentRef.current.scrollTop = 0;
       },
       { equalityFn: sameLibraryForKeyboardNavigation },
     );
@@ -204,7 +208,9 @@ export function TrackTable({ useStore }: TrackTableProps) {
     if (resultTotal === 0 || event.target !== event.currentTarget) return;
     const state = useStore.getState();
     const selectedIndex = state.library.selectedSongId
-      ? (state.library.indexById.get(state.library.selectedSongId) ?? -1)
+      ? (state.library.indexById.get(state.library.selectedSongId) ??
+        state.library.selectedSongIndex ??
+        -1)
       : -1;
     const pendingNavigation = pendingKeyboardNavigation.current;
     const pendingMatchesCurrentResults =

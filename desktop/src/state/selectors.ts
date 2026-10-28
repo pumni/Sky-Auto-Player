@@ -142,11 +142,15 @@ export function selectRowAtIndex(library: Pick<LibraryState, 'pages'>, index: nu
 }
 
 export function selectSongById(
-  library: Pick<LibraryState, 'pages' | 'indexById'>,
+  library: Pick<LibraryState, 'pages' | 'indexById' | 'selectedSongId' | 'selectedSongSummary'>,
   songId: string | null,
 ) {
   const index = songId ? library.indexById.get(songId) : undefined;
-  return index === undefined ? undefined : selectRowAtIndex(library, index);
+  const loadedRow = index === undefined ? undefined : selectRowAtIndex(library, index);
+  return (
+    loadedRow ??
+    (songId === library.selectedSongId ? (library.selectedSongSummary ?? undefined) : undefined)
+  );
 }
 
 export function playbackContextMatchesLibrary(

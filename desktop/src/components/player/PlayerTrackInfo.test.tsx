@@ -45,15 +45,23 @@ describe('PlayerTrackInfo', () => {
     expect(selectRowAtIndex(store.getState().library, 1)?.liked).toBe(false);
   });
 
-  it('falls back to the selected song when no Now Playing identity exists', async () => {
+  it('uses the pinned selected summary after its browser page is evicted', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 1);
     if (!row) throw new Error('mock Library is too small');
     await act(async () => store.getState().selectSong(row.song_id));
+    store.setState({
+      library: {
+        ...store.getState().library,
+        pages: new Map(),
+        indexById: new Map(),
+      },
+    });
 
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
+    expect(store.getState().library.selectedSongSummary?.song_id).toBe(row.song_id);
     expect(screen.getByText('Ready to play')).toBeInTheDocument();
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
     expect(container.querySelector('.player-identity-label')).toBeNull();

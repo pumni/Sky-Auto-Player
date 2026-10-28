@@ -556,7 +556,9 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
   };
 
   const contextForSong = (library: LibraryState, songId: string): PlaybackContext | null => {
-    const currentIndex = library.indexById.get(songId);
+    const currentIndex =
+      library.indexById.get(songId) ??
+      (library.selectedSongId === songId ? (library.selectedSongIndex ?? undefined) : undefined);
     if (currentIndex === undefined) return null;
     const shuffleEnabled = get().playback.shuffleEnabled;
     return {

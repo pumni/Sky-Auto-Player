@@ -85,6 +85,8 @@ export interface LibraryState {
   pages: Map<number, readonly SongRow[]>;
   indexById: Map<string, number>;
   selectedSongId: string | null;
+  selectedSongSummary: SongRow | null;
+  selectedSongIndex: number | null;
   visibleRange: { first: number; last: number };
   loading: boolean;
   searchRequestGeneration: number;

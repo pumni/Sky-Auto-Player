@@ -106,6 +106,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         indexById: new Map(),
 
         selectedSongId: null,
+        selectedSongSummary: null,
+        selectedSongIndex: null,
         visibleRange: { first: 0, last: 0 },
         loading: false,
         searchRequestGeneration: 0,
@@ -311,6 +313,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
               pages: new Map(),
               indexById: new Map(),
               selectedSongId: null,
+              selectedSongSummary: null,
+              selectedSongIndex: null,
+              visibleRange: { first: 0, last: 0 },
               error: null,
               loading: true,
             },
