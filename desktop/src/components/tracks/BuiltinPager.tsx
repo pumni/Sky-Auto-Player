@@ -31,7 +31,7 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
   }, [editing]);
 
   const pageDigits = String(pageCount).length;
-  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 44px)`;
+  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 40px)`;
 
   const focusTrigger = () => {
     window.setTimeout(() => triggerRef.current?.focus(), 0);

@@ -399,8 +399,8 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     await expect(page.locator('.builtin-pager-jump-trigger')).toBeVisible();
     await expect(page.locator('.builtin-pager button')).toHaveCount(3);
     const geometry = await readBuiltinPagerGeometry(page);
-    expect(geometry.indicator.width).toBeGreaterThanOrEqual(80);
-    expect(geometry.indicator.width).toBeLessThanOrEqual(88);
+    expect(geometry.indicator.width).toBeGreaterThanOrEqual(76);
+    expect(geometry.indicator.width).toBeLessThanOrEqual(80);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
@@ -448,8 +448,8 @@ test('F3.5 two-page Built-in pager spacing stays compact through inline editing 
   const before = await readBuiltinPagerGeometry(page);
   const beforeVisual = await readBuiltinPagerGlyphGeometry(page);
   console.info('[F3.5 compact pager spacing]', JSON.stringify(beforeVisual));
-  expect(beforeVisual.pageSlot.width).toBeGreaterThanOrEqual(80);
-  expect(beforeVisual.pageSlot.width).toBeLessThanOrEqual(88);
+  expect(beforeVisual.pageSlot.width).toBeGreaterThanOrEqual(76);
+  expect(beforeVisual.pageSlot.width).toBeLessThanOrEqual(80);
   expect(beforeVisual.leftGlyphGap).toBeLessThanOrEqual(50);
   expect(beforeVisual.rightGlyphGap).toBeLessThanOrEqual(50);
   expect(beforeVisual.previous.width).toBe(36);
@@ -514,6 +514,103 @@ test('F3.5 two-page Built-in pager spacing stays compact through inline editing 
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
   await expect(page.getByRole('button', { name: builtinPageTriggerName(1, 2) })).toBeFocused();
   expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+});
+
+test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 995, height: 706 });
+  await page.goto('/?mockCatalogCount=106');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+
+  const previous = page.getByRole('button', { name: 'Previous page' });
+  const next = page.getByRole('button', { name: 'Next page' });
+  await expect(previous).toHaveAttribute('title', 'Previous page');
+  await expect(next).toHaveAttribute('title', 'Next page');
+  await expect(previous).toBeDisabled();
+  await expect(next).toBeEnabled();
+
+  const readControlSurface = async (control: typeof previous) =>
+    control.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return {
+        width: button.getBoundingClientRect().width,
+        height: button.getBoundingClientRect().height,
+        background: style.backgroundColor,
+        borderWidth: style.borderTopWidth,
+        outlineStyle: style.outlineStyle,
+        hoverColor: (() => {
+          const probe = document.createElement('span');
+          probe.style.backgroundColor = 'var(--control-hover)';
+          document.body.append(probe);
+          const color = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return color;
+        })(),
+      };
+    });
+
+  const initialGeometry = await readBuiltinPagerGeometry(page);
+  const previousRest = await readControlSurface(previous);
+  const nextRest = await readControlSurface(next);
+  for (const surface of [previousRest, nextRest]) {
+    expect(surface.width).toBe(36);
+    expect(surface.height).toBe(36);
+    expect(surface.background).toBe('rgba(0, 0, 0, 0)');
+    expect(surface.borderWidth).toBe('0px');
+  }
+  expect(initialGeometry.indicator.width).toBeGreaterThanOrEqual(76);
+  expect(initialGeometry.indicator.width).toBeLessThanOrEqual(80);
+
+  await previous.hover();
+  expect((await readControlSurface(previous)).background).toBe('rgba(0, 0, 0, 0)');
+  await next.hover();
+  const nextHover = await readControlSurface(next);
+  expect(nextHover.background).toBe(nextHover.hoverColor);
+  expect(nextHover.background).not.toBe('rgba(0, 0, 0, 0)');
+  await page.mouse.move(0, 0);
+
+  await next.focus();
+  await expect
+    .poll(() => next.evaluate((button) => getComputedStyle(button).outlineStyle))
+    .toBe('solid');
+  await page.keyboard.press('Space');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Song 101/ })).toHaveAttribute('aria-rowindex', '2');
+  await expect(previous).toBeEnabled();
+  await expect(next).toBeDisabled();
+  expectBuiltinPagerGeometryStable(initialGeometry, await readBuiltinPagerGeometry(page));
+
+  await next.hover();
+  expect((await readControlSurface(next)).background).toBe('rgba(0, 0, 0, 0)');
+  await previous.hover();
+  const previousHover = await readControlSurface(previous);
+  expect(previousHover.background).toBe(previousHover.hoverColor);
+  await testInfo.attach('f3.6-pager-control-surfaces.json', {
+    body: JSON.stringify(
+      { initialGeometry, previousRest, nextRest, nextHover, previousHover },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  });
+  console.info(
+    '[F3.6 quiet pager controls]',
+    JSON.stringify({ initialGeometry, previousRest, nextRest, nextHover, previousHover }),
+  );
+
+  await page.goto('/?mockCatalogCount=10000');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  const largeCatalogIndicator = page.getByRole('button', {
+    name: builtinPageTriggerName(1, 100),
+  });
+  await largeCatalogIndicator.click();
+  const largeCatalogEditor = await readBuiltinPagerEditorGeometry(page);
+  expect(largeCatalogEditor.input.width).toBeGreaterThanOrEqual(20);
+  expect(largeCatalogEditor.pageCountFits).toBe(true);
+  expect(largeCatalogEditor.confirm.width).toBeGreaterThanOrEqual(32);
+  expect(largeCatalogEditor.confirm.height).toBeGreaterThanOrEqual(32);
+  console.info('[F3.6 100-page editor geometry]', JSON.stringify(largeCatalogEditor));
 });
 
 test('F3.1 heading typography and pager alignment stay clear at desktop and compact widths', async ({
