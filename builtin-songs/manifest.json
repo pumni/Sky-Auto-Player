@@ -3,14 +3,14 @@
   "songs": [
     {
       "id": "03d615893c005143d02af6b88f677062",
-      "path": "sheets/Alen Walker - On My Way.json",
-      "title": "Alen Walker - On My Way",
+      "path": "sheets/On My Way.json",
+      "title": "On My Way - Alen Walker",
       "sha256": "cf3b1ecbebe4fa946dae4f63fd2f3b5194511a361bbe2f5bb50182601f6e917e"
     },
     {
       "id": "4da36b4027a1b649ea41946e9292f33e",
-      "path": "sheets/Alen Walker - The Spectre.json",
-      "title": "Alen Walker - The Spectre",
+      "path": "sheets/The Spectre.json",
+      "title": "The Spectre - Alen Walker",
       "sha256": "b6713cc1d0f8a5d30b661fc56dbe9e534e9c7514e59a943f50b3b0ecfd15fc60"
     },
     {
@@ -21,8 +21,8 @@
     },
     {
       "id": "50c0394dd7b863e231c109a7a9e5a457",
-      "path": "sheets/Arthur Warrell - We Wish You A Merry Christmas.json",
-      "title": "Arthur Warrell - We Wish You A Merry Christmas",
+      "path": "sheets/We Wish You A Merry Christmas.json",
+      "title": "We Wish You A Merry Christmas - Arthur Warrell",
       "sha256": "1cf3a9ebc89820de8c0acf0487309223a804c2cf79fc0b24d843c5fe6bb64df9"
     },
     {
@@ -33,14 +33,14 @@
     },
     {
       "id": "c9b3d8769b05cd9107cd948adb817455",
-      "path": "sheets/Avicii - Wake Me Up.json",
-      "title": "Avicii - Wake Me Up",
+      "path": "sheets/Wake Me Up.json",
+      "title": "Wake Me Up - Avicii",
       "sha256": "e2e3cb7e71296aff642618a063fd3c84fd2c9191a7ed197db0facfdc1ca7b942"
     },
     {
       "id": "a47c5a71cb3e24b30f3404269471c502",
-      "path": "sheets/Billie Eilish ft. Khalid - Lovely.json",
-      "title": "Billie Eilish ft. Khalid - Lovely",
+      "path": "sheets/Lovely-Billie Eilish ft. Khalid.json",
+      "title": "Lovely - Billie Eilish ft. Khalid",
       "sha256": "65d1a73f1c64f10232875ceaf3d9358b162d5efccaee57703a27914c0a915b94"
     },
     {
@@ -51,8 +51,8 @@
     },
     {
       "id": "a198102ca0efcd4ed6ed313df1ef5080",
-      "path": "sheets/Bruno Mars - Lazy Song.json",
-      "title": "Bruno Mars - Lazy Song",
+      "path": "sheets/Lazy Song.json",
+      "title": "Lazy Song - Bruno Mars",
       "sha256": "11aa39bb907c2a95b2b291f2fd09a4563f5bbfcfb8aba527690bdc575bdbabca"
     },
     {
@@ -219,8 +219,8 @@
     },
     {
       "id": "4a8b3fad5acf2e8e1c7cc42d7f799d40",
-      "path": "sheets/Justin Bieber - Love Yourself.json",
-      "title": "Justin Bieber - Love Yourself",
+      "path": "sheets/Love Yourself.json",
+      "title": "Love Yourself - Justin Bieber",
       "sha256": "cd8778f8d8e52bc73965153edf7fc3b94d97d680725b32a62782c1d1140103e9"
     },
     {
@@ -261,26 +261,26 @@
     },
     {
       "id": "0c7e90f250ea456182928a81e244d648",
-      "path": "sheets/Linkin Park - In The End.json",
-      "title": "Linkin Park - In The End",
+      "path": "sheets/In The End.json",
+      "title": "In The End - Linkin Park",
       "sha256": "1619721e9e5bf0f5c185820cf1f13d89c0ff60f5ebf6c08dd5d0e4d3e355f8b2"
     },
     {
       "id": "27655e850191870084266a5c36ed9c32",
-      "path": "sheets/Maroon 5 - Memories.json",
-      "title": "Maroon 5 - Memories",
+      "path": "sheets/Memories-Maroon 5.json",
+      "title": "Memories - Maroon 5",
       "sha256": "4c880e8cae9edae523315fc9853f28f2aba3ea7a32305ea4e7c5f705d6c3c752"
     },
     {
       "id": "6e4a8c8f1f6b4cbb8f3ee707c18a2f6a",
-      "path": "sheets/Marshmello - Alone.json",
-      "title": "Marshmello - Alone",
+      "path": "sheets/Alone-Marshmello.json",
+      "title": "Alone - Marshmello",
       "sha256": "7d826dd83252deadb6504c1d9fc270bfb7938f447fcd2226b8431fd5d6de819d"
     },
     {
       "id": "15ddc01725fe8ad63e940796238314ff",
-      "path": "sheets/Marshmello - Happier.json",
-      "title": "Marshmello - Happier",
+      "path": "sheets/Happier-Marshmello.json",
+      "title": "Happier - Marshmello",
       "sha256": "ef7bd2c58aca09bfc540faa81f53eb7b8d4cd4b39e9d2da3c6bf59ade70dda6c"
     },
     {
@@ -297,8 +297,8 @@
     },
     {
       "id": "8940ac356ac0fbcee9c7298eb618c1d6",
-      "path": "sheets/Michael Jackson - Smooth Criminal.json",
-      "title": "Michael Jackson - Smooth Criminal",
+      "path": "sheets/Smooth Criminal.json",
+      "title": "Smooth Criminal - Michael Jackson",
       "sha256": "08f9c4059e1c96aff02a6f1bd0aba2550227cb8ddca7c090ae4df6300fcf1de5"
     },
     {
@@ -345,8 +345,8 @@
     },
     {
       "id": "2a2523753bebbcacb3b62441b1616311",
-      "path": "sheets/Passenger - Let Her Go.json",
-      "title": "Passenger - Let Her Go",
+      "path": "sheets/Let Her Go.json",
+      "title": "Let Her Go - Passenger",
       "sha256": "d5dbd5e7d4b9fa417fd552eb8a3c39677a5cf979e89c65ec976b9250e889efe6"
     },
     {
@@ -441,14 +441,14 @@
     },
     {
       "id": "c14a0cb179815240b989db6c7c4702a0",
-      "path": "sheets/Sia - Cheap Thrills.skysheet",
-      "title": "Sia - Cheap Thrills",
+      "path": "sheets/Cheap Thrills.skysheet",
+      "title": "Cheap Thrills - Sia",
       "sha256": "b98186e3a82082262ff8cd5232ba4eb40d2a1fe85c14bea4c10d4a8151957d63"
     },
     {
       "id": "354969bd8947b61a125237bcf0cebc52",
-      "path": "sheets/Sia - Dusk Till Dawn.json",
-      "title": "Sia - Dusk Till Dawn",
+      "path": "sheets/Dusk Till Dawn.json",
+      "title": "Dusk Till Dawn - Sia",
       "sha256": "a71e8db9267907b4e19a78cf291d61af1013b470973f9911b75b63936577c6f4"
     },
     {
@@ -507,8 +507,8 @@
     },
     {
       "id": "dbe4eeafc2425063567b9d5b38475286",
-      "path": "sheets/The Chainsmokers - Something Just Like This.json",
-      "title": "The Chainsmokers - Something Just Like This",
+      "path": "sheets/Something Just Like This.json",
+      "title": "Something Just Like This - The Chainsmokers",
       "sha256": "787c5eada868330fe8f098faac5e75aff5a2ef6107f48184c3372543208fe69b"
     },
     {
@@ -519,14 +519,14 @@
     },
     {
       "id": "423bbbbb4b4280694bd32e4b1333c318",
-      "path": "sheets/The Weeknd - Blinding Lights.json",
-      "title": "The Weeknd - Blinding Lights",
+      "path": "sheets/Blinding Lights.json",
+      "title": "Blinding Lights - The Weeknd",
       "sha256": "ebca80820b7914222906ea89b0cf0b7a35dcffdbc2e6ae0986d6de82a927aa8a"
     },
     {
       "id": "73444cf179888a922119f01d889d1c95",
-      "path": "sheets/Tom Odell - Another Love (2).json",
-      "title": "Tom Odell - Another Love (2)",
+      "path": "sheets/Another Love (2).json",
+      "title": "Another Love (2) - Tom Odell",
       "sha256": "04219ac0b7942596e3573f11c4e4dc6dd8d1b8014287c7a55649d703c52fbcc3"
     },
     {
@@ -537,8 +537,8 @@
     },
     {
       "id": "7b068a22b73c0c1fcffc269c4c75360e",
-      "path": "sheets/Twilight - A Thousand Years.json",
-      "title": "Twilight - A Thousand Years",
+      "path": "sheets/A Thousand Years.json",
+      "title": "A Thousand Years - Twilight",
       "sha256": "3176436dbd902e8d815a112448328f9140901a98a7176705070e71416c237943"
     },
     {
@@ -555,8 +555,8 @@
     },
     {
       "id": "e8027857cb75654590c4b61fa322d1f1",
-      "path": "sheets/Wintergatan - Marble Machine.json",
-      "title": "Wintergatan - Marble Machine",
+      "path": "sheets/Marble Machine.json",
+      "title": "Marble Machine - Wintergatan",
       "sha256": "e811d8ca5f5c27483fcf5e2ef3f5d1a50b288c0fc94350b20aae45bf6396b24a"
     },
     {
