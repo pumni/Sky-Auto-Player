@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LibraryPlaylistSummary } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { LibraryNavigator } from './LibraryNavigator';
@@ -34,7 +35,8 @@ describe('LibraryNavigator built-in source', () => {
     view.rerender(
       <LibraryNavigator collapsed onToggleCollapsed={() => undefined} useStore={store} />,
     );
-    expect(screen.getByRole('button', { name: 'Playlists' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Playlists' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'Playlists' })).toBeInTheDocument();
   });
 
   it('does not present the initial false/zero defaults as native unavailability', () => {
@@ -114,48 +116,124 @@ describe('LibraryNavigator built-in source', () => {
     expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
   });
 
-  it('opens a playlist picker from the collapsed rail and preserves selection and focus', async () => {
-    const store = createDesktopStore(createMockBridge());
+  it('keeps collapsed navigation available and retryable when playlist loading fails', async () => {
+    const bridge = createMockBridge();
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const listNavigation = vi
+      .spyOn(bridge, 'listLibraryNavigation')
+      .mockRejectedValueOnce(new Error('navigation bridge unavailable'))
+      .mockImplementation(originalListNavigation);
+    const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    await act(async () => store.getState().createPlaylist('Morning Practice'));
-    const morningId = store.getState().library.source.id;
-    await act(async () => store.getState().createPlaylist('Evening Practice'));
-    const toggle = vi.fn();
-    render(<LibraryNavigator collapsed onToggleCollapsed={toggle} useStore={store} />);
+    await waitFor(() => expect(store.getState().libraryNavigation.loadState).toBe('error'));
+    render(<LibraryNavigator collapsed onToggleCollapsed={() => undefined} useStore={store} />);
 
-    const launcher = screen.getByRole('button', { name: 'Playlists' });
-    fireEvent.click(launcher);
-    const menu = screen.getByRole('menu', { name: 'Playlists' });
-    expect(menu).toBeVisible();
-    const current = within(menu).getByRole('menuitem', {
-      name: 'Evening Practice, current playlist',
-    });
-    expect(current).toHaveClass('is-current');
-    await act(async () =>
-      fireEvent.click(within(menu).getByRole('menuitem', { name: /Morning Practice/ })),
-    );
-    await waitFor(() =>
-      expect(store.getState().library.source).toEqual({ kind: 'playlist', id: morningId }),
-    );
-    expect(screen.queryByRole('menu', { name: 'Playlists' })).toBeNull();
-    expect(toggle).not.toHaveBeenCalled();
-    await waitFor(() => expect(launcher).toHaveFocus());
+    const group = screen.getByRole('group', { name: 'Playlists' });
+    expect(within(group).queryAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t load playlists');
+    expect(screen.getByRole('button', { name: 'Retry library navigation' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Playlists' })).toBeNull();
+
+    await act(async () => screen.getByRole('button', { name: 'Retry library navigation' }).click());
+    await waitFor(() => expect(store.getState().libraryNavigation.loadState).toBe('ready'));
+    expect(listNavigation).toHaveBeenCalledTimes(2);
+    expect(within(group).queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('offers a truthful empty state and Create playlist action from the collapsed picker', async () => {
+  it('keeps empty collapsed playlists truthful and leaves Create playlist fixed', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const toggle = vi.fn();
     render(<LibraryNavigator collapsed onToggleCollapsed={toggle} useStore={store} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Playlists' }));
-    const menu = screen.getByRole('menu', { name: 'Playlists' });
-    expect(within(menu).getByRole('menuitem', { name: 'No playlists yet' })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    );
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Create playlist' }));
-    expect(screen.getByRole('dialog', { name: 'New playlist' })).toBeVisible();
+    const group = screen.getByRole('group', { name: 'Playlists' });
+    expect(within(group).queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Create playlist' })).toBeVisible();
+    expect(screen.queryByRole('menu', { name: 'Playlists' })).toBeNull();
     expect(toggle).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 3, 20, 100, 500])(
+    'renders %i collapsed playlists as direct, ordered, one-click destinations',
+    async (count) => {
+      const store = createDesktopStore(createMockBridge());
+      await act(async () => store.getState().initialize());
+      const playlists: LibraryPlaylistSummary[] = Array.from({ length: count }, (_, index) => ({
+        id: `playlist-${index}`,
+        name:
+          index === 0
+            ? 'Ánh sáng 🌅'
+            : index === 1
+              ? 'Ánh sáng của tôi'
+              : index === 2
+                ? '👨‍👩‍👧‍👦 Piano'
+                : count >= 20 && index < 5
+                  ? 'Shared playlist'
+                  : `Playlist ${index + 1}`,
+        song_count: index,
+      }));
+      store.setState({
+        libraryNavigation: {
+          ...store.getState().libraryNavigation,
+          loadState: 'ready',
+          playlistOrder: playlists.map((playlist) => playlist.id),
+          playlistsById: new Map(playlists.map((playlist) => [playlist.id, playlist])),
+        },
+      });
+      const toggle = vi.fn();
+      render(<LibraryNavigator collapsed onToggleCollapsed={toggle} useStore={store} />);
+
+      const group = screen.getByRole('group', { name: 'Playlists' });
+      const tiles = within(group).queryAllByRole('button');
+      const duplicateNames = new Map<string, number>();
+      for (const playlist of playlists) {
+        duplicateNames.set(playlist.name, (duplicateNames.get(playlist.name) ?? 0) + 1);
+      }
+      expect(tiles).toHaveLength(count);
+      expect(tiles.map((tile) => tile.getAttribute('aria-label'))).toEqual(
+        playlists.map((playlist, index) =>
+          (duplicateNames.get(playlist.name) ?? 0) > 1
+            ? `${playlist.name}, playlist ${index + 1}`
+            : playlist.name,
+        ),
+      );
+      if (count > 0) {
+        expect(tiles[0]?.querySelector('.library-playlist-monogram')).toHaveTextContent('Á');
+      }
+      if (count > 2) {
+        expect(tiles[2]?.querySelector('.library-playlist-monogram')).toHaveTextContent('👨‍👩‍👧‍👦');
+      }
+      expect(screen.queryByRole('button', { name: 'Playlists' })).toBeNull();
+      expect(screen.queryByRole('menu', { name: 'Playlists' })).toBeNull();
+
+      if (count > 0) {
+        fireEvent.click(tiles[count - 1]!);
+        await waitFor(() =>
+          expect(store.getState().library.source).toEqual({
+            kind: 'playlist',
+            id: playlists[count - 1]!.id,
+          }),
+        );
+      }
+      expect(toggle).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses the generic playlist glyph and accessible fallback for an empty name', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const playlist: LibraryPlaylistSummary = { id: 'empty-name', name: ' ', song_count: 0 };
+    store.setState({
+      libraryNavigation: {
+        ...store.getState().libraryNavigation,
+        loadState: 'ready',
+        playlistOrder: [playlist.id],
+        playlistsById: new Map([[playlist.id, playlist]]),
+      },
+    });
+    render(<LibraryNavigator collapsed onToggleCollapsed={() => undefined} useStore={store} />);
+
+    const tile = screen.getByRole('button', { name: 'Playlist 1' });
+    expect(tile.querySelector('.lucide-list-music')).toBeInTheDocument();
   });
 });

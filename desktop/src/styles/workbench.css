@@ -377,16 +377,92 @@ body.is-resizing * {
 }
 
 .library-collapsed-launchers {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   width: 44px;
   margin-top: 14px;
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
 }
 
-.library-collapsed-launchers .library-nav-item {
+.library-collapsed-playlist-scroller {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+  width: 100%;
+  gap: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.library-collapsed-playlist-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+.library-collapsed-playlist-tile {
+  flex: 0 0 auto;
   margin-top: 0;
+}
+
+.library-playlist-monogram {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.library-collapsed-playlist-tile:hover .library-playlist-monogram,
+.library-collapsed-playlist-tile:focus-visible .library-playlist-monogram {
+  color: var(--text-primary);
+  background: var(--workbench-control-hover);
+}
+
+.library-collapsed-playlist-tile.is-active .library-playlist-monogram {
+  color: var(--text-primary);
+  background: var(--selection-bg);
+}
+
+.library-collapsed-retry {
+  display: grid;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--workbench-radius-sm);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.library-collapsed-retry:hover {
+  color: var(--text-primary);
+  background: var(--workbench-control-hover);
+}
+
+.library-playlist-tooltip {
+  z-index: 20;
+  max-width: min(320px, calc(100vw - 64px));
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px var(--shadow-dialog);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .library-navigator-footer {

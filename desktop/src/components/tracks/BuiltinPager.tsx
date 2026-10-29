@@ -1,82 +1,89 @@
-import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Button, Dialog, DialogTrigger, Popover } from 'react-aria-components';
-import { useId, useRef, useState, type KeyboardEvent, type SubmitEvent } from 'react';
+import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { LIBRARY_PAGE_SIZE } from '../../state/store';
 
-export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
-  const total = useStore((store: DesktopStore) => store.library.resultTotal);
-  const page = useStore((store: DesktopStore) => store.library.builtinPage.committedPage);
-  const pendingPage = useStore((store: DesktopStore) => store.library.builtinPage.pendingPage);
-  const failedPage = useStore((store: DesktopStore) => store.library.builtinPage.failedPage);
-  const navigate = useStore((store: DesktopStore) => store.navigateBuiltinPage);
-  const [jumpOpen, setJumpOpen] = useState(false);
-  const [jumpValue, setJumpValue] = useState('');
-  const [jumpError, setJumpError] = useState<string | null>(null);
-  const jumpTriggerRef = useRef<HTMLButtonElement>(null);
+interface BuiltinPagerNavigationProps {
+  page: number;
+  pageCount: number;
+  busy: boolean;
+  navigate: (page: number) => Promise<void>;
+}
+
+function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPagerNavigationProps) {
+  const [editing, setEditing] = useState(false);
+  const [pageValue, setPageValue] = useState('');
+  const [pageError, setPageError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const jumpPopoverId = useId();
-  const jumpInputId = useId();
-  const jumpErrorId = useId();
-  const pageCount = Math.ceil(total / LIBRARY_PAGE_SIZE);
+  const pageInputId = useId();
+  const pageInstructionsId = useId();
+  const pageErrorId = useId();
+  const canJump = pageCount > 5;
 
-  if (total === 0) return null;
+  useEffect(() => {
+    if (!editing) return;
+    const focusTimer = window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [editing]);
 
-  const firstRow = (page - 1) * LIBRARY_PAGE_SIZE + 1;
-  const lastRow = Math.min(page * LIBRARY_PAGE_SIZE, total);
-  const rangeText = `${firstRow}–${lastRow} of ${total} songs`;
-  const rangeStatus = `Showing ${firstRow}–${lastRow} of ${total} songs.`;
-  const status =
-    pendingPage !== null
-      ? `${rangeStatus} Loading page ${pendingPage} of ${pageCount}.`
-      : failedPage !== null
-        ? `${rangeStatus} Page ${failedPage} failed to load. Retry is available.`
-        : pageCount === 1
-          ? rangeStatus
-          : `${rangeStatus} Page ${page} of ${pageCount}.`;
   const pageDigits = String(pageCount).length;
-  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 28px)`;
+  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 34px)`;
 
-  const setPopoverOpen = (isOpen: boolean) => {
-    setJumpOpen(isOpen);
-    if (isOpen) {
-      setJumpValue(String(page));
-      setJumpError(null);
-      window.setTimeout(() => {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      }, 0);
-    } else {
-      setJumpValue('');
-      setJumpError(null);
-    }
+  const focusTrigger = () => {
+    window.setTimeout(() => triggerRef.current?.focus(), 0);
   };
 
-  const closeJump = () => {
-    setPopoverOpen(false);
-    window.setTimeout(() => jumpTriggerRef.current?.focus(), 0);
+  const beginEditing = () => {
+    setPageValue(String(page));
+    setPageError(null);
+    setEditing(true);
   };
 
-  const submitJump = async (event: SubmitEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!/^[1-9]\d*$/.test(jumpValue)) {
-      setJumpError(`Enter a whole page number from 1 to ${pageCount}.`);
+  const cancelEditing = (restoreFocus = true) => {
+    setEditing(false);
+    setPageValue('');
+    setPageError(null);
+    if (restoreFocus) focusTrigger();
+  };
+
+  const commitEditing = async () => {
+    if (!/^[1-9]\d*$/.test(pageValue)) {
+      setPageError(`Enter a whole page number from 1 to ${pageCount}.`);
       return;
     }
-    const target = Number(jumpValue);
+    const target = Number(pageValue);
     if (!Number.isSafeInteger(target) || target > pageCount) {
-      setJumpError(`Enter a whole page number from 1 to ${pageCount}.`);
+      setPageError(`Enter a whole page number from 1 to ${pageCount}.`);
       return;
     }
-    setPopoverOpen(false);
+    setEditing(false);
+    setPageValue('');
+    setPageError(null);
     await navigate(target);
-    window.setTimeout(() => jumpTriggerRef.current?.focus(), 0);
+    focusTrigger();
   };
 
-  const onJumpKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    closeJump();
+  const onEditorKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelEditing();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      void commitEditing();
+    }
+  };
+
+  const onEditorBlur = (event: FocusEvent<HTMLInputElement>) => {
+    if (event.relatedTarget instanceof Node && editorRef.current?.contains(event.relatedTarget)) {
+      return;
+    }
+    cancelEditing(false);
   };
 
   const onPagerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -97,99 +104,143 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
   };
 
   return (
+    <nav
+      className="builtin-pager"
+      aria-label="Built-in Songs pages"
+      aria-busy={busy}
+      onKeyDown={onPagerKeyDown}
+    >
+      <button
+        className="builtin-pager-control"
+        type="button"
+        aria-label="Previous page"
+        title="Previous page"
+        disabled={page === 1}
+        onClick={() => void navigate(page - 1)}
+      >
+        <ChevronLeft size={16} aria-hidden="true" />
+      </button>
+      <div
+        className="builtin-pager-page-slot"
+        style={{ width: indicatorWidth }}
+        data-editing={editing ? 'true' : 'false'}
+      >
+        {editing && canJump ? (
+          <div className="builtin-pager-editor" ref={editorRef}>
+            <label className="visually-hidden" htmlFor={pageInputId}>
+              Page number
+            </label>
+            <input
+              ref={inputRef}
+              id={pageInputId}
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              size={pageDigits}
+              value={pageValue}
+              aria-label={`Page number, from 1 to ${pageCount}`}
+              aria-invalid={pageError !== null}
+              aria-describedby={
+                pageError ? `${pageInstructionsId} ${pageErrorId}` : pageInstructionsId
+              }
+              onChange={(event) => {
+                setPageValue(event.currentTarget.value);
+                setPageError(null);
+              }}
+              onKeyDown={onEditorKeyDown}
+              onBlur={onEditorBlur}
+            />
+            <span className="builtin-pager-page-count" aria-hidden="true">
+              / {pageCount}
+            </span>
+            <button
+              className="builtin-pager-confirm"
+              type="button"
+              aria-label="Confirm page change"
+              title="Confirm page change"
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => void commitEditing()}
+            >
+              <Check size={14} aria-hidden="true" />
+            </button>
+            <span id={pageInstructionsId} className="visually-hidden">
+              Enter a whole page number from 1 to {pageCount}. Press Enter to navigate or Escape to
+              cancel.
+            </span>
+            {pageError && (
+              <span id={pageErrorId} className="builtin-pager-error" role="alert">
+                {pageError}
+              </span>
+            )}
+          </div>
+        ) : canJump ? (
+          <button
+            ref={triggerRef}
+            className="builtin-pager-jump-trigger"
+            type="button"
+            title="Jump to page"
+            aria-label={`${page} / ${pageCount}, Page ${page} of ${pageCount}. Jump to page`}
+            aria-current="page"
+            onClick={beginEditing}
+          >
+            {page} / {pageCount}
+          </button>
+        ) : (
+          <span className="builtin-pager-static-indicator" aria-current="page">
+            {page} / {pageCount}
+          </span>
+        )}
+      </div>
+      <button
+        className="builtin-pager-control"
+        type="button"
+        aria-label="Next page"
+        title="Next page"
+        disabled={page === pageCount}
+        onClick={() => void navigate(page + 1)}
+      >
+        <ChevronRight size={16} aria-hidden="true" />
+      </button>
+    </nav>
+  );
+}
+
+export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
+  const total = useStore((store: DesktopStore) => store.library.resultTotal);
+  const page = useStore((store: DesktopStore) => store.library.builtinPage.committedPage);
+  const pendingPage = useStore((store: DesktopStore) => store.library.builtinPage.pendingPage);
+  const failedPage = useStore((store: DesktopStore) => store.library.builtinPage.failedPage);
+  const navigate = useStore((store: DesktopStore) => store.navigateBuiltinPage);
+  const pageCount = Math.ceil(total / LIBRARY_PAGE_SIZE);
+
+  if (total === 0) return null;
+
+  const firstRow = (page - 1) * LIBRARY_PAGE_SIZE + 1;
+  const lastRow = Math.min(page * LIBRARY_PAGE_SIZE, total);
+  const rangeText = `${firstRow}–${lastRow} of ${total} songs`;
+  const rangeStatus = `Showing ${firstRow}–${lastRow} of ${total} songs`;
+  const status =
+    pendingPage !== null
+      ? `${rangeStatus}. Loading page ${pendingPage} of ${pageCount}.`
+      : failedPage !== null
+        ? `${rangeStatus}. Page ${failedPage} failed to load. Retry is available.`
+        : pageCount === 1
+          ? `${rangeStatus}.`
+          : `${rangeStatus}. Page ${page} of ${pageCount}.`;
+
+  return (
     <div className="builtin-pager-wrap">
       <span className="builtin-pager-range" aria-hidden="true">
         {rangeText}
       </span>
       {pageCount > 1 && (
-        <nav
-          className="builtin-pager"
-          aria-label="Built-in Songs pages"
-          aria-busy={pendingPage !== null}
-          onKeyDown={onPagerKeyDown}
-        >
-          <button
-            className="builtin-pager-control"
-            type="button"
-            aria-label="Previous page"
-            title="Previous page"
-            disabled={page === 1}
-            onClick={() => void navigate(page - 1)}
-          >
-            <ChevronLeft size={16} aria-hidden="true" />
-          </button>
-          <DialogTrigger isOpen={jumpOpen} onOpenChange={setPopoverOpen}>
-            <Button
-              ref={jumpTriggerRef}
-              className="builtin-pager-jump-trigger"
-              type="button"
-              style={{ width: indicatorWidth }}
-              aria-label={`${page} / ${pageCount}, Page ${page} of ${pageCount}. Go to page`}
-              aria-current="page"
-              aria-expanded={jumpOpen}
-              aria-controls={jumpOpen ? jumpPopoverId : undefined}
-            >
-              <span>
-                {page} / {pageCount}
-              </span>
-              <ChevronDown size={12} aria-hidden="true" />
-            </Button>
-            <Popover
-              id={jumpPopoverId}
-              className="builtin-pager-popover"
-              placement="top end"
-              offset={6}
-            >
-              <Dialog aria-label="Go to page" className="builtin-pager-dialog">
-                <form className="builtin-pager-jump" noValidate onSubmit={submitJump}>
-                  <h2 className="builtin-pager-popover-title">Go to page</h2>
-                  <label className="visually-hidden" htmlFor={jumpInputId}>
-                    Page number
-                  </label>
-                  <input
-                    ref={inputRef}
-                    id={jumpInputId}
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[1-9][0-9]*"
-                    value={jumpValue}
-                    aria-label="Page number"
-                    aria-invalid={jumpError !== null}
-                    aria-describedby={
-                      jumpError ? `${jumpPopoverId}-count ${jumpErrorId}` : `${jumpPopoverId}-count`
-                    }
-                    onChange={(event) => {
-                      setJumpValue(event.currentTarget.value);
-                      setJumpError(null);
-                    }}
-                    onKeyDown={onJumpKeyDown}
-                  />
-                  <span id={`${jumpPopoverId}-count`} className="builtin-pager-page-count">
-                    of {pageCount}
-                  </span>
-                  <button className="button button-primary" type="submit">
-                    Go
-                  </button>
-                  {jumpError && (
-                    <p id={jumpErrorId} className="builtin-pager-error" role="alert">
-                      {jumpError}
-                    </p>
-                  )}
-                </form>
-              </Dialog>
-            </Popover>
-          </DialogTrigger>
-          <button
-            className="builtin-pager-control"
-            type="button"
-            aria-label="Next page"
-            title="Next page"
-            disabled={page === pageCount}
-            onClick={() => void navigate(page + 1)}
-          >
-            <ChevronRight size={16} aria-hidden="true" />
-          </button>
-        </nav>
+        <BuiltinPagerNavigation
+          key={pageCount}
+          page={page}
+          pageCount={pageCount}
+          busy={pendingPage !== null}
+          navigate={navigate}
+        />
       )}
       <p className="builtin-pager-status" role="status" aria-live="polite" aria-atomic="true">
         {status}

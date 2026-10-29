@@ -200,13 +200,17 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
                 type="button"
                 onClick={() => {
                   void retryBuiltinPage().finally(() => {
-                    window.setTimeout(
-                      () =>
-                        document
-                          .querySelector<HTMLButtonElement>('.builtin-pager-jump-trigger')
-                          ?.focus(),
-                      0,
-                    );
+                    window.setTimeout(() => {
+                      const pagerTarget =
+                        document.querySelector<HTMLButtonElement>('.builtin-pager-jump-trigger') ??
+                        document.querySelector<HTMLButtonElement>(
+                          '[aria-label="Next page"]:not(:disabled)',
+                        ) ??
+                        document.querySelector<HTMLButtonElement>(
+                          '[aria-label="Previous page"]:not(:disabled)',
+                        );
+                      pagerTarget?.focus();
+                    }, 0);
                   });
                 }}
               >

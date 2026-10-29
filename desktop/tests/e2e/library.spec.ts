@@ -2,16 +2,28 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { expectNoSeriousAccessibilityViolations, startSelectedSong } from './testHelpers';
 
 async function jumpToBuiltinPage(page: Page, target: number) {
-  await page.locator('.builtin-pager-jump-trigger').click();
-  const input = page.getByRole('textbox', { name: 'Page number' });
-  await input.fill(String(target));
-  await input.press('Enter');
+  const trigger = page.locator('.builtin-pager-jump-trigger');
+  if ((await trigger.count()) > 0) {
+    await trigger.click();
+    const input = page.getByRole('textbox', { name: /Page number, from/ });
+    await input.fill(String(target));
+    await input.press('Enter');
+    await expect(trigger).toBeFocused();
+  } else {
+    const currentGrid = page.getByRole('grid', { name: /Built-in Songs, page \d+/ });
+    const label = await currentGrid.getAttribute('aria-label');
+    const currentPage = Number(label?.match(/page (\d+)/i)?.[1] ?? 1);
+    const direction = target > currentPage ? 'Next page' : 'Previous page';
+    for (let pageNumber = currentPage; pageNumber !== target;) {
+      await page.getByRole('button', { name: direction }).click();
+      pageNumber += target > currentPage ? 1 : -1;
+    }
+  }
   await expect(page.getByRole('grid', { name: `Built-in Songs, page ${target}` })).toBeVisible();
-  await expect(page.locator('.builtin-pager-jump-trigger')).toBeFocused();
 }
 
 function builtinPageTriggerName(page: number, pageCount: number) {
-  return `${page} / ${pageCount}, Page ${page} of ${pageCount}. Go to page`;
+  return `${page} / ${pageCount}, Page ${page} of ${pageCount}. Jump to page`;
 }
 
 async function readBuiltinPagerGeometry(page: Page) {
@@ -30,7 +42,7 @@ async function readBuiltinPagerGeometry(page: Page) {
     };
     return {
       previous: rect(document.querySelector('[aria-label="Previous page"]')),
-      indicator: rect(document.querySelector('.builtin-pager-jump-trigger')),
+      indicator: rect(document.querySelector('.builtin-pager-page-slot')),
       next: rect(document.querySelector('[aria-label="Next page"]')),
       toolbar: rect(document.querySelector('.builtin-pager')),
       range: rect(document.querySelector('.builtin-pager-range')),
@@ -76,7 +88,7 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
     const wrap = includePager ? required('.builtin-pager-wrap') : null;
     const pager = includePager ? required('.builtin-pager') : null;
     const previous = includePager ? required('[aria-label="Previous page"]') : null;
-    const indicator = includePager ? required('.builtin-pager-jump-trigger') : null;
+    const indicator = includePager ? required('.builtin-pager-page-slot') : null;
     const next = includePager ? required('[aria-label="Next page"]') : null;
     const player = includePager ? required('.player-bar') : null;
     const titleStyle = getComputedStyle(title);
@@ -89,7 +101,11 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
       wrap && pager && previous && indicator && next && player
         ? (() => {
             const wrapStyle = getComputedStyle(wrap);
-            const triggerStyle = getComputedStyle(indicator);
+            const pageIndicator = indicator.querySelector<HTMLElement>(
+              '.builtin-pager-static-indicator, .builtin-pager-jump-trigger',
+            );
+            if (!pageIndicator) throw new Error('Built-in page indicator is missing');
+            const indicatorStyle = getComputedStyle(pageIndicator);
             const previousStyle = getComputedStyle(previous);
             return {
               wrap: rect(wrap),
@@ -106,9 +122,11 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
                 wrap.getBoundingClientRect().bottom -
                 Number.parseFloat(wrapStyle.borderBottomWidth) -
                 previous.getBoundingClientRect().bottom,
-              triggerBorderColor: triggerStyle.borderTopColor,
+              indicatorIsStatic: pageIndicator.classList.contains('builtin-pager-static-indicator'),
+              indicatorBorderStyle: indicatorStyle.borderTopStyle,
+              indicatorBorderColor: indicatorStyle.borderTopColor,
               previousBorderColor: previousStyle.borderTopColor,
-              triggerBackgroundColor: triggerStyle.backgroundColor,
+              indicatorBackgroundColor: indicatorStyle.backgroundColor,
               previousBackgroundColor: previousStyle.backgroundColor,
               clientWidth: wrap.clientWidth,
               scrollWidth: wrap.scrollWidth,
@@ -252,175 +270,93 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     'true',
   );
 
-  const pageThreeIndicator = page.getByRole('button', { name: builtinPageTriggerName(3, 5) });
-  await pageThreeIndicator.focus();
-  await page.keyboard.press('Enter');
-  await expect(pageThreeIndicator).toHaveAttribute('aria-expanded', 'true');
-  const jump = page.getByRole('textbox', { name: 'Page number' });
-  await expect(jump).toBeFocused();
-  for (const invalidPage of ['0', '-1', '1.5', '6', '9007199254740992']) {
-    await jump.fill(invalidPage);
-    await jump.press('Enter');
-    await expect(page.getByRole('alert')).toContainText('Enter a whole page number from 1 to 5');
-  }
-  await jump.press('Escape');
-  await expect(page.getByRole('textbox', { name: 'Page number' })).toHaveCount(0);
-  await expect(pageThreeIndicator).toBeFocused();
-  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
+  const staticIndicator = page.locator('.builtin-pager-static-indicator');
+  await expect(staticIndicator).toHaveText('3 / 5');
+  await expect(staticIndicator).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 
-  await pageThreeIndicator.focus();
-  await page.keyboard.press('Space');
-  await page.getByRole('textbox', { name: 'Page number' }).fill('5');
-  await page.getByRole('button', { name: 'Go', exact: true }).click();
+  await jumpToBuiltinPage(page, 5);
   const pageFive = page.getByRole('grid', { name: 'Built-in Songs, page 5' });
   await expect(pageFive).toHaveAttribute('aria-rowcount', '101');
-  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeFocused();
+  await expect(page.locator('.builtin-pager-static-indicator')).toHaveText('5 / 5');
   await pageFive.focus();
   await page.keyboard.press('End');
   await expect(page.getByRole('row', { name: /Song 500/ })).toHaveAttribute('aria-rowindex', '101');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
-  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
+  const previous = page.getByRole('button', { name: 'Previous page' });
+  const next = page.getByRole('button', { name: 'Next page' });
+  await expect(previous).toBeEnabled();
+  await expect(next).toBeDisabled();
+  await previous.focus();
   await expect
-    .poll(() =>
-      page
-        .getByRole('button', { name: builtinPageTriggerName(5, 5) })
-        .evaluate((button) => getComputedStyle(button).outlineStyle),
-    )
+    .poll(() => previous.evaluate((button) => getComputedStyle(button).outlineStyle))
     .toBe('solid');
-  await page.setViewportSize({ width: 800, height: 560 });
-  await expect(page.locator('.builtin-pager-range')).toBeVisible();
-  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'First page' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Last page' })).toHaveCount(0);
-  await expect(page.locator('.builtin-pager button')).toHaveCount(3);
-  const geometry = await page.evaluate(() => ({
-    browserWidth:
-      document.querySelector<HTMLElement>('.track-browser-workbench-pane')?.clientWidth ?? 0,
-    browserScrollWidth:
-      document.querySelector<HTMLElement>('.track-browser-workbench-pane')?.scrollWidth ?? 0,
-    documentWidth: document.documentElement.scrollWidth,
-  }));
-  expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
-  expect(geometry.documentWidth).toBeLessThanOrEqual(800);
-
-  const expectCompactJumpToFit = async () => {
-    const indicator = page.getByRole('button', { name: builtinPageTriggerName(5, 5) });
-    await indicator.focus();
-    await page.keyboard.press('Enter');
-    await expect(indicator).toHaveAttribute('aria-expanded', 'true');
-    const jump = page.getByRole('textbox', { name: 'Page number' });
-    await expect(jump).toBeVisible();
-    const jumpGeometry = await jump.evaluate((input) => {
-      const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
-      const player = document.querySelector<HTMLElement>('.player-bar');
-      const popover = input.closest<HTMLElement>('.builtin-pager-popover');
-      const toolbar = document.querySelector<HTMLElement>('.builtin-pager');
-      if (!pane || !player || !popover || !toolbar) return null;
-      const paneRect = pane.getBoundingClientRect();
-      const playerRect = player.getBoundingClientRect();
-      const popoverRect = popover.getBoundingClientRect();
-      const toolbarRect = toolbar.getBoundingClientRect();
-      return {
-        paneLeft: paneRect.left,
-        paneRight: paneRect.right,
-        paneTop: paneRect.top,
-        paneBottom: paneRect.bottom,
-        popoverLeft: popoverRect.left,
-        popoverRight: popoverRect.right,
-        popoverTop: popoverRect.top,
-        popoverBottom: popoverRect.bottom,
-        popoverWidth: popoverRect.width,
-        popoverScrollWidth: popover.scrollWidth,
-        toolbarTop: toolbarRect.top,
-        playerTop: playerRect.top,
-        viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
-      };
-    });
-    expect(jumpGeometry).not.toBeNull();
-    if (jumpGeometry) {
-      expect(jumpGeometry.popoverLeft).toBeGreaterThanOrEqual(0);
-      expect(jumpGeometry.popoverRight).toBeLessThanOrEqual(jumpGeometry.viewportWidth);
-      expect(jumpGeometry.popoverTop).toBeGreaterThanOrEqual(0);
-      expect(jumpGeometry.popoverBottom).toBeLessThanOrEqual(jumpGeometry.viewportHeight);
-      expect(jumpGeometry.popoverLeft).toBeGreaterThanOrEqual(jumpGeometry.paneLeft);
-      expect(jumpGeometry.popoverRight).toBeLessThanOrEqual(jumpGeometry.paneRight);
-      expect(jumpGeometry.popoverTop).toBeLessThan(jumpGeometry.toolbarTop);
-      expect(jumpGeometry.popoverBottom).toBeLessThanOrEqual(jumpGeometry.toolbarTop);
-      expect(jumpGeometry.popoverBottom).toBeLessThanOrEqual(jumpGeometry.playerTop);
-      expect(jumpGeometry.popoverScrollWidth).toBeLessThanOrEqual(jumpGeometry.popoverWidth);
-    }
-    await jump.press('Escape');
-    await expect(indicator).toBeFocused();
-  };
-
-  await page.setViewportSize({ width: 1366, height: 768 });
-  await expectCompactJumpToFit();
-  await page.setViewportSize({ width: 800, height: 560 });
-  await expectCompactJumpToFit();
-
-  await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.builtin-pager-range')).toBeVisible();
-  await expect(page.locator('.builtin-pager')).toBeVisible();
-  await expectCompactJumpToFit();
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 995, height: 706 },
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.locator('.builtin-pager-static-indicator')).toBeVisible();
+    await expect(page.locator('.builtin-pager button')).toHaveCount(2);
+    const geometry = await readBuiltinPagerGeometry(page);
+    expect(geometry.indicator.width).toBeGreaterThanOrEqual(60);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewport.width,
+    );
+  }
 
   await page.setViewportSize({ width: 1366, height: 768 });
   const browserPane = page.locator('.track-browser-workbench-pane');
-  await browserPane.evaluate((element) => {
-    element.style.flex = '0 0 520px';
-    element.style.minWidth = '0';
-  });
-  await expect(page.locator('.builtin-pager-range')).toBeVisible();
-  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeVisible();
-  const pagerGeometry = await page.locator('.builtin-pager').evaluate((element) => ({
-    width: element.clientWidth,
-    scrollWidth: element.scrollWidth,
-  }));
-  expect(pagerGeometry.scrollWidth).toBeLessThanOrEqual(pagerGeometry.width);
-  await expectCompactJumpToFit();
-  await browserPane.evaluate((element) => {
-    element.style.flex = '0 0 440px';
-  });
-  const narrowPagerGeometry = await page.locator('.builtin-pager-wrap').evaluate((element) => ({
-    width: element.clientWidth,
-    scrollWidth: element.scrollWidth,
-  }));
-  expect(narrowPagerGeometry.scrollWidth).toBeLessThanOrEqual(narrowPagerGeometry.width);
-  await expectCompactJumpToFit();
+  for (const width of [520, 440]) {
+    await browserPane.evaluate((element, targetWidth) => {
+      element.style.flex = `0 0 ${targetWidth}px`;
+      element.style.minWidth = '0';
+    }, width);
+    const pagerGeometry = await page.locator('.builtin-pager-wrap').evaluate((element) => ({
+      width: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(pagerGeometry.scrollWidth).toBeLessThanOrEqual(pagerGeometry.width);
+    await expect(page.locator('.builtin-pager-static-indicator')).toBeVisible();
+  }
   await browserPane.evaluate((element) => {
     element.style.removeProperty('flex');
     element.style.removeProperty('min-width');
   });
 });
 
-test('Built-in pager controls keep their geometry across navigation and jump popover changes', async ({
+test('two-page Built-in pager keeps its static center and geometry during navigation', async ({
   page,
 }) => {
+  await page.goto('/?mockCatalogCount=106');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
   const previous = page.getByRole('button', { name: 'Previous page' });
   const next = page.getByRole('button', { name: 'Next page' });
-  const indicator = page.locator('.builtin-pager-jump-trigger');
+  const indicator = page.locator('.builtin-pager-static-indicator');
   await expect(previous).toBeVisible();
   await expect(next).toBeVisible();
   await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveText('1 / 2');
+  await expect(indicator).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('.builtin-pager button')).toHaveCount(2);
+  await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
 
   const pageOne = await readBuiltinPagerGeometry(page);
   await indicator.click();
-  await expect(page.getByRole('textbox', { name: 'Page number' })).toBeVisible();
-  const popupOpen = await readBuiltinPagerGeometry(page);
-  expectBuiltinPagerGeometryStable(pageOne, popupOpen);
-  await page.getByRole('textbox', { name: 'Page number' }).press('Escape');
-  await expect(indicator).toBeFocused();
+  await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
 
   await next.click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+  await expect(indicator).toHaveText('2 / 2');
   expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
   await page.getByRole('button', { name: 'Previous page' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
@@ -471,14 +407,22 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       metrics.separator.verticalAlign === 'baseline',
       'separator uses a non-baseline alignment',
     );
-    check(
-      pager.triggerBorderColor === pager.previousBorderColor,
-      'resting trigger border is accented',
-    );
-    check(
-      pager.triggerBackgroundColor === pager.previousBackgroundColor,
-      'resting trigger surface is accented',
-    );
+    if (pager.indicatorIsStatic) {
+      check(
+        pager.indicatorBorderStyle === 'none' &&
+          pager.indicatorBackgroundColor === 'rgba(0, 0, 0, 0)',
+        'static page indicator has an interactive surface',
+      );
+    } else {
+      check(
+        pager.indicatorBorderColor === pager.previousBorderColor,
+        'resting trigger border is accented',
+      );
+      check(
+        pager.indicatorBackgroundColor === pager.previousBackgroundColor,
+        'resting trigger surface is accented',
+      );
+    }
     check(pagerClearanceDelta <= 1, 'pager top/bottom clearance is asymmetric');
     check(
       Math.min(pager.previous.height, pager.indicator.height, pager.next.height) >= 32,
@@ -502,9 +446,10 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
         topClearance: pager.topClearance,
         bottomClearance: pager.bottomClearance,
         clearanceDelta: pagerClearanceDelta,
-        triggerBorder: pager.triggerBorderColor,
+        indicatorBorder: pager.indicatorBorderColor,
+        indicatorBorderStyle: pager.indicatorBorderStyle,
         previousBorder: pager.previousBorderColor,
-        triggerBackground: pager.triggerBackgroundColor,
+        indicatorBackground: pager.indicatorBackgroundColor,
         previousBackground: pager.previousBackgroundColor,
         height: pager.toolbar.height,
       },
@@ -537,23 +482,27 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
     );
     await assertVisualContract(viewport.label);
     const pageOneGeometry = await readBuiltinPagerGeometry(page);
-    await page.getByRole('button', { name: 'Next page' }).click();
+    const next = page.getByRole('button', { name: 'Next page' });
+    await next.focus();
+    await expect(next).toBeFocused();
+    await expect
+      .poll(() => next.evaluate((button) => getComputedStyle(button).outlineStyle))
+      .toBe('solid');
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
-    await page.getByRole('button', { name: 'Previous page' }).focus();
-    await page.keyboard.press('Tab');
-    const indicator = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
-    await expect(indicator).toBeFocused();
+    const previous = page.getByRole('button', { name: 'Previous page' });
+    await previous.focus();
+    await expect(previous).toBeFocused();
     await expect
-      .poll(() => indicator.evaluate((button) => getComputedStyle(button).outlineStyle))
+      .poll(() => previous.evaluate((button) => getComputedStyle(button).outlineStyle))
       .toBe('solid');
     await assertVisualContract(`${viewport.label} page 2 focused`);
-    await indicator.click();
-    await expect(page.getByRole('textbox', { name: 'Page number' })).toBeVisible();
+    await expect(page.locator('.builtin-pager-static-indicator')).toHaveText('2 / 2');
+    await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
-    await page.getByRole('textbox', { name: 'Page number' }).press('Escape');
-    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
-    await page.getByRole('button', { name: 'Previous page' }).click();
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
   }
@@ -638,14 +587,19 @@ test('Built-in pager handles the approved result-count boundaries', async ({ pag
 
     const pageCount = Math.ceil(count / 100);
     const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
-    await expect(pager.locator('button')).toHaveCount(3);
+    await expect(pager.locator('button')).toHaveCount(pageCount <= 5 ? 2 : 3);
     await expect(page.getByRole('button', { name: 'Previous page' })).toBeDisabled();
-    await expect(
-      page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) }),
-    ).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('button', { name: 'Next page' })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'First page' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Last page' })).toHaveCount(0);
+    if (pageCount <= 5) {
+      await expect(pager.locator('.builtin-pager-static-indicator')).toHaveText(`1 / ${pageCount}`);
+      await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
+    } else {
+      await expect(
+        page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) }),
+      ).toHaveAttribute('aria-current', 'page');
+    }
 
     if (count === 106) {
       await page.getByRole('button', { name: 'Next page' }).click();
@@ -1168,7 +1122,7 @@ test('playlist Built-in picker pages through song 101 and adds it to the same pl
   const pageTwo = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
   await expect(pageTwo).toBeVisible();
   await expect(pageTwo).toHaveAttribute('aria-rowcount', '101');
-  await expect(page.locator('.builtin-pager-jump-trigger')).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Next page' })).toBeFocused();
   await expect(song101).toBeVisible();
   await expect(song101).toHaveAttribute('aria-rowindex', '2');
   await expectNoSeriousAccessibilityViolations(page);
@@ -1748,7 +1702,7 @@ test('F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search
   }
 });
 
-test('F3.2 collapsed Playlists opens a picker and selecting a playlist preserves the collapsed rail', async ({
+test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist region', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 995, height: 706 });
@@ -1768,356 +1722,290 @@ test('F3.2 collapsed Playlists opens a picker and selecting a playlist preserves
   }, preferenceKey);
   await page.goto('/?mockCatalogCount=500');
   await expect(page.locator('.app-shell')).toBeVisible();
-  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+
+  const names = [
+    'Ánh sáng 🌅',
+    'Ánh sáng của tôi',
+    '🎹 Piano practice',
+    'Nguyễn Ánh — Bản tình ca buổi tối 🎹🌙',
+    'Evening practice',
+    'Morning practice',
+    'Favorites for family',
+    'Quiet songs',
+    ...Array.from(
+      { length: 12 },
+      (_, index) => 'Practice set ' + String(index + 9).padStart(2, '0'),
+    ),
+  ];
+  const navigator = page.getByRole('navigation', { name: 'Library' });
   const navigatorPane = page.locator('.navigator-workbench-pane');
   await expect(navigatorPane).toHaveClass(/is-collapsed/);
-  await page.getByRole('button', { name: 'Create playlist' }).click();
-  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
-  await createDialog.getByLabel('Playlist name').fill('F3.2 Practice');
-  await createDialog.getByRole('button', { name: 'Create' }).click();
-  await expect(page.getByRole('heading', { name: 'F3.2 Practice' })).toBeVisible();
-  await page.getByRole('button', { name: 'Create playlist' }).click();
-  const secondCreateDialog = page.getByRole('dialog', { name: 'New playlist' });
-  await secondCreateDialog.getByLabel('Playlist name').fill('F3.2 Other');
-  await secondCreateDialog.getByRole('button', { name: 'Create' }).click();
-  await expect(page.getByRole('heading', { name: 'F3.2 Other' })).toBeVisible();
-  for (let index = 1; index <= 12; index += 1) {
-    await page.getByRole('button', { name: 'Create playlist' }).click();
+  for (const name of names) {
+    await navigator.getByRole('button', { name: 'Create playlist' }).click();
     const dialog = page.getByRole('dialog', { name: 'New playlist' });
-    const name = `F3.2 Playlist ${index} — Long collection for practice`;
     await dialog.getByLabel('Playlist name').fill(name);
     await dialog.getByRole('button', { name: 'Create' }).click();
     await expect(page.getByRole('heading', { name })).toBeVisible();
   }
-  const before = await page.evaluate((key) => {
-    const pane = document.querySelector('.navigator-workbench-pane');
-    const preference = JSON.parse(window.localStorage.getItem(key) ?? 'null');
-    return {
-      collapsed: pane?.classList.contains('is-collapsed') ?? false,
-      navigatorPreference: preference?.navigatorPreference ?? null,
-      expandedNavigatorWidth: preference?.expandedNavigatorWidth ?? null,
-      playlistsLauncher: document
-        .querySelector('[aria-label="Playlists"]')
-        ?.getBoundingClientRect()
-        .toJSON(),
+
+  const scroller = navigator.locator('.library-collapsed-playlist-scroller');
+  const tiles = scroller.locator('.library-collapsed-playlist-tile');
+  await expect(navigator.getByRole('group', { name: 'Playlists' })).toBeVisible();
+  await expect(tiles).toHaveCount(names.length);
+  await expect(navigator.getByRole('button', { name: 'Playlists', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('menu', { name: 'Playlists' })).toHaveCount(0);
+  expect(
+    await tiles.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('aria-label')),
+    ),
+  ).toEqual(names);
+
+  const beforeScroll = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error('Missing collapsed rail region: ' + selector);
+      const box = element.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
     };
-  }, preferenceKey);
-  await page.getByRole('button', { name: 'Playlists' }).click();
-  const afterOpen = await page.evaluate((key) => {
-    const pane = document.querySelector('.navigator-workbench-pane');
-    const preference = JSON.parse(window.localStorage.getItem(key) ?? 'null');
+    const scroller = document.querySelector<HTMLElement>('.library-collapsed-playlist-scroller')!;
     return {
-      collapsed: pane?.classList.contains('is-collapsed') ?? false,
-      navigatorPreference: preference?.navigatorPreference ?? null,
-      expandedNavigatorWidth: preference?.expandedNavigatorWidth ?? null,
-      menu:
-        document
-          .querySelector('[role="menu"][aria-label="Playlists"]')
-          ?.getBoundingClientRect()
-          .toJSON() ?? null,
-    };
-  }, preferenceKey);
-  await testInfo.attach('f3.2-collapsed-playlist-picker.json', {
-    body: JSON.stringify({ before, afterOpen }, null, 2),
-    contentType: 'application/json',
-  });
-  console.info('[F3.2 collapsed playlist picker geometry]', JSON.stringify({ before, afterOpen }));
-  await expect(navigatorPane).toHaveClass(/is-collapsed/);
-  expect(afterOpen.navigatorPreference).toBe(before.navigatorPreference);
-  expect(afterOpen.expandedNavigatorWidth).toBe(before.expandedNavigatorWidth);
-  const menu = page.getByRole('menu', { name: 'Playlists' });
-  await expect(menu).toBeVisible();
-  const menuGeometry = await menu.evaluate((element) => {
-    const menuBox = element.getBoundingClientRect();
-    const popover = element.closest<HTMLElement>('.collapsed-playlist-menu-popover');
-    const popoverBox = popover?.getBoundingClientRect();
-    return {
-      menuHeight: menuBox.height,
-      menuScrollHeight: element.scrollHeight,
-      menuWidth: element.clientWidth,
-      menuScrollWidth: element.scrollWidth,
-      popover: popoverBox
-        ? { x: popoverBox.x, y: popoverBox.y, right: popoverBox.right, bottom: popoverBox.bottom }
-        : null,
-      viewport: { width: innerWidth, height: innerHeight },
+      heading: rect('.library-navigator-heading'),
+      primary: rect('.library-primary-items'),
+      playlists: rect('.library-collapsed-launchers'),
+      footer: rect('.library-navigator-footer'),
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
+      overflowY: getComputedStyle(scroller).overflowY,
+      firstTile: rect('.library-collapsed-playlist-tile'),
+      documentWidth: document.documentElement.scrollWidth,
+      documentScrollTop: document.documentElement.scrollTop,
     };
   });
-  expect(menuGeometry.menuScrollHeight).toBeGreaterThan(menuGeometry.menuHeight);
-  expect(menuGeometry.menuScrollWidth).toBeLessThanOrEqual(menuGeometry.menuWidth);
-  expect(menuGeometry.popover?.x).toBeGreaterThanOrEqual(0);
-  expect(menuGeometry.popover?.right).toBeLessThanOrEqual(menuGeometry.viewport.width);
-  expect(menuGeometry.popover?.y).toBeGreaterThanOrEqual(0);
-  expect(menuGeometry.popover?.bottom).toBeLessThanOrEqual(menuGeometry.viewport.height);
-  await testInfo.attach('f3.2-collapsed-playlist-menu-geometry.json', {
-    body: JSON.stringify(menuGeometry, null, 2),
-    contentType: 'application/json',
-  });
-  await expect(
-    menu.getByRole('menuitem', {
-      name: 'F3.2 Playlist 12 — Long collection for practice, current playlist',
-    }),
-  ).toBeVisible();
-  await expectNoSeriousAccessibilityViolations(page);
-  const launcher = page.getByRole('button', { name: 'Playlists' });
-  await launcher.focus();
-  await page.keyboard.press('ArrowDown');
-  await expect(menu).toBeVisible();
-  const firstPlaylistItem = menu.getByRole('menuitem').first();
-  await expect(firstPlaylistItem).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: 'F3.2 Practice' })).toBeVisible();
-  await expect(navigatorPane).toHaveClass(/is-collapsed/);
-  await expect(launcher).toBeFocused();
-  await launcher.focus();
-  await page.keyboard.press('ArrowDown');
-  await expect(menu).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(launcher).toBeFocused();
-  await expect(menu).toHaveCount(0);
-  await expect(navigatorPane).toHaveClass(/is-collapsed/);
-  const responsiveMenuMeasurements: Array<Record<string, unknown>> = [];
-  for (const viewport of [
-    { width: 1366, height: 768 },
-    { width: 800, height: 560 },
-    { width: 640, height: 448 },
-    { width: 520, height: 448 },
-    { width: 440, height: 448 },
-  ]) {
-    await page.setViewportSize(viewport);
-    await expect(page.locator('.workbench')).toHaveAttribute(
-      'data-workbench-width',
-      String(viewport.width),
-    );
-    await launcher.click();
-    await expect(menu).toBeVisible();
-    const bounds = await menu.evaluate((element) => {
-      const box = element
-        .closest<HTMLElement>('.collapsed-playlist-menu-popover')!
-        .getBoundingClientRect();
-      return {
-        left: box.left,
-        top: box.top,
-        right: box.right,
-        bottom: box.bottom,
-        menuClientHeight: element.clientHeight,
-        menuScrollHeight: element.scrollHeight,
-        menuClientWidth: element.clientWidth,
-        menuScrollWidth: element.scrollWidth,
-      };
-    });
-    expect(bounds.left).toBeGreaterThanOrEqual(0);
-    expect(bounds.right).toBeLessThanOrEqual(viewport.width);
-    expect(bounds.top).toBeGreaterThanOrEqual(0);
-    expect(bounds.bottom).toBeLessThanOrEqual(viewport.height);
-    responsiveMenuMeasurements.push({ viewport, ...bounds });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      viewport.width,
-    );
-    await page.keyboard.press('Escape');
-    await expect(launcher).toBeFocused();
-    await expect(navigatorPane).toHaveClass(/is-collapsed/);
+  expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
+  expect(beforeScroll.overflowY).toBe('auto');
+  expect(beforeScroll.firstTile.width).toBe(40);
+  expect(beforeScroll.firstTile.height).toBe(40);
+  expect(beforeScroll.documentWidth).toBeLessThanOrEqual(995);
+
+  const lastName = names[names.length - 1]!;
+  const lastTile = scroller.getByRole('button', { name: lastName });
+  await lastTile.hover();
+  await expect(page.getByRole('tooltip')).toHaveText(lastName);
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await navigator.getByRole('button', { name: 'Expand library navigator' }).focus();
+  for (let tabIndex = 0; tabIndex < names.length + 2; tabIndex += 1) {
+    await page.keyboard.press('Tab');
   }
-  await testInfo.attach('f3.2-collapsed-playlist-menu-responsive-geometry.json', {
-    body: JSON.stringify(responsiveMenuMeasurements, null, 2),
-    contentType: 'application/json',
-  });
-  console.info(
-    '[F3.2 collapsed playlist responsive geometry]',
-    JSON.stringify(responsiveMenuMeasurements),
-  );
-  await page.setViewportSize({ width: 995, height: 706 });
-  await launcher.click();
-  const playlist = page.getByRole('menuitem', { name: 'F3.2 Practice' });
-  await playlist.click();
-  await expect(page.getByRole('heading', { name: 'F3.2 Practice' })).toBeVisible();
+  await expect(lastTile).toBeFocused();
+  await expect(page.getByRole('tooltip')).toHaveText(lastName);
+  const focusedScrollTop = await scroller.evaluate((element) => element.scrollTop);
+  expect(focusedScrollTop).toBeGreaterThan(0);
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: lastName })).toBeVisible();
   await expect(navigatorPane).toHaveClass(/is-collapsed/);
-  await expect(launcher).toBeFocused();
-  await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  const savedLayout = await page.evaluate(
+
+  const firstName = names[0]!;
+  await scroller.getByRole('button', { name: firstName }).click();
+  await expect(page.getByRole('heading', { name: firstName })).toBeVisible();
+  await expect(scroller.getByRole('button', { name: firstName })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(navigatorPane).toHaveClass(/is-collapsed/);
+  const preference = await page.evaluate(
     (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null'),
     preferenceKey,
   );
-  expect(savedLayout.navigatorPreference).toBe('collapsed');
-  expect(savedLayout.expandedNavigatorWidth).toBe(before.expandedNavigatorWidth);
-  await page.getByRole('button', { name: 'Expand library navigator' }).click();
-  await expect(navigatorPane).not.toHaveClass(/is-collapsed/);
-});
-
-test('F3.2 pager uses fixed icon controls and a compact validated page-jump popover', async ({
-  page,
-}, testInfo) => {
-  await page.setViewportSize({ width: 995, height: 706 });
-  await page.goto('/?mockCatalogCount=106');
-  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
-
-  const previous = page.getByRole('button', { name: 'Previous page' });
-  const next = page.getByRole('button', { name: 'Next page' });
-  const indicator = page.locator('.builtin-pager-jump-trigger');
-  await expect(previous).toHaveAttribute('title', 'Previous page');
-  await expect(next).toHaveAttribute('title', 'Next page');
-  await expect(previous).toHaveText('');
-  await expect(next).toHaveText('');
-  for (const control of [previous, next]) {
-    const box = await control.boundingBox();
-    expect(box?.width).toBe(36);
-    expect(box?.height).toBe(36);
-  }
-
-  const pageOneGeometry = await readBuiltinPagerGeometry(page);
-  await indicator.click();
-  const input = page.getByRole('textbox', { name: 'Page number' });
-  await expect(input).toBeFocused();
-  await expect(input).toHaveValue('1');
-  expect(
-    await input.evaluate((element) => {
-      const field = element as HTMLInputElement;
-      return [field.selectionStart, field.selectionEnd];
-    }),
-  ).toEqual([0, 1]);
-  const popover = page.locator('.builtin-pager-popover');
-  await expect(popover).toContainText('Go to page');
-  await expect(popover).toContainText('of 2');
-  await expect(popover.getByRole('button', { name: 'Go' })).toHaveCount(1);
-  await expect(popover.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
-  const initialPopover = await popover.evaluate((element) => {
-    const box = element.getBoundingClientRect();
-    const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane')!;
-    const paneBox = pane.getBoundingClientRect();
+  expect(preference.navigatorPreference).toBe('collapsed');
+  expect(preference.expandedNavigatorWidth).toBe(240);
+  const afterSelection = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const box = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    };
     return {
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      right: box.right,
-      bottom: box.bottom,
-      paneLeft: paneBox.left,
-      paneRight: paneBox.right,
-      viewportWidth: innerWidth,
-      viewportHeight: innerHeight,
+      heading: rect('.library-navigator-heading'),
+      primary: rect('.library-primary-items'),
+      playlists: rect('.library-collapsed-launchers'),
+      footer: rect('.library-navigator-footer'),
+      documentWidth: document.documentElement.scrollWidth,
     };
   });
-  expect(initialPopover.width).toBeGreaterThanOrEqual(200);
-  expect(initialPopover.width).toBeLessThanOrEqual(240);
-  expect(initialPopover.x).toBeGreaterThanOrEqual(initialPopover.paneLeft);
-  expect(initialPopover.right).toBeLessThanOrEqual(initialPopover.paneRight);
-  expect(initialPopover.y).toBeGreaterThanOrEqual(0);
-  expect(initialPopover.bottom).toBeLessThanOrEqual(initialPopover.viewportHeight);
-  expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
+  expect(afterSelection.heading).toEqual(beforeScroll.heading);
+  expect(afterSelection.primary).toEqual(beforeScroll.primary);
+  expect(afterSelection.playlists).toEqual(beforeScroll.playlists);
+  expect(afterSelection.footer).toEqual(beforeScroll.footer);
+  expect(afterSelection.documentWidth).toBeLessThanOrEqual(995);
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(navigatorPane).toHaveClass(/is-collapsed/);
+  const compactGeometry = await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>('.library-collapsed-playlist-scroller')!;
+    const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane')!;
+    const footer = document.querySelector<HTMLElement>('.library-navigator-footer')!;
+    return {
+      railWidth: pane.getBoundingClientRect().width,
+      scroller: {
+        width: scroller.getBoundingClientRect().width,
+        height: scroller.getBoundingClientRect().height,
+        scrollHeight: scroller.scrollHeight,
+        clientHeight: scroller.clientHeight,
+        scrollTop: scroller.scrollTop,
+      },
+      footerY: footer.getBoundingClientRect().y,
+      documentWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(compactGeometry.railWidth).toBe(48);
+  expect(compactGeometry.scroller.scrollHeight).toBeGreaterThan(
+    compactGeometry.scroller.clientHeight,
+  );
+  expect(compactGeometry.documentWidth).toBeLessThanOrEqual(640);
+  await testInfo.attach('f3.3-collapsed-playlist-rail-geometry.json', {
+    body: JSON.stringify({ beforeScroll, afterSelection, compactGeometry }, null, 2),
+    contentType: 'application/json',
+  });
+  console.info(
+    '[F3.3 collapsed playlist rail geometry]',
+    JSON.stringify({ beforeScroll, afterSelection, compactGeometry }),
+  );
   await expectNoSeriousAccessibilityViolations(page);
-  const pageJumpMeasurements: Array<Record<string, unknown>> = [
-    { viewport: { width: 995, height: 706 }, popover: initialPopover, pager: pageOneGeometry },
-  ];
+});
 
-  await page.mouse.click(20, 20);
-  await expect(popover).toHaveCount(0);
-  await expect(indicator).toBeFocused();
-  await indicator.click();
-  await expect(input).toHaveValue('1');
-
-  await input.fill('9007199254740993');
-  await input.press('Enter');
-  await expect(page.getByRole('alert')).toHaveText('Enter a whole page number from 1 to 2.');
-  await expect(input).toHaveAttribute('aria-invalid', 'true');
-  await expect(input).toHaveAttribute('aria-describedby', /.+/);
-  expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
-  const errorPopover = await popover.boundingBox();
-  expect(errorPopover?.x).toBe(initialPopover.x);
-  expect(errorPopover?.width).toBe(initialPopover.width);
-  expect(errorPopover?.y).toBeLessThan(initialPopover.y);
-
-  await input.fill('2');
-  await input.press('Enter');
-  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
-  await expect(indicator).toBeFocused();
-  const pageTwo = await readBuiltinPagerGeometry(page);
-  expectBuiltinPagerGeometryStable(pageOneGeometry, pageTwo);
-  await expect(previous).toBeEnabled();
-  await expect(next).toBeDisabled();
-
-  for (const viewport of [
-    { width: 1366, height: 768 },
-    { width: 995, height: 706 },
-    { width: 800, height: 560 },
-    { width: 640, height: 448 },
-  ]) {
-    await page.setViewportSize(viewport);
-    await expect(page.locator('.workbench')).toHaveAttribute(
-      'data-workbench-width',
-      String(viewport.width),
-    );
-    const beforeOpen = await readBuiltinPagerGeometry(page);
-    await indicator.click();
-    await expect(input).toHaveValue('2');
-    const box = await popover.boundingBox();
-    expect(box?.width).toBeGreaterThanOrEqual(200);
-    expect(box?.width).toBeLessThanOrEqual(240);
-    expect(box?.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
-    expect(box?.y).toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
-    const openPagerGeometry = await readBuiltinPagerGeometry(page);
-    expectBuiltinPagerGeometryStable(beforeOpen, openPagerGeometry);
-    pageJumpMeasurements.push({ viewport, popover: box, pager: openPagerGeometry });
-    await page.keyboard.press('Escape');
-    await expect(indicator).toBeFocused();
-    expectBuiltinPagerGeometryStable(beforeOpen, await readBuiltinPagerGeometry(page));
+test('F3.3 pager uses a static status through five pages and inline editing from six pages', async ({
+  page,
+}, testInfo) => {
+  const measurements: Array<Record<string, unknown>> = [];
+  for (const total of [106, 500]) {
+    await page.setViewportSize({ width: 995, height: 706 });
+    await page.goto('/?mockCatalogCount=' + total);
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+    const pageCount = Math.ceil(total / 100);
+    const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
+    const indicator = pager.locator('.builtin-pager-static-indicator');
+    await expect(indicator).toHaveText('1 / ' + pageCount);
+    await expect(indicator).toHaveAttribute('aria-current', 'page');
+    await expect(pager.locator('button')).toHaveCount(2);
+    await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(pager).not.toContainText(/Go to page|\bGo\b/);
+    const before = await readBuiltinPagerGeometry(page);
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+    expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+    measurements.push({ total, pageCount, before, after: await readBuiltinPagerGeometry(page) });
   }
 
+  await page.setViewportSize({ width: 995, height: 706 });
+  await page.goto('/?mockCatalogCount=501');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  const sixPagePager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
+  const sixPageTrigger = page.getByRole('button', {
+    name: '1 / 6, Page 1 of 6. Jump to page',
+  });
+  await expect(sixPagePager.locator('button')).toHaveCount(3);
+  const beforeEdit = await readBuiltinPagerGeometry(page);
+  await sixPageTrigger.click();
+  const input = page.getByRole('textbox', { name: 'Page number, from 1 to 6' });
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('1');
+  await expect(sixPagePager).not.toContainText(/Go to page|\bGo\b/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.builtin-pager-popover')).toHaveCount(0);
+  expectBuiltinPagerGeometryStable(beforeEdit, await readBuiltinPagerGeometry(page));
+  await input.fill('999');
+  await input.press('Enter');
+  await expect(page.getByRole('alert')).toHaveText('Enter a whole page number from 1 to 6.');
+  await expect(input).toHaveAttribute('aria-invalid', 'true');
+  await expect(input).toBeFocused();
+  expectBuiltinPagerGeometryStable(beforeEdit, await readBuiltinPagerGeometry(page));
+  const errorGeometry = await page.locator('.builtin-pager-error').boundingBox();
+  const slotGeometry = await page.locator('.builtin-pager-page-slot').boundingBox();
+  expect(errorGeometry).not.toBeNull();
+  expect(slotGeometry).not.toBeNull();
+  await input.fill('6');
+  await input.press('Enter');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 6' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Song 501/ })).toBeVisible();
+  const sixPageTriggerAfter = page.getByRole('button', {
+    name: '6 / 6, Page 6 of 6. Jump to page',
+  });
+  await expect(sixPageTriggerAfter).toBeFocused();
+  expectBuiltinPagerGeometryStable(beforeEdit, await readBuiltinPagerGeometry(page));
+  measurements.push({
+    total: 501,
+    pageCount: 6,
+    beforeEdit,
+    error: { errorGeometry, slotGeometry },
+    afterCommit: await readBuiltinPagerGeometry(page),
+  });
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.goto('/?mockCatalogCount=2438');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  const manyPageTrigger = page.getByRole('button', {
+    name: '1 / 25, Page 1 of 25. Jump to page',
+  });
+  await manyPageTrigger.click();
+  const manyPageInput = page.getByRole('textbox', { name: 'Page number, from 1 to 25' });
+  await manyPageInput.fill('25');
+  await page.getByRole('button', { name: 'Confirm page change' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 25' })).toBeVisible();
+  await expect(page.locator('.builtin-pager-range')).toHaveText('2401–2438 of 2438 songs');
+  await expect(
+    page.getByRole('button', { name: '25 / 25, Page 25 of 25. Jump to page' }),
+  ).toBeFocused();
+
+  await page.goto('/?mockCatalogCount=10000');
+  await jumpToBuiltinPage(page, 99);
+  const beforeHundred = await readBuiltinPagerGeometry(page);
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 100' })).toBeVisible();
+  expectBuiltinPagerGeometryStable(beforeHundred, await readBuiltinPagerGeometry(page));
+  measurements.push({
+    total: 10_000,
+    from: 99,
+    to: 100,
+    before: beforeHundred,
+    after: await readBuiltinPagerGeometry(page),
+  });
+
   await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockCatalogCount=10000');
   const browserPane = page.locator('.track-browser-workbench-pane');
   for (const width of [520, 440]) {
     await browserPane.evaluate((element, targetWidth) => {
-      element.style.flex = `0 0 ${targetWidth}px`;
+      element.style.flex = '0 0 ' + targetWidth + 'px';
       element.style.minWidth = '0';
     }, width);
-    await indicator.click();
-    await expect(input).toHaveValue('2');
-    const geometry = await popover.evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      const paneBox = document
-        .querySelector<HTMLElement>('.track-browser-workbench-pane')!
-        .getBoundingClientRect();
-      return {
-        x: box.x,
-        right: box.right,
-        width: box.width,
-        paneLeft: paneBox.left,
-        paneRight: paneBox.right,
-      };
+    const trigger = page.getByRole('button', {
+      name: '1 / 100, Page 1 of 100. Jump to page',
     });
-    expect(geometry.width).toBeGreaterThanOrEqual(200);
-    expect(geometry.width).toBeLessThanOrEqual(240);
-    expect(geometry.x).toBeGreaterThanOrEqual(geometry.paneLeft);
-    expect(geometry.right).toBeLessThanOrEqual(geometry.paneRight);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      1366,
-    );
-    await testInfo.attach(`f3.2-page-jump-${width}px.json`, {
-      body: JSON.stringify(geometry, null, 2),
-      contentType: 'application/json',
-    });
-    pageJumpMeasurements.push({
-      viewport: { width: 1366, height: 768 },
-      paneWidth: width,
-      ...geometry,
-    });
-    await page.keyboard.press('Escape');
-    await expect(indicator).toBeFocused();
+    const before = await readBuiltinPagerGeometry(page);
+    await trigger.click();
+    const field = page.getByRole('textbox', { name: 'Page number, from 1 to 100' });
+    await expect(field).toBeFocused();
+    const during = await readBuiltinPagerGeometry(page);
+    expectBuiltinPagerGeometryStable(before, during);
+    const geometry = await page.locator('.builtin-pager-wrap').evaluate((element) => ({
+      width: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      pagerWidth: element.querySelector('.builtin-pager')?.getBoundingClientRect().width ?? 0,
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+    measurements.push({ paneWidth: width, before, during, geometry });
+    await field.press('Escape');
+    await expect(trigger).toBeFocused();
   }
   await browserPane.evaluate((element) => {
     element.style.removeProperty('flex');
     element.style.removeProperty('min-width');
   });
-  await testInfo.attach('f3.2-page-jump-responsive-geometry.json', {
-    body: JSON.stringify(pageJumpMeasurements, null, 2),
+  await testInfo.attach('f3.3-inline-page-editor-geometry.json', {
+    body: JSON.stringify(measurements, null, 2),
     contentType: 'application/json',
   });
-  console.info('[F3.2 page-jump geometry]', JSON.stringify(pageJumpMeasurements));
-
-  await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
-  await previous.focus();
-  await page.keyboard.press('Tab');
-  await expect(indicator).toBeFocused();
-  await expect
-    .poll(() => indicator.evaluate((button) => getComputedStyle(button).outlineStyle))
-    .toBe('solid');
+  console.info('[F3.3 inline pager geometry]', JSON.stringify(measurements));
 });

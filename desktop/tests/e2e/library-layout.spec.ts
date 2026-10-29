@@ -278,7 +278,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
   const collapsedLabels = navigator.locator('.library-nav-item-label');
-  await expect(collapsedLabels).toHaveCount(3);
+  await expect(collapsedLabels).toHaveCount(2);
   expect(
     await collapsedLabels.evaluateAll((items) =>
       items.every((item) => {
@@ -298,7 +298,8 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
       paddingTop: navigatorStyle.paddingTop,
       paddingBottom: navigatorStyle.paddingBottom,
       launcherCount: navigator.querySelectorAll('.library-collapsed-launchers').length,
-      launcherItemCount: launchers?.querySelectorAll('.library-nav-item').length ?? 0,
+      launcherItemCount:
+        launchers?.querySelectorAll('.library-collapsed-playlist-tile').length ?? 0,
       secondarySectionCount: navigator.querySelectorAll('.library-secondary-sections').length,
       launcherMarginTop: launcherStyle?.marginTop ?? null,
       launcherPaddingTop: launcherStyle?.paddingTop ?? null,
@@ -309,14 +310,10 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
   expect(collapsedLayout.paddingBottom).toBe('8px');
   expect(collapsedLayout.footerPaddingTop).toBe('8px');
   expect(collapsedLayout.secondarySectionCount).toBe(0);
-  expect(collapsedLayout.launcherCount).toBe(collapsedLayout.launcherItemCount > 0 ? 1 : 0);
-  if (collapsedLayout.launcherItemCount === 0) {
-    expect(collapsedLayout.launcherMarginTop).toBeNull();
-    expect(collapsedLayout.launcherPaddingTop).toBeNull();
-  } else {
-    expect(collapsedLayout.launcherMarginTop).toBe('8px');
-    expect(collapsedLayout.launcherPaddingTop).toBe('6px');
-  }
+  expect(collapsedLayout.launcherCount).toBe(1);
+  expect(collapsedLayout.launcherItemCount).toBe(0);
+  expect(collapsedLayout.launcherMarginTop).toBe('8px');
+  expect(collapsedLayout.launcherPaddingTop).toBe('6px');
   await page.mouse.move(0, 0);
   const collapsedToggleStyle = await collapseButton.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -590,7 +587,7 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       marginBottom: '4px',
       padding: '0px',
     });
-    expect(compact.launcherItemCount).toBe(1);
+    expect(compact.launcherItemCount).toBe(2);
     expect(compact.launcherCount).toBe(1);
     expect(compact.launcher).toEqual({ marginTop: '8px', paddingTop: '6px' });
     expect(compact.tiles.length).toBeGreaterThanOrEqual(5);
@@ -665,15 +662,15 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
   }
   await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
   const emptyCollapsed = await navigator.evaluate((element) => ({
-    playlistLauncherCount: element.querySelectorAll(
-      '.library-collapsed-launchers .library-nav-item',
+    playlistTileCount: element.querySelectorAll(
+      '.library-collapsed-playlist-scroller .library-collapsed-playlist-tile',
     ).length,
     launchers: element.querySelectorAll('.library-collapsed-launchers').length,
     expandedPlaylistSection: element.querySelectorAll('.library-secondary-sections').length,
     children: Array.from(element.children).map((child) => (child as HTMLElement).className),
   }));
   expect(emptyCollapsed).toEqual({
-    playlistLauncherCount: 1,
+    playlistTileCount: 0,
     launchers: 1,
     expandedPlaylistSection: 0,
     children: [
