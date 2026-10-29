@@ -576,6 +576,66 @@
       "path": "sheets/Yume To Hazakura.json",
       "title": "Yume To Hazakura",
       "sha256": "1ba9780d791b22572d4621857578839f1ba8c67d82f46cff595fef6696aaadd3"
+    },
+    {
+      "id": "25eff6ee6e950323052937bc80fad9ab",
+      "path": "sheets/Alway With Me.json",
+      "title": "Alway With Me",
+      "sha256": "1e8d251ab6754d9a3ba3915d6a6b7e0c64ff919a91db0cb254e8023df2526e90"
+    },
+    {
+      "id": "57cddde3f3fc47d0e453d52add3e7619",
+      "path": "sheets/Lemon.json",
+      "title": "Lemon",
+      "sha256": "bef137a24ddb8e671f7a0f6393fb5ccc38f8e7cebd8b054680a8b3c35e5bade6"
+    },
+    {
+      "id": "9cf4f96c3e1e0e2ca42d35392cabc401",
+      "path": "sheets/Path Of The Wind.json",
+      "title": "Path Of The Wind",
+      "sha256": "6ed9f8a2a459963d911ead27dedffde2106b5ba8996be7f9eab4c39ae30bf416"
+    },
+    {
+      "id": "678615af8612114d5eae7bc7c4fcaa8d",
+      "path": "sheets/Proud of You - Fiona Fung.json",
+      "title": "Proud of You - Fiona Fung",
+      "sha256": "d45c9089a5160e1ba1ec2e0262bfb25f2e231be6b9db80325fad5e1d7c8fe341"
+    },
+    {
+      "id": "0cdf5e724b9cbce642a4bbb34b579941",
+      "path": "sheets/Star Sky.json",
+      "title": "Star Sky",
+      "sha256": "5bd28445c46f7b439a1e17b891f2de568240ed48bef63520ecfa1b8ffae6d990"
+    },
+    {
+      "id": "09fbdccc4240b8647947c0501667115b",
+      "path": "sheets/Stay - The Kid LAROI, Justin Bieber.json",
+      "title": "Stay - The Kid LAROI, Justin Bieber",
+      "sha256": "8d45e9c3af5070b6e953e5bc2683664120f8b60c9ff0073411addc9a1e5c20d2"
+    },
+    {
+      "id": "a0dae790c352911c84d879c39ec8ccdc",
+      "path": "sheets/Victory.json",
+      "title": "Victory",
+      "sha256": "f28ae280f98b81f9fb1e00cf8f65d828ff8d9c063854762c98ed22f1a0e2b033"
+    },
+    {
+      "id": "e64f6e5346ab94fa7c8d15e0680c98b8",
+      "path": "sheets/Waiting For Love.json",
+      "title": "Waiting For Love",
+      "sha256": "1a322775cc4da63650d4f7f2a9609fa4057eba5174d5c3cf8200cf1501069bb4"
+    },
+    {
+      "id": "09c646b8a2b4c1ffaefdb12763567840",
+      "path": "sheets/Xe Đạp - Sakurairo Maukoro.json",
+      "title": "Xe Đạp - Sakurairo Maukoro",
+      "sha256": "c07d7553ee79f646a4ba67bfc9f9b370dbe1d6d2cca62ad0f09e40b2a50f5870"
+    },
+    {
+      "id": "8d8ee9b6853053cbefcfd77c5268249e",
+      "path": "sheets/Yêu 5.json",
+      "title": "Yêu 5",
+      "sha256": "5c33cbe848fac4f36a950556ca60cb912e139a048091a32f2e729c7bc6c7e174"
     }
   ],
   "retired_songs": []
