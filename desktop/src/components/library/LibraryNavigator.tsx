@@ -1,5 +1,6 @@
-import { ChevronLeft, ChevronRight, Heart, Library, Music2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Heart, Library, Music2, Plus } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { Button, Menu, MenuItem, MenuTrigger, Popover } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { PlaylistCreateDialog } from './PlaylistCreateDialog';
 import { PlaylistNavItem } from './PlaylistNavItem';
@@ -44,6 +45,10 @@ export function LibraryNavigator({
 
   const renameTarget = renameId ? navigation.playlistsById.get(renameId) : undefined;
   const deleteTarget = deleteId ? navigation.playlistsById.get(deleteId) : undefined;
+  const collapsedPlaylists = navigation.playlistOrder.flatMap((id) => {
+    const playlist = navigation.playlistsById.get(id);
+    return playlist ? [playlist] : [];
+  });
 
   const runAndClose = async (operation: () => Promise<void>, close: () => void) => {
     await operation();
@@ -131,14 +136,95 @@ export function LibraryNavigator({
 
       {collapsed ? (
         <div className="library-collapsed-launchers">
-          <LibraryNavItem
-            collapsed
-            label="Playlists"
-            icon={<Music2 size={18} />}
-            onPress={onToggleCollapsed}
-          >
-            Playlists
-          </LibraryNavItem>
+          <MenuTrigger>
+            <Button
+              className={`library-nav-item${source.kind === 'playlist' ? ' is-active' : ''}`}
+              aria-label="Playlists"
+              title="Playlists"
+              aria-current={source.kind === 'playlist' ? 'page' : undefined}
+            >
+              <span className="library-nav-item-icon" aria-hidden="true">
+                <Music2 size={18} />
+              </span>
+              <span className="library-nav-item-label">Playlists</span>
+            </Button>
+            <Popover
+              className="library-menu-popover collapsed-playlist-menu-popover"
+              placement="right top"
+              offset={8}
+            >
+              <Menu aria-label="Playlists" className="collapsed-playlist-menu">
+                {collapsedPlaylists.length > 0 ? (
+                  <>
+                    {collapsedPlaylists.map((playlist) => {
+                      const active = source.kind === 'playlist' && source.id === playlist.id;
+                      return (
+                        <MenuItem
+                          key={playlist.id}
+                          id={playlist.id}
+                          aria-label={active ? `${playlist.name}, current playlist` : playlist.name}
+                          className={`library-menu-item collapsed-playlist-menu-item${active ? ' is-current' : ''}`}
+                          onAction={() =>
+                            void selectLibrarySource({ kind: 'playlist', id: playlist.id })
+                          }
+                        >
+                          <span className="collapsed-playlist-menu-name" title={playlist.name}>
+                            {playlist.name}
+                          </span>
+                          {active && (
+                            <>
+                              <Check size={15} aria-hidden="true" />
+                              <span className="visually-hidden">, current playlist</span>
+                            </>
+                          )}
+                        </MenuItem>
+                      );
+                    })}
+                    {navigation.loadState === 'error' && (
+                      <MenuItem
+                        id="retry-playlists"
+                        className="library-menu-item"
+                        onAction={() => void useStore.getState().loadLibraryNavigation()}
+                      >
+                        Retry loading playlists
+                      </MenuItem>
+                    )}
+                  </>
+                ) : navigation.loadState === 'error' ? (
+                  <>
+                    <MenuItem id="playlists-unavailable" isDisabled className="library-menu-item">
+                      Playlists unavailable
+                    </MenuItem>
+                    <MenuItem
+                      id="retry-playlists"
+                      className="library-menu-item"
+                      onAction={() => void useStore.getState().loadLibraryNavigation()}
+                    >
+                      Retry loading playlists
+                    </MenuItem>
+                  </>
+                ) : navigation.loadState !== 'ready' ? (
+                  <MenuItem id="loading-playlists" isDisabled className="library-menu-item">
+                    Loading playlists…
+                  </MenuItem>
+                ) : (
+                  <>
+                    <MenuItem id="empty-playlists" isDisabled className="library-menu-item">
+                      No playlists yet
+                    </MenuItem>
+                    <MenuItem
+                      id="create-playlist"
+                      className="library-menu-item"
+                      onAction={() => setCreateOpen(true)}
+                    >
+                      <Plus size={15} aria-hidden="true" />
+                      <span>Create playlist</span>
+                    </MenuItem>
+                  </>
+                )}
+              </Menu>
+            </Popover>
+          </MenuTrigger>
         </div>
       ) : (
         <div className="library-secondary-sections">

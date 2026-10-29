@@ -4,6 +4,7 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   background: var(--workbench-content);
 }
 
@@ -312,14 +313,14 @@
 
 .builtin-pager-control,
 .builtin-pager-jump-trigger,
-.builtin-pager-jump button {
+.builtin-pager-jump .button {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 5px;
   min-width: 36px;
-  min-height: 32px;
+  min-height: 36px;
   padding: 4px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
@@ -329,6 +330,18 @@
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.builtin-pager-control {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.builtin-pager-jump-trigger {
+  height: 36px;
 }
 
 .builtin-pager-jump-trigger[aria-current='page'] {
@@ -358,8 +371,8 @@
 .builtin-pager-popover {
   z-index: 12;
   box-sizing: border-box;
-  width: max-content;
-  min-width: 220px;
+  width: 220px;
+  min-width: 200px;
   max-width: calc(100vw - 16px);
   padding: 8px;
   border: 1px solid var(--border-strong);
@@ -382,20 +395,24 @@
   font-size: 11px;
 }
 
-.builtin-pager-jump label,
+.builtin-pager-popover-title,
 .builtin-pager-jump .builtin-pager-error {
   grid-column: 1 / -1;
 }
 
-.builtin-pager-jump label {
+.builtin-pager-popover-title {
+  margin: 0 0 2px;
   color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .builtin-pager-jump input {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 32px;
+  min-height: 36px;
   padding-inline: 8px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
@@ -403,6 +420,18 @@
   background: var(--workbench-content);
   font: inherit;
   font-variant-numeric: tabular-nums;
+}
+
+.builtin-pager-page-count {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.builtin-pager-jump .button-primary {
+  min-width: 48px;
+  min-height: 36px;
+  padding-inline: 12px;
 }
 
 .builtin-pager-status {
@@ -454,10 +483,6 @@
 
   .builtin-pager {
     gap: 4px;
-  }
-
-  .builtin-pager-control {
-    padding-inline: 6px;
   }
 
   .builtin-page-feedback {

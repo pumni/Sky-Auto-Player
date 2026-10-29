@@ -446,11 +446,27 @@ body.is-resizing * {
   box-shadow: 0 12px 30px var(--shadow-dialog);
 }
 
+.collapsed-playlist-menu-popover {
+  box-sizing: border-box;
+  width: min(260px, calc(100vw - 24px));
+  min-width: min(180px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow: hidden;
+}
+
 .library-menu-popover [role='menu'],
 .track-menu-popover [role='menu'] {
   display: grid;
   gap: 2px;
   outline: 0;
+}
+
+.collapsed-playlist-menu-popover [role='menu'] {
+  max-height: min(70dvh, 440px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .library-menu-item {
@@ -465,6 +481,23 @@ body.is-resizing * {
   background: transparent;
   text-align: left;
   font-size: 13px;
+}
+
+.collapsed-playlist-menu-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  min-width: 0;
+}
+
+.collapsed-playlist-menu-item .collapsed-playlist-menu-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsed-playlist-menu-item.is-current svg {
+  color: var(--workbench-accent-ink);
 }
 
 .library-menu-item:hover,

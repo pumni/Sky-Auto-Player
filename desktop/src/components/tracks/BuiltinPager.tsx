@@ -40,9 +40,12 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
   const setPopoverOpen = (isOpen: boolean) => {
     setJumpOpen(isOpen);
     if (isOpen) {
-      setJumpValue('');
+      setJumpValue(String(page));
       setJumpError(null);
-      window.setTimeout(() => inputRef.current?.focus(), 0);
+      window.setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 0);
     } else {
       setJumpValue('');
       setJumpError(null);
@@ -113,8 +116,7 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
             disabled={page === 1}
             onClick={() => void navigate(page - 1)}
           >
-            <ChevronLeft size={14} aria-hidden="true" />
-            <span>Previous</span>
+            <ChevronLeft size={16} aria-hidden="true" />
           </button>
           <DialogTrigger isOpen={jumpOpen} onOpenChange={setPopoverOpen}>
             <Button
@@ -140,7 +142,10 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
             >
               <Dialog aria-label="Go to page" className="builtin-pager-dialog">
                 <form className="builtin-pager-jump" noValidate onSubmit={submitJump}>
-                  <label htmlFor={jumpInputId}>Go to page</label>
+                  <h2 className="builtin-pager-popover-title">Go to page</h2>
+                  <label className="visually-hidden" htmlFor={jumpInputId}>
+                    Page number
+                  </label>
                   <input
                     ref={inputRef}
                     id={jumpInputId}
@@ -148,17 +153,22 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
                     inputMode="numeric"
                     pattern="[1-9][0-9]*"
                     value={jumpValue}
+                    aria-label="Page number"
                     aria-invalid={jumpError !== null}
-                    aria-describedby={jumpError ? jumpErrorId : undefined}
+                    aria-describedby={
+                      jumpError ? `${jumpPopoverId}-count ${jumpErrorId}` : `${jumpPopoverId}-count`
+                    }
                     onChange={(event) => {
                       setJumpValue(event.currentTarget.value);
                       setJumpError(null);
                     }}
                     onKeyDown={onJumpKeyDown}
                   />
-                  <button type="submit">Go</button>
-                  <button type="button" onClick={closeJump}>
-                    Cancel
+                  <span id={`${jumpPopoverId}-count`} className="builtin-pager-page-count">
+                    of {pageCount}
+                  </span>
+                  <button className="button button-primary" type="submit">
+                    Go
                   </button>
                   {jumpError && (
                     <p id={jumpErrorId} className="builtin-pager-error" role="alert">
@@ -177,8 +187,7 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
             disabled={page === pageCount}
             onClick={() => void navigate(page + 1)}
           >
-            <span>Next</span>
-            <ChevronRight size={14} aria-hidden="true" />
+            <ChevronRight size={16} aria-hidden="true" />
           </button>
         </nav>
       )}

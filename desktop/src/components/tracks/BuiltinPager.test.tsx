@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -8,7 +8,7 @@ import { TrackBrowser } from './TrackBrowser';
 describe('BuiltinPager', () => {
   afterEach(cleanup);
 
-  it('validates jumps, supports Enter, Go, Escape, Cancel, and restores trigger focus', async () => {
+  it('validates jumps, preselects the current page, supports Enter and Go, and restores focus', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
@@ -20,6 +20,14 @@ describe('BuiltinPager', () => {
     const pageOne = screen.getByRole('button', {
       name: '1 / 5, Page 1 of 5. Go to page',
     });
+    const previous = screen.getByRole('button', { name: 'Previous page' });
+    const next = screen.getByRole('button', { name: 'Next page' });
+    expect(previous).toHaveAttribute('title', 'Previous page');
+    expect(next).toHaveAttribute('title', 'Next page');
+    expect(previous).not.toHaveTextContent('Previous');
+    expect(next).not.toHaveTextContent('Next');
+    expect(previous.querySelector('svg')).toHaveAttribute('width', '16');
+    expect(next.querySelector('svg')).toHaveAttribute('width', '16');
     expect(pageOne).toHaveAttribute('aria-current', 'page');
     expect(pageOne).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByRole('status')).toHaveTextContent(
@@ -32,9 +40,17 @@ describe('BuiltinPager', () => {
     expect(
       document.getElementById(pageOne.getAttribute('aria-controls') ?? ''),
     ).toBeInTheDocument();
-    const input = screen.getByRole('textbox', { name: 'Go to page' });
+    const input = screen.getByRole('textbox', { name: 'Page number' });
     await waitFor(() => expect(input).toHaveFocus());
-    for (const value of ['1.5', '0', '-1', '6', '9007199254740992']) {
+    expect(input).toHaveValue('1');
+    expect((input as HTMLInputElement).selectionStart).toBe(0);
+    expect((input as HTMLInputElement).selectionEnd).toBe(1);
+    const dialog = screen.getByRole('dialog', { name: 'Go to page' });
+    expect(within(dialog).getByText('of 5')).toBeVisible();
+    expect(within(dialog).getAllByRole('button')).toHaveLength(1);
+    expect(within(dialog).getByRole('button', { name: 'Go' })).toBeVisible();
+    expect(within(dialog).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    for (const value of ['', 'abc', '1.5', '0', '-1', '6', '9007199254740992']) {
       fireEvent.change(input, { target: { value } });
       fireEvent.submit(input.closest('form')!);
       expect(screen.getByRole('alert')).toHaveTextContent('Enter a whole page number from 1 to 5.');
@@ -44,12 +60,12 @@ describe('BuiltinPager', () => {
 
     fireEvent.change(input, { target: { value: '5' } });
     fireEvent.keyDown(input, { key: 'Escape' });
-    expect(screen.queryByRole('textbox', { name: 'Go to page' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Page number' })).toBeNull();
     await waitFor(() => expect(pageOne).toHaveFocus());
     expect(store.getState().library.builtinPage.committedPage).toBe(1);
 
     fireEvent.click(pageOne);
-    const reopenedInput = screen.getByRole('textbox', { name: 'Go to page' });
+    const reopenedInput = screen.getByRole('textbox', { name: 'Page number' });
     fireEvent.change(reopenedInput, { target: { value: '5' } });
     await act(async () => fireEvent.submit(reopenedInput.closest('form')!));
     await waitFor(() => expect(store.getState().library.builtinPage.committedPage).toBe(5));
@@ -63,7 +79,7 @@ describe('BuiltinPager', () => {
     );
 
     fireEvent.click(pageFive);
-    const goInput = screen.getByRole('textbox', { name: 'Go to page' });
+    const goInput = screen.getByRole('textbox', { name: 'Page number' });
     fireEvent.change(goInput, { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Go' }));
     await waitFor(() => expect(store.getState().library.builtinPage.committedPage).toBe(3));
@@ -73,7 +89,7 @@ describe('BuiltinPager', () => {
     await waitFor(() => expect(pageThree).toHaveFocus());
 
     fireEvent.click(pageThree);
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Page number' }), { key: 'Escape' });
     await waitFor(() => expect(pageThree).toHaveFocus());
   });
 

@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -112,5 +112,50 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toHaveTextContent('96');
     await act(async () => builtin.click());
     expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
+  });
+
+  it('opens a playlist picker from the collapsed rail and preserves selection and focus', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().createPlaylist('Morning Practice'));
+    const morningId = store.getState().library.source.id;
+    await act(async () => store.getState().createPlaylist('Evening Practice'));
+    const toggle = vi.fn();
+    render(<LibraryNavigator collapsed onToggleCollapsed={toggle} useStore={store} />);
+
+    const launcher = screen.getByRole('button', { name: 'Playlists' });
+    fireEvent.click(launcher);
+    const menu = screen.getByRole('menu', { name: 'Playlists' });
+    expect(menu).toBeVisible();
+    const current = within(menu).getByRole('menuitem', {
+      name: 'Evening Practice, current playlist',
+    });
+    expect(current).toHaveClass('is-current');
+    await act(async () =>
+      fireEvent.click(within(menu).getByRole('menuitem', { name: /Morning Practice/ })),
+    );
+    await waitFor(() =>
+      expect(store.getState().library.source).toEqual({ kind: 'playlist', id: morningId }),
+    );
+    expect(screen.queryByRole('menu', { name: 'Playlists' })).toBeNull();
+    expect(toggle).not.toHaveBeenCalled();
+    await waitFor(() => expect(launcher).toHaveFocus());
+  });
+
+  it('offers a truthful empty state and Create playlist action from the collapsed picker', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const toggle = vi.fn();
+    render(<LibraryNavigator collapsed onToggleCollapsed={toggle} useStore={store} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Playlists' }));
+    const menu = screen.getByRole('menu', { name: 'Playlists' });
+    expect(within(menu).getByRole('menuitem', { name: 'No playlists yet' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Create playlist' }));
+    expect(screen.getByRole('dialog', { name: 'New playlist' })).toBeVisible();
+    expect(toggle).not.toHaveBeenCalled();
   });
 });
