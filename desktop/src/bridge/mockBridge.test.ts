@@ -1,9 +1,84 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { UiEvent } from './DesktopBridge';
 import { assertMissReasonAccounting } from './diagnosticsTestUtils';
 import { createMockBridge } from './mockBridge';
 
+const initialMockBridgeTestUrl = window.location.href;
+
+afterEach(() => {
+  window.history.replaceState(null, '', initialMockBridgeTestUrl);
+});
+
 describe('mock bridge timing contracts', () => {
+  it('loads URL release-note fixtures through the browser mock', async () => {
+    window.history.replaceState(null, '', '/?mockReleaseNotes=maximum');
+    const bridge = createMockBridge();
+    const events: UiEvent[] = [];
+    const unsubscribe = await bridge.subscribeUiEvents((event) => events.push(event));
+
+    await bridge.checkForUpdate({ origin: 'manual' });
+
+    const update = events.find((event) => event.name === 'update.changed');
+    expect(update?.name).toBe('update.changed');
+    if (update?.name !== 'update.changed') throw new Error('missing update fixture event');
+    expect(update.payload.state).toBe('available');
+    expect(update.payload.release_notes).toHaveLength(16_384);
+    expect(update.payload.release_notes).toContain('FINAL RELEASE NOTE LINE — Hoàn tất cập nhật.');
+    unsubscribe();
+  });
+
+  it('prefers an explicit update snapshot over a URL release-note fixture', async () => {
+    window.history.replaceState(null, '', '/?mockReleaseNotes=maximum');
+    const bridge = createMockBridge({
+      updateSnapshot: {
+        state: 'current',
+        current_version: '4.8.0-mock',
+        available_version: null,
+        release_notes: 'Explicit caller fixture.',
+      },
+    });
+    const events: UiEvent[] = [];
+    const unsubscribe = await bridge.subscribeUiEvents((event) => events.push(event));
+
+    await bridge.checkForUpdate({ origin: 'manual' });
+
+    const update = events.find((event) => event.name === 'update.changed');
+    expect(update?.name).toBe('update.changed');
+    if (update?.name !== 'update.changed') throw new Error('missing explicit update event');
+    expect(update.payload).toMatchObject({
+      state: 'current',
+      current_version: '4.8.0-mock',
+      release_notes: 'Explicit caller fixture.',
+    });
+    unsubscribe();
+  });
+
+  it('prefers an explicit transport error over a URL error fixture', async () => {
+    window.history.replaceState(null, '', '/?mockUpdateState=error-long');
+    const bridge = createMockBridge({
+      updateCheckTransportError: 'Explicit mock transport error.',
+    });
+
+    await expect(bridge.checkForUpdate({ origin: 'manual' })).rejects.toThrow(
+      'Explicit mock transport error.',
+    );
+  });
+
+  it('keeps the default update fixture with no fixture query', async () => {
+    window.history.replaceState(null, '', '/');
+    const bridge = createMockBridge();
+    const events: UiEvent[] = [];
+    const unsubscribe = await bridge.subscribeUiEvents((event) => events.push(event));
+
+    await bridge.checkForUpdate({ origin: 'manual' });
+
+    const update = events.find((event) => event.name === 'update.changed');
+    expect(update?.name).toBe('update.changed');
+    if (update?.name !== 'update.changed') throw new Error('missing default update event');
+    expect(update.payload.release_notes).toBe('A deterministic update fixture for the desktop UI.');
+    unsubscribe();
+  });
+
   it('emits diagnostics with mutually exclusive miss-reason accounting', async () => {
     const bridge = createMockBridge();
     const events: UiEvent[] = [];

@@ -32,6 +32,8 @@ import type {
 } from './DesktopBridge';
 import type { DiagnosticsBackend } from './DesktopBridge';
 import type { WholeStreamTimingAdvisoryDto } from './generated';
+import { getMockUpdateFixtureOptions } from './mockUpdateFixtures';
+import type { MockUpdateFixtureOptions } from './mockUpdateFixtures';
 
 function mockTimingAdvisory(
   fingerprint: string,
@@ -207,6 +209,11 @@ export interface MockBridgeOptions {
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
+  const urlUpdateFixtures: MockUpdateFixtureOptions =
+    typeof window === 'undefined' ? {} : getMockUpdateFixtureOptions(window.location.search);
+  const updateSnapshot = options.updateSnapshot ?? urlUpdateFixtures.updateSnapshot;
+  const updateCheckTransportError =
+    options.updateCheckTransportError ?? urlUpdateFixtures.updateCheckTransportError;
   const requestedCatalogCount = options.catalogCount;
   const catalogRows =
     options.catalogRows ??
@@ -278,7 +285,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
-  let updateRevision = options.updateSnapshot?.revision ?? 0;
+  let updateRevision = updateSnapshot?.revision ?? 0;
   let currentUpdateSnapshot: UpdateSnapshotPayload = {
     revision: updateRevision,
     state: 'idle',
@@ -292,7 +299,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     retry_action: 'none',
     operation_id: null,
     progress: null,
-    ...(options.updateSnapshot ?? {}),
+    ...(updateSnapshot ?? {}),
   };
   const emitUpdateSnapshot = (snapshot: Omit<UpdateSnapshotPayload, 'revision'>) => {
     updateRevision += 1;
@@ -803,7 +810,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings;
     },
     async checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheck> {
-      const transportError = options.updateCheckTransportError;
+      const transportError = updateCheckTransportError;
       if (transportError) {
         throw new Error(transportError);
       }
@@ -866,8 +873,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         return { disposition: 'performed' };
       }
 
-      if (options.updateSnapshot) {
-        if (options.updateSnapshot.state === 'error') {
+      if (updateSnapshot) {
+        if (updateSnapshot.state === 'error') {
           settings = {
             ...settings,
             update_preferences: {
@@ -886,17 +893,17 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           };
         }
         emitUpdateChanged({
-          state: options.updateSnapshot.state ?? 'idle',
-          current_version: options.updateSnapshot.current_version ?? '4.0.0-alpha.1-mock',
-          available_version: options.updateSnapshot.available_version ?? null,
-          channel: options.updateSnapshot.channel ?? settings.update_preferences.channel,
-          release_notes: options.updateSnapshot.release_notes ?? null,
-          published_at: options.updateSnapshot.published_at ?? null,
-          error_code: options.updateSnapshot.error_code ?? null,
-          error_detail: options.updateSnapshot.error_detail ?? null,
-          retry_action: options.updateSnapshot.retry_action ?? 'none',
-          operation_id: options.updateSnapshot.operation_id ?? null,
-          progress: options.updateSnapshot.progress ?? null,
+          state: updateSnapshot.state ?? 'idle',
+          current_version: updateSnapshot.current_version ?? '4.0.0-alpha.1-mock',
+          available_version: updateSnapshot.available_version ?? null,
+          channel: updateSnapshot.channel ?? settings.update_preferences.channel,
+          release_notes: updateSnapshot.release_notes ?? null,
+          published_at: updateSnapshot.published_at ?? null,
+          error_code: updateSnapshot.error_code ?? null,
+          error_detail: updateSnapshot.error_detail ?? null,
+          retry_action: updateSnapshot.retry_action ?? 'none',
+          operation_id: updateSnapshot.operation_id ?? null,
+          progress: updateSnapshot.progress ?? null,
         });
         return { disposition: 'performed' };
       }
