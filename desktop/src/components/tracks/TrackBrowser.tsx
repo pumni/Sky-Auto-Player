@@ -32,7 +32,9 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
   const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
   const loading = useStore((store: DesktopStore) => store.library.loading);
   const error = useStore((store: DesktopStore) => store.library.error);
+  const failedBuiltinPage = useStore((store: DesktopStore) => store.library.builtinPage.failedPage);
   const reloadLibrary = useStore((store: DesktopStore) => store.reloadLibrary);
+  const retryBuiltinPage = useStore((store: DesktopStore) => store.retryBuiltinPage);
   const loadLibraryNavigation = useStore((store: DesktopStore) => store.loadLibraryNavigation);
   const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
   const openPlaylistAdd = useStore((store: DesktopStore) => store.openPlaylistAdd);
@@ -184,10 +186,35 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           {importFeedbackText}
         </p>
       )}
-      {error && resultTotal > 0 && (
-        <p className="inline-error" role="status">
-          {error}
-        </p>
+      {((error && resultTotal > 0) || (isBuiltinSearch && failedBuiltinPage !== null)) && (
+        <div
+          className="inline-error builtin-page-feedback"
+          role={isBuiltinSearch && failedBuiltinPage !== null ? 'alert' : 'status'}
+        >
+          {error && resultTotal > 0 && <span>{error}</span>}
+          {isBuiltinSearch && failedBuiltinPage !== null && (
+            <>
+              <span>Couldn’t load page {failedBuiltinPage}.</span>
+              <button
+                className="button"
+                type="button"
+                onClick={() => {
+                  void retryBuiltinPage().finally(() => {
+                    window.setTimeout(
+                      () =>
+                        document
+                          .querySelector<HTMLButtonElement>('.builtin-pager-jump-trigger')
+                          ?.focus(),
+                      0,
+                    );
+                  });
+                }}
+              >
+                Retry page {failedBuiltinPage}
+              </button>
+            </>
+          )}
+        </div>
       )}
       {loading && resultTotal === 0 ? (
         <div className="empty-state" role="status" aria-busy="true">

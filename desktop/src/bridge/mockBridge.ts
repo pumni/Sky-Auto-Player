@@ -161,6 +161,7 @@ function initialSettings(): Settings {
 
 export interface MockBridgeOptions {
   catalogRows?: SearchResult['items'];
+  catalogCount?: number;
   builtinSongIds?: readonly string[];
   builtinAvailable?: boolean;
   libraryNavigationFailures?: number;
@@ -206,7 +207,15 @@ export interface MockBridgeOptions {
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
-  const catalogRows = options.catalogRows ?? rows;
+  const requestedCatalogCount = options.catalogCount;
+  const catalogRows =
+    options.catalogRows ??
+    (Number.isSafeInteger(requestedCatalogCount) &&
+    requestedCatalogCount !== undefined &&
+    requestedCatalogCount >= 0 &&
+    requestedCatalogCount <= 10_000
+      ? Array.from({ length: requestedCatalogCount }, (_, index) => row(index, `Song ${index + 1}`))
+      : rows);
   const builtinSongIds = options.builtinSongIds ? new Set(options.builtinSongIds) : null;
   const builtinRows = builtinSongIds
     ? catalogRows.filter((item) => builtinSongIds.has(item.song_id))

@@ -1,5 +1,61 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { expectNoSeriousAccessibilityViolations, startSelectedSong } from './testHelpers';
+
+async function jumpToBuiltinPage(page: Page, target: number) {
+  await page.locator('.builtin-pager-jump-trigger').click();
+  const input = page.getByRole('textbox', { name: 'Go to page' });
+  await input.fill(String(target));
+  await input.press('Enter');
+  await expect(page.getByRole('grid', { name: `Built-in Songs, page ${target}` })).toBeVisible();
+  await expect(page.locator('.builtin-pager-jump-trigger')).toBeFocused();
+}
+
+function builtinPageTriggerName(page: number, pageCount: number) {
+  return `${page} / ${pageCount}, Page ${page} of ${pageCount}. Go to page`;
+}
+
+async function readBuiltinPagerGeometry(page: Page) {
+  return page.evaluate(() => {
+    const rect = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) throw new Error('Pager element is missing');
+      const box = element.getBoundingClientRect();
+      return {
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        centerX: box.x + box.width / 2,
+        centerY: box.y + box.height / 2,
+      };
+    };
+    return {
+      previous: rect(document.querySelector('[aria-label="Previous page"]')),
+      indicator: rect(document.querySelector('.builtin-pager-jump-trigger')),
+      next: rect(document.querySelector('[aria-label="Next page"]')),
+      toolbar: rect(document.querySelector('.builtin-pager')),
+      range: rect(document.querySelector('.builtin-pager-range')),
+    };
+  });
+}
+
+function expectBuiltinPagerGeometryStable(
+  before: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
+  after: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
+) {
+  for (const control of ['previous', 'indicator', 'next'] as const) {
+    expect(Math.abs(after[control].centerX - before[control].centerX)).toBeLessThanOrEqual(1);
+    expect(Math.abs(after[control].centerY - before[control].centerY)).toBeLessThanOrEqual(1);
+    expect(Math.abs(after[control].width - before[control].width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(after[control].height - before[control].height)).toBeLessThanOrEqual(1);
+  }
+  expect(Math.abs(after.toolbar.y - before.toolbar.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.toolbar.height - before.toolbar.height)).toBeLessThanOrEqual(1);
+  expect(after.range.x + after.range.width).toBeLessThanOrEqual(after.toolbar.x + 1);
+  expect(Math.abs(after.range.centerY - after.toolbar.centerY)).toBeLessThanOrEqual(1);
+  expect(after.previous.height).toBeGreaterThanOrEqual(32);
+  expect(after.indicator.height).toBeGreaterThanOrEqual(32);
+  expect(after.next.height).toBeGreaterThanOrEqual(32);
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -54,9 +110,10 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
   await expect(grid).toHaveAttribute('aria-rowcount', '101');
   await expect(page.locator('.builtin-pager-status')).toContainText('Page 1 of 5');
-  await expect(page.locator('.builtin-pager-current-wide')).toBeVisible();
+  await expect(page.locator('.builtin-pager-range')).toHaveText('1–100 of 500 songs');
+  await expect(page.locator('.builtin-pager')).toHaveCSS('flex-wrap', 'nowrap');
 
-  await page.getByRole('button', { name: 'Page 3' }).click();
+  await jumpToBuiltinPage(page, 3);
   const pageThree = page.getByRole('grid', { name: 'Built-in Songs, page 3' });
   await expect(pageThree).toHaveAttribute('aria-rowcount', '101');
   await pageThree.focus();
@@ -71,13 +128,13 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     'true',
   );
 
-  const pageThreeIndicator = page.getByRole('button', { name: 'Page 3 of 5' });
+  const pageThreeIndicator = page.getByRole('button', { name: builtinPageTriggerName(3, 5) });
   await pageThreeIndicator.focus();
   await page.keyboard.press('Enter');
   await expect(pageThreeIndicator).toHaveAttribute('aria-expanded', 'true');
   const jump = page.getByRole('textbox', { name: 'Go to page' });
   await expect(jump).toBeFocused();
-  for (const invalidPage of ['0', '1.5', '6']) {
+  for (const invalidPage of ['0', '-1', '1.5', '6', '9007199254740992']) {
     await jump.fill(invalidPage);
     await jump.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Enter a whole page number from 1 to 5');
@@ -90,33 +147,33 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   await pageThreeIndicator.focus();
   await page.keyboard.press('Space');
   await page.getByRole('textbox', { name: 'Go to page' }).fill('5');
-  await page.getByRole('textbox', { name: 'Go to page' }).press('Enter');
+  await page.getByRole('button', { name: 'Go', exact: true }).click();
   const pageFive = page.getByRole('grid', { name: 'Built-in Songs, page 5' });
   await expect(pageFive).toHaveAttribute('aria-rowcount', '101');
-  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toBeFocused();
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeFocused();
   await pageFive.focus();
   await page.keyboard.press('End');
   await expect(page.getByRole('row', { name: /Song 500/ })).toHaveAttribute('aria-rowindex', '101');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
-  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toHaveAttribute(
     'aria-current',
     'page',
   );
   await expect
     .poll(() =>
       page
-        .getByRole('button', { name: 'Page 5 of 5' })
+        .getByRole('button', { name: builtinPageTriggerName(5, 5) })
         .evaluate((button) => getComputedStyle(button).outlineStyle),
     )
     .toBe('solid');
   await page.setViewportSize({ width: 800, height: 560 });
-  await expect(page.locator('.builtin-pager-current-narrow')).toBeVisible();
-  await expect(page.locator('.builtin-pager-current-wide')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'First page' })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Last page' })).toBeHidden();
+  await expect(page.locator('.builtin-pager-range')).toBeVisible();
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'First page' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Last page' })).toHaveCount(0);
+  await expect(page.locator('.builtin-pager button')).toHaveCount(3);
   const geometry = await page.evaluate(() => ({
     browserWidth:
       document.querySelector<HTMLElement>('.track-browser-workbench-pane')?.clientWidth ?? 0,
@@ -128,7 +185,7 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   expect(geometry.documentWidth).toBeLessThanOrEqual(800);
 
   const expectCompactJumpToFit = async () => {
-    const indicator = page.getByRole('button', { name: 'Page 5 of 5' });
+    const indicator = page.getByRole('button', { name: builtinPageTriggerName(5, 5) });
     await indicator.focus();
     await page.keyboard.press('Enter');
     await expect(indicator).toHaveAttribute('aria-expanded', 'true');
@@ -136,42 +193,56 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     await expect(jump).toBeVisible();
     const jumpGeometry = await jump.evaluate((input) => {
       const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
-      const table = pane?.querySelector<HTMLElement>('.track-table');
       const player = document.querySelector<HTMLElement>('.player-bar');
-      const form = input.closest('form');
-      if (!pane || !table || !player || !form) return null;
+      const popover = input.closest<HTMLElement>('.builtin-pager-popover');
+      const toolbar = document.querySelector<HTMLElement>('.builtin-pager');
+      if (!pane || !player || !popover || !toolbar) return null;
       const paneRect = pane.getBoundingClientRect();
-      const tableRect = table.getBoundingClientRect();
       const playerRect = player.getBoundingClientRect();
-      const formRect = form.getBoundingClientRect();
+      const popoverRect = popover.getBoundingClientRect();
+      const toolbarRect = toolbar.getBoundingClientRect();
       return {
         paneLeft: paneRect.left,
         paneRight: paneRect.right,
         paneTop: paneRect.top,
         paneBottom: paneRect.bottom,
-        formLeft: formRect.left,
-        formRight: formRect.right,
-        formTop: formRect.top,
-        formBottom: formRect.bottom,
-        tableBottom: tableRect.bottom,
+        popoverLeft: popoverRect.left,
+        popoverRight: popoverRect.right,
+        popoverTop: popoverRect.top,
+        popoverBottom: popoverRect.bottom,
+        popoverWidth: popoverRect.width,
+        popoverScrollWidth: popover.scrollWidth,
+        toolbarTop: toolbarRect.top,
         playerTop: playerRect.top,
-        formWidth: form.clientWidth,
-        formScrollWidth: form.scrollWidth,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
       };
     });
     expect(jumpGeometry).not.toBeNull();
     if (jumpGeometry) {
-      expect(jumpGeometry.formLeft).toBeGreaterThanOrEqual(jumpGeometry.paneLeft);
-      expect(jumpGeometry.formRight).toBeLessThanOrEqual(jumpGeometry.paneRight);
-      expect(jumpGeometry.formTop).toBeGreaterThanOrEqual(jumpGeometry.paneTop);
-      expect(jumpGeometry.formBottom).toBeLessThanOrEqual(jumpGeometry.paneBottom);
-      expect(jumpGeometry.formTop).toBeGreaterThanOrEqual(jumpGeometry.tableBottom);
-      expect(jumpGeometry.formBottom).toBeLessThanOrEqual(jumpGeometry.playerTop);
-      expect(jumpGeometry.formScrollWidth).toBeLessThanOrEqual(jumpGeometry.formWidth);
+      expect(jumpGeometry.popoverLeft).toBeGreaterThanOrEqual(0);
+      expect(jumpGeometry.popoverRight).toBeLessThanOrEqual(jumpGeometry.viewportWidth);
+      expect(jumpGeometry.popoverTop).toBeGreaterThanOrEqual(0);
+      expect(jumpGeometry.popoverBottom).toBeLessThanOrEqual(jumpGeometry.viewportHeight);
+      expect(jumpGeometry.popoverLeft).toBeGreaterThanOrEqual(jumpGeometry.paneLeft);
+      expect(jumpGeometry.popoverRight).toBeLessThanOrEqual(jumpGeometry.paneRight);
+      expect(jumpGeometry.popoverTop).toBeLessThan(jumpGeometry.toolbarTop);
+      expect(jumpGeometry.popoverBottom).toBeLessThanOrEqual(jumpGeometry.toolbarTop);
+      expect(jumpGeometry.popoverBottom).toBeLessThanOrEqual(jumpGeometry.playerTop);
+      expect(jumpGeometry.popoverScrollWidth).toBeLessThanOrEqual(jumpGeometry.popoverWidth);
     }
     await jump.press('Escape');
     await expect(indicator).toBeFocused();
   };
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await expectCompactJumpToFit();
+  await page.setViewportSize({ width: 800, height: 560 });
+  await expectCompactJumpToFit();
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.builtin-pager-range')).toBeVisible();
+  await expect(page.locator('.builtin-pager')).toBeVisible();
   await expectCompactJumpToFit();
 
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -180,8 +251,8 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     element.style.flex = '0 0 520px';
     element.style.minWidth = '0';
   });
-  await expect(page.locator('.builtin-pager-current-narrow')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Page 5 of 5' })).toBeVisible();
+  await expect(page.locator('.builtin-pager-range')).toBeVisible();
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeVisible();
   const pagerGeometry = await page.locator('.builtin-pager').evaluate((element) => ({
     width: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -189,9 +260,113 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   expect(pagerGeometry.scrollWidth).toBeLessThanOrEqual(pagerGeometry.width);
   await expectCompactJumpToFit();
   await browserPane.evaluate((element) => {
+    element.style.flex = '0 0 440px';
+  });
+  const narrowPagerGeometry = await page.locator('.builtin-pager-wrap').evaluate((element) => ({
+    width: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(narrowPagerGeometry.scrollWidth).toBeLessThanOrEqual(narrowPagerGeometry.width);
+  await expectCompactJumpToFit();
+  await browserPane.evaluate((element) => {
     element.style.removeProperty('flex');
     element.style.removeProperty('min-width');
   });
+});
+
+test('Built-in pager controls keep their geometry across navigation and jump popover changes', async ({
+  page,
+}) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
+  const previous = page.getByRole('button', { name: 'Previous page' });
+  const next = page.getByRole('button', { name: 'Next page' });
+  const indicator = page.locator('.builtin-pager-jump-trigger');
+  await expect(previous).toBeVisible();
+  await expect(next).toBeVisible();
+  await expect(indicator).toBeVisible();
+
+  const pageOne = await readBuiltinPagerGeometry(page);
+  await indicator.click();
+  await expect(page.getByRole('textbox', { name: 'Go to page' })).toBeVisible();
+  const popupOpen = await readBuiltinPagerGeometry(page);
+  expectBuiltinPagerGeometryStable(pageOne, popupOpen);
+  await page.getByRole('textbox', { name: 'Go to page' }).press('Escape');
+  await expect(indicator).toBeFocused();
+  expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
+
+  await next.click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+  expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
+  await page.getByRole('button', { name: 'Previous page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
+});
+
+test('Built-in pager handles the approved result-count boundaries', async ({ page }) => {
+  for (const count of [0, 1, 96, 100, 101, 106, 500, 2438, 10_000]) {
+    await page.goto(`/?mockCatalogCount=${count}`);
+    if (count === 0) {
+      await expect(page.getByText('The built-in song catalog is empty.')).toBeVisible();
+      await expect(page.locator('.builtin-pager')).toHaveCount(0);
+      await expect(page.getByText(/Page 1 of 0/)).toHaveCount(0);
+      continue;
+    }
+
+    const firstLast = Math.min(100, count);
+    await expect(page.locator('.builtin-pager-range')).toHaveText(
+      `1–${firstLast} of ${count} songs`,
+    );
+    if (count <= 100) {
+      await expect(page.locator('.builtin-pager')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /Go to page/ })).toHaveCount(0);
+      continue;
+    }
+
+    const pageCount = Math.ceil(count / 100);
+    const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
+    await expect(pager.locator('button')).toHaveCount(3);
+    await expect(page.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) }),
+    ).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('button', { name: 'Next page' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'First page' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Last page' })).toHaveCount(0);
+
+    if (count === 106) {
+      await page.getByRole('button', { name: 'Next page' }).click();
+      await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toHaveAttribute(
+        'aria-rowcount',
+        '7',
+      );
+      await expect(page.getByRole('row', { name: /Song 101/ })).toHaveAttribute(
+        'aria-rowindex',
+        '2',
+      );
+      await expect(page.locator('.builtin-pager-range')).toHaveText('101–106 of 106 songs');
+    }
+  }
+});
+
+test('Built-in pager control centers stay fixed across 9→10 and 99→100', async ({ page }) => {
+  for (const transition of [
+    { total: 2438, from: 9, to: 10 },
+    { total: 10_000, from: 99, to: 100 },
+  ]) {
+    await page.goto(`/?mockCatalogCount=${transition.total}`);
+    await jumpToBuiltinPage(page, transition.from);
+    const before = await readBuiltinPagerGeometry(page);
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await expect(
+      page.getByRole('grid', { name: `Built-in Songs, page ${transition.to}` }),
+    ).toBeVisible();
+    const after = await readBuiltinPagerGeometry(page);
+    expectBuiltinPagerGeometryStable(before, after);
+    await expect(page.locator('.builtin-pager-jump-trigger')).toHaveAccessibleName(
+      builtinPageTriggerName(transition.to, Math.ceil(transition.total / 100)),
+    );
+  }
 });
 
 test('Show now playing scrolls to a deep built-in row across and within pages', async ({
@@ -200,7 +375,7 @@ test('Show now playing scrolls to a deep built-in row across and within pages', 
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
-  await page.getByRole('button', { name: 'Page 2' }).click();
+  await jumpToBuiltinPage(page, 2);
 
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const table = page.locator('.track-table');
@@ -225,7 +400,7 @@ test('Show now playing scrolls to a deep built-in row across and within pages', 
   await expect(song180).toHaveAttribute('aria-selected', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
 
-  await page.getByRole('button', { name: 'Page 1' }).click();
+  await jumpToBuiltinPage(page, 1);
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
   await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
 
@@ -244,7 +419,7 @@ test('Show now playing scrolls to a deep built-in row across and within pages', 
   await expect(song180).toHaveAttribute('aria-selected', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
 
-  await page.getByRole('button', { name: 'Page 1' }).click();
+  await jumpToBuiltinPage(page, 1);
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
   await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
 });
@@ -674,13 +849,13 @@ test('playlist Built-in picker pages through song 101 and adds it to the same pl
   await page.getByRole('menuitem', { name: 'Browse Built-in Songs…' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
-  await page.getByRole('button', { name: 'Page 2' }).click();
+  await jumpToBuiltinPage(page, 2);
 
   const song101 = page.getByRole('row', { name: /Song 101/ });
   const pageTwo = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
   await expect(pageTwo).toBeVisible();
   await expect(pageTwo).toHaveAttribute('aria-rowcount', '101');
-  await expect(page.getByRole('button', { name: 'Page 2' })).toBeFocused();
+  await expect(page.locator('.builtin-pager-jump-trigger')).toBeFocused();
   await expect(song101).toBeVisible();
   await expect(song101).toHaveAttribute('aria-rowindex', '2');
   await expectNoSeriousAccessibilityViolations(page);
@@ -789,7 +964,7 @@ test('selected, hovered, and focused rows reveal actions without showing them on
 
 test('Built-in Songs pages beyond the first 200 songs', async ({ page }) => {
   await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Last page' }).click();
+  await jumpToBuiltinPage(page, 5);
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 5' })).toBeVisible();
   await expect(page.locator('.builtin-pager-status')).toHaveText(
     'Showing 401–500 of 500 songs. Page 5 of 5.',

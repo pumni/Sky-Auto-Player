@@ -26,6 +26,7 @@ const mockDurations = (
   .map((value) => Math.min(value, 120_000));
 const mockParams = new URLSearchParams(window.location.search);
 const mockLibraryState = mockParams.get('mockLibraryState');
+const mockCatalogCount = Number(mockParams.get('mockCatalogCount'));
 const mockSearchDelay = Number(mockParams.get('mockSearchDelayMs'));
 const mockNavigationFailures = Number(mockParams.get('mockNavigationFailures'));
 const diagnosticsStatuses = ['healthy', 'degraded', 'unavailable', 'error'] as const;
@@ -57,6 +58,9 @@ const mockStartFailures: Record<string, { code: string; message: string }> = {
 const createBrowserBridge = async () => {
   const { createMockBridge } = await import('./bridge/mockBridge');
   return createMockBridge({
+    ...(mockParams.has('mockCatalogCount') && Number.isSafeInteger(mockCatalogCount)
+      ? { catalogCount: mockCatalogCount }
+      : {}),
     ...(mockLibraryState === 'empty' ? { catalogRows: [] } : {}),
     ...(Number.isFinite(mockSearchDelay) && mockSearchDelay > 0
       ? { searchDelayMs: Math.min(mockSearchDelay, 5_000) }
