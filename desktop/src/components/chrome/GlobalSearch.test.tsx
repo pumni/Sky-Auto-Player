@@ -80,9 +80,9 @@ describe('GlobalSearch', () => {
     await act(async () => store.getState().initialize());
     render(<GlobalSearch useStore={store} />);
 
-    expect(screen.getByRole('searchbox', { name: 'Search All Songs' })).toHaveAttribute(
+    expect(screen.getByRole('searchbox', { name: 'Search Built-in Songs' })).toHaveAttribute(
       'placeholder',
-      'Search All Songs…',
+      'Search Built-in Songs…',
     );
 
     await act(async () => store.getState().createPlaylist('Practice'));
@@ -94,13 +94,13 @@ describe('GlobalSearch', () => {
 
     await act(async () => store.getState().openPlaylistAdd(playlistId));
     const addSearch = screen.getByRole('searchbox', {
-      name: 'Search All Songs to add to Practice',
+      name: 'Search Built-in Songs to add to Practice',
     });
-    expect(addSearch).toHaveAttribute('placeholder', 'Search All Songs…');
+    expect(addSearch).toHaveAttribute('placeholder', 'Search Built-in Songs…');
     fireEvent.change(addSearch, { target: { value: 'Moonlit' } });
     await waitFor(() => {
       expect(store.getState().library.query).toBe('Moonlit');
-      expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+      expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     });
     expect(addSearch).toHaveValue('Moonlit');
 

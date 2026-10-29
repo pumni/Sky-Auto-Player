@@ -95,8 +95,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
       bootstrap: null,
       fatal: null,
       library: {
-        source: { kind: 'smart', id: 'all' },
-        searchSource: { kind: 'smart', id: 'all' },
+        source: { kind: 'smart', id: 'builtin' },
+        searchSource: { kind: 'smart', id: 'builtin' },
         playlistAddMode: null,
         query: '',
         generation: 0,

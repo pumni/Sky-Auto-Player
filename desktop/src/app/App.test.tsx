@@ -146,8 +146,11 @@ describe('desktop application shell', () => {
     await waitFor(() =>
       expect(screen.getByRole('row', { name: /Aurora Landing/ })).toBeInTheDocument(),
     );
-    expect(screen.getByRole('navigation', { name: 'Library' })).toHaveTextContent('All Songs');
-    expect(screen.getByRole('grid', { name: 'Songs' })).toBeInTheDocument();
+    const navigator = screen.getByRole('navigation', { name: 'Library' });
+    expect(navigator).toHaveTextContent('Built-in Songs');
+    expect(navigator).not.toHaveTextContent('All Songs');
+    expect(navigator).not.toHaveTextContent('My Songs');
+    expect(screen.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeInTheDocument();
 
     const firstSong = screen.getByRole('row', { name: /Aurora Landing/ });
     fireEvent.click(firstSong);
@@ -188,7 +191,7 @@ describe('desktop application shell', () => {
 
   it('supports keyboard navigation in the virtualized track table', async () => {
     render(<App bridge={createMockBridge()} />);
-    const grid = await screen.findByRole('grid', { name: 'Songs' });
+    const grid = await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     grid.focus();
     fireEvent.keyDown(grid, { key: 'ArrowDown' });
     await waitFor(() =>
@@ -241,15 +244,15 @@ describe('desktop application shell', () => {
     });
   });
 
-  it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {
+  it('selects the last row on the active Built-in page with End', async () => {
     render(<App bridge={createMockBridge()} />);
-    const grid = await screen.findByRole('grid', { name: 'Songs' });
+    const grid = await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     grid.focus();
     fireEvent.keyDown(grid, { key: 'End' });
     await waitFor(() =>
       expect(
         screen
-          .getAllByRole('row', { name: /Song 500/ })
+          .getAllByRole('row', { name: /Song 100/ })
           .some((row) => row.getAttribute('aria-selected') === 'true'),
       ).toBe(true),
     );
@@ -282,7 +285,7 @@ describe('desktop application shell', () => {
     });
 
     render(<App bridge={bridge} />);
-    await screen.findByRole('grid', { name: 'Songs' });
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
 
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
     expect(acknowledgeStartupReveal).toHaveBeenCalledTimes(1);
@@ -347,7 +350,7 @@ describe('desktop application shell', () => {
         <App bridge={bridge} />
       </StrictMode>,
     );
-    await screen.findByRole('grid', { name: 'Songs' });
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     rerender(
       <StrictMode>
         <App bridge={bridge} />

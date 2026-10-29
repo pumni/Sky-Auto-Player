@@ -216,7 +216,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   const details = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
   await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
-  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   const collapseButton = page.getByRole('button', { name: 'Collapse library navigator' });
   await page.mouse.move(0, 0);
   const idleCollapseStyle = await collapseButton.evaluate((button) => {
@@ -294,7 +294,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
   const update = page.getByRole('button', { name: /Open update/ });
   await expect(update).toBeVisible();
-  const compactSearch = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const compactSearch = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await compactSearch.evaluate((input: HTMLInputElement) => input.blur());
   await page.keyboard.press('/');
   await expect(compactSearch).toBeFocused();

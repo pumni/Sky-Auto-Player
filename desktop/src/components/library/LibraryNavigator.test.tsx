@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -6,6 +6,36 @@ import { LibraryNavigator } from './LibraryNavigator';
 
 describe('LibraryNavigator built-in source', () => {
   afterEach(cleanup);
+
+  it('starts on Built-in Songs and exposes no All Songs or My Songs destination', async () => {
+    const store = createDesktopStore(
+      createMockBridge({
+        builtinSongIds: Array.from({ length: 96 }, (_, index) =>
+          index.toString(16).padStart(32, '0'),
+        ),
+      }),
+    );
+    await act(async () => store.getState().initialize());
+    const view = render(
+      <LibraryNavigator collapsed={false} onToggleCollapsed={() => undefined} useStore={store} />,
+    );
+
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
+    const navigator = screen.getByRole('navigation', { name: 'Library' });
+    const library = within(navigator);
+    const builtin = library.getByRole('button', { name: /Built-in Songs/ });
+    expect(builtin).toBeEnabled();
+    expect(builtin).toHaveTextContent('96');
+    expect(library.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
+    expect(library.getByText('Playlists')).toBeInTheDocument();
+    expect(library.queryByRole('button', { name: /All Songs/ })).not.toBeInTheDocument();
+    expect(library.queryByRole('button', { name: /My Songs/ })).not.toBeInTheDocument();
+
+    view.rerender(
+      <LibraryNavigator collapsed onToggleCollapsed={() => undefined} useStore={store} />,
+    );
+    expect(screen.getByRole('button', { name: 'Playlists' })).toBeEnabled();
+  });
 
   it('does not present the initial false/zero defaults as native unavailability', () => {
     const store = createDesktopStore(createMockBridge());
@@ -33,7 +63,8 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toBeDisabled();
     expect(builtin).not.toHaveTextContent('0');
     expect(screen.getByRole('status')).toHaveTextContent(/aren’t available in this installation/i);
-    expect(screen.getByRole('button', { name: /All Songs/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /All Songs/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
   });
 
   it('keeps available empty catalogs distinct from unavailable catalogs', async () => {

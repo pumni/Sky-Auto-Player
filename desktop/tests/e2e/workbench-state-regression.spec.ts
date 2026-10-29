@@ -68,7 +68,7 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
   await startDryRunWithSelection(page);
   await openInspector(page, 'Details');
-  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await search.focus();
   await expect(search).toBeFocused();
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
@@ -86,7 +86,7 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await expect(runtimeInspector.getByRole('tab', { name: 'Runtime' })).toBeVisible();
 
   await openApp(page, viewports[1], '/?mockLibraryState=empty');
-  await expect(page.locator('.empty-state strong')).toHaveText('Your catalog is empty');
+  await expect(page.locator('.empty-state strong')).toHaveText('No Built-in Songs are available');
   await expect(page.locator('.library-empty-playlists p')).toContainText(
     'import local sheet files',
   );
@@ -105,7 +105,7 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
 
   await openApp(page, viewports[3]);
   const navigator = await createPlaylist(page, 'Practice');
-  const allSongs = navigator.getByRole('button', { name: /^All Songs/ });
+  const allSongs = navigator.getByRole('button', { name: /^Built-in Songs/ });
   await expect(allSongs).toBeVisible({ timeout: 5_000 });
   await allSongs.click({ timeout: 5_000 });
   const songRow = page.getByRole('row', { name: /Candle Run/ });

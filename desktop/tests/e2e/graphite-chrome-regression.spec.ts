@@ -175,7 +175,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   const details = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
   await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
-  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await page.mouse.move(0, 0);
   await search.evaluate((input: HTMLInputElement) => input.blur());
   await expect(search).not.toBeFocused();
@@ -196,7 +196,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   const compactPlayer = await startDryRunWithSelection(page);
   const overlay = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
-  const compactSearch = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const compactSearch = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await compactSearch.evaluate((input: HTMLInputElement) => input.blur());
   await page.keyboard.press('/');
   await expect(compactSearch).toBeFocused();
@@ -452,7 +452,7 @@ test('Graphite Search uses a responsive preferred width and stays centered in th
 
     if (updateAvailable) {
       await page.keyboard.press('/');
-      const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+      const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
       await expect(search).toBeFocused();
       await expect
         .poll(() => search.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')))

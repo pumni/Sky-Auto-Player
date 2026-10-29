@@ -105,6 +105,19 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   let builtinFocusSequence = 0;
   let pendingBuiltinFocus: { intentId: number; index: number; id: number } | null = null;
 
+  const isBuiltinPageContext = (library: DesktopStore['library']): boolean => {
+    if (library.searchSource.kind !== 'smart' || library.searchSource.id !== 'builtin') {
+      return false;
+    }
+    if (library.source.kind === 'smart') {
+      return library.source.id === 'builtin' && library.playlistAddMode === null;
+    }
+    return (
+      library.source.kind === 'playlist' &&
+      library.playlistAddMode?.playlistId === library.source.id
+    );
+  };
+
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
   const pageKey = (key: string, offset: number) => `${key}\u0000${offset}`;
@@ -476,11 +489,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     if (
       !Number.isSafeInteger(page) ||
       page < 1 ||
-      current.source.kind !== 'smart' ||
-      current.source.id !== 'builtin' ||
-      current.searchSource.kind !== 'smart' ||
-      current.searchSource.id !== 'builtin' ||
-      current.playlistAddMode !== null ||
+      !isBuiltinPageContext(current) ||
       current.resultTotal <= 0
     ) {
       return;
@@ -551,9 +560,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         membershipRevisionFor(latest.searchSource) !== requestMembershipRevision ||
         latest.query !== requestQuery ||
         sourceKey(latest.searchSource) !== sourceKey(requestSource) ||
-        latest.source.kind !== 'smart' ||
-        latest.source.id !== 'builtin' ||
-        latest.playlistAddMode !== null
+        !isBuiltinPageContext(latest)
       ) {
         return;
       }
@@ -623,9 +630,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         membershipRevisionFor(latest.searchSource) !== requestMembershipRevision ||
         latest.query !== requestQuery ||
         sourceKey(latest.searchSource) !== sourceKey(requestSource) ||
-        latest.source.kind !== 'smart' ||
-        latest.source.id !== 'builtin' ||
-        latest.playlistAddMode !== null
+        !isBuiltinPageContext(latest)
       ) {
         return;
       }
@@ -849,7 +854,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const nextSource = source ?? current.source;
       const nextSearchSource: LibrarySource =
         nextSource.kind === 'playlist' && current.playlistAddMode?.playlistId === nextSource.id
-          ? { kind: 'smart', id: 'all' }
+          ? { kind: 'smart', id: 'builtin' }
           : nextSource;
       const scopeChanged =
         current.query !== nextQuery ||
@@ -1230,7 +1235,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             },
           });
           if (active.kind === 'playlist' && active.id === playlistId) {
-            await get().selectLibrarySource({ kind: 'smart', id: 'all' });
+            await get().selectLibrarySource({ kind: 'smart', id: 'builtin' });
           }
         }
       } catch (error) {

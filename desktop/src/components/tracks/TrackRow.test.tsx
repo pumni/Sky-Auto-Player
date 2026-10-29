@@ -165,7 +165,7 @@ describe('Track Browser primitives', () => {
     const first = selectRowAtIndex(store.getState().library, 0);
 
     render(<TrackTable useStore={store} />);
-    const grid = screen.getByRole('grid', { name: 'Songs' });
+    const grid = screen.getByRole('grid', { name: 'Built-in Songs, page 1' });
     const firstRow = screen.getByRole('row', { name: /Aurora Landing/ });
     const second = selectRowAtIndex(store.getState().library, 1);
     if (!first || !second) throw new Error('mock library has fewer than two rows');
@@ -190,7 +190,7 @@ describe('Track Browser primitives', () => {
     const loadedLibrary = store.getState().library;
 
     render(<TrackTable useStore={store} />);
-    const grid = screen.getByRole('grid', { name: 'Songs' });
+    const grid = screen.getByRole('grid', { name: 'Built-in Songs, page 1' });
     await waitFor(() =>
       expect(grid).toHaveAttribute('aria-activedescendant', `song-row-${selected.song_id}`),
     );
@@ -235,6 +235,7 @@ describe('Track Browser primitives', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
 
     render(<TrackTable useStore={store} />);
     const grid = screen.getByRole('grid', { name: 'Songs' });
@@ -277,6 +278,7 @@ describe('Track Browser primitives', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
     const selected = selectRowAtIndex(store.getState().library, 99);
     if (!selected) throw new Error('mock library page does not include index 99');
     await act(async () => store.getState().selectSong(selected.song_id));
@@ -317,6 +319,7 @@ describe('Track Browser primitives', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
 
     render(<TrackTable useStore={store} />);
     const grid = screen.getByRole('grid', { name: 'Songs' });
@@ -372,11 +375,18 @@ describe('Track Browser primitives', () => {
     const store = createDesktopStore(createMockBridge());
     store.setState({
       library: { ...store.getState().library, pages: new Map(), resultTotal: 0, loading: false },
+      libraryNavigation: {
+        ...store.getState().libraryNavigation,
+        loadState: 'ready',
+        builtinAvailable: true,
+        builtinSongCount: 0,
+      },
     });
 
     render(<TrackBrowser useStore={store} />);
 
-    expect(screen.getByText('Your catalog is empty')).toBeInTheDocument();
+    expect(screen.getByText('No Built-in Songs are available')).toBeInTheDocument();
+    expect(screen.getByText('The built-in song catalog is empty.')).toBeInTheDocument();
     expect(screen.queryByRole('grid', { name: 'Songs' })).toBeNull();
   });
 
@@ -396,7 +406,7 @@ describe('Track Browser primitives', () => {
     render(<TrackBrowser useStore={store} />);
     await act(async () => store.getState().search('broken'));
     expect(store.getState().library.selectedSongId).toBeNull();
-    expect(screen.getByRole('alert')).toHaveTextContent('Library unavailable');
+    expect(screen.getByRole('alert')).toHaveTextContent('Built-in Songs could not be loaded');
     expect(screen.getByRole('alert')).toHaveTextContent('catalog search failed');
 
     await act(async () => store.getState().search('Moonlit'));
@@ -426,6 +436,53 @@ describe('Track Browser primitives', () => {
 
     expect(screen.getByRole('heading', { name: 'Practice' })).toBeInTheDocument();
     expect(screen.getByText('This playlist is empty')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Browse All Songs…' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Browse Built-in Songs…' })).toBeInTheDocument();
+  });
+
+  it('offers a retry for a genuinely unavailable default Built-in catalog', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ builtinAvailable: false, builtinSongIds: [] }),
+    );
+    await act(async () => store.getState().initialize());
+    const reloadLibrary = vi.fn();
+    const loadLibraryNavigation = vi.fn();
+    store.setState({ reloadLibrary, loadLibraryNavigation });
+
+    render(<TrackBrowser useStore={store} />);
+
+    expect(screen.getByText('Built-in Songs are unavailable')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('Built-in songs are unavailable');
+    await act(async () => screen.getByRole('button', { name: 'Retry' }).click());
+    expect(loadLibraryNavigation).toHaveBeenCalledTimes(1);
+    expect(reloadLibrary).not.toHaveBeenCalled();
+  });
+
+  it('does not report an empty catalog when native navigation reports Built-in songs', async () => {
+    const builtinSongIds = Array.from({ length: 96 }, (_, index) =>
+      index.toString(16).padStart(32, '0'),
+    );
+    const bridge = createMockBridge({ builtinSongIds });
+    const originalSearch = bridge.searchSongs.bind(bridge);
+    bridge.searchSongs = async (request) => {
+      const result = await originalSearch(request);
+      return request.source.kind === 'smart' &&
+        request.source.id === 'builtin' &&
+        request.query === ''
+        ? { ...result, total: 0, items: [] }
+        : result;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const reloadLibrary = vi.fn();
+    store.setState({ reloadLibrary });
+
+    render(<TrackBrowser useStore={store} />);
+
+    expect(store.getState().libraryNavigation.builtinSongCount).toBe(96);
+    expect(screen.getByRole('alert')).toHaveTextContent('Built-in Songs could not be loaded');
+    expect(screen.getByRole('alert')).toHaveTextContent('96 songs');
+    expect(screen.queryByText('The built-in song catalog is empty.')).not.toBeInTheDocument();
+    await act(async () => screen.getByRole('button', { name: 'Retry' }).click());
+    expect(reloadLibrary).toHaveBeenCalledTimes(1);
   });
 });

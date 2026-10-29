@@ -20,7 +20,6 @@ export function LibraryNavigator({
   onToggleCollapsed,
   useStore,
 }: LibraryNavigatorProps) {
-  const catalogTotal = useStore((store: DesktopStore) => store.library.catalogTotal);
   const likedTotal = useStore((store: DesktopStore) => store.library.likedTotal);
   const source = useStore((store: DesktopStore) => store.library.source);
   const navigation = useStore((store: DesktopStore) => store.libraryNavigation);
@@ -78,27 +77,6 @@ export function LibraryNavigator({
       <div className="library-primary-items">
         <LibraryNavItem
           collapsed={collapsed}
-          label="Liked Songs"
-          active={source.kind === 'smart' && source.id === 'liked'}
-          count={likedTotal}
-          icon={<Heart size={18} />}
-          iconTone="liked"
-          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'liked' })}
-        >
-          Liked Songs
-        </LibraryNavItem>
-        <LibraryNavItem
-          collapsed={collapsed}
-          label="All Songs"
-          active={source.kind === 'smart' && source.id === 'all'}
-          count={catalogTotal}
-          icon={<Music2 size={18} />}
-          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'all' })}
-        >
-          All Songs
-        </LibraryNavItem>
-        <LibraryNavItem
-          collapsed={collapsed}
           label={builtinLabel}
           active={source.kind === 'smart' && source.id === 'builtin'}
           {...(navigationReady && navigation.builtinAvailable
@@ -109,6 +87,17 @@ export function LibraryNavigator({
           onPress={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
         >
           {builtinChecking ? 'Checking Built-in Songs…' : 'Built-in Songs'}
+        </LibraryNavItem>
+        <LibraryNavItem
+          collapsed={collapsed}
+          label="Liked Songs"
+          active={source.kind === 'smart' && source.id === 'liked'}
+          count={likedTotal}
+          icon={<Heart size={18} />}
+          iconTone="liked"
+          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'liked' })}
+        >
+          Liked Songs
         </LibraryNavItem>
       </div>
 
@@ -135,24 +124,22 @@ export function LibraryNavigator({
       )}
       {navigation.loadState === 'ready' && !navigation.builtinAvailable && (
         <p className="library-loading muted" role="status">
-          Built-in Songs aren’t available in this installation. All Songs and playlists remain
+          Built-in Songs aren’t available in this installation. Liked Songs and playlists remain
           available.
         </p>
       )}
 
       {collapsed ? (
-        navigation.playlistOrder.length > 0 ? (
-          <div className="library-collapsed-launchers">
-            <LibraryNavItem
-              collapsed
-              label="Playlists"
-              icon={<Music2 size={18} />}
-              onPress={onToggleCollapsed}
-            >
-              Playlists
-            </LibraryNavItem>
-          </div>
-        ) : null
+        <div className="library-collapsed-launchers">
+          <LibraryNavItem
+            collapsed
+            label="Playlists"
+            icon={<Music2 size={18} />}
+            onPress={onToggleCollapsed}
+          >
+            Playlists
+          </LibraryNavItem>
+        </div>
       ) : (
         <div className="library-secondary-sections">
           <LibrarySection label="Playlists" showWhenEmpty>
@@ -177,7 +164,7 @@ export function LibraryNavigator({
             })}
             {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
               <div className="library-empty-playlists">
-                {catalogTotal === 0 && (
+                {(!navigation.builtinAvailable || navigation.builtinSongCount === 0) && (
                   <p>Create a playlist to collect songs or import local sheet files and folders.</p>
                 )}
                 <button

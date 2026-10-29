@@ -15,8 +15,8 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(navigator.getByRole('button', { name, exact: true })).toBeVisible();
   }
-  await navigator.getByRole('button', { name: /^All Songs/ }).click();
-  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  await navigator.getByRole('button', { name: /^Built-in Songs/ }).click();
+  await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
   for (const palette of palettes) {
     await page.setViewportSize({ width: 1366, height: 768 });
     await selectPalette(page, palette);
@@ -71,7 +71,7 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
     expect(expanded.headingMinHeight).toBe('36px');
     expect(expanded.headingMarginBottom).toBe('8px');
     expect(expanded.primaryRowGap).toBe('4px');
-    expect(expanded.rows).toHaveLength(5);
+    expect(expanded.rows).toHaveLength(4);
     for (const row of expanded.rows) {
       expect(row.row.height).toBe(42);
       expect(row.icon.width).toBe(24);
@@ -246,7 +246,7 @@ test('Graphite workspace header compacts by viewport and browser width over one 
     );
     expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
     expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
-    await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
     await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
   }
 
@@ -527,7 +527,7 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
   expect(Math.abs(expanded.heading.x - expanded.sectionHeading.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(expanded.footerCenter - expanded.pane.centerX)).toBeLessThanOrEqual(1);
   expect(Math.abs(expanded.dividerInsets[0] - expanded.dividerInsets[1])).toBeLessThanOrEqual(1);
-  expect(expanded.rows).toHaveLength(5);
+  expect(expanded.rows).toHaveLength(4);
   for (const row of expanded.rows) {
     expect(row.icon.width).toBeCloseTo(24, 0);
     expect(Math.abs(row.icon.x - expanded.heading.x)).toBeLessThanOrEqual(1);
@@ -673,10 +673,15 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
     children: Array.from(element.children).map((child) => (child as HTMLElement).className),
   }));
   expect(emptyCollapsed).toEqual({
-    playlistLauncherCount: 0,
-    launchers: 0,
+    playlistLauncherCount: 1,
+    launchers: 1,
     expandedPlaylistSection: 0,
-    children: ['library-navigator-heading', 'library-primary-items', 'library-navigator-footer'],
+    children: [
+      'library-navigator-heading',
+      'library-primary-items',
+      'library-collapsed-launchers',
+      'library-navigator-footer',
+    ],
   });
 });
 

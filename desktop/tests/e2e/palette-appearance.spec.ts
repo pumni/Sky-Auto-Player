@@ -619,7 +619,7 @@ test('Dark mode is the new-install palette and keeps the graphite setting ID', a
     await resolvedTokenColor(page, '--workbench-control-disabled'),
   );
 
-  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await search.focus();
   await expect
     .poll(() => search.evaluate((input) => getComputedStyle(input.parentElement!).outlineWidth))

@@ -88,6 +88,8 @@ describe('desktop store', () => {
   it('defaults Shuffle off and persists Auto Play on', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().playback.shuffleEnabled).toBe(false);
     expect(store.getState().settings?.auto_play).toBe(true);
   });
@@ -464,6 +466,7 @@ describe('desktop store', () => {
     const store = createDesktopStore(bridge);
 
     await act(async () => store.getState().initialize());
+    await act(async () => store.getState().search('', { kind: 'smart', id: 'all' }));
     expect(store.getState().bootstrapState).toBe('ready');
     expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
     expect(store.getState().library.catalogTotal).toBe(500);
@@ -756,6 +759,7 @@ describe('desktop store', () => {
     const initialGeneration = store.getState().library.generation;
 
     await store.getState().search('Aurora');
+    await store.getState().search('Aurora', { kind: 'smart', id: 'all' });
     const afterAllSongs = requests.length;
     const playlistSource = { kind: 'playlist' as const, id: 'cache-playlist' };
     await store.getState().search('Aurora', playlistSource);
@@ -971,14 +975,30 @@ describe('desktop store', () => {
 
     await act(async () => store.getState().openPlaylistAdd(playlistId));
     expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().library.selectedSongId).toBeNull();
     expect(selectSelectedDetail(store.getState()).value).toBeNull();
 
     const availableRow = rowAt(store, 0);
-    if (!availableRow) throw new Error('All Songs was not loaded in playlist-add mode');
+    if (!availableRow) throw new Error('Built-in Songs were not loaded in playlist-add mode');
     await act(async () => store.getState().selectSong(availableRow.song_id));
+    const playbackBeforePage = store.getState().playback;
+
+    await act(async () => store.getState().navigateBuiltinPage(2));
+    const row101 = rowAt(store, 100);
+    if (!row101) throw new Error('Built-in picker could not reach song #101');
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.selectedSongId).toBe(availableRow.song_id);
+    expect(selectSelectedDetail(store.getState()).value?.song_id).toBe(availableRow.song_id);
+    expect(store.getState().playback).toBe(playbackBeforePage);
+    await act(async () => store.getState().addSongToPlaylist(playlistId, row101.song_id));
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.song_count).toBe(2);
+
     await act(async () => store.getState().exitPlaylistAdd());
     expect(store.getState().library.playlistAddMode).toBeNull();
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.resultTotal).toBe(2);
+    expect(rowAt(store, 1)?.song_id).toBe(row101.song_id);
     expect(store.getState().library.selectedSongId).toBeNull();
 
     const playlistRow = rowAt(store, 0);
@@ -1031,6 +1051,7 @@ describe('desktop store', () => {
       createMockBridge({ catalogRows: rows, builtinSongIds: builtinIds }),
     );
     await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
     expect(store.getState().library.catalogTotal).toBe(3);
     expect(store.getState().libraryNavigation.builtinSongCount).toBe(2);
 
@@ -1089,54 +1110,72 @@ describe('desktop store', () => {
     },
   );
 
-  it('commits only the latest built-in page intent and keeps the prior page visible while pending', async () => {
-    const rows = syntheticRows(500);
-    const bridge = createMockBridge({
-      catalogRows: rows,
-      builtinSongIds: rows.map((row) => row.song_id),
-    });
-    const originalSearch = bridge.searchSongs;
-    const delayed = new Map<number, ReturnType<typeof deferred<void>>>();
-    bridge.searchSongs = async (request) => {
-      if (
-        request.source.kind === 'smart' &&
-        request.source.id === 'builtin' &&
-        request.offset > 0
-      ) {
-        const gate = deferred<void>();
-        delayed.set(request.offset, gate);
-        await gate.promise;
+  it.each(['library', 'playlist-add'] as const)(
+    'commits only the latest built-in page intent in %s context and keeps the prior page visible',
+    async (context) => {
+      const rows = syntheticRows(500);
+      const bridge = createMockBridge({
+        catalogRows: rows,
+        builtinSongIds: rows.map((row) => row.song_id),
+      });
+      const originalSearch = bridge.searchSongs;
+      const delayed = new Map<number, ReturnType<typeof deferred<void>>>();
+      bridge.searchSongs = async (request) => {
+        if (
+          request.source.kind === 'smart' &&
+          request.source.id === 'builtin' &&
+          request.offset > 0
+        ) {
+          const gate = deferred<void>();
+          delayed.set(request.offset, gate);
+          await gate.promise;
+        }
+        return originalSearch(request);
+      };
+      const store = createDesktopStore(bridge);
+      await act(async () => store.getState().initialize());
+      let playlistId: string | null = null;
+      if (context === 'playlist-add') {
+        await act(async () => store.getState().createPlaylist('Practice'));
+        const source = store.getState().library.source;
+        if (source.kind !== 'playlist') throw new Error('new playlist was not selected');
+        playlistId = source.id;
+        await act(async () => store.getState().openPlaylistAdd(source.id));
+      } else {
+        await act(async () =>
+          store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }),
+        );
       }
-      return originalSearch(request);
-    };
-    const store = createDesktopStore(bridge);
-    await act(async () => store.getState().initialize());
-    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
 
-    let pageTwo!: Promise<void>;
-    let pageFour!: Promise<void>;
-    let pageThree!: Promise<void>;
-    act(() => {
-      pageTwo = store.getState().navigateBuiltinPage(2);
-      pageFour = store.getState().navigateBuiltinPage(4);
-      pageThree = store.getState().navigateBuiltinPage(3);
-    });
-    await waitFor(() => expect(delayed.size).toBe(3));
-    expect(store.getState().library.builtinPage.committedPage).toBe(1);
-    expect(store.getState().library.builtinPage.pendingPage).toBe(3);
-    expect(rowAt(store, 0)?.title).toBe('Fixture Song 00001');
+      let pageTwo!: Promise<void>;
+      let pageFour!: Promise<void>;
+      let pageThree!: Promise<void>;
+      act(() => {
+        pageTwo = store.getState().navigateBuiltinPage(2);
+        pageFour = store.getState().navigateBuiltinPage(4);
+        pageThree = store.getState().navigateBuiltinPage(3);
+      });
+      await waitFor(() => expect(delayed.size).toBe(3));
+      expect(store.getState().library.builtinPage.committedPage).toBe(1);
+      expect(store.getState().library.builtinPage.pendingPage).toBe(3);
+      expect(rowAt(store, 0)?.title).toBe('Fixture Song 00001');
 
-    await act(async () => {
-      delayed.get(300)?.resolve();
-      delayed.get(100)?.resolve();
-      delayed.get(200)?.resolve();
-      await Promise.all([pageTwo, pageFour, pageThree]);
-    });
-    expect(store.getState().library.builtinPage.committedPage).toBe(3);
-    expect(store.getState().library.builtinPage.pendingPage).toBeNull();
-    expect(rowAt(store, 200)?.title).toBe('Fixture Song 00201');
-    expect(rowAt(store, 100)).toBeUndefined();
-  });
+      await act(async () => {
+        delayed.get(300)?.resolve();
+        delayed.get(100)?.resolve();
+        delayed.get(200)?.resolve();
+        await Promise.all([pageTwo, pageFour, pageThree]);
+      });
+      expect(store.getState().library.builtinPage.committedPage).toBe(3);
+      expect(store.getState().library.builtinPage.pendingPage).toBeNull();
+      expect(rowAt(store, 200)?.title).toBe('Fixture Song 00201');
+      expect(rowAt(store, 100)).toBeUndefined();
+      if (playlistId) {
+        expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+        expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+      }
+    },
+  );
 
   it('drops an older built-in page response after the query changes', async () => {
     const rows = syntheticRows(500);
@@ -1536,7 +1575,8 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    await act(async () => store.getState().search('Song'));
+    await act(async () => store.getState().search('', { kind: 'smart', id: 'all' }));
+    await act(async () => store.getState().search('Song', { kind: 'smart', id: 'all' }));
     await act(async () => store.getState().setViewport(200, 220));
     expect(viewportCalls).toBe(1);
     expect(viewportSongIds).toHaveLength(21);
@@ -1832,7 +1872,7 @@ describe('desktop store', () => {
     await act(async () => store.getState().renamePlaylist(playlistId, 'Morning'));
     expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe('Morning');
     await act(async () => store.getState().deletePlaylist(playlistId));
-    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(0);
   });
 
@@ -1858,7 +1898,7 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.title).not.toBe('Local Song B');
   });
 
-  it('keeps the playlist selected while browsing All Songs to add', async () => {
+  it('keeps the playlist selected while browsing Built-in Songs to add', async () => {
     const bridge = createMockBridge();
     const requests: SearchRequest[] = [];
     const originalSearch = bridge.searchSongs;
@@ -1880,13 +1920,13 @@ describe('desktop store', () => {
     expect(requests).toHaveLength(0);
     expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
     expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
-    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().library.resultTotal).toBe(500);
     expect(rowAt(store, 0)?.liked).toBe(true);
 
     requests.length = 0;
     await act(async () => store.getState().search('Song 1'));
-    expect(requests.at(-1)?.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(requests.at(-1)?.source).toEqual({ kind: 'smart', id: 'builtin' });
 
     await act(async () => store.getState().exitPlaylistAdd());
     expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });

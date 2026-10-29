@@ -121,7 +121,9 @@ describe('BuiltinPager', () => {
 
     const { container } = render(<TrackBrowser useStore={store} />);
     expect(
-      screen.getByText('Built-in songs are unavailable in this installation.'),
+      screen.getByText(
+        'Built-in songs are unavailable in this installation. Create a playlist to import local sheets.',
+      ),
     ).toBeInTheDocument();
     expect(container.querySelector('[aria-label="Built-in Songs pages"]')).toBeNull();
     expect(screen.queryByText(/Page 1 of 0/)).toBeNull();

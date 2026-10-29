@@ -41,7 +41,7 @@ describe('AppTitleBar', () => {
       'data-tauri-drag-region',
       'true',
     );
-    expect(screen.getByPlaceholderText('Search All Songs…')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search Built-in Songs…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Maximize window' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close window' })).toBeInTheDocument();

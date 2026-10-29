@@ -213,7 +213,7 @@ async function expectAccessibility(
   appearance: Awaited<ReturnType<typeof readAppearance>>,
 ) {
   expect(appearance.accessibility.searchRole).toBe('searchbox');
-  expect(appearance.accessibility.searchAccessibleName).toBe('Search All Songs');
+  expect(appearance.accessibility.searchAccessibleName).toBe('Search Built-in Songs');
   expect(appearance.geometry.inputHitTargeted).toBe(true);
   expect(appearance.geometry.searchHitTargeted).toBe(true);
   expect(appearance.geometry.updateHitTargeted).toBe(true);
@@ -237,7 +237,7 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
   await openApp(page, 1366, 768);
   await startDryRunWithSelection(page);
   await openInspector(page, 'Details');
-  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await page.mouse.move(0, 0);
   await search.evaluate((input: HTMLInputElement) => input.blur());
   await expect(search).not.toBeFocused();
@@ -259,7 +259,7 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
   await openApp(page, 800, 560);
   await startDryRunWithSelection(page);
   await openInspector(page, 'Details');
-  const everydaySearch = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const everydaySearch = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await everydaySearch.evaluate((input: HTMLInputElement) => input.blur());
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
   appearance = await readAppearance(page, 'everyday-workbench-800x560');
@@ -271,7 +271,7 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
   await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
   await expect(overlay).toBeVisible();
-  const compactSearch = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const compactSearch = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await compactSearch.evaluate((input: HTMLInputElement) => input.blur());
   appearance = await readAppearance(page, 'compact-overlay-640x448');
   appearances.push(appearance);

@@ -7,7 +7,14 @@ test.beforeEach(async ({ page }) => {
 
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
-  const search = page.getByLabel('Search All Songs');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: /Built-in Songs/ })).toBeEnabled();
+  await expect(navigator.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
+  await expect(navigator.getByText('Playlists')).toBeVisible();
+  await expect(navigator.getByRole('button', { name: /All Songs/ })).toHaveCount(0);
+  await expect(navigator.getByRole('button', { name: /My Songs/ })).toHaveCount(0);
+  const search = page.getByLabel('Search Built-in Songs');
   await search.focus();
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
@@ -15,7 +22,7 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   await expect(moonlitRow).toBeVisible();
   await expect(search).toBeFocused();
   await moonlitRow.locator('.track-title-text').click();
-  await expect(page.getByRole('grid', { name: 'Songs' })).toBeFocused();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeFocused();
   await expect(moonlitRow).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(moonlitRow).toHaveAttribute('aria-selected', 'true');
@@ -304,7 +311,7 @@ test('Built-in playback crosses page boundaries without replacing selection', as
 test('rapid A-B-A search keeps the newest query results visible', async ({ page }) => {
   await page.goto('/?mockSearchDelayMs=1000');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
-  const search = page.getByLabel('Search All Songs');
+  const search = page.getByLabel('Search Built-in Songs');
 
   await search.fill('Aurora');
   await expect(page.locator('[role="status"][aria-busy="true"]')).toBeVisible();
@@ -334,7 +341,7 @@ test('search clears browser selection while Now Playing remains on the active so
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
 
-  const search = page.getByLabel('Search All Songs');
+  const search = page.getByLabel('Search Built-in Songs');
   await search.fill('Moonlit');
   const browsedRow = page.getByRole('row', { name: /Moonlit Village/ });
   await expect(browsedRow).toBeVisible();
@@ -361,10 +368,10 @@ test('row selection returns focus to the grid and Like and menu actions stay iso
   await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
   await expect(createDialog).toBeHidden();
-  await navigator.getByRole('button', { name: 'All Songs' }).click();
+  await navigator.getByRole('button', { name: 'Built-in Songs' }).click();
 
   const row = page.getByRole('row', { name: /Aurora Landing/ });
-  const grid = page.getByRole('grid', { name: 'Songs' });
+  const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
   await row.locator('.track-title-text').click();
   await expect(row).toHaveAttribute('aria-selected', 'true');
   await expect(grid).toBeFocused();
@@ -455,9 +462,9 @@ test('empty catalog keeps playlist onboarding while a populated catalog stays un
   await expect(page.locator('.library-empty-playlists p')).toHaveCount(0);
 
   await page.goto('/?mockLibraryState=empty');
-  await expect(page.locator('.empty-state strong')).toHaveText('Your catalog is empty');
+  await expect(page.locator('.empty-state strong')).toHaveText('No Built-in Songs are available');
   await expect(page.locator('.track-browser-guidance')).toContainText(
-    'Create a playlist to collect songs or import local sheets.',
+    'Create a playlist to import local sheets.',
   );
   await expect(page.locator('.library-empty-playlists p')).toContainText(
     'import local sheet files',
@@ -493,10 +500,10 @@ test('populated library keeps playlist actions available without repeated onboar
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.getByRole('button', { name: 'Add songs' }).click();
-  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  await page.getByRole('menuitem', { name: 'Browse Built-in Songs…' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
   const addSearch = page.getByRole('searchbox', {
-    name: 'Search All Songs to add to Practice',
+    name: 'Search Built-in Songs to add to Practice',
   });
   await addSearch.fill('Moonlit');
   const catalogRow = page.getByRole('row', { name: /Moonlit Village/ });
@@ -505,7 +512,7 @@ test('populated library keeps playlist actions available without repeated onboar
   await page.getByRole('button', { name: 'Back to playlist' }).click();
   await expect(page.getByText('This playlist is empty')).toBeVisible();
 
-  await navigator.getByRole('button', { name: 'All Songs' }).click();
+  await navigator.getByRole('button', { name: 'Built-in Songs' }).click();
   const player = await startSelectedSong(page);
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
@@ -566,7 +573,7 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
   await addButton.focus();
   await page.keyboard.press('Enter');
   const menu = page.getByRole('menu', { name: 'Add songs' });
-  const firstMenuItem = menu.getByRole('menuitem', { name: 'Browse All Songs…' });
+  const firstMenuItem = menu.getByRole('menuitem', { name: 'Browse Built-in Songs…' });
   await expect(firstMenuItem).toBeVisible();
   await expect(firstMenuItem).toBeFocused();
   await expectNoSeriousAccessibilityViolations(page);
@@ -578,7 +585,7 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
     expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(640);
     expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(448);
   }
-  for (const name of ['Browse All Songs…', 'Import files…', 'Import folder…']) {
+  for (const name of ['Browse Built-in Songs…', 'Import files…', 'Import folder…']) {
     const item = menu.getByRole('menuitem', { name });
     await expect(item).toBeVisible();
     const box = await item.boundingBox();
@@ -605,7 +612,7 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
   await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
 
   await addButton.click();
-  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  await page.getByRole('menuitem', { name: 'Browse Built-in Songs…' }).click();
   const addHeading = page.getByRole('heading', {
     name: `Add songs to ${playlistName}`,
   });
@@ -613,9 +620,9 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
   await expect(addHeading).toHaveAttribute('title', `Add songs to ${playlistName}`);
   const backButton = page.getByRole('button', { name: 'Back to playlist' });
   await expect(backButton).toBeVisible();
-  await expect(page.getByText('500 songs in All Songs', { exact: true })).toBeVisible();
+  await expect(page.getByText('500 songs in Built-in Songs', { exact: true })).toBeVisible();
   await expect(
-    page.getByRole('searchbox', { name: `Search All Songs to add to ${playlistName}` }),
+    page.getByRole('searchbox', { name: `Search Built-in Songs to add to ${playlistName}` }),
   ).toBeVisible();
   const addModeHeader = await page.evaluate(() => {
     const box = (selector: string) => {
@@ -651,6 +658,43 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
   await backButton.click();
   await expect(heading).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('playlist Built-in picker pages through song 101 and adds it to the same playlist', async ({
+  page,
+}) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.locator('.library-add-button').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Browse Built-in Songs…' }).click();
+  await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await page.getByRole('button', { name: 'Page 2' }).click();
+
+  const song101 = page.getByRole('row', { name: /Song 101/ });
+  const pageTwo = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
+  await expect(pageTwo).toBeVisible();
+  await expect(pageTwo).toHaveAttribute('aria-rowcount', '101');
+  await expect(page.getByRole('button', { name: 'Page 2' })).toBeFocused();
+  await expect(song101).toBeVisible();
+  await expect(song101).toHaveAttribute('aria-rowindex', '2');
+  await expectNoSeriousAccessibilityViolations(page);
+  await song101.getByRole('button', { name: 'More actions for Song 101' }).click();
+  await page
+    .getByRole('menu', { name: 'Actions for Song 101' })
+    .getByRole('menuitem', { name: 'Add to Practice' })
+    .click();
+
+  await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to playlist' }).click();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Song 101/ })).toBeVisible();
+  await expect(page.locator('.track-browser-count')).toHaveText('1 song');
 });
 
 test('idle Graphite selection stays distinct from native Now Playing', async ({ page }) => {
@@ -720,8 +764,8 @@ test('selected, hovered, and focused rows reveal actions without showing them on
   await expect(toggledLike).toHaveAttribute('aria-pressed', 'true');
   await expect(otherRow).toHaveAttribute('aria-selected', 'false');
   await expect(firstRow).toHaveAttribute('aria-selected', 'true');
-  await page.getByLabel('Search All Songs').focus();
-  await page.getByLabel('Search All Songs').hover();
+  await page.getByLabel('Search Built-in Songs').focus();
+  await page.getByLabel('Search Built-in Songs').hover();
   await expect
     .poll(() => otherMenu.evaluate((button) => getComputedStyle(button).opacity))
     .toBe('0');
@@ -743,14 +787,13 @@ test('selected, hovered, and focused rows reveal actions without showing them on
   await expect(firstRow).toHaveAttribute('aria-selected', 'true');
 });
 
-test('virtualized library pages beyond the first 200 songs', async ({ page }) => {
-  const list = page.locator('.track-table');
-  await expect(page.getByText('500 songs')).toBeVisible();
-  await list.evaluate((element) => {
-    element.scrollTop = 400 * 46;
-    element.dispatchEvent(new Event('scroll'));
-  });
-  await expect(list).toHaveClass(/is-scrolling/);
+test('Built-in Songs pages beyond the first 200 songs', async ({ page }) => {
+  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Last page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 5' })).toBeVisible();
+  await expect(page.locator('.builtin-pager-status')).toHaveText(
+    'Showing 401–500 of 500 songs. Page 5 of 5.',
+  );
   const song = page.getByRole('row', { name: /Song 401/ });
   await expect(song).toBeVisible();
   await song.click();
@@ -762,12 +805,12 @@ test('virtualized grid navigation keeps its active descendant mounted across pag
   page,
 }) => {
   await page.goto('/?mockPlaybackDurationMs=120000');
-  const grid = page.getByRole('grid', { name: 'Songs' });
+  const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
   const list = page.locator('.track-table');
 
   await grid.focus();
   await page.keyboard.press('End');
-  const lastRow = page.getByRole('row', { name: /Song 500/ });
+  const lastRow = page.getByRole('row', { name: /Song 100/ });
   await expect(lastRow).toBeVisible();
   await expect(lastRow).toHaveAttribute('aria-selected', 'true');
   const lastRowId = await lastRow.getAttribute('id');
@@ -801,12 +844,27 @@ test('virtualized grid navigation keeps its active descendant mounted across pag
   expect(firstRowId).toBeTruthy();
   await expect(grid).toHaveAttribute('aria-activedescendant', firstRowId ?? '');
 
-  await list.evaluate((element) => {
-    element.scrollTop = 400 * 46;
-    element.dispatchEvent(new Event('scroll'));
-  });
-  await expect(page.getByRole('row', { name: /Song 401/ })).toBeVisible();
-  const search = page.getByLabel('Search All Songs');
+  await page.getByRole('button', { name: 'Next page' }).click();
+  const secondPageGrid = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
+  await expect(secondPageGrid).toBeVisible();
+  await expect(lastRow).toHaveCount(0);
+  await expect.poll(() => secondPageGrid.getAttribute('aria-activedescendant')).toBeNull();
+  await secondPageGrid.focus();
+  await page.keyboard.press('Home');
+  const firstRowOnPageTwo = page.getByRole('row', { name: /Song 101/ });
+  await expect(firstRowOnPageTwo).toHaveAttribute('aria-selected', 'true');
+  const firstRowOnPageTwoId = await firstRowOnPageTwo.getAttribute('id');
+  expect(firstRowOnPageTwoId).toBeTruthy();
+  await expect(secondPageGrid).toHaveAttribute('aria-activedescendant', firstRowOnPageTwoId ?? '');
+  await expect
+    .poll(() =>
+      secondPageGrid.evaluate((element, id) => {
+        const activeRow = id ? document.getElementById(id) : null;
+        return Boolean(activeRow && element.contains(activeRow) && activeRow.isConnected);
+      }, firstRowOnPageTwoId),
+    )
+    .toBe(true);
+  const search = page.getByLabel('Search Built-in Songs');
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
   await expect(firstRow).toHaveCount(0);
@@ -814,15 +872,15 @@ test('virtualized grid navigation keeps its active descendant mounted across pag
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
-test('All Songs clears search while retaining the catalog count', async ({ page }) => {
-  const navigatorItem = page.getByRole('button', { name: 'All Songs' });
+test('Built-in Songs clears search while retaining the catalog count', async ({ page }) => {
+  const navigatorItem = page.getByRole('button', { name: 'Built-in Songs' });
   await expect(navigatorItem).toContainText('500');
-  await page.getByLabel('Search All Songs').fill('Moonlit');
-  await expect(page.getByText('1 song')).toBeVisible();
+  await page.getByLabel('Search Built-in Songs').fill('Moonlit');
+  await expect(page.getByText('1 song', { exact: true })).toBeVisible();
   await expect(navigatorItem).toContainText('500');
   await navigatorItem.click();
-  await expect(page.getByLabel('Search All Songs')).toHaveValue('');
-  await expect(page.getByText('500 songs')).toBeVisible();
+  await expect(page.getByLabel('Search Built-in Songs')).toHaveValue('');
+  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
   await expect(navigatorItem).toContainText('500');
 });
 
@@ -840,7 +898,7 @@ test('keeps slash local to the New Playlist name field', async ({ page }) => {
   await createDialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(createDialog).toBeHidden();
 
-  const search = page.getByLabel('Search All Songs');
+  const search = page.getByLabel('Search Built-in Songs');
   await page.keyboard.press('/');
   await expect(search).toBeFocused();
 });
@@ -880,7 +938,7 @@ test('Playlists support create, rename, delete, and membership actions', async (
   await expect(page.getByRole('menuitem', { name: 'Add songs' })).toBeVisible();
   await page.getByRole('menuitem', { name: 'Add songs' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
-  await expect(page.getByText(/in All Songs/)).toBeVisible();
+  await expect(page.getByText(/in Built-in Songs/)).toBeVisible();
   await expect(navigator.locator('.library-nav-action-row.is-active')).toContainText('Practice');
   await page.getByRole('button', { name: 'Back to playlist' }).click();
 
@@ -899,7 +957,7 @@ test('Playlists support create, rename, delete, and membership actions', async (
   await expect(
     navigator.getByRole('button', { name: 'Morning Practice', exact: true }),
   ).toBeHidden();
-  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
 });
 
 test('Add songs keeps local imports inside the selected playlist', async ({ page }) => {
@@ -912,10 +970,10 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Add songs' }).click();
-  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  await page.getByRole('menuitem', { name: 'Browse Built-in Songs…' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
-  await expect(page.getByText(/in All Songs/)).toBeVisible();
-  await expect(page.getByPlaceholder('Search All Songs…')).toBeVisible();
+  await expect(page.getByText(/in Built-in Songs/)).toBeVisible();
+  await expect(page.getByPlaceholder('Search Built-in Songs…')).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
   await existingSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
@@ -937,8 +995,21 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await page.getByRole('menuitem', { name: 'Import folder…' }).click();
   await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'All Songs' }).click();
-  await expect(page.getByText('500 songs')).toBeVisible();
+  await navigator.locator('.library-add-button').click();
+  const secondPlaylistDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await secondPlaylistDialog.getByLabel('Playlist name').fill('Weekend');
+  await secondPlaylistDialog.getByRole('button', { name: 'Create' }).click();
+  await expect(page.getByRole('heading', { name: 'Weekend' })).toBeVisible();
+  await navigator.getByRole('button', { name: 'Practice', exact: true }).click();
+  const importedSong = page.getByRole('row', { name: /Local Song B/ });
+  await importedSong.getByRole('button', { name: 'More actions for Local Song B' }).click();
+  await page.getByRole('menuitem', { name: 'Add to Weekend' }).click();
+  await navigator.getByRole('button', { name: 'Weekend', exact: true }).click();
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+  await expect(page.getByText('1 song')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Built-in Songs' }).click();
+  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
   await expect(page.getByRole('row', { name: /Local Song B/ })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Practice', exact: true }).click();
@@ -966,7 +1037,7 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await expect(deleteDialog).toContainText('local files will not be deleted');
   await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
   await expect(navigator.getByRole('button', { name: /Practice/ })).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
 });
 
 test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({
@@ -974,9 +1045,15 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
+  for (let pageNumber = 2; pageNumber <= 5; pageNumber += 1) {
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await expect(
+      page.getByRole('grid', { name: `Built-in Songs, page ${pageNumber}` }),
+    ).toBeVisible();
+  }
   const list = page.locator('.track-table');
   await list.evaluate((element) => {
-    element.scrollTop = 495 * 46;
+    element.scrollTop = 95 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const longTitle = /A sheet with an intentionally long title/;

@@ -7,7 +7,7 @@ import { PlaylistAddSongsMenu } from './PlaylistAddSongsMenu';
 describe('PlaylistAddSongsMenu', () => {
   afterEach(() => cleanup());
 
-  it('opens from the keyboard and dispatches Browse All Songs', async () => {
+  it('opens from the keyboard and dispatches Browse Built-in Songs', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
@@ -22,16 +22,16 @@ describe('PlaylistAddSongsMenu', () => {
     fireEvent.keyDown(trigger, { key: 'Enter' });
 
     expect(await screen.findByRole('menu', { name: 'Add songs' })).toBeVisible();
-    expect(screen.getByRole('menuitem', { name: 'Browse All Songs…' })).toBeVisible();
+    expect(screen.getByRole('menuitem', { name: 'Browse Built-in Songs…' })).toBeVisible();
     expect(screen.getByRole('menuitem', { name: 'Import files…' })).toBeVisible();
     expect(screen.getByRole('menuitem', { name: 'Import folder…' })).toBeVisible();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Browse All Songs…' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Browse Built-in Songs…' }));
     });
     await waitFor(() => {
       expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
     });
-    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
   });
 });
