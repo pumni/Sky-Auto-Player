@@ -38,18 +38,142 @@ async function readBuiltinPagerGeometry(page: Page) {
   });
 }
 
+async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
+  return page.evaluate((includePager) => {
+    const required = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`Missing visual regression element: ${selector}`);
+      return element;
+    };
+    const rect = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect();
+      return {
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        right: box.right,
+        bottom: box.bottom,
+        centerX: box.x + box.width / 2,
+        centerY: box.y + box.height / 2,
+      };
+    };
+    const baseline = (element: HTMLElement) => {
+      const marker = document.createElement('span');
+      marker.style.cssText =
+        'display:inline-block;width:0;height:0;padding:0;border:0;margin:0;vertical-align:baseline;font-size:0;line-height:0;';
+      element.append(marker);
+      const y = marker.getBoundingClientRect().y;
+      marker.remove();
+      return y;
+    };
+
+    const header = required('.track-browser-header');
+    const heading = required('.track-browser-heading');
+    const source = required('.track-browser-source-label');
+    const title = required('.track-browser-header h1');
+    const count = required('.track-browser-count');
+    const wrap = includePager ? required('.builtin-pager-wrap') : null;
+    const pager = includePager ? required('.builtin-pager') : null;
+    const previous = includePager ? required('[aria-label="Previous page"]') : null;
+    const indicator = includePager ? required('.builtin-pager-jump-trigger') : null;
+    const next = includePager ? required('[aria-label="Next page"]') : null;
+    const player = includePager ? required('.player-bar') : null;
+    const titleStyle = getComputedStyle(title);
+    const countStyle = getComputedStyle(count);
+    const countSeparatorStyle = getComputedStyle(count, '::before');
+    const titleTextBaseline = baseline(title);
+    const countTextBaseline = baseline(count);
+
+    const pagerMetrics =
+      wrap && pager && previous && indicator && next && player
+        ? (() => {
+            const wrapStyle = getComputedStyle(wrap);
+            const triggerStyle = getComputedStyle(indicator);
+            const previousStyle = getComputedStyle(previous);
+            return {
+              wrap: rect(wrap),
+              toolbar: rect(pager),
+              previous: rect(previous),
+              indicator: rect(indicator),
+              next: rect(next),
+              player: rect(player),
+              topClearance:
+                previous.getBoundingClientRect().top -
+                wrap.getBoundingClientRect().top -
+                Number.parseFloat(wrapStyle.borderTopWidth),
+              bottomClearance:
+                wrap.getBoundingClientRect().bottom -
+                Number.parseFloat(wrapStyle.borderBottomWidth) -
+                previous.getBoundingClientRect().bottom,
+              triggerBorderColor: triggerStyle.borderTopColor,
+              previousBorderColor: previousStyle.borderTopColor,
+              triggerBackgroundColor: triggerStyle.backgroundColor,
+              previousBackgroundColor: previousStyle.backgroundColor,
+              clientWidth: wrap.clientWidth,
+              scrollWidth: wrap.scrollWidth,
+            };
+          })()
+        : null;
+
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      header: rect(header),
+      heading: rect(heading),
+      source: rect(source),
+      title: rect(title),
+      count: rect(count),
+      titleTextBaseline,
+      countTextBaseline,
+      titleFontSize: Number.parseFloat(titleStyle.fontSize),
+      titleLineHeight: Number.parseFloat(titleStyle.lineHeight),
+      titleOverflow: titleStyle.overflow,
+      titleTextOverflow: titleStyle.textOverflow,
+      titleWhiteSpace: titleStyle.whiteSpace,
+      separator: {
+        content: countSeparatorStyle.content,
+        fontSize: countSeparatorStyle.fontSize,
+        lineHeight: countSeparatorStyle.lineHeight,
+        verticalAlign: countSeparatorStyle.verticalAlign,
+      },
+      pager: pagerMetrics,
+      documentWidth: document.documentElement.scrollWidth,
+    };
+  }, includePager);
+}
+
 function expectBuiltinPagerGeometryStable(
   before: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
   after: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
 ) {
   for (const control of ['previous', 'indicator', 'next'] as const) {
-    expect(Math.abs(after[control].centerX - before[control].centerX)).toBeLessThanOrEqual(1);
-    expect(Math.abs(after[control].centerY - before[control].centerY)).toBeLessThanOrEqual(1);
-    expect(Math.abs(after[control].width - before[control].width)).toBeLessThanOrEqual(1);
-    expect(Math.abs(after[control].height - before[control].height)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(after[control].centerX - before[control].centerX),
+      `${control} centerX: ${before[control].centerX} -> ${after[control].centerX}; ` +
+        `toolbar x ${before.toolbar.x} -> ${after.toolbar.x}, ` +
+        `range ${JSON.stringify(before.range)} -> ${JSON.stringify(after.range)}`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(after[control].centerY - before[control].centerY),
+      `${control} centerY: ${before[control].centerY} -> ${after[control].centerY}`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(after[control].width - before[control].width),
+      `${control} width: ${before[control].width} -> ${after[control].width}`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(after[control].height - before[control].height),
+      `${control} height: ${before[control].height} -> ${after[control].height}`,
+    ).toBeLessThanOrEqual(1);
   }
-  expect(Math.abs(after.toolbar.y - before.toolbar.y)).toBeLessThanOrEqual(1);
-  expect(Math.abs(after.toolbar.height - before.toolbar.height)).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(after.toolbar.y - before.toolbar.y),
+    `toolbar y: ${before.toolbar.y} -> ${after.toolbar.y}`,
+  ).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(after.toolbar.height - before.toolbar.height),
+    `toolbar height: ${before.toolbar.height} -> ${after.toolbar.height}`,
+  ).toBeLessThanOrEqual(1);
   expect(after.range.x + after.range.width).toBeLessThanOrEqual(after.toolbar.x + 1);
   expect(Math.abs(after.range.centerY - after.toolbar.centerY)).toBeLessThanOrEqual(1);
   expect(after.previous.height).toBeGreaterThanOrEqual(32);
@@ -301,6 +425,195 @@ test('Built-in pager controls keep their geometry across navigation and jump pop
   await page.getByRole('button', { name: 'Previous page' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
   expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
+});
+
+test('F3.1 heading typography and pager alignment stay clear at desktop and compact widths', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 995, height: 706 });
+  await page.goto('/?mockCatalogCount=106');
+  await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
+  await expect(page.locator('.track-browser-count')).toHaveText('106 songs');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  const visualMeasurements: Array<{
+    label: string;
+    metrics: Awaited<ReturnType<typeof readTrackBrowserVisualGeometry>>;
+  }> = [];
+
+  const assertVisualContract = async (label: string) => {
+    const metrics = await readTrackBrowserVisualGeometry(page);
+    visualMeasurements.push({ label, metrics });
+    const pager = metrics.pager;
+    if (!pager) throw new Error(`${label}: pager geometry is required`);
+    const baselineDelta = Math.abs(metrics.titleTextBaseline - metrics.countTextBaseline);
+    const pagerClearanceDelta = Math.abs(pager.topClearance - pager.bottomClearance);
+    const failures: string[] = [];
+    const check = (condition: boolean, reason: string) => {
+      if (!condition) failures.push(reason);
+    };
+
+    check(metrics.titleLineHeight >= metrics.titleFontSize * 1.39, 'short title line box');
+    check(baselineDelta <= 0.5, 'title/count separator baseline mismatch');
+    check(
+      metrics.titleOverflow === 'hidden' &&
+        metrics.titleTextOverflow === 'ellipsis' &&
+        metrics.titleWhiteSpace === 'nowrap',
+      'title truncation contract changed',
+    );
+    check(metrics.source.y >= metrics.header.y, 'label crosses header top');
+    check(metrics.source.bottom <= metrics.header.bottom, 'label crosses header bottom');
+    check(metrics.title.y >= metrics.source.y - 1, 'title line box crosses label top');
+    check(metrics.title.bottom <= metrics.source.bottom + 1, 'title line box crosses label bottom');
+    check(metrics.heading.right <= metrics.header.right + 1, 'heading crosses header right');
+    check(metrics.title.right <= metrics.count.x + 1, 'title intrudes into count');
+    check(metrics.separator.content === '"·"', 'separator dot missing');
+    check(
+      metrics.separator.verticalAlign === 'baseline',
+      'separator uses a non-baseline alignment',
+    );
+    check(
+      pager.triggerBorderColor === pager.previousBorderColor,
+      'resting trigger border is accented',
+    );
+    check(
+      pager.triggerBackgroundColor === pager.previousBackgroundColor,
+      'resting trigger surface is accented',
+    );
+    check(pagerClearanceDelta <= 1, 'pager top/bottom clearance is asymmetric');
+    check(
+      Math.min(pager.previous.height, pager.indicator.height, pager.next.height) >= 32,
+      'pager target is shorter than 32px',
+    );
+    check(pager.scrollWidth <= pager.clientWidth, 'pager overflows horizontally');
+    check(metrics.documentWidth <= metrics.viewport.width, 'document overflows horizontally');
+    check(pager.wrap.bottom <= pager.player.y + 1, 'pager overlaps the player dock');
+
+    const facts = {
+      viewport: metrics.viewport,
+      title: {
+        fontSize: metrics.titleFontSize,
+        lineHeight: metrics.titleLineHeight,
+        baselineDelta,
+        overflow: metrics.titleOverflow,
+        textOverflow: metrics.titleTextOverflow,
+      },
+      count: { textBaseline: metrics.countTextBaseline, separator: metrics.separator },
+      pager: {
+        topClearance: pager.topClearance,
+        bottomClearance: pager.bottomClearance,
+        clearanceDelta: pagerClearanceDelta,
+        triggerBorder: pager.triggerBorderColor,
+        previousBorder: pager.previousBorderColor,
+        triggerBackground: pager.triggerBackgroundColor,
+        previousBackground: pager.previousBackgroundColor,
+        height: pager.toolbar.height,
+      },
+    };
+    expect.soft(failures, `${label}: ${JSON.stringify(facts)}`).toEqual([]);
+  };
+
+  const viewportCases = [
+    { width: 995, height: 706, label: 'reference 995x706' },
+    { width: 1366, height: 768, label: 'wide 1366x768' },
+    { width: 800, height: 560, label: 'compact 800x560' },
+    { width: 640, height: 448, label: 'compact 640x448' },
+  ];
+
+  for (const viewport of viewportCases) {
+    await page.setViewportSize(viewport);
+    await expect(page.locator('.workbench')).toHaveAttribute(
+      'data-workbench-width',
+      String(viewport.width),
+    );
+    const navigatorPane = page.locator('.navigator-workbench-pane');
+    if (viewport.width <= 640) {
+      await expect(navigatorPane).toHaveClass(/is-collapsed/);
+    } else {
+      await expect(navigatorPane).not.toHaveClass(/is-collapsed/);
+    }
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    await assertVisualContract(viewport.label);
+    const pageOneGeometry = await readBuiltinPagerGeometry(page);
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
+    await page.getByRole('button', { name: 'Previous page' }).focus();
+    await page.keyboard.press('Tab');
+    const indicator = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
+    await expect(indicator).toBeFocused();
+    await expect
+      .poll(() => indicator.evaluate((button) => getComputedStyle(button).outlineStyle))
+      .toBe('solid');
+    await assertVisualContract(`${viewport.label} page 2 focused`);
+    await indicator.click();
+    await expect(page.getByRole('textbox', { name: 'Go to page' })).toBeVisible();
+    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
+    await page.getByRole('textbox', { name: 'Go to page' }).press('Escape');
+    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
+    await page.getByRole('button', { name: 'Previous page' }).click();
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
+  }
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const browserPane = page.locator('.track-browser-workbench-pane');
+  for (const width of [520, 440]) {
+    await browserPane.evaluate((element, constrainedWidth) => {
+      element.style.flex = `0 0 ${constrainedWidth}px`;
+      element.style.minWidth = '0';
+    }, width);
+    await assertVisualContract(`track-browser container ${width}px`);
+  }
+  await browserPane.evaluate((element) => {
+    element.style.removeProperty('flex');
+    element.style.removeProperty('min-width');
+  });
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  const mixedPlaylistTitle =
+    'Bản tình ca của Nguyễn Ánh — The Long Evening Song Collection for Practice';
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.locator('.library-add-button').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill(mixedPlaylistTitle);
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+  const mixedHeading = page.getByRole('heading', { name: mixedPlaylistTitle });
+  await expect(mixedHeading).toBeVisible();
+  await expect(mixedHeading).toHaveAttribute('title', mixedPlaylistTitle);
+  const playlistMetrics = await readTrackBrowserVisualGeometry(page, false);
+  visualMeasurements.push({
+    label: 'mixed Vietnamese playlist at 640x448',
+    metrics: playlistMetrics,
+  });
+  expect(playlistMetrics.titleLineHeight).toBeGreaterThanOrEqual(
+    playlistMetrics.titleFontSize * 1.39,
+  );
+  expect(
+    Math.abs(playlistMetrics.titleTextBaseline - playlistMetrics.countTextBaseline),
+  ).toBeLessThanOrEqual(1);
+  expect(playlistMetrics.title.bottom).toBeLessThanOrEqual(playlistMetrics.source.bottom + 1);
+  expect(playlistMetrics.title.right).toBeLessThanOrEqual(playlistMetrics.count.x + 1);
+
+  await page.setViewportSize({ width: 995, height: 706 });
+  await page.goto('/?mockCatalogCount=106');
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath('f3.1-after-995x706.png'),
+    animations: 'disabled',
+  });
+  visualMeasurements.push({
+    label: 'after screenshot 995x706',
+    metrics: await readTrackBrowserVisualGeometry(page),
+  });
+  await import('node:fs/promises').then(({ writeFile }) =>
+    writeFile(
+      testInfo.outputPath('f3.1-geometry-report.json'),
+      `${JSON.stringify(visualMeasurements, null, 2)}\n`,
+    ),
+  );
 });
 
 test('Built-in pager handles the approved result-count boundaries', async ({ page }) => {
