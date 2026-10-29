@@ -306,7 +306,7 @@
   flex: 0 0 auto;
   align-items: center;
   justify-self: end;
-  gap: 6px;
+  gap: 4px;
   min-width: max-content;
   white-space: nowrap;
 }
@@ -344,7 +344,7 @@
   flex: 0 0 auto;
   place-items: center;
   height: 36px;
-  min-width: 112px;
+  min-width: 80px;
   box-sizing: border-box;
 }
 
