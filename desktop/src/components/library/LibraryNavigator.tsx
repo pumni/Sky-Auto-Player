@@ -22,14 +22,17 @@ export function LibraryNavigator({
 }: LibraryNavigatorProps) {
   const catalogTotal = useStore((store: DesktopStore) => store.library.catalogTotal);
   const likedTotal = useStore((store: DesktopStore) => store.library.likedTotal);
-  const builtinAvailable = useStore(
-    (store: DesktopStore) => store.libraryNavigation.builtinAvailable,
-  );
-  const builtinSongCount = useStore(
-    (store: DesktopStore) => store.libraryNavigation.builtinSongCount,
-  );
   const source = useStore((store: DesktopStore) => store.library.source);
   const navigation = useStore((store: DesktopStore) => store.libraryNavigation);
+  const navigationReady = navigation.loadState === 'ready';
+  const builtinChecking = navigation.loadState === 'idle' || navigation.loadState === 'loading';
+  const builtinLabel = builtinChecking
+    ? 'Checking Built-in Songs'
+    : navigation.loadState === 'error'
+      ? 'Built-in Songs status unknown'
+      : navigation.builtinAvailable
+        ? 'Built-in Songs'
+        : 'Built-in Songs unavailable';
   const selectLibrarySource = useStore((store: DesktopStore) => store.selectLibrarySource);
   const openPlaylistAdd = useStore((store: DesktopStore) => store.openPlaylistAdd);
   const createPlaylist = useStore((store: DesktopStore) => store.createPlaylist);
@@ -96,16 +99,46 @@ export function LibraryNavigator({
         </LibraryNavItem>
         <LibraryNavItem
           collapsed={collapsed}
-          label={builtinAvailable ? 'Built-in Songs' : 'Built-in Songs unavailable'}
+          label={builtinLabel}
           active={source.kind === 'smart' && source.id === 'builtin'}
-          count={builtinSongCount}
-          disabled={!builtinAvailable}
+          {...(navigationReady && navigation.builtinAvailable
+            ? { count: navigation.builtinSongCount }
+            : {})}
+          disabled={!navigationReady || !navigation.builtinAvailable}
           icon={<Library size={18} />}
           onPress={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
         >
-          Built-in Songs
+          {builtinChecking ? 'Checking Built-in Songs…' : 'Built-in Songs'}
         </LibraryNavItem>
       </div>
+
+      {builtinChecking && (
+        <p className="library-loading muted" role="status">
+          Checking Built-in Songs…
+        </p>
+      )}
+      {navigation.loadState === 'error' && (
+        <div className="library-empty-playlists" aria-label="Library navigation recovery">
+          <p role="alert">
+            Couldn’t check Built-in Songs or playlists.
+            {navigation.lastError ? ` ${navigation.lastError}` : ''}
+          </p>
+          <button
+            className="button library-empty-playlists-create"
+            type="button"
+            aria-label="Retry library navigation"
+            onClick={() => void useStore.getState().loadLibraryNavigation()}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {navigation.loadState === 'ready' && !navigation.builtinAvailable && (
+        <p className="library-loading muted" role="status">
+          Built-in Songs aren’t available in this installation. All Songs and playlists remain
+          available.
+        </p>
+      )}
 
       {collapsed ? (
         navigation.playlistOrder.length > 0 ? (
@@ -156,23 +189,11 @@ export function LibraryNavigator({
                 </button>
               </div>
             )}
-            {navigation.loadState === 'error' && (
-              <div className="library-empty-playlists" role="status">
-                <p>Playlists couldn’t be loaded.</p>
-                <button
-                  className="button library-empty-playlists-create"
-                  type="button"
-                  onClick={() => void useStore.getState().loadLibraryNavigation()}
-                >
-                  Try again
-                </button>
-              </div>
-            )}
           </LibrarySection>
         </div>
       )}
 
-      {navigation.lastError && (
+      {navigation.lastError && navigation.loadState !== 'error' && (
         <p className="library-inline-error" role="status">
           {navigation.lastError}
         </p>
@@ -185,9 +206,6 @@ export function LibraryNavigator({
             triggerRef={addTriggerRef}
             onNewPlaylist={() => setCreateOpen(true)}
           />
-        )}
-        {!collapsed && navigation.loadState === 'loading' && (
-          <span className="library-loading muted">Updating library…</span>
         )}
       </div>
 

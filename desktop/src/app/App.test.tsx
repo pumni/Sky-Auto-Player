@@ -340,6 +340,7 @@ describe('desktop application shell', () => {
   it('keeps StrictMode startup to one native subscription and one window reveal', async () => {
     isTauriRuntimeMock.mockReturnValue(true);
     const bridge = createMockBridge();
+    const listNavigation = vi.spyOn(bridge, 'listLibraryNavigation');
     const nativeEvents = installStrictSingletonEvents(bridge);
     const { rerender } = render(
       <StrictMode>
@@ -354,6 +355,7 @@ describe('desktop application shell', () => {
     );
 
     expect(nativeEvents.subscriptionCount).toBe(1);
+    expect(listNavigation).toHaveBeenCalledTimes(1);
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
   });
 

@@ -27,6 +27,7 @@ const mockDurations = (
 const mockParams = new URLSearchParams(window.location.search);
 const mockLibraryState = mockParams.get('mockLibraryState');
 const mockSearchDelay = Number(mockParams.get('mockSearchDelayMs'));
+const mockNavigationFailures = Number(mockParams.get('mockNavigationFailures'));
 const diagnosticsStatuses = ['healthy', 'degraded', 'unavailable', 'error'] as const;
 const mockDiagnosticsStatus = diagnosticsStatuses.find(
   (status) => status === mockParams.get('mockDiagnosticsStatus'),
@@ -59,6 +60,9 @@ const createBrowserBridge = async () => {
     ...(mockLibraryState === 'empty' ? { catalogRows: [] } : {}),
     ...(Number.isFinite(mockSearchDelay) && mockSearchDelay > 0
       ? { searchDelayMs: Math.min(mockSearchDelay, 5_000) }
+      : {}),
+    ...(Number.isFinite(mockNavigationFailures) && mockNavigationFailures > 0
+      ? { libraryNavigationFailures: Math.min(mockNavigationFailures, 3) }
       : {}),
     ...(mockDiagnosticsStatus ? { diagnosticsBackendStatus: mockDiagnosticsStatus } : {}),
     ...(mockDurations.length === 1 && mockDurations[0] !== undefined

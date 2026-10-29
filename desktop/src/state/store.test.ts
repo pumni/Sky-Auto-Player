@@ -2,6 +2,7 @@ import { act, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type {
+  LibraryNavigation,
   LibrarySource,
   SearchRequest,
   SearchResult,
@@ -89,6 +90,191 @@ describe('desktop store', () => {
     await act(async () => store.getState().initialize());
     expect(store.getState().playback.shuffleEnabled).toBe(false);
     expect(store.getState().settings?.auto_play).toBe(true);
+  });
+
+  it('loads authoritative navigation while the first catalog page is still pending', async () => {
+    const builtinSongIds = Array.from({ length: 96 }, (_, index) =>
+      index.toString(16).padStart(32, '0'),
+    );
+    const bridge = createMockBridge({ builtinSongIds });
+    const originalSearch = bridge.searchSongs.bind(bridge);
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const pendingSearch = deferred<SearchResult>();
+    const searchStarted = deferred<SearchRequest>();
+    bridge.searchSongs = async (request) => {
+      searchStarted.resolve(request);
+      return pendingSearch.promise;
+    };
+    const listNavigation = vi.spyOn(bridge, 'listLibraryNavigation');
+    const store = createDesktopStore(bridge);
+
+    const nativeNavigation = await originalListNavigation();
+    expect(nativeNavigation).toMatchObject({ builtin_available: true, builtin_song_count: 96 });
+
+    const initialization = store.getState().initialize();
+    const request = await searchStarted.promise;
+    try {
+      await waitFor(() => expect(store.getState().libraryNavigation.loadState).toBe('ready'));
+      expect(listNavigation).toHaveBeenCalledTimes(1);
+      expect(store.getState().libraryNavigation).toMatchObject({
+        builtinAvailable: true,
+        builtinSongCount: 96,
+      });
+    } finally {
+      pendingSearch.resolve(await originalSearch(request));
+    }
+    await initialization;
+  });
+
+  it('loads native navigation when bootstrap reports that catalog loading is still in progress', async () => {
+    const builtinSongIds = Array.from({ length: 96 }, (_, index) =>
+      index.toString(16).padStart(32, '0'),
+    );
+    const bridge = createMockBridge({ builtinSongIds });
+    const originalBootstrap = bridge.bootstrap.bind(bridge);
+    bridge.bootstrap = async () => ({
+      ...(await originalBootstrap()),
+      catalog_state: 'loading',
+      catalog_generation: null,
+    });
+    const store = createDesktopStore(bridge);
+
+    await act(async () => store.getState().initialize());
+    await waitFor(() => expect(store.getState().libraryNavigation.loadState).toBe('ready'));
+
+    expect(store.getState().libraryNavigation).toMatchObject({
+      builtinAvailable: true,
+      builtinSongCount: 96,
+    });
+  });
+
+  it('ignores older navigation after a catalog generation change and repeated event', async () => {
+    const bridge = createMockBridge({ builtinSongIds: ['00000000000000000000000000000001'] });
+    const originalSearch = bridge.searchSongs.bind(bridge);
+    bridge.searchSongs = async (request) => {
+      const result = await originalSearch(request);
+      return request.generation === undefined
+        ? result
+        : { ...result, generation: request.generation };
+    };
+    const firstNavigation = deferred<LibraryNavigation>();
+    const secondNavigation = deferred<LibraryNavigation>();
+    let navigationCalls = 0;
+    bridge.listLibraryNavigation = vi.fn(() => {
+      navigationCalls += 1;
+      return navigationCalls === 1 ? firstNavigation.promise : secondNavigation.promise;
+    });
+    const store = createDesktopStore(bridge);
+
+    const initialization = store.getState().initialize();
+    await waitFor(() => expect(navigationCalls).toBe(1));
+    await initialization;
+    const changed = {
+      v: 1 as const,
+      name: 'catalog.changed' as const,
+      payload: { generation: 2, total: 500 },
+    };
+    store.getState().applyEvent(changed);
+    store.getState().applyEvent(changed);
+    await waitFor(() => expect(navigationCalls).toBe(2));
+    secondNavigation.resolve({ builtin_available: true, builtin_song_count: 96, playlists: [] });
+    await waitFor(() => expect(store.getState().libraryNavigation.builtinSongCount).toBe(96));
+    firstNavigation.resolve({ builtin_available: false, builtin_song_count: 0, playlists: [] });
+
+    await waitFor(() => {
+      expect(store.getState().libraryNavigation.loadState).toBe('ready');
+      expect(store.getState().libraryNavigation.builtinAvailable).toBe(true);
+      expect(store.getState().libraryNavigation.builtinSongCount).toBe(96);
+    });
+  });
+
+  it('refreshes navigation after an older response overlaps a playlist rename', async () => {
+    const bridge = createMockBridge();
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const originalRenamePlaylist = bridge.renamePlaylist.bind(bridge);
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await store.getState().createPlaylist('Morning');
+    const playlistId = store.getState().libraryNavigation.playlistOrder[0];
+    if (!playlistId) throw new Error('mock playlist creation failed');
+    const staleNavigation = await originalListNavigation();
+    const pendingNavigation = deferred<LibraryNavigation>();
+    const renameGate = deferred<void>();
+    let navigationCalls = 0;
+    bridge.listLibraryNavigation = vi.fn(() => {
+      navigationCalls += 1;
+      return navigationCalls === 1 ? pendingNavigation.promise : originalListNavigation();
+    });
+    bridge.renamePlaylist = async (playlistId, name) => {
+      await renameGate.promise;
+      return originalRenamePlaylist(playlistId, name);
+    };
+
+    const navigationRequest = store.getState().loadLibraryNavigation();
+    const rename = store.getState().renamePlaylist(playlistId, 'Evening');
+    expect(
+      store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+    ).toBe(true);
+    renameGate.resolve();
+    await rename;
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe('Evening');
+
+    pendingNavigation.resolve(staleNavigation);
+    await navigationRequest;
+    await waitFor(() => {
+      expect(navigationCalls).toBe(2);
+      expect(store.getState().libraryNavigation.loadState).toBe('ready');
+      expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe(
+        'Evening',
+      );
+      expect(
+        store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+      ).toBe(false);
+    });
+  });
+
+  it('keeps pending playlist mutation state and refreshes after stale navigation settles', async () => {
+    const bridge = createMockBridge();
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const originalRenamePlaylist = bridge.renamePlaylist.bind(bridge);
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await store.getState().createPlaylist('Morning');
+    const playlistId = store.getState().libraryNavigation.playlistOrder[0];
+    if (!playlistId) throw new Error('mock playlist creation failed');
+    const staleNavigation = await originalListNavigation();
+    const pendingNavigation = deferred<LibraryNavigation>();
+    const renameGate = deferred<void>();
+    let navigationCalls = 0;
+    bridge.listLibraryNavigation = vi.fn(() => {
+      navigationCalls += 1;
+      return navigationCalls === 1 ? pendingNavigation.promise : originalListNavigation();
+    });
+    bridge.renamePlaylist = async (id, name) => {
+      await renameGate.promise;
+      return originalRenamePlaylist(id, name);
+    };
+
+    const navigationRequest = store.getState().loadLibraryNavigation();
+    const rename = store.getState().renamePlaylist(playlistId, 'Evening');
+    pendingNavigation.resolve(staleNavigation);
+    await navigationRequest;
+    expect(
+      store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+    ).toBe(true);
+
+    renameGate.resolve();
+    await rename;
+    await waitFor(() => {
+      expect(navigationCalls).toBe(2);
+      expect(store.getState().libraryNavigation.loadState).toBe('ready');
+      expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe(
+        'Evening',
+      );
+      expect(
+        store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+      ).toBe(false);
+    });
   });
 
   it('keeps catalog loading and failure states separate from shell readiness', () => {

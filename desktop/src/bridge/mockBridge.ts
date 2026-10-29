@@ -163,6 +163,7 @@ export interface MockBridgeOptions {
   catalogRows?: SearchResult['items'];
   builtinSongIds?: readonly string[];
   builtinAvailable?: boolean;
+  libraryNavigationFailures?: number;
   searchDelayMs?: number;
   diagnosticsBackendStatus?: DiagnosticsBackend;
   readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
@@ -211,6 +212,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     ? catalogRows.filter((item) => builtinSongIds.has(item.song_id))
     : catalogRows;
   const builtinAvailable = options.builtinAvailable ?? true;
+  let libraryNavigationFailuresRemaining = Number.isFinite(options.libraryNavigationFailures)
+    ? Math.max(0, Math.min(Math.floor(options.libraryNavigationFailures ?? 0), 3))
+    : 0;
   const searchDelayMs = Math.max(0, Math.min(options.searchDelayMs ?? 0, 5_000));
   const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
   const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
@@ -660,6 +664,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return { song_id: request.songId, liked: request.liked, total: likedSongIds.size };
     },
     async listLibraryNavigation(): Promise<LibraryNavigation> {
+      if (libraryNavigationFailuresRemaining > 0) {
+        libraryNavigationFailuresRemaining -= 1;
+        throw new Error('Library navigation request failed.');
+      }
       return {
         builtin_available: builtinAvailable,
         builtin_song_count: builtinAvailable ? builtinRows.length : 0,

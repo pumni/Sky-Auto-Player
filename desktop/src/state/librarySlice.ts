@@ -96,6 +96,9 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   let likeMutationRevision = 0;
   let likeWriteRevision = 0;
   let likeMutationSequence = 0;
+  let libraryNavigationRequestId = 0;
+  let libraryNavigationMutationRevision = 0;
+  let refreshNavigationAfterMutation = false;
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
   let catalogReadyRecorded = false;
   let builtinPageIntentSequence = 0;
@@ -237,6 +240,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     const nextPending = new Set(current.pendingMutations);
     if (pending) nextPending.add(key);
     else nextPending.delete(key);
+    libraryNavigationMutationRevision += 1;
     set({
       libraryNavigation: {
         ...current,
@@ -244,6 +248,10 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         lastError: current.lastError,
       },
     });
+    if (!pending && nextPending.size === 0 && refreshNavigationAfterMutation) {
+      refreshNavigationAfterMutation = false;
+      void get().loadLibraryNavigation();
+    }
     return true;
   };
 
@@ -272,6 +280,28 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         pendingMutations: new Set(pendingMutations),
       },
     });
+  };
+
+  const canApplyNavigationResponse = (
+    requestId: number,
+    generation: number,
+    mutationRevision: number,
+  ): boolean => {
+    if (requestId !== libraryNavigationRequestId) return false;
+    if (generation !== get().library.generation) {
+      void get().loadLibraryNavigation();
+      return false;
+    }
+    const pendingMutations = get().libraryNavigation.pendingMutations;
+    if (mutationRevision !== libraryNavigationMutationRevision || pendingMutations.size > 0) {
+      refreshNavigationAfterMutation = true;
+      if (pendingMutations.size === 0) {
+        refreshNavigationAfterMutation = false;
+        void get().loadLibraryNavigation();
+      }
+      return false;
+    }
+    return true;
   };
 
   const mergePage = (result: SearchResult, token: number): boolean => {
@@ -783,6 +813,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         transportOperation: cancelPreparing ? null : playback.transportOperation,
       },
     });
+    void get().loadLibraryNavigation();
     await get().search();
   };
 
@@ -796,7 +827,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         if (afterSearch.error !== null) return;
         if (afterSearch.loading || afterSearch.generation !== requestedGeneration) continue;
 
-        await get().loadLibraryNavigation();
         const settled = get().library;
         if (settled.error !== null || settled.loading || settled.generation !== requestedGeneration)
           continue;
@@ -925,7 +955,10 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           },
           ...(generationChanged ? { details: { bySongId: new Map() } } : {}),
         });
-        if (generationChanged) mergePage(result, token);
+        if (generationChanged) {
+          mergePage(result, token);
+          void get().loadLibraryNavigation();
+        }
         if (!generationChanged && result.total > 0) {
           const afterSearch = get().library;
           const lastIndex = result.total - 1;
@@ -1118,14 +1151,19 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     },
 
     async loadLibraryNavigation() {
+      const requestId = ++libraryNavigationRequestId;
+      const generation = get().library.generation;
+      const mutationRevision = libraryNavigationMutationRevision;
       const current = get().libraryNavigation;
       set({
         libraryNavigation: { ...current, loadState: 'loading', lastError: null },
       });
       try {
         const navigation = await bridge.listLibraryNavigation();
+        if (!canApplyNavigationResponse(requestId, generation, mutationRevision)) return;
         updateNavigation(navigation);
       } catch (error) {
+        if (!canApplyNavigationResponse(requestId, generation, mutationRevision)) return;
         set({
           libraryNavigation: {
             ...get().libraryNavigation,

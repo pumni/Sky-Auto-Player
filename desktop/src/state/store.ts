@@ -224,6 +224,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
                 : currentLibrary.error,
             },
           });
+          void get().loadLibraryNavigation();
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
             await librarySlice.reconcileCatalog();
           }
@@ -349,6 +350,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             },
           });
           set({ details: { bySongId: new Map() } });
+          void get().loadLibraryNavigation();
           void librarySlice.reconcileCatalog();
           return;
         }

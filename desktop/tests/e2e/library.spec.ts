@@ -22,6 +22,22 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
+test('startup can recover built-in navigation while the catalog search is delayed', async ({
+  page,
+}) => {
+  await page.goto('/?mockSearchDelayMs=1000&mockNavigationFailures=1');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+
+  await expect(page.getByRole('alert')).toContainText('Couldn’t check Built-in Songs');
+  await page.getByRole('button', { name: 'Retry library navigation' }).click();
+  const builtin = navigator.getByRole('button', { name: /Built-in Songs/ });
+  await expect(builtin).toBeEnabled();
+  await expect(builtin).toContainText('500');
+  await builtin.click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
 test('Built-in Songs pages keep local row semantics and adapt to the browser container', async ({
   page,
 }) => {
