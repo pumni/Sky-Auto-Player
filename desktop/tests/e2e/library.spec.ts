@@ -89,6 +89,7 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
     const pager = includePager ? required('.builtin-pager') : null;
     const previous = includePager ? required('[aria-label="Previous page"]') : null;
     const indicator = includePager ? required('.builtin-pager-page-slot') : null;
+    const pageIndicator = includePager ? required('.builtin-pager-jump-trigger') : null;
     const next = includePager ? required('[aria-label="Next page"]') : null;
     const player = includePager ? required('.player-bar') : null;
     const titleStyle = getComputedStyle(title);
@@ -101,12 +102,8 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
       wrap && pager && previous && indicator && next && player
         ? (() => {
             const wrapStyle = getComputedStyle(wrap);
-            const pageIndicator = indicator.querySelector<HTMLElement>(
-              '.builtin-pager-static-indicator, .builtin-pager-jump-trigger',
-            );
             if (!pageIndicator) throw new Error('Built-in page indicator is missing');
             const indicatorStyle = getComputedStyle(pageIndicator);
-            const previousStyle = getComputedStyle(previous);
             return {
               wrap: rect(wrap),
               toolbar: rect(pager),
@@ -122,12 +119,9 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
                 wrap.getBoundingClientRect().bottom -
                 Number.parseFloat(wrapStyle.borderBottomWidth) -
                 previous.getBoundingClientRect().bottom,
-              indicatorIsStatic: pageIndicator.classList.contains('builtin-pager-static-indicator'),
               indicatorBorderStyle: indicatorStyle.borderTopStyle,
               indicatorBorderColor: indicatorStyle.borderTopColor,
-              previousBorderColor: previousStyle.borderTopColor,
               indicatorBackgroundColor: indicatorStyle.backgroundColor,
-              previousBackgroundColor: previousStyle.backgroundColor,
               clientWidth: wrap.clientWidth,
               scrollWidth: wrap.scrollWidth,
             };
@@ -270,17 +264,16 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     'true',
   );
 
-  const staticIndicator = page.locator('.builtin-pager-static-indicator');
-  await expect(staticIndicator).toHaveText('3 / 5');
-  await expect(staticIndicator).toHaveAttribute('aria-current', 'page');
-  await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
-  await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(3, 5) })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
   await jumpToBuiltinPage(page, 5);
   const pageFive = page.getByRole('grid', { name: 'Built-in Songs, page 5' });
   await expect(pageFive).toHaveAttribute('aria-rowcount', '101');
-  await expect(page.locator('.builtin-pager-static-indicator')).toHaveText('5 / 5');
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(5, 5) })).toBeVisible();
   await pageFive.focus();
   await page.keyboard.press('End');
   await expect(page.getByRole('row', { name: /Song 500/ })).toHaveAttribute('aria-rowindex', '101');
@@ -295,6 +288,22 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   await expect
     .poll(() => previous.evaluate((button) => getComputedStyle(button).outlineStyle))
     .toBe('solid');
+  const pageFiveIndicator = page.getByRole('button', { name: builtinPageTriggerName(5, 5) });
+  await pageFiveIndicator.focus();
+  await expect
+    .poll(() => pageFiveIndicator.evaluate((button) => getComputedStyle(button).outlineStyle))
+    .toBe('solid');
+  await page.keyboard.press('Enter');
+  const pageFiveInput = page.getByRole('textbox', { name: 'Page number, from 1 to 5' });
+  await expect(pageFiveInput).toBeFocused();
+  const confirmPageChange = page.getByRole('button', { name: 'Confirm page change' });
+  await confirmPageChange.focus();
+  await expect
+    .poll(() => confirmPageChange.evaluate((button) => getComputedStyle(button).outlineStyle))
+    .toBe('solid');
+  await pageFiveInput.focus();
+  await page.keyboard.press('Escape');
+  await expect(pageFiveIndicator).toBeFocused();
   for (const viewport of [
     { width: 1366, height: 768 },
     { width: 995, height: 706 },
@@ -302,10 +311,10 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
-    await expect(page.locator('.builtin-pager-static-indicator')).toBeVisible();
-    await expect(page.locator('.builtin-pager button')).toHaveCount(2);
+    await expect(page.locator('.builtin-pager-jump-trigger')).toBeVisible();
+    await expect(page.locator('.builtin-pager button')).toHaveCount(3);
     const geometry = await readBuiltinPagerGeometry(page);
-    expect(geometry.indicator.width).toBeGreaterThanOrEqual(60);
+    expect(geometry.indicator.width).toBeGreaterThanOrEqual(112);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
@@ -323,7 +332,7 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
       scrollWidth: element.scrollWidth,
     }));
     expect(pagerGeometry.scrollWidth).toBeLessThanOrEqual(pagerGeometry.width);
-    await expect(page.locator('.builtin-pager-static-indicator')).toBeVisible();
+    await expect(page.locator('.builtin-pager-jump-trigger')).toBeVisible();
   }
   await browserPane.evaluate((element) => {
     element.style.removeProperty('flex');
@@ -331,36 +340,87 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   });
 });
 
-test('two-page Built-in pager keeps its static center and geometry during navigation', async ({
+test('F3.4 two-page Built-in pager edits inline with stable geometry and a usable confirm target', async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto('/?mockCatalogCount=106');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
   const previous = page.getByRole('button', { name: 'Previous page' });
   const next = page.getByRole('button', { name: 'Next page' });
-  const indicator = page.locator('.builtin-pager-static-indicator');
+  const indicator = page.getByRole('button', { name: builtinPageTriggerName(1, 2) });
   await expect(previous).toBeVisible();
   await expect(next).toBeVisible();
   await expect(indicator).toBeVisible();
-  await expect(indicator).toHaveText('1 / 2');
   await expect(indicator).toHaveAttribute('aria-current', 'page');
-  await expect(page.locator('.builtin-pager button')).toHaveCount(2);
-  await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
-
-  const pageOne = await readBuiltinPagerGeometry(page);
-  await indicator.click();
-  await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
+  await expect(page.locator('.builtin-pager-static-indicator')).toHaveCount(0);
+  await expect(page.locator('.builtin-pager button')).toHaveCount(3);
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
+  await expect(page.locator('.builtin-pager')).not.toContainText(/Go to page|\bGo\b/);
 
-  await next.click();
+  const before = await readBuiltinPagerGeometry(page);
+  await indicator.focus();
+  await page.keyboard.press('Enter');
+  let input = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+  await expect(input).toBeFocused();
+  await input.press('Escape');
+  await expect(indicator).toBeFocused();
+  expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+  await page.keyboard.press('Space');
+  input = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+  const confirm = page.getByRole('button', { name: 'Confirm page change' });
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('1');
+  await expect(confirm).toBeVisible();
+  const editorGeometry = await page.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>('.builtin-pager-editor input')!;
+    const confirm = document.querySelector<HTMLButtonElement>('.builtin-pager-confirm')!;
+    const rect = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    };
+    const confirmRect = confirm.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      confirmRect.x + confirmRect.width / 2,
+      confirmRect.y + confirmRect.height / 2,
+    );
+    return {
+      input: rect(input),
+      confirm: rect(confirm),
+      receivesPointer: hit === confirm || confirm.contains(hit),
+    };
+  });
+  expect(editorGeometry.confirm.width).toBeGreaterThanOrEqual(32);
+  expect(editorGeometry.confirm.height).toBeGreaterThanOrEqual(32);
+  expect(editorGeometry.input.width).toBeGreaterThanOrEqual(20);
+  expect(editorGeometry.receivesPointer).toBe(true);
+  expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+  await testInfo.attach('f3.4-two-page-editor-geometry.json', {
+    body: JSON.stringify({ pager: before, editor: editorGeometry }, null, 2),
+    contentType: 'application/json',
+  });
+  await page.screenshot({
+    path: testInfo.outputPath('f3.4-two-page-editor-995x706.png'),
+    animations: 'disabled',
+  });
+  console.info('[F3.4 two-page editor geometry]', JSON.stringify({ before, editorGeometry }));
+
+  await input.fill('2');
+  await input.press('Enter');
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
-  await expect(indicator).toHaveText('2 / 2');
-  expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
-  await page.getByRole('button', { name: 'Previous page' }).click();
+  await expect(page.getByRole('row', { name: /Song 101/ })).toHaveAttribute('aria-rowindex', '2');
+  await expect(page.locator('.builtin-pager-range')).toHaveText('101–106 of 106 songs');
+  const pageTwoIndicator = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
+  await expect(pageTwoIndicator).toBeFocused();
+  expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+
+  await pageTwoIndicator.click();
+  const pageTwoInput = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+  await pageTwoInput.fill('1');
+  await page.getByRole('button', { name: 'Confirm page change' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
-  expectBuiltinPagerGeometryStable(pageOne, await readBuiltinPagerGeometry(page));
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(1, 2) })).toBeFocused();
+  expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
 });
 
 test('F3.1 heading typography and pager alignment stay clear at desktop and compact widths', async ({
@@ -377,6 +437,7 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
   }> = [];
 
   const assertVisualContract = async (label: string) => {
+    await page.mouse.move(0, 0);
     const metrics = await readTrackBrowserVisualGeometry(page);
     visualMeasurements.push({ label, metrics });
     const pager = metrics.pager;
@@ -407,22 +468,11 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       metrics.separator.verticalAlign === 'baseline',
       'separator uses a non-baseline alignment',
     );
-    if (pager.indicatorIsStatic) {
-      check(
-        pager.indicatorBorderStyle === 'none' &&
-          pager.indicatorBackgroundColor === 'rgba(0, 0, 0, 0)',
-        'static page indicator has an interactive surface',
-      );
-    } else {
-      check(
-        pager.indicatorBorderColor === pager.previousBorderColor,
-        'resting trigger border is accented',
-      );
-      check(
-        pager.indicatorBackgroundColor === pager.previousBackgroundColor,
-        'resting trigger surface is accented',
-      );
-    }
+    check(pager.indicatorBorderColor === 'rgba(0, 0, 0, 0)', 'resting trigger border is accented');
+    check(
+      pager.indicatorBackgroundColor === 'rgba(0, 0, 0, 0)',
+      'resting trigger surface is accented',
+    );
     check(pagerClearanceDelta <= 1, 'pager top/bottom clearance is asymmetric');
     check(
       Math.min(pager.previous.height, pager.indicator.height, pager.next.height) >= 32,
@@ -448,9 +498,7 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
         clearanceDelta: pagerClearanceDelta,
         indicatorBorder: pager.indicatorBorderColor,
         indicatorBorderStyle: pager.indicatorBorderStyle,
-        previousBorder: pager.previousBorderColor,
         indicatorBackground: pager.indicatorBackgroundColor,
-        previousBackground: pager.previousBackgroundColor,
         height: pager.toolbar.height,
       },
     };
@@ -482,6 +530,14 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
     );
     await assertVisualContract(viewport.label);
     const pageOneGeometry = await readBuiltinPagerGeometry(page);
+    const pageOneTrigger = page.getByRole('button', { name: builtinPageTriggerName(1, 2) });
+    await pageOneTrigger.click();
+    const pageOneInput = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+    await expect(pageOneInput).toBeFocused();
+    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
+    await pageOneInput.press('Escape');
+    await expect(pageOneTrigger).toBeFocused();
+    expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
     const next = page.getByRole('button', { name: 'Next page' });
     await next.focus();
     await expect(next).toBeFocused();
@@ -498,11 +554,12 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       .poll(() => previous.evaluate((button) => getComputedStyle(button).outlineStyle))
       .toBe('solid');
     await assertVisualContract(`${viewport.label} page 2 focused`);
-    await expect(page.locator('.builtin-pager-static-indicator')).toHaveText('2 / 2');
-    await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
-    await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
-    await page.keyboard.press('Enter');
+    const pageTwoTrigger = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
+    await pageTwoTrigger.click();
+    const pageTwoInput = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+    await pageTwoInput.fill('1');
+    await pageTwoInput.press('Enter');
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
   }
@@ -566,7 +623,7 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
 });
 
 test('Built-in pager handles the approved result-count boundaries', async ({ page }) => {
-  for (const count of [0, 1, 96, 100, 101, 106, 500, 2438, 10_000]) {
+  for (const count of [0, 1, 96, 100, 101, 106, 500, 501, 2438, 10_000]) {
     await page.goto(`/?mockCatalogCount=${count}`);
     if (count === 0) {
       await expect(page.getByText('The built-in song catalog is empty.')).toBeVisible();
@@ -587,19 +644,15 @@ test('Built-in pager handles the approved result-count boundaries', async ({ pag
 
     const pageCount = Math.ceil(count / 100);
     const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
-    await expect(pager.locator('button')).toHaveCount(pageCount <= 5 ? 2 : 3);
+    await expect(pager.locator('button')).toHaveCount(3);
     await expect(page.getByRole('button', { name: 'Previous page' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Next page' })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'First page' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Last page' })).toHaveCount(0);
-    if (pageCount <= 5) {
-      await expect(pager.locator('.builtin-pager-static-indicator')).toHaveText(`1 / ${pageCount}`);
-      await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
-    } else {
-      await expect(
-        page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) }),
-      ).toHaveAttribute('aria-current', 'page');
-    }
+    await expect(pager.locator('.builtin-pager-static-indicator')).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) }),
+    ).toHaveAttribute('aria-current', 'page');
 
     if (count === 106) {
       await page.getByRole('button', { name: 'Next page' }).click();
@@ -1122,7 +1175,7 @@ test('playlist Built-in picker pages through song 101 and adds it to the same pl
   const pageTwo = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
   await expect(pageTwo).toBeVisible();
   await expect(pageTwo).toHaveAttribute('aria-rowcount', '101');
-  await expect(page.getByRole('button', { name: 'Next page' })).toBeFocused();
+  await expect(page.getByRole('button', { name: builtinPageTriggerName(2, 5) })).toBeFocused();
   await expect(song101).toBeVisible();
   await expect(song101).toHaveAttribute('aria-rowindex', '2');
   await expectNoSeriousAccessibilityViolations(page);
@@ -1873,7 +1926,7 @@ test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('F3.3 pager uses a static status through five pages and inline editing from six pages', async ({
+test('F3.4 page indicator opens an inline editor at every multi-page count', async ({
   page,
 }, testInfo) => {
   const measurements: Array<Record<string, unknown>> = [];
@@ -1883,19 +1936,43 @@ test('F3.3 pager uses a static status through five pages and inline editing from
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     const pageCount = Math.ceil(total / 100);
     const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
-    const indicator = pager.locator('.builtin-pager-static-indicator');
-    await expect(indicator).toHaveText('1 / ' + pageCount);
+    const indicator = page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) });
     await expect(indicator).toHaveAttribute('aria-current', 'page');
-    await expect(pager.locator('button')).toHaveCount(2);
-    await expect(page.locator('.builtin-pager-jump-trigger')).toHaveCount(0);
-    await expect(page.getByRole('textbox', { name: /Page number/ })).toHaveCount(0);
+    await expect(pager.locator('button')).toHaveCount(3);
+    await expect(page.locator('.builtin-pager-static-indicator')).toHaveCount(0);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(pager).not.toContainText(/Go to page|\bGo\b/);
     const before = await readBuiltinPagerGeometry(page);
-    await page.getByRole('button', { name: 'Next page' }).click();
-    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+    await indicator.click();
+    const input = page.getByRole('textbox', { name: `Page number, from 1 to ${pageCount}` });
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue('1');
+    const editing = await readBuiltinPagerGeometry(page);
+    expectBuiltinPagerGeometryStable(before, editing);
+    await input.fill(String(pageCount));
+    if (total === 106) {
+      await input.press('Enter');
+    } else {
+      await page.getByRole('button', { name: 'Confirm page change' }).click();
+    }
+    await expect(
+      page.getByRole('grid', { name: `Built-in Songs, page ${pageCount}` }),
+    ).toBeVisible();
+    const lastRow = page.getByRole('row', { name: new RegExp(`Song ${total}`) });
+    await page.getByRole('grid', { name: `Built-in Songs, page ${pageCount}` }).focus();
+    await page.keyboard.press('End');
+    await expect(lastRow).toBeVisible();
+    await expect(page.locator('.builtin-pager-range')).toHaveText(
+      `${(pageCount - 1) * 100 + 1}–${total} of ${total} songs`,
+    );
     expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
-    measurements.push({ total, pageCount, before, after: await readBuiltinPagerGeometry(page) });
+    measurements.push({
+      total,
+      pageCount,
+      before,
+      editing,
+      after: await readBuiltinPagerGeometry(page),
+    });
   }
 
   await page.setViewportSize({ width: 995, height: 706 });
@@ -1959,16 +2036,28 @@ test('F3.3 pager uses a static status through five pages and inline editing from
   ).toBeFocused();
 
   await page.goto('/?mockCatalogCount=10000');
-  await jumpToBuiltinPage(page, 99);
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  const hundredPageTrigger = page.getByRole('button', {
+    name: '1 / 100, Page 1 of 100. Jump to page',
+  });
   const beforeHundred = await readBuiltinPagerGeometry(page);
-  await page.getByRole('button', { name: 'Next page' }).click();
+  await hundredPageTrigger.click();
+  const hundredPageInput = page.getByRole('textbox', { name: 'Page number, from 1 to 100' });
+  await expect(hundredPageInput).toBeFocused();
+  await hundredPageInput.fill('100');
+  const editingHundred = await readBuiltinPagerGeometry(page);
+  expectBuiltinPagerGeometryStable(beforeHundred, editingHundred);
+  await hundredPageInput.press('Enter');
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 100' })).toBeVisible();
+  await expect(page.locator('.builtin-pager-range')).toHaveText('9901–10000 of 10000 songs');
+  await expect(
+    page.getByRole('button', { name: '100 / 100, Page 100 of 100. Jump to page' }),
+  ).toBeFocused();
   expectBuiltinPagerGeometryStable(beforeHundred, await readBuiltinPagerGeometry(page));
   measurements.push({
     total: 10_000,
-    from: 99,
-    to: 100,
     before: beforeHundred,
+    editing: editingHundred,
     after: await readBuiltinPagerGeometry(page),
   });
 
@@ -1989,6 +2078,18 @@ test('F3.3 pager uses a static status through five pages and inline editing from
     await expect(field).toBeFocused();
     const during = await readBuiltinPagerGeometry(page);
     expectBuiltinPagerGeometryStable(before, during);
+    const confirm = page.getByRole('button', { name: 'Confirm page change' });
+    const confirmGeometry = await confirm.boundingBox();
+    expect(confirmGeometry).not.toBeNull();
+    expect(confirmGeometry!.width).toBeGreaterThanOrEqual(32);
+    expect(confirmGeometry!.height).toBeGreaterThanOrEqual(32);
+    expect(
+      await confirm.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return hit === button || button.contains(hit);
+      }),
+    ).toBe(true);
     const geometry = await page.locator('.builtin-pager-wrap').evaluate((element) => ({
       width: element.clientWidth,
       scrollWidth: element.scrollWidth,
@@ -2003,9 +2104,9 @@ test('F3.3 pager uses a static status through five pages and inline editing from
     element.style.removeProperty('flex');
     element.style.removeProperty('min-width');
   });
-  await testInfo.attach('f3.3-inline-page-editor-geometry.json', {
+  await testInfo.attach('f3.4-inline-page-editor-geometry.json', {
     body: JSON.stringify(measurements, null, 2),
     contentType: 'application/json',
   });
-  console.info('[F3.3 inline pager geometry]', JSON.stringify(measurements));
+  console.info('[F3.4 inline pager geometry]', JSON.stringify(measurements));
 });

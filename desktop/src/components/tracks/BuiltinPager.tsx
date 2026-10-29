@@ -20,7 +20,6 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
   const pageInputId = useId();
   const pageInstructionsId = useId();
   const pageErrorId = useId();
-  const canJump = pageCount > 5;
 
   useEffect(() => {
     if (!editing) return;
@@ -32,10 +31,19 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
   }, [editing]);
 
   const pageDigits = String(pageCount).length;
-  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 34px)`;
+  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 44px)`;
 
   const focusTrigger = () => {
     window.setTimeout(() => triggerRef.current?.focus(), 0);
+  };
+
+  const focusTriggerIfUnclaimed = (editingInput: HTMLInputElement | null) => {
+    window.setTimeout(() => {
+      if (document.activeElement !== document.body && document.activeElement !== editingInput) {
+        return;
+      }
+      triggerRef.current?.focus();
+    }, 0);
   };
 
   const beginEditing = () => {
@@ -61,11 +69,12 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
       setPageError(`Enter a whole page number from 1 to ${pageCount}.`);
       return;
     }
+    const editingInput = inputRef.current;
     setEditing(false);
     setPageValue('');
     setPageError(null);
     await navigate(target);
-    focusTrigger();
+    focusTriggerIfUnclaimed(editingInput);
   };
 
   const onEditorKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -79,7 +88,7 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
     }
   };
 
-  const onEditorBlur = (event: FocusEvent<HTMLInputElement>) => {
+  const onEditorBlur = (event: FocusEvent<HTMLDivElement>) => {
     if (event.relatedTarget instanceof Node && editorRef.current?.contains(event.relatedTarget)) {
       return;
     }
@@ -125,8 +134,8 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
         style={{ width: indicatorWidth }}
         data-editing={editing ? 'true' : 'false'}
       >
-        {editing && canJump ? (
-          <div className="builtin-pager-editor" ref={editorRef}>
+        {editing ? (
+          <div className="builtin-pager-editor" ref={editorRef} onBlur={onEditorBlur}>
             <label className="visually-hidden" htmlFor={pageInputId}>
               Page number
             </label>
@@ -148,7 +157,6 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
                 setPageError(null);
               }}
               onKeyDown={onEditorKeyDown}
-              onBlur={onEditorBlur}
             />
             <span className="builtin-pager-page-count" aria-hidden="true">
               / {pageCount}
@@ -173,7 +181,7 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
               </span>
             )}
           </div>
-        ) : canJump ? (
+        ) : (
           <button
             ref={triggerRef}
             className="builtin-pager-jump-trigger"
@@ -185,10 +193,6 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
           >
             {page} / {pageCount}
           </button>
-        ) : (
-          <span className="builtin-pager-static-indicator" aria-current="page">
-            {page} / {pageCount}
-          </span>
         )}
       </div>
       <button

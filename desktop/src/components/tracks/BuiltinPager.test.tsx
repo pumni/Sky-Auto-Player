@@ -8,28 +8,54 @@ import { TrackBrowser } from './TrackBrowser';
 describe('BuiltinPager', () => {
   afterEach(cleanup);
 
-  it.each([106, 500])(
-    'keeps %i songs in static page-indicator mode with no redundant jump action',
-    async (catalogCount) => {
-      const store = createDesktopStore(createMockBridge({ catalogCount }));
+  it.each([
+    { total: 106, pages: 2, target: 2 },
+    { total: 500, pages: 5, target: 5 },
+  ])(
+    'opens an inline page editor for $total songs and navigates to page $target',
+    async ({ total, pages, target }) => {
+      const store = createDesktopStore(createMockBridge({ catalogCount: total }));
       await act(async () => store.getState().initialize());
       await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
       render(<BuiltinPager useStore={store} />);
 
       const pager = screen.getByRole('navigation', { name: 'Built-in Songs pages' });
-      const pageIndicator = pager.querySelector('.builtin-pager-static-indicator');
-      expect(pageIndicator).toHaveTextContent(`1 / ${Math.ceil(catalogCount / 100)}`);
-      expect(pageIndicator).toHaveAttribute('aria-current', 'page');
-      expect(pager.querySelectorAll('button')).toHaveLength(2);
-      expect(screen.queryByRole('button', { name: /jump to page/i })).toBeNull();
-      expect(screen.queryByRole('textbox', { name: /page number/i })).toBeNull();
+      const pageOne = screen.getByRole('button', {
+        name: `1 / ${pages}, Page 1 of ${pages}. Jump to page`,
+      });
+      expect(pageOne).toHaveAttribute('aria-current', 'page');
+      expect(pageOne).toHaveAttribute('title', 'Jump to page');
+      expect(pager.querySelectorAll('button')).toHaveLength(3);
+      fireEvent.click(pageOne);
+      const input = screen.getByRole('textbox', { name: `Page number, from 1 to ${pages}` });
+      await waitFor(() => expect(input).toHaveFocus());
+      expect(input).toHaveValue('1');
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(screen.queryByText(/go to page/i)).toBeNull();
-      expect(screen.getByRole('status')).toHaveTextContent(
-        `Showing 1–${Math.min(100, catalogCount)} of ${catalogCount} songs. Page 1 of ${Math.ceil(catalogCount / 100)}.`,
-      );
-      fireEvent.click(pageIndicator!);
-      expect(screen.queryByRole('textbox', { name: /page number/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^go$/i })).toBeNull();
+      fireEvent.change(input, { target: { value: String(target) } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(store.getState().library.builtinPage.committedPage).toBe(target));
+      const selectedPage = screen.getByRole('button', {
+        name: `${target} / ${pages}, Page ${target} of ${pages}. Jump to page`,
+      });
+      await waitFor(() => expect(selectedPage).toHaveFocus());
+      expect(
+        screen.getByText(`${(target - 1) * 100 + 1}–${total} of ${total} songs`),
+      ).toBeVisible();
+
+      if (total === 106) {
+        fireEvent.click(selectedPage);
+        const returnInput = screen.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+        fireEvent.change(returnInput, { target: { value: '1' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm page change' }));
+        await waitFor(() => expect(store.getState().library.builtinPage.committedPage).toBe(1));
+        await waitFor(() =>
+          expect(
+            screen.getByRole('button', { name: '1 / 2, Page 1 of 2. Jump to page' }),
+          ).toHaveFocus(),
+        );
+      }
     },
   );
 
@@ -123,14 +149,50 @@ describe('BuiltinPager', () => {
     fireEvent.click(trigger);
     input = screen.getByRole('textbox', { name: 'Page number, from 1 to 6' });
     await waitFor(() => expect(input).toHaveFocus());
+    const confirm = screen.getByRole('button', { name: 'Confirm page change' });
     const outside = screen.getByRole('button', { name: 'Outside pager' });
-    fireEvent.blur(input, { relatedTarget: outside });
+    fireEvent.blur(input, { relatedTarget: confirm });
+    expect(input).toBeInTheDocument();
+    fireEvent.blur(confirm, { relatedTarget: outside });
     await waitFor(() => expect(screen.queryByRole('textbox', { name: /page number/i })).toBeNull());
     outside.focus();
     expect(outside).toHaveFocus();
   });
 
-  it('moves focus between only the previous and next controls in static mode', async () => {
+  it('does not steal focus moved elsewhere while an inline page navigation is pending', async () => {
+    const store = createDesktopStore(createMockBridge({ catalogCount: 500, searchDelayMs: 150 }));
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    render(
+      <>
+        <BuiltinPager useStore={store} />
+        <button type="button">Outside pager</button>
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '1 / 5, Page 1 of 5. Jump to page' }));
+    const input = screen.getByRole('textbox', { name: 'Page number, from 1 to 5' });
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByRole('navigation', { name: 'Built-in Songs pages' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
+
+    const outside = screen.getByRole('button', { name: 'Outside pager' });
+    outside.focus();
+    await waitFor(() => expect(store.getState().library.builtinPage.committedPage).toBe(2));
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Built-in Songs pages' })).toHaveAttribute(
+        'aria-busy',
+        'false',
+      ),
+    );
+    expect(outside).toHaveFocus();
+  });
+
+  it('moves focus between the previous, page indicator and next controls with arrow keys', async () => {
     const store = createDesktopStore(createMockBridge({ catalogCount: 500 }));
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
@@ -138,11 +200,18 @@ describe('BuiltinPager', () => {
     render(<BuiltinPager useStore={store} />);
 
     const previous = screen.getByRole('button', { name: 'Previous page' });
+    const indicator = screen.getByRole('button', {
+      name: '2 / 5, Page 2 of 5. Jump to page',
+    });
     const next = screen.getByRole('button', { name: 'Next page' });
     previous.focus();
     fireEvent.keyDown(previous, { key: 'ArrowRight' });
+    expect(indicator).toHaveFocus();
+    fireEvent.keyDown(indicator, { key: 'ArrowRight' });
     expect(next).toHaveFocus();
     fireEvent.keyDown(next, { key: 'ArrowLeft' });
+    expect(indicator).toHaveFocus();
+    fireEvent.keyDown(indicator, { key: 'ArrowLeft' });
     expect(previous).toHaveFocus();
   });
 
@@ -163,7 +232,7 @@ describe('BuiltinPager', () => {
     expect(screen.getByText('101–200 of 500 songs')).toBeVisible();
   });
 
-  it('retries a failed page and focuses a real navigation control in static mode', async () => {
+  it('retries a failed page and focuses the page indicator after navigation', async () => {
     const store = createDesktopStore(createMockBridge({ catalogCount: 500 }));
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
@@ -181,7 +250,11 @@ describe('BuiltinPager', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t load page 2.');
     await act(async () => screen.getByRole('button', { name: 'Retry page 2' }).click());
     await waitFor(() => expect(store.getState().library.builtinPage.committedPage).toBe(2));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).toHaveFocus());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '2 / 5, Page 2 of 5. Jump to page' }),
+      ).toHaveFocus(),
+    );
     expect(screen.getByText('2 / 5')).toBeVisible();
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -215,21 +288,15 @@ describe('BuiltinPager', () => {
 
       const pageCount = Math.ceil(count / 100);
       const pager = screen.getByRole('navigation', { name: 'Built-in Songs pages' });
-      expect(pager.querySelectorAll('button')).toHaveLength(pageCount <= 5 ? 2 : 3);
+      expect(pager.querySelectorAll('button')).toHaveLength(3);
       expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled();
-      if (pageCount <= 5) {
-        expect(pager.querySelector('.builtin-pager-static-indicator')).toHaveTextContent(
-          `1 / ${pageCount}`,
-        );
-        expect(screen.queryByRole('button', { name: /jump to page/i })).toBeNull();
-      } else {
-        expect(
-          screen.getByRole('button', {
-            name: `1 / ${pageCount}, Page 1 of ${pageCount}. Jump to page`,
-          }),
-        ).toHaveAttribute('aria-current', 'page');
-      }
+      expect(pager.querySelector('.builtin-pager-static-indicator')).toBeNull();
+      expect(
+        screen.getByRole('button', {
+          name: `1 / ${pageCount}, Page 1 of ${pageCount}. Jump to page`,
+        }),
+      ).toHaveAttribute('aria-current', 'page');
     },
   );
 
