@@ -1,67 +1,58 @@
-# Sky Auto Player Documentation Router
+# Technical Documentation — Find by Task
 
-Choose the smallest set of documents that matches the task. Evidence and decision records are
-revision-scoped; their presence here or in the repository does not make them current instructions.
+This is a locator, not a checklist. Open the references relevant to the
+problem; code and tests at the checked-out SHA establish implementation
+behavior. Security, timing, and release contracts also define intended
+invariants that must not be discarded because an implementation differs.
 
-## Find documents by task
+## Active contracts and references
 
-- **Architecture and native ownership:** [architecture.md](architecture.md),
-  [native-playback-ownership.md](native-playback-ownership.md), and
-  [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
-- **Playback and timing:** [timing-principles.md](timing-principles.md),
-  [hold-frame-model.md](hold-frame-model.md), and [tuning-presets.md](tuning-presets.md).
-- **Timing or Windows qualification:** [final-down-admission-qualification.md](final-down-admission-qualification.md)
-  and [physical-key-study-method.md](physical-key-study-method.md). The associated
-  [timing observations](rt-dispatch-timing-evidence.md) are revision-scoped evidence.
-- **Desktop UI and workbench layout:** [desktop-workbench.md](desktop-workbench.md) and
-  [Graphite final polish evidence](evidence/graphite-final-ui-polish/README.md).
-- **Library and local import:** [library-v1-contract.md](library-v1-contract.md).
-- **Built-in library paging qualification:** [Issue #560 Package D evidence](evidence/issue-560-package-d/README.md)
-  records cross-layer regressions, Windows/Tauri profiling, resource verification, and the isolated
-  upgrade blocker for its reviewed source SHA.
-- **Security and distribution:** [../SECURITY.md](../SECURITY.md),
-  [distribution-and-update.md](distribution-and-update.md),
-  [v4-release-authority.md](v4-release-authority.md),
-  [v4-tauri-packaging.md](v4-tauri-packaging.md),
-  [v4-updater-key-custody.md](v4-updater-key-custody.md),
-  [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md),
-  [v4-release-execution-topology.md](v4-release-execution-topology.md), and
-  [v4-hosted-signing-proof.md](v4-hosted-signing-proof.md).
-- **CI lanes and artifact tooling:** [ci-validation-topology.md](ci-validation-topology.md)
-  covers Rust-owned classification, candidate/bridge artifacts, calibration packaging, and
-  installer/updater qualification. [powershell-dependency-ledger.md](powershell-dependency-ledger.md)
-  records migrated fixture entrypoints and retained Windows/operator adapters.
-- **Toolchain and development:** [rust-toolchain-policy.md](rust-toolchain-policy.md) and
-  [../CONTRIBUTING.md](../CONTRIBUTING.md).
-- **Performance or test-pipeline work:** [desktop-startup-benchmark.md](desktop-startup-benchmark.md)
-  documents an opt-in benchmark; [maintenance-test-pipeline-report.md](maintenance-test-pipeline-report.md)
-  records measured gate coverage and costs. [Dispatch forensics](dispatch-forensics-cost-qualification.md)
-  and the [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md) are
-  source-revision-scoped research, not general current behavior contracts.
+- **Architecture and ownership:** [architecture](architecture.md);
+  [native dispatch](rt-dispatch-architecture.md) for real-time boundaries.
+- **Timing and playback:** [timing principles](timing-principles.md),
+  [hold frames](hold-frame-model.md), [presets](tuning-presets.md);
+  [timing observation semantics](rt-dispatch-timing-evidence.md)
+  (field definitions are current; dated qualification results are historical).
+- **Desktop UI:** [workbench](desktop-workbench.md).
+  **Library:** [playlist/import contract](library-v1-contract.md).
+- **Security:** [SECURITY.md](../SECURITY.md).
+- **Packaging and updater:** [distribution](distribution-and-update.md),
+  [Tauri packaging](v4-tauri-packaging.md).
+- **Release operations:** [release authority](v4-release-authority.md),
+  [execution topology](v4-release-execution-topology.md)
+  (active runbook; dated v4.2.0 compatibility proof is historical),
+  [updater key custody](v4-updater-key-custody.md),
+  [Authenticode](v4-authenticode-provider-seam.md).
+- **CI and development:** [CI topology](ci-validation-topology.md),
+  [Rust toolchain](rust-toolchain-policy.md),
+  [contributing](../CONTRIBUTING.md).
+- **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),
+  [physical-key study method](physical-key-study-method.md),
+  [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md).
+- **When auditing agent context:** [maintenance approach](agent-context-maintenance.md)
+  and [optional behavioral probes](agent-context-evals.md).
 
-## Evidence and authority
+## Revision-bound records
 
-Authority depends on the claim being checked; there is no single source hierarchy for every domain.
+These are useful when tracing a decision or reproducing an earlier result,
+not as instructions for current code. Keep recorded SHAs, hardware,
+measurements, and limitations intact.
 
-- Current implementation behavior is established by source, direct tests, and configuration at the
-  exact checked-out SHA. CI reports which checks passed for its own commit.
-- Security and release requirements come from the current security and distribution contracts,
-  considered with the enforcing source and workflows.
-- Claims about Windows behavior, physical input, or observed playback require evidence from the
-  matching native environment. Browser screenshots and mock bridges establish only the UI behavior
-  they exercise.
-- Historical decisions and captures establish only what their stated revision, date, and conditions
-  support. They are not standing instructions or evidence of a current approval state.
+- **Decisions:** [ADRs](adr/).
+- **Measured / reviewed evidence:** [evidence](evidence/),
+  [native playback ownership migration](native-playback-ownership.md),
+  [hosted signing proof](v4-hosted-signing-proof.md),
+  [dispatch forensics qualification](dispatch-forensics-cost-qualification.md),
+  [final Down qualification](final-down-admission-qualification.md),
+  [test-pipeline report](maintenance-test-pipeline-report.md),
+  [PowerShell migration ledger](powershell-dependency-ledger.md), and
+  [Issue #560 Package D qualification](evidence/issue-560-package-d/README.md)
+  (source-bound 96-song paging/Windows profile; not current 106-song or installed-upgrade evidence).
+- **Release-specific records:** [releases](releases/).
+- Other issue- and phase-scoped reports remain in `docs/` (for example,
+  `gate-*-evidence.md`, `r3-*.md`, and `prepared-*-evidence.md`);
+  search by issue, feature, or source SHA when needed.
 
-Use [adr/](adr/) for the relevant design decision and its rationale; ADRs are not all current
-contracts and need not be read as a set. Use [evidence/](evidence/) for revision-bound measurements,
-screenshots, and reports, and [releases/](releases/) for qualification records tied to a particular
-release. Check each record's source SHA, conditions, and stated limits before applying it.
-
-## Verification
-
-The canonical pre-review command is `cargo xtask check all`; it covers static, Rust, desktop, and
-native desktop checks. Focused development commands are `cargo xtask check static`,
-`cargo xtask check rust`, and `cargo xtask check desktop`. Packaging, Windows timing acceptance,
-release, and benchmark workflows are specialized evidence paths for changes that touch those
-boundaries.
+If an active contract disagrees with source, inspect both and report the
+discrepancy before changing the relevant owner. Historical test evidence
+and browser mocks cannot establish current native Windows timing behavior.

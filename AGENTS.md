@@ -1,46 +1,33 @@
-# Sky Auto Player — Repository Guide
+# Sky Auto Player — Agent Context
 
-Windows 11 music-sheet player for Sky: Children of the Light. The desktop application reads JSON,
-skysheet, and TXT sheets and emits gameplay keyboard input through Windows `SendInput`.
+Windows 11 desktop app (Tauri 2, React/TypeScript) with a Rust-native
+music-sheet player for Sky: Children of the Light.
 
-## Scope and external actions
+## Project boundaries
 
-Keep work within the requested task. Do not create, publish, close, merge, retarget, or otherwise
-mutate remote branches, pull requests, issues, releases, or other externally visible project state
-unless the user's current request explicitly authorizes that action. Ordinary local work within the
-requested scope does not need separate authorization.
+- Gameplay input uses Windows `SendInput` only. No game-memory access,
+  file tampering, process hooks, DLL injection, debugger attachment, or
+  anti-cheat bypass. See [SECURITY.md](SECURITY.md).
+- Keep domain/orchestration separate from Win32 effects. The native timing
+  and focus contracts matter; see [architecture](docs/architecture.md) and
+  [dispatch](docs/rt-dispatch-architecture.md) for changes to those boundaries.
+- Rust and Bun are the supported product/repository toolchains; do not
+  introduce a Python product runtime or repository toolchain.
+- Preserve updater and release trust requirements in
+  [distribution-and-update.md](docs/distribution-and-update.md).
 
-## Security and input boundary
+## Working in this repository
 
-- Never modify game files, access another process's memory, bypass anti-cheat, inject code, attach a
-  debugger, or install process/input hooks.
-- Gameplay keystroke simulation uses Windows `SendInput` only. Do not introduce other injection
-  mechanisms.
-- Validate external and user inputs; fail closed on ambiguous or malformed security-sensitive data.
-- [`SECURITY.md`](SECURITY.md) is canonical for the security contract; `cargo xtask check static`
-  enforces it.
-
-## Architecture and current behavior
-
-- Domain and orchestration crates stay independent of Win32 details and direct `SendInput`; see
-  [`docs/architecture.md`](docs/architecture.md) and boundary tests for exact ownership.
-- The supported product and repository tooling are Rust/Bun native. Do not reintroduce Python into
-  the product runtime or repository tooling.
-- Native updater and release integrity contracts follow
-  [`docs/distribution-and-update.md`](docs/distribution-and-update.md).
-- Current source, tests, and configuration at the checked-out SHA establish implementation
-  behavior. Use [`docs/INDEX.md`](docs/INDEX.md) to find relevant current contracts and scoped
-  historical evidence.
-- Active names describe lasting behavior, not implementation sequence; schema/version identifiers
-  and immutable historical or external contracts are exceptions. `cargo xtask check static` audits
-  this policy.
-
-## Validation
-
-- Run focused checks while editing. Before review, run `cargo xtask check all` once against the final
-  relevant source state; it includes static, Rust, desktop, and native desktop checks.
-- Record exact commands, HEAD and relevant input identity, exit code, and coverage. Report only
-  checks that actually ran and identify skipped checks.
-- Do not repeat full performance baselines or native acceptance without a new behavior or
-  performance change. Run packaging, Windows timing/latency acceptance, release, and benchmark
-  workflows only when the changed boundary requires them.
+- Use code, tests, and configuration at the checked-out commit for current
+  implementation behavior. Old ADRs, benchmarks, and release evidence describe
+  their recorded revisions, not current qualification.
+- [docs/INDEX.md](docs/INDEX.md) locates task-specific contracts. Open only
+  the references relevant to the change; update a current contract when its
+  behavior changes.
+- Local editing and testing are within scope. Remote branch/PR/issue/release
+  changes need authorization for the requested action.
+- Run focused checks as appropriate. The pre-review full gate for implementation
+  changes is `cargo xtask check all`; native timing, packaging, and release
+  qualification are task-specific. Report what actually ran and what did not.
+- Maintained names describe responsibilities rather than past project phases;
+  genuine version/schema IDs and immutable historical names are exceptions.

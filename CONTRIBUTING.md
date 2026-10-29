@@ -12,9 +12,10 @@ keeps process proportional to the risk of the boundary being changed.
 - [`AGENTS.md`](AGENTS.md) is a concise repository/agent guide; it is not a replacement for source,
   tests, or task-specific investigation.
 
-Do not preload historical plans or archives. Existing documentation describes the current system and
-should normally be preserved, but an intentional contribution may change a documented architecture
-or contract; update the active documentation in the same change when that happens.
+Use [`docs/INDEX.md`](docs/INDEX.md) for relevant active contracts; don't preload historical
+records. Update the owning contract when behavior changes and preserve earlier evidence at its
+recorded revision. Agent-context reviews can use
+[`docs/agent-context-maintenance.md`](docs/agent-context-maintenance.md).
 
 ## Required naming rule
 
