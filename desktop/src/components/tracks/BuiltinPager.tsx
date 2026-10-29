@@ -1,5 +1,13 @@
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type RefObject,
+} from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { LIBRARY_PAGE_SIZE } from '../../state/store';
 
@@ -8,13 +16,21 @@ interface BuiltinPagerNavigationProps {
   pageCount: number;
   busy: boolean;
   navigate: (page: number) => Promise<void>;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  editorFocusIntentRef: RefObject<boolean>;
 }
 
-function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPagerNavigationProps) {
+function BuiltinPagerNavigation({
+  page,
+  pageCount,
+  busy,
+  navigate,
+  triggerRef,
+  editorFocusIntentRef,
+}: BuiltinPagerNavigationProps) {
   const [editing, setEditing] = useState(false);
   const [pageValue, setPageValue] = useState('');
   const [pageError, setPageError] = useState<string | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pageInputId = useId();
@@ -31,7 +47,8 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
   }, [editing]);
 
   const pageDigits = String(pageCount).length;
-  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 40px)`;
+  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 8px)`;
+  const pagerWidth = `calc(${pageDigits * 2 + 3}ch + 88px)`;
 
   const focusTrigger = () => {
     window.setTimeout(() => triggerRef.current?.focus(), 0);
@@ -56,6 +73,7 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
     setEditing(false);
     setPageValue('');
     setPageError(null);
+    if (restoreFocus) editorFocusIntentRef.current = false;
     if (restoreFocus) focusTrigger();
   };
 
@@ -70,6 +88,7 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
       return;
     }
     const editingInput = inputRef.current;
+    editorFocusIntentRef.current = false;
     setEditing(false);
     setPageValue('');
     setPageError(null);
@@ -92,10 +111,12 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
     if (event.relatedTarget instanceof Node && editorRef.current?.contains(event.relatedTarget)) {
       return;
     }
+    if (event.relatedTarget instanceof Node) editorFocusIntentRef.current = false;
     cancelEditing(false);
   };
 
   const onPagerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (editing) return;
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     if (!(event.target instanceof HTMLButtonElement)) return;
     const controls = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button'));
@@ -117,24 +138,12 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
       className="builtin-pager"
       aria-label="Built-in Songs pages"
       aria-busy={busy}
+      data-editing={editing ? 'true' : 'false'}
+      style={{ width: pagerWidth }}
       onKeyDown={onPagerKeyDown}
     >
-      <button
-        className="builtin-pager-control"
-        type="button"
-        aria-label="Previous page"
-        title="Previous page"
-        disabled={page === 1}
-        onClick={() => void navigate(page - 1)}
-      >
-        <ChevronLeft size={16} aria-hidden="true" />
-      </button>
-      <div
-        className="builtin-pager-page-slot"
-        style={{ width: indicatorWidth }}
-        data-editing={editing ? 'true' : 'false'}
-      >
-        {editing ? (
+      {editing ? (
+        <div className="builtin-pager-page-slot" style={{ width: '100%' }} data-editing="true">
           <div className="builtin-pager-editor" ref={editorRef} onBlur={onEditorBlur}>
             <label className="visually-hidden" htmlFor={pageInputId}>
               Page number
@@ -152,6 +161,9 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
               aria-describedby={
                 pageError ? `${pageInstructionsId} ${pageErrorId}` : pageInstructionsId
               }
+              onFocus={() => {
+                editorFocusIntentRef.current = true;
+              }}
               onChange={(event) => {
                 setPageValue(event.currentTarget.value);
                 setPageError(null);
@@ -181,30 +193,44 @@ function BuiltinPagerNavigation({ page, pageCount, busy, navigate }: BuiltinPage
               </span>
             )}
           </div>
-        ) : (
+        </div>
+      ) : (
+        <>
           <button
-            ref={triggerRef}
-            className="builtin-pager-jump-trigger"
+            className="builtin-pager-control"
             type="button"
-            title="Jump to page"
-            aria-label={`${page} / ${pageCount}, Page ${page} of ${pageCount}. Jump to page`}
-            aria-current="page"
-            onClick={beginEditing}
+            aria-label="Previous page"
+            title="Previous page"
+            disabled={page === 1}
+            onClick={() => void navigate(page - 1)}
           >
-            {page} / {pageCount}
+            <ChevronLeft size={16} aria-hidden="true" />
           </button>
-        )}
-      </div>
-      <button
-        className="builtin-pager-control"
-        type="button"
-        aria-label="Next page"
-        title="Next page"
-        disabled={page === pageCount}
-        onClick={() => void navigate(page + 1)}
-      >
-        <ChevronRight size={16} aria-hidden="true" />
-      </button>
+          <div className="builtin-pager-page-slot" style={{ width: indicatorWidth }}>
+            <button
+              ref={triggerRef}
+              className="builtin-pager-jump-trigger"
+              type="button"
+              title="Jump to page"
+              aria-label={`${page} / ${pageCount}, Page ${page} of ${pageCount}. Jump to page`}
+              aria-current="page"
+              onClick={beginEditing}
+            >
+              {page} / {pageCount}
+            </button>
+          </div>
+          <button
+            className="builtin-pager-control"
+            type="button"
+            aria-label="Next page"
+            title="Next page"
+            disabled={page === pageCount}
+            onClick={() => void navigate(page + 1)}
+          >
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </>
+      )}
     </nav>
   );
 }
@@ -216,6 +242,18 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
   const failedPage = useStore((store: DesktopStore) => store.library.builtinPage.failedPage);
   const navigate = useStore((store: DesktopStore) => store.navigateBuiltinPage);
   const pageCount = Math.ceil(total / LIBRARY_PAGE_SIZE);
+  const previousPageCountRef = useRef(pageCount);
+  const editorFocusIntentRef = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const pageCountChanged = previousPageCountRef.current !== pageCount;
+    previousPageCountRef.current = pageCount;
+    if (!pageCountChanged) return;
+    const shouldRestoreFocus = editorFocusIntentRef.current;
+    editorFocusIntentRef.current = false;
+    if (shouldRestoreFocus) triggerRef.current?.focus();
+  }, [pageCount]);
 
   if (total === 0) return null;
 
@@ -244,6 +282,8 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
           pageCount={pageCount}
           busy={pendingPage !== null}
           navigate={navigate}
+          triggerRef={triggerRef}
+          editorFocusIntentRef={editorFocusIntentRef}
         />
       )}
       <p className="builtin-pager-status" role="status" aria-live="polite" aria-atomic="true">

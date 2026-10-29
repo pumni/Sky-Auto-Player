@@ -28,8 +28,12 @@ function builtinPageTriggerName(page: number, pageCount: number) {
 
 async function readBuiltinPagerGeometry(page: Page) {
   return page.evaluate(() => {
-    const rect = (element: Element | null) => {
-      if (!(element instanceof HTMLElement)) throw new Error('Pager element is missing');
+    const required = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`Missing pager geometry element: ${selector}`);
+      return element;
+    };
+    const rect = (element: HTMLElement) => {
       const box = element.getBoundingClientRect();
       return {
         x: box.x,
@@ -40,12 +44,20 @@ async function readBuiltinPagerGeometry(page: Page) {
         centerY: box.y + box.height / 2,
       };
     };
+    const optionalRect = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      return element ? rect(element) : null;
+    };
     return {
-      previous: rect(document.querySelector('[aria-label="Previous page"]')),
-      indicator: rect(document.querySelector('.builtin-pager-page-slot')),
-      next: rect(document.querySelector('[aria-label="Next page"]')),
-      toolbar: rect(document.querySelector('.builtin-pager')),
-      range: rect(document.querySelector('.builtin-pager-range')),
+      previous: optionalRect('[aria-label="Previous page"]'),
+      indicator: rect(required('.builtin-pager-page-slot')),
+      trigger: optionalRect('.builtin-pager-jump-trigger'),
+      next: optionalRect('[aria-label="Next page"]'),
+      toolbar: rect(required('.builtin-pager')),
+      wrap: rect(required('.builtin-pager-wrap')),
+      range: rect(required('.builtin-pager-range')),
+      table: rect(required('.track-table')),
+      player: rect(required('.player-bar')),
     };
   });
 }
@@ -117,7 +129,9 @@ async function readBuiltinPagerEditorGeometry(page: Page) {
     const input = required<HTMLInputElement>('.builtin-pager-editor input');
     const pageCount = required<HTMLElement>('.builtin-pager-page-count');
     const confirm = required<HTMLButtonElement>('.builtin-pager-confirm');
+    const toolbar = required<HTMLElement>('.builtin-pager');
     const slotRect = slot.getBoundingClientRect();
+    const toolbarRect = toolbar.getBoundingClientRect();
     const countRect = pageCount.getBoundingClientRect();
     const confirmRect = confirm.getBoundingClientRect();
     const hit = document.elementFromPoint(
@@ -125,14 +139,43 @@ async function readBuiltinPagerEditorGeometry(page: Page) {
       confirmRect.y + confirmRect.height / 2,
     );
     return {
+      toolbar: bounds(toolbar),
       slot: bounds(slot),
       input: bounds(input),
       pageCount: bounds(pageCount),
       confirm: bounds(confirm),
-      pageCountFits: countRect.left >= slotRect.left && countRect.right <= slotRect.right,
+      slotFillsToolbar:
+        Math.abs(slotRect.x - toolbarRect.x) <= 1 &&
+        Math.abs(slotRect.width - toolbarRect.width) <= 1,
+      pageCountFits: countRect.left >= toolbarRect.left && countRect.right <= toolbarRect.right,
       receivesPointer: hit === confirm || confirm.contains(hit),
     };
   });
+}
+
+async function expectBuiltinPagerEditingControls(page: Page, pageCount: number) {
+  const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
+  await expect(pager).toHaveAttribute('data-editing', 'true');
+  await expect(pager.locator('button')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Previous page' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Next page' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Confirm page change' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.builtin-pager-popover')).toHaveCount(0);
+  await expect(pager).not.toContainText(/Go to page|\bGo\b/);
+
+  const geometry = await readBuiltinPagerEditorGeometry(page);
+  expect(geometry.slotFillsToolbar).toBe(true);
+  expect(geometry.slot.height).toBe(36);
+  expect(geometry.input.width).toBeGreaterThanOrEqual(20);
+  expect(geometry.pageCountFits).toBe(true);
+  expect(geometry.confirm.width).toBeGreaterThanOrEqual(32);
+  expect(geometry.confirm.height).toBeGreaterThanOrEqual(32);
+  expect(geometry.receivesPointer).toBe(true);
+  await expect(
+    page.getByRole('textbox', { name: `Page number, from 1 to ${pageCount}` }),
+  ).toBeVisible();
+  return geometry;
 }
 
 async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
@@ -243,39 +286,56 @@ function expectBuiltinPagerGeometryStable(
   before: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
   after: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
 ) {
-  for (const control of ['previous', 'indicator', 'next'] as const) {
-    expect(
-      Math.abs(after[control].centerX - before[control].centerX),
-      `${control} centerX: ${before[control].centerX} -> ${after[control].centerX}; ` +
-        `toolbar x ${before.toolbar.x} -> ${after.toolbar.x}, ` +
-        `range ${JSON.stringify(before.range)} -> ${JSON.stringify(after.range)}`,
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs(after[control].centerY - before[control].centerY),
-      `${control} centerY: ${before[control].centerY} -> ${after[control].centerY}`,
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs(after[control].width - before[control].width),
-      `${control} width: ${before[control].width} -> ${after[control].width}`,
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs(after[control].height - before[control].height),
-      `${control} height: ${before[control].height} -> ${after[control].height}`,
-    ).toBeLessThanOrEqual(1);
-  }
-  expect(
-    Math.abs(after.toolbar.y - before.toolbar.y),
-    `toolbar y: ${before.toolbar.y} -> ${after.toolbar.y}`,
-  ).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs(after.toolbar.height - before.toolbar.height),
-    `toolbar height: ${before.toolbar.height} -> ${after.toolbar.height}`,
-  ).toBeLessThanOrEqual(1);
+  const expectBoxStable = (
+    label: string,
+    beforeBox: typeof before.toolbar,
+    afterBox: typeof after.toolbar,
+  ) => {
+    for (const edge of ['x', 'y', 'width', 'height'] as const) {
+      expect(
+        Math.abs(afterBox[edge] - beforeBox[edge]),
+        `${label} ${edge}: ${beforeBox[edge]} -> ${afterBox[edge]}`,
+      ).toBeLessThanOrEqual(1);
+    }
+  };
+  expectBoxStable('toolbar', before.toolbar, after.toolbar);
+  expectBoxStable('pager wrapper', before.wrap, after.wrap);
+  expectBoxStable('range', before.range, after.range);
+  expectBoxStable('track table', before.table, after.table);
+  expectBoxStable('player dock', before.player, after.player);
   expect(after.range.x + after.range.width).toBeLessThanOrEqual(after.toolbar.x + 1);
   expect(Math.abs(after.range.centerY - after.toolbar.centerY)).toBeLessThanOrEqual(1);
-  expect(after.previous.height).toBeGreaterThanOrEqual(32);
-  expect(after.indicator.height).toBeGreaterThanOrEqual(32);
-  expect(after.next.height).toBeGreaterThanOrEqual(32);
+
+  if (
+    before.previous &&
+    before.trigger &&
+    before.next &&
+    after.previous &&
+    after.trigger &&
+    after.next
+  ) {
+    for (const control of ['previous', 'trigger', 'next'] as const) {
+      expect(
+        Math.abs(after[control].centerX - before[control].centerX),
+        `${control} centerX: ${before[control].centerX} -> ${after[control].centerX}`,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(after[control].centerY - before[control].centerY),
+        `${control} centerY: ${before[control].centerY} -> ${after[control].centerY}`,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(after[control].width - before[control].width),
+        `${control} width: ${before[control].width} -> ${after[control].width}`,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(after[control].height - before[control].height),
+        `${control} height: ${before[control].height} -> ${after[control].height}`,
+      ).toBeLessThanOrEqual(1);
+    }
+    expect(after.previous.height).toBeGreaterThanOrEqual(36);
+    expect(after.trigger.height).toBeGreaterThanOrEqual(36);
+    expect(after.next.height).toBeGreaterThanOrEqual(36);
+  }
 }
 
 test.beforeEach(async ({ page }) => {
@@ -399,8 +459,8 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     await expect(page.locator('.builtin-pager-jump-trigger')).toBeVisible();
     await expect(page.locator('.builtin-pager button')).toHaveCount(3);
     const geometry = await readBuiltinPagerGeometry(page);
-    expect(geometry.indicator.width).toBeGreaterThanOrEqual(76);
-    expect(geometry.indicator.width).toBeLessThanOrEqual(80);
+    expect(geometry.indicator.width).toBeGreaterThanOrEqual(40);
+    expect(geometry.indicator.width).toBeLessThanOrEqual(52);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
@@ -448,10 +508,10 @@ test('F3.5 two-page Built-in pager spacing stays compact through inline editing 
   const before = await readBuiltinPagerGeometry(page);
   const beforeVisual = await readBuiltinPagerGlyphGeometry(page);
   console.info('[F3.5 compact pager spacing]', JSON.stringify(beforeVisual));
-  expect(beforeVisual.pageSlot.width).toBeGreaterThanOrEqual(76);
-  expect(beforeVisual.pageSlot.width).toBeLessThanOrEqual(80);
-  expect(beforeVisual.leftGlyphGap).toBeLessThanOrEqual(50);
-  expect(beforeVisual.rightGlyphGap).toBeLessThanOrEqual(50);
+  expect(beforeVisual.pageSlot.width).toBeGreaterThanOrEqual(40);
+  expect(beforeVisual.pageSlot.width).toBeLessThanOrEqual(52);
+  expect(beforeVisual.leftGlyphGap).toBeLessThanOrEqual(35);
+  expect(beforeVisual.rightGlyphGap).toBeLessThanOrEqual(35);
   expect(beforeVisual.previous.width).toBe(36);
   expect(beforeVisual.next.width).toBe(36);
   expect(beforeVisual.outerControlGap).toBe(4);
@@ -559,8 +619,8 @@ test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation'
     expect(surface.background).toBe('rgba(0, 0, 0, 0)');
     expect(surface.borderWidth).toBe('0px');
   }
-  expect(initialGeometry.indicator.width).toBeGreaterThanOrEqual(76);
-  expect(initialGeometry.indicator.width).toBeLessThanOrEqual(80);
+  expect(initialGeometry.indicator.width).toBeGreaterThanOrEqual(40);
+  expect(initialGeometry.indicator.width).toBeLessThanOrEqual(52);
 
   await previous.hover();
   expect((await readControlSurface(previous)).background).toBe('rgba(0, 0, 0, 0)');
@@ -611,6 +671,138 @@ test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation'
   expect(largeCatalogEditor.confirm.width).toBeGreaterThanOrEqual(32);
   expect(largeCatalogEditor.confirm.height).toBeGreaterThanOrEqual(32);
   console.info('[F3.6 100-page editor geometry]', JSON.stringify(largeCatalogEditor));
+});
+
+test('page indicator switches between compact view and full-width editing without moving its outer geometry', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 995, height: 706 });
+  const measurements: Array<Record<string, unknown>> = [];
+
+  for (const total of [106, 500, 501, 2438, 10_000]) {
+    const delay = total === 106 ? '&mockSearchDelayMs=150' : '';
+    await page.goto(`/?mockCatalogCount=${total}${delay}`);
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+    const pageCount = Math.ceil(total / 100);
+    const pageDigits = String(pageCount).length;
+    const ranges = [
+      { min: 40, max: 52, padding: 11 },
+      { min: 52, max: 64, padding: 17 },
+      { min: 64, max: 76, padding: 22 },
+    ];
+    const range = ranges[pageDigits - 1];
+    if (!range) throw new Error(`Unexpected Built-in page digit count: ${pageDigits}`);
+
+    const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });
+    const indicator = page.getByRole('button', { name: builtinPageTriggerName(1, pageCount) });
+    const before = await readBuiltinPagerGeometry(page);
+    const viewGlyphs = await readBuiltinPagerGlyphGeometry(page);
+    await expect(pager).toHaveAttribute('data-editing', 'false');
+    await expect(pager.locator('button')).toHaveCount(3);
+    expect(viewGlyphs.pageSlot.width).toBeGreaterThanOrEqual(range.min);
+    expect(viewGlyphs.pageSlot.width).toBeLessThanOrEqual(range.max);
+    expect(viewGlyphs.internalLeftSpace).toBeLessThanOrEqual(range.padding);
+    expect(viewGlyphs.internalRightSpace).toBeLessThanOrEqual(range.padding);
+    expect(Math.abs(before.toolbar.width - before.indicator.width - 80)).toBeLessThanOrEqual(1);
+    expect(before.previous?.width).toBe(36);
+    expect(before.next?.width).toBe(36);
+    if (total === 106) {
+      const viewScreenshot = testInfo.outputPath('f3.7-view-mode-995x706.png');
+      await page.screenshot({ path: viewScreenshot, animations: 'disabled' });
+      await testInfo.attach('f3.7-view-mode-995x706.png', {
+        path: viewScreenshot,
+        contentType: 'image/png',
+      });
+    }
+
+    if (total === 106) {
+      await indicator.focus();
+      await page.keyboard.press('Enter');
+    } else {
+      await indicator.click();
+    }
+    let input = page.getByRole('textbox', { name: `Page number, from 1 to ${pageCount}` });
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue('1');
+    expect(
+      await input.evaluate((element) => ({
+        start: (element as HTMLInputElement).selectionStart,
+        end: (element as HTMLInputElement).selectionEnd,
+      })),
+    ).toEqual({ start: 0, end: 1 });
+    expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+    const editor = await expectBuiltinPagerEditingControls(page, pageCount);
+    const duringEdit = await readBuiltinPagerGeometry(page);
+    expectBuiltinPagerGeometryStable(before, duringEdit);
+    if (total === 106) {
+      const editScreenshot = testInfo.outputPath('f3.7-edit-mode-995x706.png');
+      await page.screenshot({ path: editScreenshot, animations: 'disabled' });
+      await testInfo.attach('f3.7-edit-mode-995x706.png', {
+        path: editScreenshot,
+        contentType: 'image/png',
+      });
+    }
+
+    if (total === 106) {
+      await input.press('Escape');
+      await expect(indicator).toBeFocused();
+      const canceled = await readBuiltinPagerGeometry(page);
+      expectBuiltinPagerGeometryStable(before, canceled);
+
+      await indicator.click();
+      input = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+      await expect(input).toBeFocused();
+      await input.fill('2');
+      await input.press('Enter');
+      await expect(pager).toHaveAttribute('aria-busy', 'true');
+      const pending = await readBuiltinPagerGeometry(page);
+      expectBuiltinPagerGeometryStable(before, pending);
+      await expect(page.locator('.builtin-pager-range')).toHaveText('1–100 of 106 songs');
+      await expect(page.getByRole('status')).toContainText('Loading page 2 of 2');
+      await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+      await expect(page.getByRole('row', { name: /Song 101/ })).toHaveAttribute(
+        'aria-rowindex',
+        '2',
+      );
+      await expect(page.locator('.builtin-pager-range')).toHaveText('101–106 of 106 songs');
+      const pageTwo = await readBuiltinPagerGeometry(page);
+      expectBuiltinPagerGeometryStable(before, pageTwo);
+
+      const pageTwoIndicator = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
+      await pageTwoIndicator.click();
+      input = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+      await expect(input).toBeFocused();
+      await input.fill('1');
+      await expectBuiltinPagerEditingControls(page, 2);
+      await page.getByRole('button', { name: 'Confirm page change' }).click();
+      await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+      const returnedToPageOne = await readBuiltinPagerGeometry(page);
+      expectBuiltinPagerGeometryStable(before, returnedToPageOne);
+
+      const pageOneIndicator = page.getByRole('button', { name: builtinPageTriggerName(1, 2) });
+      await pageOneIndicator.click();
+      input = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
+      await expect(input).toBeFocused();
+      const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
+      await search.focus();
+      await expect(search).toBeFocused();
+      await expect(page.getByRole('textbox', { name: /page number/i })).toHaveCount(0);
+      await expect(pageOneIndicator).not.toBeFocused();
+      expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+    } else {
+      await input.press('Escape');
+      await expect(indicator).toBeFocused();
+      expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
+    }
+
+    measurements.push({ total, pageCount, view: before, viewGlyphs, edit: duringEdit, editor });
+  }
+
+  await testInfo.attach('f3.7-two-mode-pager-geometry.json', {
+    body: JSON.stringify(measurements, null, 2),
+    contentType: 'application/json',
+  });
+  console.info('[Two-mode pager geometry]', JSON.stringify(measurements));
 });
 
 test('F3.1 heading typography and pager alignment stay clear at desktop and compact widths', async ({
@@ -919,7 +1111,8 @@ test('Built-in pager control centers stay fixed across 9→10 and 99→100', asy
     await page.goto(`/?mockCatalogCount=${transition.total}`);
     await jumpToBuiltinPage(page, transition.from);
     const before = await readBuiltinPagerGeometry(page);
-    expect(before.indicator.width).toBeGreaterThan(88);
+    expect(before.indicator.width).toBeGreaterThan(52);
+    expect(before.indicator.width).toBeLessThanOrEqual(76);
     await page.getByRole('button', { name: 'Next page' }).click();
     await expect(
       page.getByRole('grid', { name: `Built-in Songs, page ${transition.to}` }),
@@ -2227,7 +2420,7 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
   });
   await expect(sixPagePager.locator('button')).toHaveCount(3);
   const beforeEdit = await readBuiltinPagerGeometry(page);
-  expect(beforeEdit.indicator.width).toBeLessThanOrEqual(88);
+  expect(beforeEdit.indicator.width).toBeLessThanOrEqual(52);
   await sixPageTrigger.click();
   const input = page.getByRole('textbox', { name: 'Page number, from 1 to 6' });
   await expect(input).toBeFocused();
@@ -2270,7 +2463,8 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
     name: '1 / 25, Page 1 of 25. Jump to page',
   });
   const beforeTwentyFive = await readBuiltinPagerGeometry(page);
-  expect(beforeTwentyFive.indicator.width).toBeGreaterThan(88);
+  expect(beforeTwentyFive.indicator.width).toBeGreaterThan(52);
+  expect(beforeTwentyFive.indicator.width).toBeLessThanOrEqual(64);
   await manyPageTrigger.click();
   const manyPageInput = page.getByRole('textbox', { name: 'Page number, from 1 to 25' });
   const editorTwentyFive = await readBuiltinPagerEditorGeometry(page);

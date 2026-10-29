@@ -302,13 +302,20 @@
 }
 
 .builtin-pager {
-  display: flex;
+  display: grid;
   flex: 0 0 auto;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
   align-items: center;
   justify-self: end;
   gap: 4px;
-  min-width: max-content;
+  min-width: 0;
+  height: 36px;
+  box-sizing: border-box;
   white-space: nowrap;
+}
+
+.builtin-pager[data-editing='true'] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .builtin-pager-control {
@@ -341,10 +348,9 @@
 .builtin-pager-page-slot {
   position: relative;
   display: grid;
-  flex: 0 0 auto;
   place-items: center;
   height: 36px;
-  min-width: 76px;
+  min-width: 0;
   box-sizing: border-box;
 }
 

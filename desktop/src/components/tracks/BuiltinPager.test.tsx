@@ -30,6 +30,9 @@ describe('BuiltinPager', () => {
       const input = screen.getByRole('textbox', { name: `Page number, from 1 to ${pages}` });
       await waitFor(() => expect(input).toHaveFocus());
       expect(input).toHaveValue('1');
+      expect(pager.querySelectorAll('button')).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(screen.queryByText(/go to page/i)).toBeNull();
       expect(screen.queryByRole('button', { name: /^go$/i })).toBeNull();
@@ -82,7 +85,11 @@ describe('BuiltinPager', () => {
     expect(input).toHaveValue('1');
     expect((input as HTMLInputElement).selectionStart).toBe(0);
     expect((input as HTMLInputElement).selectionEnd).toBe(1);
-    expect(pager.querySelectorAll('button')).toHaveLength(3);
+    expect(pager.querySelectorAll('button')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(input).toHaveFocus();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByText(/go to page/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /^go$/i })).toBeNull();
@@ -190,6 +197,35 @@ describe('BuiltinPager', () => {
       ),
     );
     expect(outside).toHaveFocus();
+  });
+
+  it('resets an editor when the result count changes its page count', async () => {
+    const store = createDesktopStore(createMockBridge({ catalogCount: 500 }));
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    render(<BuiltinPager useStore={store} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '1 / 5, Page 1 of 5. Jump to page' }));
+    const input = screen.getByRole('textbox', { name: 'Page number, from 1 to 5' });
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.change(input, { target: { value: '5' } });
+
+    const current = store.getState();
+    act(() =>
+      store.setState({
+        library: { ...current.library, resultTotal: 106 },
+      }),
+    );
+
+    const trigger = screen.getByRole('button', {
+      name: '1 / 2, Page 1 of 2. Jump to page',
+    });
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole('textbox', { name: /page number/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Confirm page change' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Previous page' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled();
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
   });
 
   it('moves focus between the previous, page indicator and next controls with arrow keys', async () => {
