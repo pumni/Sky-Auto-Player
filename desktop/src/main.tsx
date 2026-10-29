@@ -34,6 +34,31 @@ const mockDiagnosticsStatus = diagnosticsStatuses.find(
   (status) => status === mockParams.get('mockDiagnosticsStatus'),
 );
 const mockUpdateState = mockParams.get('mockUpdateState');
+const releaseNoteFixtures = ['none', 'short', 'medium', 'long', 'maximum'] as const;
+type ReleaseNoteFixture = (typeof releaseNoteFixtures)[number];
+const mockReleaseNotesFixture = releaseNoteFixtures.find(
+  (fixture) => fixture === mockParams.get('mockReleaseNotes'),
+);
+const makeMockReleaseNotes = (fixture: ReleaseNoteFixture): string | null => {
+  if (fixture === 'none') return null;
+  if (fixture === 'short') return 'Bản cập nhật cải thiện độ ổn định và trải nghiệm sử dụng.';
+
+  const lengths: Record<Exclude<ReleaseNoteFixture, 'none' | 'short'>, number> = {
+    medium: 1_024,
+    long: 4_096,
+    maximum: 16_384,
+  };
+  const length = lengths[fixture];
+  const finalLine = 'FINAL RELEASE NOTE LINE — Hoàn tất cập nhật.';
+  const seed = [
+    'Cải thiện độ ổn định, khả năng truy cập và thời gian khởi động.',
+    `Unbroken text: ${'x'.repeat(240)}`,
+    'Keyboard navigation and update progress now remain clear while you read.',
+    'Plain text remains text: <img src=x onerror=alert(1)> and <script>unsafe()</script>.',
+  ].join('\n\n');
+  const bodyLength = length - finalLine.length - 2;
+  return `${seed.repeat(Math.ceil(bodyLength / seed.length)).slice(0, bodyLength)}\n\n${finalLine}`;
+};
 const mockStartDelay = Number(mockParams.get('mockStartDelayMs'));
 const mockStartResponseDelay = Number(mockParams.get('mockStartResponseDelayMs'));
 const mockStatusQueryFailures = Number(mockParams.get('mockStatusQueryFailures'));
@@ -94,6 +119,20 @@ const createBrowserBridge = async () => {
             available_version: null,
           },
         }
+      : {}),
+    ...(mockReleaseNotesFixture
+      ? {
+          updateSnapshot: {
+            state: 'available' as const,
+            current_version: '4.0.0-alpha.1-mock',
+            available_version: '4.0.0-alpha.2-mock',
+            channel: 'stable' as const,
+            release_notes: makeMockReleaseNotes(mockReleaseNotesFixture),
+          },
+        }
+      : {}),
+    ...(mockUpdateState === 'error-long'
+      ? { updateCheckTransportError: makeMockReleaseNotes('long') ?? 'Mock update check failed.' }
       : {}),
     ...(mockParams.get('mockNeverCreateSession') === '1' ? { neverCreateSession: true } : {}),
     ...(mockParams.get('mockDropPlaybackSnapshots') === '1' ? { emitSnapshots: false } : {}),

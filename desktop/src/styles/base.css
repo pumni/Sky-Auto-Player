@@ -166,11 +166,8 @@ h3 {
   background: var(--surface-raised);
 }
 .update-notes {
-  max-height: 120px;
-  overflow: auto;
-  padding: 10px;
-  border-left: 2px solid var(--accent-ink);
-  background: var(--surface-raised);
+  min-width: 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .player-bar .button {

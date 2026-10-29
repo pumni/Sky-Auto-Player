@@ -1,5 +1,5 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
-import { Check, Download, LoaderCircle, X } from 'lucide-react';
+import { Check, LoaderCircle, X } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
 import type { UpdateErrorCode, UpdateRetryAction } from '../../bridge/DesktopBridge';
 import { formatUpdateError } from '../../state/updateHelpers';
@@ -74,12 +74,22 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
       }}
     >
       <Modal>
-        <Dialog aria-label="Software update" className="settings-dialog update-dialog">
-          <div className="dialog-heading">
-            <div>
-              <p className="eyebrow">APPLICATION UPDATE</p>
-              <h2>Update</h2>
-            </div>
+        <Dialog
+          aria-label="Software update"
+          className={`update-dialog${isError ? ' update-dialog-error' : ''}`}
+        >
+          <div className="dialog-heading update-dialog-heading">
+            {isAvailable ? (
+              <div className="update-status" role="status" aria-live="polite">
+                <h2>Version {update.availableVersion} is available</h2>
+                <p>
+                  You are running {update.currentVersion ?? 'the current version'} on the{' '}
+                  {update.channel} channel.
+                </p>
+              </div>
+            ) : (
+              <h2>Software update</h2>
+            )}
             <button
               className="icon-button icon-button-boxed"
               type="button"
@@ -90,29 +100,62 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
               <X size={16} aria-hidden="true" />
             </button>
           </div>
-          <div className="update-status" role="status" aria-live="polite">
-            {isChecking ? (
-              <>
-                <div className="update-icon" aria-hidden="true">
-                  <LoaderCircle className="spin" size={20} />
-                </div>
-                <h3>Checking for updates…</h3>
-                <p className="muted">
-                  Looking for available updates on the {update.channel} channel…
-                </p>
-                <div className="update-actions">
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => close(false)}
-                  >
-                    Close
-                  </button>
-                </div>
-              </>
-            ) : isError ? (
-              <>
+          {isAvailable ? (
+            <>
+              {update.releaseNotes && (
+                <section
+                  aria-labelledby="update-release-notes-heading"
+                  className="update-notes-region"
+                  role="region"
+                  tabIndex={0}
+                >
+                  <h3 id="update-release-notes-heading">What’s new</h3>
+                  <p className="update-notes">{update.releaseNotes}</p>
+                </section>
+              )}
+              <div className="update-actions">
+                <button
+                  className="button button-primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handoff()}
+                >
+                  <Check size={15} aria-hidden="true" /> Update and restart
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => close(false)}
+                >
+                  Later
+                </button>
+                <button
+                  className="button button-ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    const targetVersion = update.availableVersion;
+                    if (targetVersion) {
+                      const result = await patchSettings({
+                        updatePreferences: { skipVersion: targetVersion },
+                      });
+                      if (
+                        result !== null &&
+                        result.update_preferences.skip_version === targetVersion
+                      ) {
+                        close(false);
+                      }
+                    }
+                  }}
+                >
+                  Skip this version
+                </button>
+              </div>
+            </>
+          ) : isError ? (
+            <>
+              <div className="update-status" role="status" aria-live="polite">
                 <h3>
                   {getErrorHeading(
                     update.errorCode,
@@ -120,91 +163,64 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                     Boolean(update.transportError),
                   )}
                 </h3>
-                <p className="inline-error">{errorText}</p>
-                <div className="update-actions">
-                  {effectiveRetryAction === 'check' && (
-                    <button
-                      className="button button-primary"
-                      type="button"
-                      disabled={isChecking || busy}
-                      onClick={() => void check('manual')}
-                    >
-                      Check again
-                    </button>
-                  )}
-                  {effectiveRetryAction === 'install' && (
-                    <button
-                      className="button button-primary"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handoff()}
-                    >
-                      Try again
-                    </button>
-                  )}
+              </div>
+              <p className="inline-error update-error-region">{errorText}</p>
+              <div className="update-actions">
+                {effectiveRetryAction === 'check' && (
                   <button
-                    className="button"
+                    className="button button-primary"
                     type="button"
-                    disabled={busy}
-                    onClick={() => close(false)}
+                    disabled={isChecking || busy}
+                    onClick={() => void check('manual')}
                   >
-                    Close
+                    Check again
                   </button>
-                </div>
-              </>
-            ) : isAvailable ? (
-              <>
-                <div className="update-icon" aria-hidden="true">
-                  <Download size={20} />
-                </div>
-                <h3>Version {update.availableVersion} is available</h3>
-                <p>
-                  You are running {update.currentVersion ?? 'the current version'} on the{' '}
-                  {update.channel} channel.
-                </p>
-                {update.releaseNotes && <p className="update-notes">{update.releaseNotes}</p>}
-                <div className="update-actions">
+                )}
+                {effectiveRetryAction === 'install' && (
                   <button
                     className="button button-primary"
                     type="button"
                     disabled={busy}
                     onClick={() => void handoff()}
                   >
-                    <Check size={15} aria-hidden="true" /> Update and restart
+                    Try again
                   </button>
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => close(false)}
-                  >
-                    Later
-                  </button>
-                  <button
-                    className="button button-ghost"
-                    type="button"
-                    disabled={busy}
-                    onClick={async () => {
-                      const targetVersion = update.availableVersion;
-                      if (targetVersion) {
-                        const result = await patchSettings({
-                          updatePreferences: { skipVersion: targetVersion },
-                        });
-                        if (
-                          result !== null &&
-                          result.update_preferences.skip_version === targetVersion
-                        ) {
-                          close(false);
-                        }
-                      }
-                    }}
-                  >
-                    Skip this version
-                  </button>
+                )}
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => close(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </>
+          ) : isChecking ? (
+            <>
+              <div className="update-status" role="status" aria-live="polite">
+                <div className="update-icon" aria-hidden="true">
+                  <LoaderCircle className="spin" size={20} />
                 </div>
-              </>
-            ) : isCurrent ? (
-              <>
+                <h3>Checking for updates…</h3>
+                <p className="muted">
+                  Looking for available updates on the {update.channel} channel…
+                </p>
+              </div>
+              <div className="update-actions">
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => close(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </>
+          ) : isCurrent ? (
+            <>
+              <div className="update-status" role="status" aria-live="polite">
                 <div className="update-icon" aria-hidden="true">
                   <Check size={20} />
                 </div>
@@ -213,19 +229,21 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                   You are running version {update.currentVersion ?? 'the latest version'} on the{' '}
                   {update.channel} channel.
                 </p>
-                <div className="update-actions">
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => close(false)}
-                  >
-                    Close
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
+              </div>
+              <div className="update-actions">
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => close(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="update-status" role="status" aria-live="polite">
                 <h3>
                   {update.state === 'downloading'
                     ? 'Downloading update…'
@@ -240,16 +258,16 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                     ? `${update.progress?.message || 'The update is being applied.'}${update.progress?.total ? ` (${update.progress.completed}/${update.progress.total} bytes)` : ''}`
                     : 'The installed application is up to date.'}
                 </p>
-                {!busy && (
-                  <div className="update-actions">
-                    <button className="button" type="button" onClick={() => close(false)}>
-                      Close
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+              </div>
+              {!busy && (
+                <div className="update-actions">
+                  <button className="button" type="button" onClick={() => close(false)}>
+                    Close
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </Dialog>
       </Modal>
     </ModalOverlay>
