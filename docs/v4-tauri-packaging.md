@@ -55,6 +55,11 @@ the installed manifest schema, active/retired identities, exact declared file
 set, per-song SHA-256, and installed song parsing. A source checkout is not a
 substitute for this installed-resource evidence.
 
+The hidden `--selftest-desktop-gui` path additionally exposes the process-owned
+`BootstrapDto.gui_smoke` mode indicator. It is true only for that composition
+root, is not a renderer capability, and ordinary sessions return false so the
+packaged smoke hook is not mounted.
+
 V4 has no portable ZIP updater contract and no bundled
 `Sky-Auto-Player-Updater.exe`. The retired v3 assembler and updater remain
 available only through Git history and the `v3-maintenance` line; they are not

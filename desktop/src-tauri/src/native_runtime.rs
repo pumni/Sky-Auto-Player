@@ -680,6 +680,7 @@ impl NativeDesktopRuntime {
             update_preferences: settings_dto.update_preferences.clone(),
             catalog_state,
             catalog_generation,
+            gui_smoke: false,
         };
         if !self.ready_emitted.swap(true, Ordering::AcqRel) {
             self.publish(UiEvent::CoreReady {

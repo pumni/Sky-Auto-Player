@@ -491,7 +491,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivityCoordinator, ActivityReservationError, AppState};
+    use super::{ActivityCoordinator, ActivityReservationError, AppState, TestSeams};
     use sky_native_adapters::AppPaths;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
@@ -504,6 +504,18 @@ mod tests {
         assert!(state.begin_close());
         assert!(!state.begin_close());
         assert!(state.is_closing());
+    }
+
+    #[test]
+    fn gui_smoke_authorization_is_explicit_and_not_implied_by_safe_package() {
+        let ordinary = AppState::default();
+        assert!(!ordinary.should_exit_after_close());
+
+        let safe_package = AppState::with_test_seams(TestSeams::SafePackage);
+        assert!(!safe_package.should_exit_after_close());
+
+        ordinary.set_gui_smoke_exit(true);
+        assert!(ordinary.should_exit_after_close());
     }
 
     #[test]

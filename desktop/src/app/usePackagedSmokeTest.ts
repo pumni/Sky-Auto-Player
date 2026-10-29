@@ -7,14 +7,23 @@ interface PackagedSmokeTestProps {
   useStore: DesktopStoreHook;
 }
 
+interface UsePackagedSmokeTestProps extends PackagedSmokeTestProps {
+  authorized: boolean;
+}
+
 interface SmokeWindow extends Window {
   __SKY_DESKTOP_GUI_SMOKE__?: boolean;
 }
 
-export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProps): void {
+export function usePackagedSmokeTest({
+  bridge,
+  useStore,
+  authorized,
+}: UsePackagedSmokeTestProps): void {
   const smokeStarted = useRef(false);
 
   useEffect(() => {
+    if (!authorized) return;
     const runPackagedSmoke = async () => {
       if (smokeStarted.current) return;
       smokeStarted.current = true;
@@ -209,5 +218,10 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
       void runPackagedSmoke().catch(onSmokeFailure);
     }
     return () => window.removeEventListener('sky-desktop-gui-smoke', onSmokeEvent);
-  }, [bridge, useStore]);
+  }, [authorized, bridge, useStore]);
+}
+
+export function PackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProps) {
+  usePackagedSmokeTest({ bridge, useStore, authorized: true });
+  return null;
 }

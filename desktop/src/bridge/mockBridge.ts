@@ -585,6 +585,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         update_preferences: settings.update_preferences,
         catalog_state: 'ready',
         catalog_generation: generation,
+        gui_smoke: false,
       };
     },
     async searchSongs(request: SearchRequest) {
