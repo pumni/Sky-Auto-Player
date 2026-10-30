@@ -41,6 +41,7 @@
 
 .track-browser-workbench-pane {
   flex: 1 1 0;
+  /* Set by the workbench from the geometry policy's shared minimum. */
   min-width: var(--min-track-browser-width);
   container: track-browser / inline-size;
 }

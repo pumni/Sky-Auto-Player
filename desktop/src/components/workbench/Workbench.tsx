@@ -13,11 +13,12 @@ import { TrackBrowser } from '../tracks/TrackBrowser';
 import { UtilityPane } from '../utility/UtilityPane';
 import { ResizableSeparator } from './ResizableSeparator';
 import {
+  MIN_TRACK_BROWSER_WIDTH,
   getUtilityOverlayWidth,
   getUtilityPresentationMode,
   getNavigatorWidthMax,
-  useWorkbenchLayout,
-} from './useWorkbenchLayout';
+} from './workbenchGeometry';
+import { useWorkbenchLayout } from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
@@ -180,6 +181,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
         {
           '--navigator-pane-width': `${layout.navigatorWidth}px`,
           '--utility-pane-width': `${layout.utilityWidth}px`,
+          '--min-track-browser-width': `${MIN_TRACK_BROWSER_WIDTH}px`,
         } as CSSProperties
       }
     >

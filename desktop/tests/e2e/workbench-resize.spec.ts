@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { MIN_TRACK_BROWSER_WIDTH } from '../../src/components/workbench/workbenchGeometry';
 
 const key = 'sky.ui.workbench.v5';
 async function seed(page: Page, width: number, collapsed = false) {
@@ -97,6 +98,18 @@ test('all palettes preserve Inspector 388/389/388 geometry and persist once', as
   const trace = [];
   for (const palette of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
     await seed(page, 1024);
+    expect(
+      await page
+        .locator('.workbench')
+        .evaluate((element) =>
+          getComputedStyle(element).getPropertyValue('--min-track-browser-width').trim(),
+        ),
+    ).toBe(`${MIN_TRACK_BROWSER_WIDTH}px`);
+    expect(
+      await page
+        .locator('.track-browser-workbench-pane')
+        .evaluate((element) => getComputedStyle(element).minWidth),
+    ).toBe(`${MIN_TRACK_BROWSER_WIDTH}px`);
     await page.locator('html').evaluate((root, value) => {
       (root as HTMLElement).dataset.palette = value;
     }, palette);
