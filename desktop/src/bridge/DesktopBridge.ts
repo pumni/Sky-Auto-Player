@@ -1,5 +1,6 @@
 import type {
   BootstrapDto,
+  AppearanceMode as GeneratedAppearanceMode,
   CalibrationCancelAckDto,
   CalibrationCancelRequest,
   CalibrationFinishedPayload,
@@ -61,6 +62,7 @@ import type {
 } from './generated';
 
 export type PaletteId = 'graphite' | 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
+export type AppearanceMode = GeneratedAppearanceMode;
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type NativeBuild = NativeBuildDto;
 export type PlaybackDefaults = PlaybackDefaultsDto;
@@ -121,7 +123,8 @@ export type LibrarySource = GeneratedLibrarySource;
 export type LibraryPlaylistSummary = LibraryPlaylistSummaryDto;
 export type LibraryNavigation = LibraryNavigationDto;
 export type LibraryPlaylistImportResult = LibraryPlaylistImportResultDto;
-export type Settings = Omit<SettingsDto, 'palette' | 'update_preferences'> & {
+export type Settings = Omit<SettingsDto, 'appearance_mode' | 'palette' | 'update_preferences'> & {
+  appearance_mode: AppearanceMode;
   palette: PaletteId;
   update_preferences: UpdatePreferences;
 };
@@ -136,6 +139,7 @@ export type PlaybackPatch = Partial<
 export type SettingsPatch = Partial<
   Omit<
     GeneratedSettingsPatch,
+    | 'appearanceMode'
     | 'palette'
     | 'telemetryEnabled'
     | 'verboseHud'
@@ -143,6 +147,7 @@ export type SettingsPatch = Partial<
     | 'autoPlay'
     | 'updatePreferences'
   > & {
+    appearanceMode: AppearanceMode;
     palette: PaletteId;
     telemetryEnabled: boolean;
     verboseHud: boolean;

@@ -9,6 +9,25 @@ use tauri::State;
 use tauri::ipc::Channel;
 use ts_rs::TS;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum AppearanceMode {
+    System,
+    Light,
+    Dark,
+}
+
+impl AppearanceMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +112,7 @@ pub struct PlaybackPatch {
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
+    pub appearance_mode: Option<AppearanceMode>,
     pub palette: Option<String>,
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
@@ -105,6 +125,7 @@ pub struct SettingsPatch {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct SettingsPatchWire {
+    appearance_mode: Option<AppearanceMode>,
     #[serde(alias = "theme")]
     palette: Option<String>,
     telemetry_enabled: Option<bool>,
@@ -117,6 +138,7 @@ struct SettingsPatchWire {
 impl From<SettingsPatchWire> for SettingsPatch {
     fn from(value: SettingsPatchWire) -> Self {
         Self {
+            appearance_mode: value.appearance_mode,
             palette: value.palette,
             telemetry_enabled: value.telemetry_enabled,
             verbose_hud: value.verbose_hud,
@@ -540,6 +562,7 @@ pub struct PlaybackCommandAckDto {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SettingsDto {
+    pub appearance_mode: AppearanceMode,
     pub palette: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaultsDto,
@@ -1122,9 +1145,9 @@ pub fn startup_window_revealed(
 #[cfg(test)]
 mod tests {
     use super::{
-        PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision, PlaybackPlanVariantDto,
-        SettingsDto, SettingsPatch, TimingAdvisoryAssumptionsDto, TimingAdvisoryStatus,
-        WholeStreamTimingAdvisoryDto,
+        AppearanceMode, PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision,
+        PlaybackPlanVariantDto, SettingsDto, SettingsPatch, TimingAdvisoryAssumptionsDto,
+        TimingAdvisoryStatus, WholeStreamTimingAdvisoryDto,
     };
     use serde_json::json;
 
@@ -1169,6 +1192,29 @@ mod tests {
     }
 
     #[test]
+    fn appearance_mode_uses_only_the_generated_wire_values() {
+        for (wire, expected) in [
+            ("system", AppearanceMode::System),
+            ("light", AppearanceMode::Light),
+            ("dark", AppearanceMode::Dark),
+        ] {
+            let patch: SettingsPatch = serde_json::from_value(json!({"appearanceMode": wire}))
+                .expect("valid appearance patch");
+            assert_eq!(patch.appearance_mode, Some(expected));
+            let encoded = serde_json::to_value(&patch).expect("serialize appearance patch");
+            assert_eq!(encoded["appearanceMode"], wire);
+        }
+
+        assert!(
+            serde_json::from_value::<SettingsPatch>(json!({
+                "appearanceMode": "sepia",
+                "telemetryEnabled": true
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn settings_patch_rejects_unknown_fields() {
         let unknown = serde_json::from_value::<SettingsPatch>(json!({
             "palette": "aurora",
@@ -1201,6 +1247,7 @@ mod tests {
     #[test]
     fn settings_dto_serializes_canonical_palette_field() {
         let dto = SettingsDto {
+            appearance_mode: super::AppearanceMode::Dark,
             palette: "classic".into(),
             ui_background_mode: "transparent".into(),
             playback_defaults: super::PlaybackDefaultsDto {
@@ -1228,6 +1275,7 @@ mod tests {
             },
         };
         let serialized = serde_json::to_value(dto).expect("serialize settings DTO");
+        assert_eq!(serialized["appearance_mode"], "dark");
         assert_eq!(serialized["palette"], "classic");
         assert!(serialized.get("theme").is_none());
     }

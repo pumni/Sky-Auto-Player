@@ -17,6 +17,11 @@ import { usePackagedSmokeTest } from './usePackagedSmokeTest';
 import { STARTUP_WINDOW_REVEAL_FALLBACK_MS } from '../platform/startupWindowReveal';
 
 const { isTauriRuntimeMock, nativeWindow, acknowledgeStartupReveal } = vi.hoisted(() => {
+  const themeListeners = new Set<(event: { payload: 'light' | 'dark' }) => void>();
+  const subscribeTheme = (listener: (event: { payload: 'light' | 'dark' }) => void) => {
+    themeListeners.add(listener);
+    return () => themeListeners.delete(listener);
+  };
   const nativeWindow = {
     show: vi.fn(async () => {}),
     minimize: vi.fn(async () => {}),
@@ -24,6 +29,20 @@ const { isTauriRuntimeMock, nativeWindow, acknowledgeStartupReveal } = vi.hoiste
     close: vi.fn(async () => {}),
     isMaximized: vi.fn(async () => false),
     onResized: vi.fn(async () => () => {}),
+    theme: vi.fn(async (): Promise<'light' | 'dark'> => 'dark'),
+    onThemeChanged: vi.fn(async (listener: (event: { payload: 'light' | 'dark' }) => void) =>
+      subscribeTheme(listener),
+    ),
+    emitTheme(payload: 'light' | 'dark') {
+      for (const listener of themeListeners) listener({ payload });
+    },
+    clearThemeListeners() {
+      themeListeners.clear();
+    },
+    activeThemeListenerCount() {
+      return themeListeners.size;
+    },
+    subscribeTheme,
   };
   return {
     isTauriRuntimeMock: vi.fn(() => false),
@@ -170,6 +189,11 @@ describe('desktop application shell', () => {
     nativeWindow.close.mockReset().mockResolvedValue(undefined);
     nativeWindow.isMaximized.mockReset().mockResolvedValue(false);
     nativeWindow.onResized.mockReset().mockResolvedValue(() => {});
+    nativeWindow.theme.mockReset().mockResolvedValue('dark');
+    nativeWindow.onThemeChanged
+      .mockReset()
+      .mockImplementation(async (listener) => nativeWindow.subscribeTheme(listener));
+    nativeWindow.clearThemeListeners();
     window.localStorage.clear();
   });
 
@@ -202,7 +226,7 @@ describe('desktop application shell', () => {
     });
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-    expect(screen.getByLabelText('Color palette')).toHaveValue('graphite');
+    expect(screen.getByLabelText('Dark palette')).toHaveValue('graphite');
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('3.5.0-mock');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('Native ABI');
@@ -304,6 +328,7 @@ describe('desktop application shell', () => {
   it('applies the restored palette before revealing the native window', async () => {
     isTauriRuntimeMock.mockReturnValue(true);
     const bridge = createMockBridge();
+    nativeWindow.theme.mockResolvedValue('light');
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => {
       const bootstrap = await originalBootstrap();
@@ -312,9 +337,12 @@ describe('desktop application shell', () => {
         settings: { ...bootstrap.settings, palette: 'slate' as const },
       };
     });
-    const palettesWhenShown: string[] = [];
+    const appearanceWhenShown: Array<{ palette: string; mode: string }> = [];
     nativeWindow.show.mockImplementation(async () => {
-      palettesWhenShown.push(document.documentElement.dataset.palette ?? '');
+      appearanceWhenShown.push({
+        palette: document.documentElement.dataset.palette ?? '',
+        mode: document.documentElement.dataset.colorMode ?? '',
+      });
     });
 
     render(<App bridge={bridge} />);
@@ -322,7 +350,42 @@ describe('desktop application shell', () => {
 
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
     expect(acknowledgeStartupReveal).toHaveBeenCalledTimes(1);
-    expect(palettesWhenShown).toEqual(['slate']);
+    expect(appearanceWhenShown).toEqual([{ palette: 'slate', mode: 'light' }]);
+  });
+
+  it('waits for the native System theme before first reveal and follows later OS changes', async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    const bridge = createMockBridge();
+    const pendingTheme = deferred<'light' | 'dark'>();
+    nativeWindow.theme.mockReturnValue(pendingTheme.promise);
+    const appearanceWhenShown: string[] = [];
+    nativeWindow.show.mockImplementation(async () => {
+      appearanceWhenShown.push(document.documentElement.dataset.colorMode ?? '');
+    });
+
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
+    expect(nativeWindow.show).not.toHaveBeenCalled();
+
+    await act(async () => pendingTheme.resolve('light'));
+    await waitFor(() => expect(nativeWindow.show).toHaveBeenCalledTimes(1));
+    expect(appearanceWhenShown).toEqual(['light']);
+
+    nativeWindow.emitTheme('dark');
+    await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('dark'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    const theme = await screen.findByLabelText('Theme');
+    fireEvent.change(theme, { target: { value: 'light' } });
+    await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
+
+    nativeWindow.emitTheme('dark');
+    await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
+
+    fireEvent.change(theme, { target: { value: 'system' } });
+    await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('dark'));
   });
 
   it('reveals the committed fatal bootstrap screen', async () => {
@@ -378,7 +441,7 @@ describe('desktop application shell', () => {
     const bridge = createMockBridge();
     const listNavigation = vi.spyOn(bridge, 'listLibraryNavigation');
     const nativeEvents = installStrictSingletonEvents(bridge);
-    const { rerender } = render(
+    const { rerender, unmount } = render(
       <StrictMode>
         <App bridge={bridge} />
       </StrictMode>,
@@ -393,6 +456,10 @@ describe('desktop application shell', () => {
     expect(nativeEvents.subscriptionCount).toBe(1);
     expect(listNavigation).toHaveBeenCalledTimes(1);
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+    expect(nativeWindow.activeThemeListenerCount()).toBe(1);
+
+    unmount();
+    await waitFor(() => expect(nativeWindow.activeThemeListenerCount()).toBe(0));
   });
 
   it.each(['before', 'after'] as const)(

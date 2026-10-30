@@ -554,7 +554,7 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
-  const palette = settings.getByLabel('Color palette');
+  const palette = settings.getByLabel('Dark palette');
   await expect(palette).toHaveValue('graphite');
   await expect(palette.locator('option')).toHaveCount(6);
   await expect(palette.locator('option[value="graphite"]')).toHaveText('Graphite (Default)');
@@ -565,7 +565,7 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
   await settings.getByRole('button', { name: 'Close settings' }).click();
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expect(page.getByLabel('Color palette')).toHaveValue('graphite');
+  await expect(page.getByLabel('Dark palette')).toHaveValue('graphite');
   await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
 
@@ -705,7 +705,8 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
   await expect(dialog).toBeVisible();
   const navigation = dialog.getByRole('navigation', { name: 'Settings categories' });
   await navigation.getByRole('button', { name: 'Appearance', exact: true }).click();
-  const paletteSelect = dialog.getByRole('combobox', { name: 'Color palette' });
+  const themeSelect = dialog.getByRole('combobox', { name: 'Theme' });
+  const paletteSelect = dialog.getByRole('combobox', { name: 'Dark palette' });
   const closeButton = dialog.getByRole('button', { name: 'Close settings' });
   const focusTargets = [
     { name: 'Close settings', locator: closeButton },
@@ -727,7 +728,8 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
       locator: navigation.getByRole('button', { name: 'Advanced', exact: true }),
     },
     { name: 'About', locator: navigation.getByRole('button', { name: 'About', exact: true }) },
-    { name: 'Color palette', locator: paletteSelect },
+    { name: 'Theme', locator: themeSelect },
+    { name: 'Dark palette', locator: paletteSelect },
   ];
   let reference:
     | {
@@ -769,7 +771,13 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
         return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
       };
       const navigationElement = element.querySelector<HTMLElement>('.settings-nav');
-      const paletteElement = element.querySelector<HTMLSelectElement>('.settings-section select');
+      const themeElement = element.querySelector<HTMLSelectElement>(
+        '.settings-section label:first-of-type select',
+      );
+      const paletteElement = element.querySelector<HTMLSelectElement>(
+        '.settings-section label:nth-of-type(2) select',
+      );
+      const themeLabel = themeElement?.labels?.[0]?.textContent?.trim() ?? null;
       const paletteLabel = paletteElement?.labels?.[0]?.textContent?.trim() ?? null;
       return {
         rectangles: {
@@ -779,7 +787,8 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
           navigation: rect('.settings-nav'),
           content: rect('.settings-content'),
           section: rect('.settings-section'),
-          palette: rect('.settings-section select'),
+          theme: rect('.settings-section label:first-of-type select'),
+          palette: rect('.settings-section label:nth-of-type(2) select'),
         },
         roles: {
           dialog: { role: element.getAttribute('role'), name: element.getAttribute('aria-label') },
@@ -799,6 +808,7 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
             name:
               element.querySelector<HTMLElement>('.settings-section h3')?.textContent?.trim() ?? '',
           },
+          theme: { role: 'combobox', name: themeLabel },
           palette: { role: 'combobox', name: paletteLabel },
         },
         dialogSurface: getComputedStyle(element).backgroundColor,

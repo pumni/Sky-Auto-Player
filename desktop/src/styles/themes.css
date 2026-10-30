@@ -288,6 +288,55 @@ html[data-color-mode='dark'] {
   color-scheme: dark;
 }
 
+html[data-color-mode='light'] {
+  color-scheme: light;
+  --canvas: #ffffff;
+  --surface-panel: #f7f8fa;
+  --surface-secondary: #fafbfc;
+  --surface-raised: #ffffff;
+  --control-hover: #eef2f6;
+  --control-pressed: #e2e8f0;
+  --selection-bg: #eaf2fd;
+  --selection-row: var(--selection-bg);
+  --selection-navigation: var(--selection-bg);
+  --selection-control: var(--selection-bg);
+  --selection-control-hover: #eef2f6;
+  --selection-control-pressed: #e2e8f0;
+  --selection-indicator: var(--accent-ink);
+  --selection-row-indicator: var(--accent-ink);
+  --border-subtle: #dfe4eb;
+  --border-strong: #b1bbc6;
+  --control-border: #767f8a;
+  --text-primary: #252a31;
+  --text-secondary: #535f6c;
+  --text-tertiary: #5d6976;
+  --accent: #0b63c5;
+  --accent-hover: #0958ae;
+  --accent-ink: #0b58a5;
+  --accent-ink-hover: #084783;
+  --accent-fill: #0b63c5;
+  --accent-fill-hover: #0958ae;
+  --accent-fill-pressed: #084c98;
+  --on-accent: #ffffff;
+  --focus-ring: #0b58a5;
+  --search-focus-ring: #0b58a5;
+  --toggle-active-ink: #0b58a5;
+  --toggle-inactive-ink: #5d6976;
+  --success-fg: #1f7a47;
+  --success-bg: #e9f5ed;
+  --success-border: #7eb892;
+  --warning-fg: #8d5a08;
+  --warning-bg: #fff5df;
+  --warning-border: #d1a64c;
+  --danger-fg: #b4232f;
+  --danger-bg: #fcebed;
+  --danger-border: #d68a91;
+  --danger-fill: #b4232f;
+  --danger-fill-hover: #9f1f2a;
+  --danger-fill-pressed: #861a23;
+  --on-danger: #ffffff;
+}
+
 @media (forced-colors: active) {
   :root
     :is(

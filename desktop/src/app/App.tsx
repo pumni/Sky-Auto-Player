@@ -9,6 +9,8 @@ import { createWindowControls } from '../platform/windowControls';
 import { PackagedSmokeTest } from './usePackagedSmokeTest';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 import { applyAppearance } from '../appearance/applyAppearance';
+import { resolveAppearance } from '../appearance/resolveAppearance';
+import { useSystemAppearance } from '../appearance/useSystemAppearance';
 import {
   revealStartupWindow,
   scheduleStartupWindowRevealFallback,
@@ -54,11 +56,13 @@ export function App({ bridge }: AppProps) {
   const useStore = useMemo(() => createDesktopStore(bridge), [bridge]);
   const bootstrap = useStore((store) => store.bootstrap);
   const bootstrapState = useStore((store) => store.bootstrapState);
+  const settings = useStore((store) => store.settings);
   const settingsOpen = useStore((store) => store.settingsOpen);
   const calibrationOpen = useStore((store) => store.calibration.open);
   const updateDialogOpen = useStore((store) => store.update.dialogOpen);
   const windowControls = useMemo(() => createWindowControls(), []);
   const [settingsMounted, setSettingsMounted] = useState(false);
+  const { mode: systemMode, ready: appearanceReady } = useSystemAppearance();
 
   useEffect(() => {
     scheduleStartupWindowRevealFallback();
@@ -72,13 +76,19 @@ export function App({ bridge }: AppProps) {
   }, [bootstrap, useStore]);
 
   useLayoutEffect(() => {
-    applyAppearance(bootstrap?.settings.palette ?? 'graphite');
-    if (bootstrapState === 'ready' && bootstrap) {
+    applyAppearance(
+      resolveAppearance(
+        settings?.appearance_mode ?? bootstrap?.settings.appearance_mode ?? 'system',
+        systemMode,
+        settings?.palette ?? bootstrap?.settings.palette ?? 'graphite',
+      ),
+    );
+    if (bootstrapState === 'ready' && bootstrap && appearanceReady) {
       revealStartupWindow('bootstrap-ready');
-    } else if (bootstrapState === 'fatal') {
+    } else if (bootstrapState === 'fatal' && appearanceReady) {
       revealStartupWindow('bootstrap-failed');
     }
-  }, [bootstrap, bootstrapState]);
+  }, [bootstrap, bootstrapState, settings, systemMode, appearanceReady]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

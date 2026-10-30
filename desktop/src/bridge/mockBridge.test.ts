@@ -10,6 +10,21 @@ afterEach(() => {
 });
 
 describe('mock bridge timing contracts', () => {
+  it('defaults fresh mock settings to System and keeps the dark palette independent', async () => {
+    const bridge = createMockBridge();
+    expect((await bridge.getSettings()).appearance_mode).toBe('system');
+
+    await bridge.patchSettings({ appearanceMode: 'light' });
+    await bridge.patchSettings({ palette: 'slate' });
+    expect(await bridge.getSettings()).toMatchObject({
+      appearance_mode: 'light',
+      palette: 'slate',
+    });
+
+    const migratedLegacy = createMockBridge({ appearanceMode: 'dark' });
+    expect((await migratedLegacy.getSettings()).appearance_mode).toBe('dark');
+  });
+
   it('loads URL release-note fixtures through the browser mock', async () => {
     window.history.replaceState(null, '', '/?mockReleaseNotes=maximum');
     const bridge = createMockBridge();

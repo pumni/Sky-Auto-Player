@@ -35,6 +35,7 @@ fn native_bootstrap_uses_explicit_install_root_and_returns_plain_dto() {
     assert!(value.get("app_version").is_some());
     assert!(value.get("Ok").is_none());
     assert_eq!(value["settings"]["palette"], "aurora");
+    assert_eq!(value["settings"]["appearance_mode"], "dark");
     assert_eq!(value["settings"]["palette"], value["palette"]);
     assert_eq!(value["theme"], "aurora");
     assert_eq!(runtime.install_root(), root.as_path());
@@ -452,6 +453,7 @@ fn beta_patch_rejected() {
 
     let err1 = runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: None,
             palette: None,
             telemetry_enabled: None,
             verbose_hud: None,
@@ -497,6 +499,45 @@ fn beta_patch_rejected() {
         .unwrap_err();
     assert!(err4.contains("channel_unavailable"));
 
+    runtime.shutdown();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn invalid_appearance_patch_rejects_neighboring_settings_atomically() {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sky-invalid-appearance-patch-{suffix}"));
+    fs::create_dir_all(root.join("songs")).expect("songs root");
+    fs::write(
+        root.join("config.json"),
+        r#"{"schema_version":9,"palette":"slate"}"#,
+    )
+    .expect("write legacy settings");
+    let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+    let before = runtime
+        .dispatch("settings.get", Value::Object(Default::default()))
+        .expect("settings before patch");
+    assert_eq!(before["appearance_mode"], "dark");
+    assert_eq!(before["telemetry_enabled"], false);
+
+    let error = runtime
+        .dispatch(
+            "settings.patch",
+            serde_json::json!({
+                "appearanceMode": "sepia",
+                "telemetryEnabled": true
+            }),
+        )
+        .expect_err("invalid appearance mode rejected");
+    assert!(!error.is_empty());
+
+    let after = runtime
+        .dispatch("settings.get", Value::Object(Default::default()))
+        .expect("settings after rejected patch");
+    assert_eq!(after, before);
     runtime.shutdown();
     let _ = fs::remove_dir_all(root);
 }

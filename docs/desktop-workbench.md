@@ -90,9 +90,24 @@ the Player Dock, which keeps its own independent geometry and controls.
 
 ## Palette and semantic color roles
 
-Graphite remains the default palette with persisted ID `graphite`; `data-color-mode="dark"` remains
-unchanged. Settings calls it **Graphite (Default)**. The five other persisted palette IDs remain
-selectable and their palette-specific colors stay in `desktop/src/styles/themes.css`.
+Native settings schema 10 owns `appearance_mode` (`system`, `light`, or `dark`) independently from
+the persisted dark `palette` ID. A missing config file starts as System with Graphite; a legacy
+config without the mode migrates to Dark and preserves its normalized palette. Invalid persisted
+modes normalize to Dark, and invalid patch values are rejected atomically. Appearance-only patches
+do not invalidate prepared playback.
+
+In System mode, `App.tsx` resolves the effective mode from the native Tauri window theme and live
+theme events. Browser and mock runs use `prefers-color-scheme`. The effective value is applied to
+`html[data-color-mode]` and `color-scheme`; the selected dark palette stays persisted while Light is
+active. The stylesheet-driven startup screen follows the media preference before React loads, and
+a packaged window is revealed only after bootstrap settings and the initial native theme are
+applied. The native Tauri window background remains fixed at RGB `(18, 19, 20)` and may briefly
+show through before WebView content paints.
+
+Graphite remains the default dark palette with persisted ID `graphite`; Settings calls it
+**Graphite (Default)**. The five other persisted palette IDs remain selectable and their
+palette-specific dark colors stay in `desktop/src/styles/themes.css`. Light uses a separate
+semantic token override and does not introduce a palette ID.
 
 Production Graphite is the existing A palette: accent ink and focus `#B2A5E9`, primary fill
 `#705EAE`, hover `#7564B4`, pressed `#6553A0`, selected surface `#25242C`, search focus `#9688C6`,

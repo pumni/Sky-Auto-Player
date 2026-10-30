@@ -14,11 +14,11 @@ use sky_app_core::library::{
     LibraryManifestStore, LibraryManifestV1, LikedSongs,
 };
 use sky_app_core::settings::{
-    ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
-    DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS,
-    HotkeySettings, MAX_TIMING_MARGIN_US, MIN_TIMING_MARGIN_US, SafetySettings, SettingsError,
-    SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences, VALID_FPS,
-    normalize_settings,
+    AppearanceMode, ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES,
+    DEFAULT_PROCESS_NAMES, DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S,
+    HOLD_FRAME_OPTIONS, HotkeySettings, MAX_TIMING_MARGIN_US, MIN_TIMING_MARGIN_US, SafetySettings,
+    SettingsError, SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences,
+    VALID_FPS, normalize_settings,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -1145,7 +1145,14 @@ fn import_display_name(path: &Path, kind: ImportedSourceKind) -> String {
 }
 
 fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
-    let mut settings = ApplicationSettings::default();
+    let mut settings = ApplicationSettings {
+        appearance_mode: raw
+            .get("appearance_mode")
+            .and_then(Value::as_str)
+            .and_then(AppearanceMode::parse)
+            .unwrap_or(AppearanceMode::Dark),
+        ..ApplicationSettings::default()
+    };
     let palette = raw
         .get("palette")
         .or_else(|| raw.get("theme"))
@@ -1210,6 +1217,17 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
 
 fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<String, Value> {
     let mut migrated = raw.clone();
+    let appearance_mode = raw
+        .get("appearance_mode")
+        .and_then(Value::as_str)
+        .and_then(AppearanceMode::parse)
+        .unwrap_or({
+            if is_new_settings_file {
+                AppearanceMode::System
+            } else {
+                AppearanceMode::Dark
+            }
+        });
     let palette = raw
         .get("palette")
         .or_else(|| raw.get("theme"))
@@ -1266,6 +1284,10 @@ fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<Stri
         Value::from(sky_app_core::settings::SCHEMA_VERSION),
     );
     migrated.insert("palette".into(), Value::from(normalized_palette(&palette)));
+    migrated.insert(
+        "appearance_mode".into(),
+        Value::from(appearance_mode.as_str()),
+    );
     migrated.remove("theme");
     migrated.insert(
         "default_hold_frames".into(),
@@ -1546,6 +1568,10 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         Value::from(sky_app_core::settings::SCHEMA_VERSION),
     );
     raw.insert("palette".into(), Value::from(settings.palette.clone()));
+    raw.insert(
+        "appearance_mode".into(),
+        Value::from(settings.appearance_mode.as_str()),
+    );
     raw.remove("theme");
     raw.insert(
         "ui_background_mode".into(),
@@ -1732,7 +1758,7 @@ mod tests {
         assert_eq!(settings.palette, "slate");
         let migrated = serde_json::from_slice::<Value>(&fs::read(&path).expect("read migrated"))
             .expect("valid migrated json");
-        assert_eq!(migrated["schema_version"], 9);
+        assert_eq!(migrated["schema_version"], 10);
         assert_eq!(migrated["palette"], "slate");
         assert!(migrated.get("theme").is_none());
         assert_eq!(migrated["future_root"]["preserve"], true);

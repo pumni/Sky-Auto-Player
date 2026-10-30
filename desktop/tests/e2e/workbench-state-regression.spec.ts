@@ -124,7 +124,7 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
-  const palette = settings.getByLabel('Color palette');
+  const palette = settings.getByLabel('Dark palette');
   await palette.focus();
   await expect(palette).toBeFocused();
   await expect(palette).toBeVisible();

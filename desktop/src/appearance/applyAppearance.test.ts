@@ -8,11 +8,11 @@ describe('applyAppearance', () => {
     document.documentElement.dataset.theme = 'stale';
   });
 
-  it('applies the palette and dark color mode while removing legacy theme state', () => {
-    applyAppearance('slate');
+  it('applies the resolved mode and saved dark palette while removing legacy theme state', () => {
+    applyAppearance({ colorMode: 'light', palette: 'slate' });
 
     expect(document.documentElement.dataset.palette).toBe('slate');
-    expect(document.documentElement.dataset.colorMode).toBe('dark');
+    expect(document.documentElement.dataset.colorMode).toBe('light');
     expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 });

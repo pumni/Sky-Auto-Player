@@ -1,6 +1,5 @@
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import type { DesktopStore } from './types';
-import { applyAppearance } from '../appearance/applyAppearance';
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
@@ -46,7 +45,9 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             .map(([field]) => field);
           const preparationSafePatch =
             patchFields.length > 0 &&
-            patchFields.every((field) => field === 'palette' || field === 'autoPlay');
+            patchFields.every(
+              (field) => field === 'appearanceMode' || field === 'palette' || field === 'autoPlay',
+            );
           const cancelPreparing =
             !preparationSafePatch && playback.transportOperation === 'preparing';
           if (cancelPreparing) context.clearOperationFromEvent();
@@ -62,7 +63,6 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
               transportOperation: cancelPreparing ? null : playback.transportOperation,
             },
           });
-          applyAppearance(settings.palette);
           return settings;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

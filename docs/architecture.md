@@ -124,6 +124,11 @@ not create separate stores or synchronize state through effects.
   `updateSlice.ts` owns update check and install handoff request state, dialog
   state, and frontend transport errors. Rust `UpdateService` remains the
   authority for update policy and native update state.
+- Native settings own `appearance_mode` and its legacy migration alongside the
+  dark palette. `App.tsx` resolves System from one platform source at a time
+  (Tauri window theme/events when packaged, browser media query otherwise) and
+  applies it before startup window reveal; the effective mode is not stored in
+  browser storage.
 - `librarySlice.ts` owns Library query intent, bounded page caching,
   virtualization hydration, and paging. `librarySelectionActions.ts` owns
   selected-song/detail requests and browser navigation.

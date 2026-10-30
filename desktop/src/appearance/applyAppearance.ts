@@ -1,8 +1,8 @@
-import type { PaletteId } from '../bridge/DesktopBridge';
+import type { EffectiveAppearance } from './resolveAppearance';
 
-export function applyAppearance(palette: PaletteId): void {
+export function applyAppearance(appearance: EffectiveAppearance): void {
   const root = document.documentElement;
-  root.dataset.palette = palette;
-  root.dataset.colorMode = 'dark';
+  root.dataset.palette = appearance.palette;
+  root.dataset.colorMode = appearance.colorMode;
   delete root.dataset.theme;
 }

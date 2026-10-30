@@ -151,7 +151,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expectFocusClearance(dialog.getByLabel('Tempo'));
   await expectFocusClearance(dialog.getByLabel('FPS'));
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expectFocusClearance(dialog.getByLabel('Color palette'));
+  await expectFocusClearance(dialog.getByLabel('Dark palette'));
   await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
   await expectFocusClearance(dialog.getByLabel('Channel'));
   await expectFocusClearance(dialog.getByRole('button', { name: 'Check for updates' }));
@@ -231,7 +231,7 @@ test('all supported palettes round-trip through the settings surface', async ({ 
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
   await page.getByRole('button', { name: 'Appearance' }).click();
-  const palette = page.getByLabel('Color palette');
+  const palette = page.getByLabel('Dark palette');
   for (const id of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
     await palette.selectOption(id);
     await expect(page.locator('html')).toHaveAttribute('data-palette', id);

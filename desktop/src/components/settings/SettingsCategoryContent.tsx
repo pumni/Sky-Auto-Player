@@ -1,4 +1,9 @@
-import type { Bootstrap, PaletteId, SettingsPatch } from '../../bridge/DesktopBridge';
+import type {
+  AppearanceMode,
+  Bootstrap,
+  PaletteId,
+  SettingsPatch,
+} from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { AutoPlaySwitch } from './AutoPlaySwitch';
 import { TimingMarginControl } from './TimingMarginControl';
@@ -154,7 +159,18 @@ export function SettingsCategoryContent({
         <section className="settings-section" aria-labelledby="appearance-settings-title">
           <h3 id="appearance-settings-title">Appearance</h3>
           <label>
-            Color palette
+            Theme
+            <select
+              value={settings.appearance_mode}
+              onChange={(event) => patch({ appearanceMode: event.target.value as AppearanceMode })}
+            >
+              <option value="system">Follow Windows (recommended)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label>
+            Dark palette
             <select
               value={settings.palette}
               onChange={(event) => patch({ palette: event.target.value as PaletteId })}
@@ -166,7 +182,10 @@ export function SettingsCategoryContent({
               ))}
             </select>
           </label>
-          <p className="settings-note">Choose a quiet, high-contrast workspace palette.</p>
+          <p className="settings-note">
+            The saved palette is used whenever Dark is effective. Follow Windows uses the Windows
+            app color preference while Theme is set to Follow Windows.
+          </p>
         </section>
       )}
 

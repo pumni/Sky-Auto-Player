@@ -1,4 +1,5 @@
 import type {
+  AppearanceMode,
   Bootstrap,
   PlaybackConfig,
   CalibrationCancel,
@@ -133,6 +134,7 @@ const rows = Array.from({ length: 500 }, (_, index) =>
 
 function initialSettings(): Settings {
   return {
+    appearance_mode: 'system',
     palette: 'graphite',
     ui_background_mode: 'opaque',
     playback_defaults: {
@@ -162,6 +164,7 @@ function initialSettings(): Settings {
 }
 
 export interface MockBridgeOptions {
+  appearanceMode?: AppearanceMode;
   catalogRows?: SearchResult['items'];
   catalogCount?: number;
   builtinSongIds?: readonly string[];
@@ -239,7 +242,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   const startDelayMs = Math.max(0, options.startDelayMs ?? 30);
   let statusQueryFailures = Math.max(0, Math.floor(options.statusQueryFailures ?? 0));
   let generation = 1;
-  let settings = initialSettings();
+  let settings = { ...initialSettings(), appearance_mode: options.appearanceMode ?? 'system' };
   let playbackSessionSequence = 0;
   let preparedPlaybackSequence = 0;
   let activeSession: {
@@ -754,6 +757,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       const playback = patch.playbackDefaults;
       settings = {
         ...settings,
+        ...(patch.appearanceMode === undefined ? {} : { appearance_mode: patch.appearanceMode }),
         ...(patch.palette === undefined ? {} : { palette: patch.palette }),
         ...(patch.telemetryEnabled === undefined
           ? {}

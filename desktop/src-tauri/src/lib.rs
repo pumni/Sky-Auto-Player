@@ -1249,6 +1249,7 @@ mod ipc_tests {
         set_available("4.2.0");
         runtime
             .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
                 palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
@@ -1268,6 +1269,7 @@ mod ipc_tests {
         // 1b. Available + Stable->Stable no-op => candidate remains Available
         runtime
             .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
                 palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
@@ -1287,6 +1289,7 @@ mod ipc_tests {
         // 1c. Available + skip X->X no-op => candidate remains Available
         runtime
             .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
                 palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
@@ -1302,6 +1305,7 @@ mod ipc_tests {
         set_available("4.2.0");
         runtime
             .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
                 palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
@@ -1321,6 +1325,7 @@ mod ipc_tests {
         // 1d. Available + actual skip change => Idle and candidate cleared
         runtime
             .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
                 palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
