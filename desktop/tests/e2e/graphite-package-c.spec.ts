@@ -134,6 +134,7 @@ async function openApp(
   viewport: { width: number; height: number },
   query: Record<string, string> = {},
 ) {
+  await page.emulateMedia({ forcedColors: 'none', reducedMotion: 'no-preference' });
   await page.setViewportSize(viewport);
   const preferences = {
     version: 5,
@@ -348,6 +349,10 @@ async function readSceneMeasurement(page: Page, variant: Variant, scene: SceneNa
     const paletteOption = document.querySelector<HTMLOptionElement>('option[value="graphite"]');
     return {
       viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
+      media: {
+        forcedColors: matchMedia('(forced-colors: active)').matches,
+        reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      },
       palette: document.documentElement.dataset.palette ?? null,
       colorMode: document.documentElement.dataset.colorMode ?? null,
       utilityPresentation:
@@ -800,6 +805,16 @@ test('captures matched Graphite A and Soft Graphite preview states', async ({ pa
       await openApp(page, scene.viewport, scene.query);
       await applyVariant(page, variant);
       await scene.prepare(page);
+      const media = await page.evaluate(() => ({
+        forcedColors: matchMedia('(forced-colors: active)').matches,
+        reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      }));
+      expect(media.forcedColors, `${variant}/${scene.name} forced-colors mode`).toBe(
+        scene.name === 'forced-colors-1366x768',
+      );
+      expect(media.reducedMotion, `${variant}/${scene.name} reduced-motion mode`).toBe(
+        scene.name === 'reduced-motion-1366x768',
+      );
       const screenshot = await captureScreenshot(page, variant, `${scene.name}.png`);
       (results.screenshots as string[]).push(screenshot);
       results.scenes[`${variant}/${scene.name}`] = {
