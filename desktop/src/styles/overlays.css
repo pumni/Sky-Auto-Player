@@ -61,7 +61,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
   padding: 12px;
   border-left: 2px solid var(--accent-ink);
@@ -95,7 +95,7 @@
   overflow-wrap: anywhere;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -112,7 +112,7 @@
 .update-notes-region::-webkit-scrollbar-thumb,
 .update-dialog-error .update-error-region::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: var(--border-strong);
+  background: var(--scrollbar-thumb);
 }
 
 .dialog-heading {

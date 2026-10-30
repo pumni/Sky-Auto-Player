@@ -22,6 +22,10 @@ const paletteTokenNames = [
   '--border-subtle',
   '--border-strong',
   '--control-border',
+  '--scrollbar-thumb',
+  '--scrollbar-thumb-hover',
+  '--workbench-divider',
+  '--workbench-playing-indicator',
   '--text-primary',
   '--text-secondary',
   '--text-tertiary',
@@ -481,6 +485,18 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     await expect
       .poll(() => tokenValues(page, Object.keys(expectedTokenValues)))
       .toEqual(expectedTokenValues);
+
+    const interactionAliases = await tokenValues(page, [
+      '--scrollbar-thumb',
+      '--scrollbar-thumb-hover',
+      '--workbench-divider',
+      '--workbench-playing-indicator',
+    ]);
+    expect(interactionAliases['--scrollbar-thumb']).toBe(values.borderStrong);
+    expect(interactionAliases['--scrollbar-thumb-hover']).toBe(values.textTertiary);
+    expect(interactionAliases['--workbench-playing-indicator']).toBe(
+      interactionAliases['--workbench-divider'],
+    );
 
     const resolvedColors = await resolvedTokenColors(page, [
       '--accent-ink',

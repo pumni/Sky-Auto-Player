@@ -45,7 +45,7 @@ h3 {
   scrollbar-width: thin;
 }
 .scroll-surface.is-scrolling {
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .scroll-surface::-webkit-scrollbar {
   width: 9px;
@@ -61,11 +61,11 @@ h3 {
   background-clip: padding-box;
 }
 .scroll-surface.is-scrolling::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
 .scroll-surface.is-scrolling::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
+  background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
 }
 .eyebrow {

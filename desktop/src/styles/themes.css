@@ -18,6 +18,8 @@
   --border-subtle: #2a2b2c;
   --border-strong: #393b3e;
   --control-border: #72777d;
+  --scrollbar-thumb: var(--border-strong);
+  --scrollbar-thumb-hover: var(--text-tertiary);
   --text-primary: #d4d4d4;
   --text-secondary: #a6a6a6;
   --text-tertiary: #929292;
@@ -75,6 +77,7 @@
   --workbench-selected-control-hover: var(--selection-control-hover);
   --workbench-selected-control-pressed: var(--selection-control-pressed);
   --workbench-divider: #2a2b2c;
+  --workbench-playing-indicator: var(--workbench-divider);
   --workbench-pane-edge: #313336;
   --workbench-overlay-edge: #72777d;
   --workbench-critical-edge: #393b3e;
@@ -290,6 +293,8 @@ html[data-color-mode='dark'] {
 
 html[data-color-mode='light'] {
   color-scheme: light;
+
+  /* General surfaces and text */
   --canvas: #ffffff;
   --surface-panel: #f7f8fa;
   --surface-secondary: #fafbfc;
@@ -300,16 +305,20 @@ html[data-color-mode='light'] {
   --selection-row: var(--selection-bg);
   --selection-navigation: var(--selection-bg);
   --selection-control: var(--selection-bg);
-  --selection-control-hover: #eef2f6;
-  --selection-control-pressed: #e2e8f0;
+  --selection-control-hover: var(--control-hover);
+  --selection-control-pressed: var(--control-pressed);
   --selection-indicator: var(--accent-ink);
   --selection-row-indicator: var(--accent-ink);
   --border-subtle: #dfe4eb;
   --border-strong: #b1bbc6;
   --control-border: #767f8a;
+  --scrollbar-thumb: #808b97;
+  --scrollbar-thumb-hover: var(--text-tertiary);
   --text-primary: #252a31;
   --text-secondary: #535f6c;
   --text-tertiary: #5d6976;
+
+  /* Restrained Windows blue accent and status colors */
   --accent: #0b63c5;
   --accent-hover: #0958ae;
   --accent-ink: #0b58a5;
@@ -324,17 +333,79 @@ html[data-color-mode='light'] {
   --toggle-inactive-ink: #5d6976;
   --success-fg: #1f7a47;
   --success-bg: #e9f5ed;
-  --success-border: #7eb892;
+  --success-border: #1f7a47;
   --warning-fg: #8d5a08;
   --warning-bg: #fff5df;
-  --warning-border: #d1a64c;
+  --warning-border: #8d5a08;
   --danger-fg: #b4232f;
   --danger-bg: #fcebed;
-  --danger-border: #d68a91;
+  --danger-border: #b4232f;
   --danger-fill: #b4232f;
   --danger-fill-hover: #9f1f2a;
   --danger-fill-pressed: #861a23;
   --on-danger: #ffffff;
+
+  /* Graphite-specific workbench aliases, overridden after every dark palette */
+  --workbench-content: var(--canvas);
+  --workbench-navigation: var(--surface-panel);
+  --workbench-inspector: var(--surface-secondary);
+  --chrome-surface: var(--surface-panel);
+  --workbench-hover: var(--control-hover);
+  --workbench-pressed: var(--control-pressed);
+  --workbench-control-rest: transparent;
+  --workbench-control-rest-edge: transparent;
+  --workbench-control-hover: var(--control-hover);
+  --workbench-control-pressed: var(--control-pressed);
+  --workbench-caption-hover: var(--control-hover);
+  --workbench-control-disabled: #626e7a;
+  --workbench-action-edge: var(--control-border);
+  --workbench-action-hover-edge: var(--control-border);
+  --workbench-action-hover: var(--control-hover);
+  --workbench-control-danger-hover: var(--danger-bg);
+  --workbench-accent-ink: var(--accent-ink);
+  --workbench-accent-ink-hover: var(--accent-ink-hover);
+  --workbench-toggle-on: var(--toggle-active-ink);
+  --workbench-toggle-off: var(--toggle-inactive-ink);
+  --workbench-accent-fill: var(--primary-fill);
+  --workbench-accent-fill-hover: var(--primary-fill-hover);
+  --workbench-accent-fill-pressed: var(--primary-fill-pressed);
+  --workbench-selected: var(--selection-bg);
+  --workbench-selected-control: var(--selection-control);
+  --workbench-selected-control-hover: var(--selection-control-hover);
+  --workbench-selected-control-pressed: var(--selection-control-pressed);
+  --workbench-divider: var(--border-subtle);
+  --workbench-playing-indicator: var(--control-border);
+  --workbench-pane-edge: var(--border-subtle);
+  --workbench-overlay-edge: var(--control-border);
+  --workbench-critical-edge: var(--danger-border);
+  --workbench-control-boundary: var(--control-border);
+  --workbench-text-primary: var(--text-primary);
+  --workbench-text-secondary: var(--text-secondary);
+  --workbench-text-tertiary: var(--text-tertiary);
+  --workbench-accent: var(--accent-ink);
+  --workbench-accent-hover: var(--accent-ink-hover);
+  --workbench-focus: var(--focus-ring);
+  --workbench-search-surface: var(--surface-raised);
+  --workbench-search-idle-edge: var(--control-border);
+  --workbench-search-focus: var(--search-focus-ring);
+
+  /* Shared control, caption, overlay, dialog, and player aliases */
+  --primary-fill: var(--accent-fill);
+  --primary-fill-hover: var(--accent-fill-hover);
+  --primary-fill-pressed: var(--accent-fill-pressed);
+  --on-primary: var(--on-accent);
+  --ghost-control-rest: var(--workbench-control-rest);
+  --ghost-control-hover: var(--workbench-control-hover);
+  --ghost-control-pressed: var(--workbench-control-pressed);
+  --caption-text: var(--workbench-text-secondary);
+  --caption-hover: var(--workbench-caption-hover);
+  --caption-pressed: var(--workbench-control-pressed);
+  --caption-close-text: var(--on-danger);
+  --caption-close-hover: var(--danger-fill);
+  --caption-close-pressed: var(--danger-fill-pressed);
+  --shadow-overlay: rgb(37 42 49 / 16%);
+  --shadow-dialog: rgb(37 42 49 / 22%);
+  --overlay-backdrop: rgb(37 42 49 / 38%);
 }
 
 @media (forced-colors: active) {
