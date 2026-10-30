@@ -108,12 +108,9 @@ screenshots remain the Package C browser-mock artifacts. The current package
 did not produce new screenshots because the packaged resize profiler could not
 reach a valid workbench target.
 
-## Final review checklist
+## Review state
 
-- [ ] Exact pushed Package D SHA recorded in this report and PR #564.
-- [x] Full focused and repository gate results recorded above.
-- [x] Baseline-to-HEAD changed paths reviewed; no native/generated/schema/release
-  changes, cache/page limit drift, selection/playing regression, or palette B
-  production values.
-- [x] Package D remains on the existing branch and Draft PR #564.
-- [ ] Stop for Agent Lead final review; no Package E, merge, or release started.
+The exact immutable Package D HEAD and verification summary will be recorded in
+the existing Draft PR #564 after push. Package D is the final authorized
+package for this dispatch; work stops here for Agent Lead review. No Package E,
+merge, or release is started.
