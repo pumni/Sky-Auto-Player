@@ -13,12 +13,13 @@ test('production bundle boots the mock shell and supports a representative flow'
   });
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  const songsGrid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
+  await expect(songsGrid).toBeVisible();
   expect(featureChunks.size).toBe(0);
 
-  await page.getByLabel('Search All Songs').fill('Moonlit');
-  const songsGrid = page.getByRole('grid', { name: 'Songs' });
+  await page.getByLabel('Search Built-in Songs').fill('Moonlit');
   await expect(songsGrid).toHaveAttribute('aria-rowcount', '2');
   const moonlitRow = page.getByRole('row', { name: /Moonlit Village/ });
   await expect(moonlitRow).toBeVisible();
