@@ -115,6 +115,13 @@ and active toggle ink `#B68CFF`. Semantic roles remain separate: accent text/ink
 fill and on-fill text, focus indication, search focus, selected surfaces/indicators, toggle state,
 and danger/warning/success. Compatibility `--workbench-*` aliases resolve through those roles.
 
+Light uses a separate Clean Windows Light token set: white content, a near-white shell and
+Navigator, charcoal text, hairline neutral separators, and restrained Windows blue. Graphite's
+component-specific workbench aliases are overridden in the theme layer so they cannot leave dark
+surfaces behind in Light mode. Component styles consume semantic variables; the six dark palette
+IDs and their rendered role values remain unchanged. Package B's browser captures and computed
+contrast report are recorded in [`issue-565-package-b evidence`](evidence/issue-565-package-b/README.md).
+
 Soft Graphite B is a review preview only. Its override exists in the opt-in
 `desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and
 `docs/evidence/issue-563-package-c/`; it is not a production selector or shipped
@@ -141,10 +148,11 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
   resize, focus/ARIA state, responsive topology, and preference v5 persistence.
 - `desktop/tests/e2e/settings-diagnostics.spec.ts`,
   `desktop/tests/e2e/palette-appearance.spec.ts`,
+  `desktop/tests/e2e/light-appearance.spec.ts`,
   `desktop/tests/e2e/graphite-final-ui-polish.spec.ts`, and
   `desktop/tests/e2e/graphite-package-c.spec.ts` cover modal/accessibility, Diagnostics
-  truthfulness, all six palettes, focus and semantic color roles, forced-colors, and reduced-motion
-  behavior.
+  truthfulness, all six palettes, Light and Graphite Dark rendering, focus and semantic color roles,
+  forced-colors, and reduced-motion behavior.
 
 Browser tests use the mock bridge. The 640×448 overlay cases are responsive browser fallbacks,
 not supported native sizes. Packaged WebView2 resize/startup measurements and their baseline

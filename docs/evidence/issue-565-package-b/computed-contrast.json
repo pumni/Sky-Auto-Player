@@ -1,0 +1,1941 @@
+{
+  "captureSourceSha": "b5b6f68a3f7257225e61be1e13d7981f7d077f2b",
+  "scenes": {
+    "light/populated-1366x768": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/populated-1200x760": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/populated-1024x768": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/populated-800x560": {
+      "sampleCount": 61,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/populated-640x448": {
+      "sampleCount": 46,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Title",
+          "element": "span.track-cell.track-cell-title",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "1",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "4",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/settings-appearance-1366x768": {
+      "sampleCount": 90,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:06",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "PREFERENCES",
+          "element": "p.eyebrow",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "The saved palette is used whenever Dark is effective. Follow Windows use",
+          "element": "p.settings-note",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/diagnostics-runtime-1366x768": {
+      "sampleCount": 115,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:07",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Available after a completed physical playback session.",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(250, 251, 252)",
+          "ratio": 5.41,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/playback-error-1366x768": {
+      "sampleCount": 81,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Prepared",
+          "element": "span.muted.player-track-status",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:00",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:05",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/playback-confirmation-1366x768": {
+      "sampleCount": 228,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "1",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Prepared",
+          "element": "span.muted.player-track-status",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Awaiting confirmation",
+          "element": "span.player-transport-status",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "medium",
+          "element": "span.player-risk.risk-medium",
+          "foreground": "rgb(141, 90, 8)",
+          "renderedForeground": "rgb(141, 90, 8)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.49,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/focus-hover-1366x768": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:02",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "light/compact-utility-overlay-640x448": {
+      "sampleCount": 50,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.97,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(234, 242, 253)",
+          "ratio": 4.97,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:03",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(247, 248, 250)",
+          "ratio": 5.27,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Title",
+          "element": "span.track-cell.track-cell-title",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "1",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "4",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(93, 105, 118)",
+          "renderedForeground": "rgb(93, 105, 118)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/populated-1366x768": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/populated-1200x760": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/populated-1024x768": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/populated-800x560": {
+      "sampleCount": 61,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/populated-640x448": {
+      "sampleCount": 46,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:01",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Title",
+          "element": "span.track-cell.track-cell-title",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "1",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/settings-appearance-1366x768": {
+      "sampleCount": 90,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Appearance",
+          "element": "button.settings-nav-item.is-active",
+          "foreground": "rgb(178, 165, 233)",
+          "renderedForeground": "rgb(178, 165, 233)",
+          "background": "rgb(59, 54, 70)",
+          "ratio": 5.24,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:06",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/diagnostics-runtime-1366x768": {
+      "sampleCount": 115,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Available after a completed physical playback session.",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:06",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/playback-error-1366x768": {
+      "sampleCount": 81,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Try again",
+          "element": "button.button.button-primary.admission-recovery-action",
+          "foreground": "rgb(255, 255, 255)",
+          "renderedForeground": "rgb(255, 255, 255)",
+          "background": "rgb(112, 94, 174)",
+          "ratio": 5.38,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Prepared",
+          "element": "span.muted.player-track-status",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:00",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/playback-confirmation-1366x768": {
+      "sampleCount": 228,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.93,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "Dense note transitions may need a slower tempo.",
+          "element": "span.muted",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Review the offline timing estimate for each plan. It is informational an",
+          "element": "span.muted",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "The illustrative model found 3 negative-slack packet(s), 2 H-floor and 1",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "12 of 12 packets analyzed (limit 50000)",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Modeled pressure:",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "3",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "late ·",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(36, 37, 38)",
+          "ratio": 4.93,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/focus-hover-1366x768": {
+      "sampleCount": 77,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "500",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0",
+          "element": "span.library-nav-item-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Playlists",
+          "element": "h3.library-section-heading",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:02",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    },
+    "graphite-dark/compact-utility-overlay-640x448": {
+      "sampleCount": 50,
+      "inactiveControlExemptions": 0,
+      "minimumApplicableRatio": 4.94,
+      "failures": [],
+      "lowestSamples": [
+        {
+          "text": "2",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(37, 36, 44)",
+          "ratio": 4.94,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Search Built-in Songs… (placeholder)",
+          "element": "input::placeholder",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(32, 33, 35)",
+          "ratio": 5.18,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "0:03",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "2:10",
+          "element": "span",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(25, 26, 27)",
+          "ratio": 5.6,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "500 songs",
+          "element": "span.track-browser-count",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "#",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "Title",
+          "element": "span.track-cell.track-cell-title",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        },
+        {
+          "text": "1",
+          "element": "span.track-cell.track-cell-index",
+          "foreground": "rgb(146, 146, 146)",
+          "renderedForeground": "rgb(146, 146, 146)",
+          "background": "rgb(21, 22, 24)",
+          "ratio": 5.82,
+          "minimum": 4.5,
+          "exemption": null
+        }
+      ]
+    }
+  }
+}

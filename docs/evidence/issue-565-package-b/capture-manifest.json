@@ -1,0 +1,40 @@
+{
+  "captureSourceSha": "b5b6f68a3f7257225e61be1e13d7981f7d077f2b",
+  "capturedAt": "2026-10-30T16:54:10.989Z",
+  "environment": {
+    "osPlatform": "win32",
+    "osRelease": "10.0.26300",
+    "osVersion": "Windows 11 Home",
+    "architecture": "x64",
+    "browser": "Playwright Chromium",
+    "browserVersion": "156.0.8078.4",
+    "deviceScaleFactor": 1,
+    "browserThemeEmulation": "prefers-color-scheme light/dark; not packaged Windows WebView2",
+    "bridge": "deterministic browser mock bridge; no Tauri runtime or game input",
+    "viewportsAreCssPixels": true
+  },
+  "screenshots": [
+    "docs/evidence/issue-565-package-b/light/populated-1366x768.png",
+    "docs/evidence/issue-565-package-b/light/populated-1200x760.png",
+    "docs/evidence/issue-565-package-b/light/populated-1024x768.png",
+    "docs/evidence/issue-565-package-b/light/populated-800x560.png",
+    "docs/evidence/issue-565-package-b/light/populated-640x448.png",
+    "docs/evidence/issue-565-package-b/light/settings-appearance-1366x768.png",
+    "docs/evidence/issue-565-package-b/light/diagnostics-runtime-1366x768.png",
+    "docs/evidence/issue-565-package-b/light/playback-error-1366x768.png",
+    "docs/evidence/issue-565-package-b/light/playback-confirmation-1366x768.png",
+    "docs/evidence/issue-565-package-b/light/focus-hover-1366x768.png",
+    "docs/evidence/issue-565-package-b/light/compact-utility-overlay-640x448.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/populated-1366x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/populated-1200x760.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/populated-1024x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/populated-800x560.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/populated-640x448.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/settings-appearance-1366x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/diagnostics-runtime-1366x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/playback-error-1366x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/playback-confirmation-1366x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/focus-hover-1366x768.png",
+    "docs/evidence/issue-565-package-b/graphite-dark/compact-utility-overlay-640x448.png"
+  ]
+}
