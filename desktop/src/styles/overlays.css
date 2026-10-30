@@ -165,7 +165,7 @@
 
 .settings-nav-item.is-active {
   border-left-color: var(--selection-indicator);
-  color: var(--workbench-accent-ink);
+  color: var(--accent-ink);
   background: var(--selection-bg);
   background-color: var(--selection-bg);
 }
@@ -266,7 +266,7 @@
 
 .auto-play-switch-description {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   line-height: 1.35;
 }
 
@@ -319,7 +319,7 @@
 }
 
 .checkbox-row input {
-  accent-color: var(--accent-fill);
+  accent-color: var(--primary-fill);
 }
 
 .settings-subsection {
@@ -359,7 +359,7 @@
 
 .timing-margin-recommendation {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   font-variant-numeric: tabular-nums;
 }
 
@@ -474,7 +474,7 @@
 
 .calibration-copy progress {
   width: 100%;
-  accent-color: var(--accent-fill);
+  accent-color: var(--primary-fill);
 }
 
 .calibration-result-icon {
@@ -575,5 +575,5 @@
 }
 
 .settings-nav-item.is-active:hover {
-  background-color: var(--workbench-selected-control-hover);
+  background-color: var(--selection-control-hover);
 }

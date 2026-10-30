@@ -16,7 +16,7 @@ export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }>
 ];
 
 const palettes: Array<{ id: PaletteId; label: string }> = [
-  { id: 'graphite', label: 'Dark mode' },
+  { id: 'graphite', label: 'Graphite (Default)' },
   { id: 'aurora', label: 'Aurora' },
   { id: 'minimalist', label: 'Minimalist' },
   { id: 'slate', label: 'Slate' },

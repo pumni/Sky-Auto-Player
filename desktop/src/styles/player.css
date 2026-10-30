@@ -59,7 +59,7 @@
 }
 
 .player-track-copy span {
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 .player-track-subtitle,
@@ -80,7 +80,7 @@
 
 @media (max-width: 960px) {
   .player-track-copy .player-track-status {
-    font-size: 11px;
+    font-size: var(--type-metadata);
   }
 }
 
@@ -212,15 +212,15 @@
 }
 
 .player-transport .player-shuffle-action.is-active {
-  color: var(--workbench-toggle-on);
+  color: var(--toggle-active-ink);
 }
 
 .player-transport .player-shuffle-action.is-active:hover:not(:disabled) {
-  color: var(--workbench-toggle-on);
+  color: var(--toggle-active-ink);
 }
 
 .player-transport .player-shuffle-action.is-active:focus-visible:not(:disabled) {
-  color: var(--workbench-toggle-on);
+  color: var(--toggle-active-ink);
 }
 
 .player-transport .player-secondary-action:hover:not(:disabled),
@@ -259,7 +259,7 @@
 .player-transport-status {
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   line-height: 11px;
   text-align: center;
   text-overflow: ellipsis;
@@ -294,7 +294,7 @@
   justify-content: space-between;
   color: var(--text-tertiary);
   font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -319,12 +319,12 @@
 
 .player-timeline progress::-webkit-progress-value {
   border-radius: inherit;
-  background: var(--accent-fill);
+  background: var(--primary-fill);
 }
 
 .player-timeline progress::-moz-progress-bar {
   border-radius: inherit;
-  background: var(--accent-fill);
+  background: var(--primary-fill);
 }
 
 .player-timeline.is-disabled {
@@ -349,7 +349,7 @@
   display: block;
   max-height: 32px;
   overflow: auto;
-  font-size: 11px;
+  font-size: var(--type-metadata);
   line-height: 1.35;
 }
 
@@ -376,7 +376,7 @@
   align-items: center;
   gap: 4px;
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -387,7 +387,7 @@
   border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 .profile-summary-button {
@@ -490,8 +490,8 @@
 }
 
 .auto-play-switch.is-on .auto-play-switch-track {
-  border-color: var(--accent-fill);
-  background: var(--accent-fill);
+  border-color: var(--primary-fill);
+  background: var(--primary-fill);
 }
 
 .auto-play-switch.is-on .auto-play-switch-track > span {
@@ -533,13 +533,13 @@
 .profile-test-action {
   width: 100%;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 .profile-test-explanation {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   line-height: 1.4;
 }
 
@@ -630,7 +630,7 @@
 .admission-copy span {
   overflow: hidden;
   color: var(--warning-fg);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -725,7 +725,7 @@
   justify-content: center;
   min-height: 32px;
   padding-inline: 10px;
-  font-size: 11px;
+  font-size: var(--type-metadata);
   white-space: nowrap;
 }
 
@@ -770,7 +770,7 @@
 .admission-option > .button {
   min-height: 30px;
   padding-inline: 9px;
-  font-size: 11px;
+  font-size: var(--type-metadata);
   white-space: normal;
 }
 
@@ -782,14 +782,14 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
 .timing-advisory strong {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .timing-advisory details {
@@ -840,7 +840,7 @@
   }
 
   .player-track-status {
-    font-size: 11px;
+    font-size: var(--type-metadata);
   }
 }
 
@@ -942,23 +942,23 @@
 }
 
 .player-transport .player-primary-action.button-primary {
-  border-color: var(--workbench-accent-fill);
-  color: var(--on-accent);
-  background-color: var(--workbench-accent-fill);
+  border-color: var(--primary-fill);
+  color: var(--on-primary);
+  background-color: var(--primary-fill);
 }
 
 .button-primary:hover:not(:disabled):not([aria-disabled='true']),
 .player-transport .player-primary-action.button-primary:hover:not(:disabled) {
-  border-color: var(--workbench-accent-fill-hover);
-  color: var(--on-accent);
-  background-color: var(--workbench-accent-fill-hover);
+  border-color: var(--primary-fill-hover);
+  color: var(--on-primary);
+  background-color: var(--primary-fill-hover);
 }
 
 .button-primary:active:not(:disabled):not([aria-disabled='true']),
 .player-transport .player-primary-action.button-primary:hover:active:not(:disabled) {
-  border-color: var(--workbench-accent-fill-pressed);
-  color: var(--on-accent);
-  background-color: var(--workbench-accent-fill-pressed);
+  border-color: var(--primary-fill-pressed);
+  color: var(--on-primary);
+  background-color: var(--primary-fill-pressed);
 }
 
 .button-primary:disabled,
@@ -972,9 +972,9 @@
 }
 
 .player-transport .player-primary-action.button-primary.is-pending:disabled {
-  border-color: var(--workbench-accent-fill);
-  color: var(--on-accent);
-  background-color: var(--workbench-accent-fill);
+  border-color: var(--primary-fill);
+  color: var(--on-primary);
+  background-color: var(--primary-fill);
 }
 
 .player-tools .player-auto-play-button {
@@ -1005,7 +1005,7 @@
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background-color: var(--workbench-toggle-on);
+  background-color: var(--toggle-active-ink);
   content: '';
   pointer-events: none;
   transform: translateX(-50%);
@@ -1020,12 +1020,12 @@
 
 .player-tools .player-utility-button[aria-expanded='true'] {
   border-color: transparent;
-  color: var(--workbench-accent-ink);
+  color: var(--accent-ink);
   background-color: transparent;
 }
 
 .player-tools .icon-button.player-utility-button[aria-expanded='true']:hover:not(:disabled) {
-  color: var(--workbench-accent-ink-hover);
+  color: var(--accent-ink-hover);
   background-color: var(--workbench-control-hover);
 }
 
@@ -1038,6 +1038,6 @@
   .icon-button.player-utility-button[aria-expanded='true']:focus-visible:not(:disabled):not(
     :hover
   ) {
-  color: var(--workbench-accent-ink-hover);
+  color: var(--accent-ink-hover);
   background-color: transparent;
 }

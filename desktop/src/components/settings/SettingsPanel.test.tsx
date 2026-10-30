@@ -75,7 +75,9 @@ describe('SettingsPanel playback timing', () => {
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     expect(store.getState().settings?.palette).toBe('graphite');
     expect(palette).toHaveValue('graphite');
-    expect(palette.querySelector('option[value="graphite"]')?.textContent).toBe('Dark mode');
+    expect(palette.querySelector('option[value="graphite"]')?.textContent).toBe(
+      'Graphite (Default)',
+    );
 
     await act(async () => {
       fireEvent.change(palette, { target: { value: 'classic' } });

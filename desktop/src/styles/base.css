@@ -135,7 +135,7 @@ h3 {
   border-radius: var(--radius-control);
   color: var(--text-primary);
   background: var(--workbench-control-rest);
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 .update-indicator:hover {
   background: var(--workbench-control-hover);
@@ -176,11 +176,11 @@ h3 {
   gap: 5px;
   min-height: 28px;
   padding-inline: 9px;
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 .inline-error {
   color: var(--danger-fg);
-  font-size: 12px;
+  font-size: var(--type-metadata);
 }
 .risk-low {
   --risk-color: var(--success-fg);
@@ -482,7 +482,7 @@ h3 {
     .player-tools .player-auto-play-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):focus-visible:not(:disabled):not([aria-disabled='true']):not(:hover) {
-  color: var(--workbench-toggle-on);
+  color: var(--toggle-active-ink);
   background-color: transparent;
 }
 
@@ -492,7 +492,7 @@ h3 {
   .track-row .track-like-button[aria-pressed='true']
 ) {
   border-color: transparent;
-  color: var(--workbench-toggle-on);
+  color: var(--toggle-active-ink);
   background-color: transparent;
 }
 
@@ -501,7 +501,7 @@ h3 {
     .player-tools .player-auto-play-button[aria-pressed='true'],
     .track-row .track-like-button[aria-pressed='true']
   ):hover:not(:disabled):not([aria-disabled='true']) {
-  color: var(--workbench-toggle-on);
+  color: var(--toggle-active-ink);
   background-color: var(--workbench-control-hover);
 }
 
@@ -546,7 +546,7 @@ h3 {
   .track-like-button,
   [role='tab']
 ):focus-visible {
-  outline: 2px solid var(--workbench-focus);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 

@@ -162,7 +162,7 @@
 }
 
 .track-metadata-status.is-error {
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 .track-like-button {
@@ -478,7 +478,7 @@
 .builtin-page-feedback .button {
   min-height: 28px;
   padding-inline: 8px;
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 @container track-browser (max-width: 640px) {

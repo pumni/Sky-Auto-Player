@@ -14,6 +14,9 @@ const paletteTokenNames = [
   '--control-hover',
   '--control-pressed',
   '--selection-bg',
+  '--selection-control',
+  '--selection-control-hover',
+  '--selection-control-pressed',
   '--selection-indicator',
   '--selection-row-indicator',
   '--border-subtle',
@@ -30,6 +33,12 @@ const paletteTokenNames = [
   '--accent-ink',
   '--accent-ink-hover',
   '--primary-fill',
+  '--primary-fill-hover',
+  '--primary-fill-pressed',
+  '--on-primary',
+  '--toggle-active-ink',
+  '--toggle-inactive-ink',
+  '--search-focus-ring',
   '--on-accent',
   '--focus-ring',
 ] as const;
@@ -37,6 +46,8 @@ const paletteTokenNames = [
 const expected = {
   graphite: {
     controlBorder: '#72777d',
+    controlHover: '#222324',
+    controlPressed: '#404246',
     selectionBg: '#25242c',
     accent: '#b2a5e9',
     accentHover: '#c0b4f1',
@@ -48,10 +59,16 @@ const expected = {
     surfaceRaised: '#242526',
     onAccent: '#ffffff',
     focusRing: '#b2a5e9',
+    searchFocus: '#9688c6',
+    toggleActive: '#b68cff',
+    toggleInactive: '#808187',
+    textTertiary: '#929292',
     onDanger: '#ffffff',
   },
   aurora: {
     controlBorder: '#617390',
+    controlHover: '#1a2533',
+    controlPressed: '#223044',
     selectionBg: '#152132',
     accent: '#9b8cff',
     accentHover: '#b4a8ff',
@@ -63,10 +80,16 @@ const expected = {
     surfaceRaised: '#151e2b',
     onAccent: '#ffffff',
     focusRing: '#9b8cff',
+    searchFocus: '#9b8cff',
+    toggleActive: '#9b8cff',
+    toggleInactive: '#8a98ad',
+    textTertiary: '#8a98ad',
     onDanger: '#ffffff',
   },
   minimalist: {
     controlBorder: '#77818d',
+    controlHover: '#333941',
+    controlPressed: '#3b424b',
     selectionBg: '#2d343d',
     accent: '#a0b8d5',
     accentHover: '#c4d0df',
@@ -78,10 +101,16 @@ const expected = {
     surfaceRaised: '#292d33',
     onAccent: '#17191d',
     focusRing: '#e1e8f0',
+    searchFocus: '#e1e8f0',
+    toggleActive: '#a0b8d5',
+    toggleInactive: '#9da5ae',
+    textTertiary: '#9da5ae',
     onDanger: '#ffffff',
   },
   slate: {
     controlBorder: '#6a8699',
+    controlHover: '#273946',
+    controlPressed: '#314754',
     selectionBg: '#2a3d4a',
     accent: '#a8dded',
     accentHover: '#c1f0fb',
@@ -93,10 +122,16 @@ const expected = {
     surfaceRaised: '#20313d',
     onAccent: '#10171d',
     focusRing: '#a8dded',
+    searchFocus: '#a8dded',
+    toggleActive: '#a8dded',
+    toggleInactive: '#8fa9b8',
+    textTertiary: '#8fa9b8',
     onDanger: '#ffffff',
   },
   cyberpunk: {
     controlBorder: '#976595',
+    controlHover: '#352445',
+    controlPressed: '#422d54',
     selectionBg: '#3a274a',
     accent: '#f4a8e3',
     accentHover: '#ffd0f2',
@@ -108,10 +143,16 @@ const expected = {
     surfaceRaised: '#291c37',
     onAccent: '#130f1d',
     focusRing: '#f4a8e3',
+    searchFocus: '#f4a8e3',
+    toggleActive: '#f4a8e3',
+    toggleInactive: '#b297bd',
+    textTertiary: '#b297bd',
     onDanger: '#ffffff',
   },
   classic: {
     controlBorder: '#897864',
+    controlHover: '#393126',
+    controlPressed: '#463b2d',
     selectionBg: '#352c21',
     accent: '#e8c17a',
     accentHover: '#f2dca5',
@@ -123,6 +164,10 @@ const expected = {
     surfaceRaised: '#2c261f',
     onAccent: '#171512',
     focusRing: '#e8c17a',
+    searchFocus: '#e8c17a',
+    toggleActive: '#e8c17a',
+    toggleInactive: '#a89882',
+    textTertiary: '#a89882',
     onDanger: '#ffffff',
   },
 } satisfies Record<Palette, Record<string, string>>;
@@ -411,6 +456,9 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     const expectedTokenValues = {
       '--control-border': values.controlBorder,
       '--selection-bg': values.selectionBg,
+      '--selection-control': palette === 'graphite' ? '#302d38' : values.selectionBg,
+      '--selection-control-hover': palette === 'graphite' ? '#3b3646' : values.controlHover,
+      '--selection-control-pressed': palette === 'graphite' ? '#474151' : values.controlPressed,
       '--accent': palette === 'graphite' ? values.accent : values.accentFill,
       '--accent-hover': palette === 'graphite' ? values.accentHover : values.accentFillHover,
       '--accent-fill': values.accentFill,
@@ -418,8 +466,14 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       '--accent-fill-pressed': values.accentFillPressed,
       '--accent-ink': values.accent,
       '--accent-ink-hover': values.accentHover,
+      '--toggle-active-ink': values.toggleActive,
+      '--toggle-inactive-ink': values.toggleInactive,
+      '--search-focus-ring': values.searchFocus,
       '--selection-row-indicator': palette === 'graphite' ? 'transparent' : values.accent,
       '--primary-fill': values.accentFill,
+      '--primary-fill-hover': values.accentFillHover,
+      '--primary-fill-pressed': values.accentFillPressed,
+      '--on-primary': values.onAccent,
       '--border-strong': values.borderStrong,
       ...(palette === 'graphite' ? graphiteRoleTokens : {}),
       ...stableStatusTokens,
@@ -490,7 +544,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   await selectPalette(page, 'aurora');
 });
 
-test('Dark mode is the new-install palette and keeps the graphite setting ID', async ({ page }) => {
+test('Graphite is the new-install palette and keeps its graphite setting ID', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -503,7 +557,7 @@ test('Dark mode is the new-install palette and keeps the graphite setting ID', a
   const palette = settings.getByLabel('Color palette');
   await expect(palette).toHaveValue('graphite');
   await expect(palette.locator('option')).toHaveCount(6);
-  await expect(palette.locator('option[value="graphite"]')).toHaveText('Dark mode');
+  await expect(palette.locator('option[value="graphite"]')).toHaveText('Graphite (Default)');
   await palette.selectOption('slate');
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'slate');
   await palette.selectOption('graphite');

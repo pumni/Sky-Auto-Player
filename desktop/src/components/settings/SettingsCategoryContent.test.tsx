@@ -68,7 +68,7 @@ describe('SettingsCategoryContent', () => {
         option.textContent,
       ]),
     ).toEqual([
-      ['graphite', 'Dark mode'],
+      ['graphite', 'Graphite (Default)'],
       ['aurora', 'Aurora'],
       ['minimalist', 'Minimalist'],
       ['slate', 'Slate'],
