@@ -62,6 +62,117 @@ async function readBuiltinPagerGeometry(page: Page) {
   });
 }
 
+async function readBrowserPanePagerLayout(page: Page) {
+  return page.evaluate(() => {
+    const describe = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        display: style.display,
+        flex: style.flex,
+        minWidth: style.minWidth,
+        boxSizing: style.boxSizing,
+        paddingInline: style.paddingInline,
+        overflowX: style.overflowX,
+        gridTemplateColumns: style.gridTemplateColumns,
+        containerType: style.containerType,
+        ariaValueMin: element.getAttribute('aria-valuemin'),
+        ariaValueMax: element.getAttribute('aria-valuemax'),
+        ariaValueNow: element.getAttribute('aria-valuenow'),
+      };
+    };
+    const workbench = document.querySelector<HTMLElement>('.workbench');
+    const workbenchRect = workbench?.getBoundingClientRect();
+    const workbenchStyle = workbench ? getComputedStyle(workbench) : null;
+    return {
+      viewport: {
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        visualWidth: window.visualViewport?.width,
+        visualHeight: window.visualViewport?.height,
+        visualScale: window.visualViewport?.scale,
+      },
+      workbench: {
+        x: workbenchRect?.x,
+        y: workbenchRect?.y,
+        width: workbenchRect?.width,
+        height: workbenchRect?.height,
+        clientWidth: workbench?.clientWidth,
+        scrollWidth: workbench?.scrollWidth,
+        layoutWidth: workbench?.dataset.workbenchWidth,
+        utilityPresentation: workbench?.dataset.utilityPresentation,
+        layoutFits: workbench?.dataset.layoutFits,
+        display: workbenchStyle?.display,
+        flex: workbenchStyle?.flex,
+        gridTemplateColumns: workbenchStyle?.gridTemplateColumns,
+      },
+      navigator: describe('.navigator-workbench-pane'),
+      navigatorSeparator: describe('[aria-label="Resize library navigator"]'),
+      browserPane: describe('.track-browser-workbench-pane'),
+      trackBrowser: describe('.track-browser'),
+      pagerWrap: describe('.builtin-pager-wrap'),
+      pager: describe('.builtin-pager'),
+      range: describe('.builtin-pager-range'),
+      utilityPane: describe('.utility-workbench-pane'),
+      utilitySeparator: describe('[aria-label="Resize utility pane"]'),
+    };
+  });
+}
+
+async function waitForBrowserLayoutFrames(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+}
+
+async function waitForBrowserPaneWidth(page: Page, expectedWidth: number) {
+  const browserPane = page.locator('.track-browser-workbench-pane');
+  let stableLayout = { width: 0, minWidth: 0, stable: false };
+  await expect
+    .poll(async () => {
+      stableLayout = await browserPane.evaluate(
+        (element) =>
+          new Promise((resolve) => {
+            requestAnimationFrame(() => {
+              const firstWidth = element.getBoundingClientRect().width;
+              requestAnimationFrame(() => {
+                const style = getComputedStyle(element);
+                const secondWidth = element.getBoundingClientRect().width;
+                resolve({
+                  width: Math.round(secondWidth),
+                  minWidth: Number.parseFloat(style.minWidth),
+                  stable: Math.abs(firstWidth - secondWidth) <= 1,
+                });
+              });
+            });
+          }),
+      );
+      return stableLayout;
+    })
+    .toEqual({ width: expectedWidth, minWidth: 420, stable: true });
+  return { ...(await readBrowserPanePagerLayout(page)), layoutStability: stableLayout };
+}
+
+async function constrainBrowserPaneForPagerTest(page: Page, width: number) {
+  // Preserve the product's 420px min-width while exercising the container query.
+  await page.locator('.track-browser-workbench-pane').evaluate((element, targetWidth) => {
+    element.style.flex = `0 0 ${targetWidth}px`;
+    element.style.removeProperty('min-width');
+  }, width);
+  return waitForBrowserPaneWidth(page, width);
+}
+
 async function readBuiltinPagerGlyphGeometry(page: Page) {
   return page.evaluate(() => {
     const required = <T extends Element>(selector: string) => {
@@ -370,6 +481,33 @@ function expectBuiltinPagerGeometryStable(
   }
 }
 
+function expectBuiltinPagerLayoutStableDuringZoomedFocus(
+  before: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
+  after: Awaited<ReturnType<typeof readBuiltinPagerGeometry>>,
+) {
+  // Zoomed input focus may shift the viewport; the pager must stay fixed to its footer.
+  for (const selector of ['toolbar', 'wrap', 'range', 'table'] as const) {
+    const beforeBox = before[selector];
+    const afterBox = after[selector];
+    for (const edge of ['x', 'width', 'height'] as const) {
+      expect(
+        Math.abs(afterBox[edge] - beforeBox[edge]),
+        `${selector} ${edge}: ${beforeBox[edge]} -> ${afterBox[edge]}`,
+      ).toBeLessThanOrEqual(1);
+    }
+    expect(
+      Math.abs(afterBox.y - after.player.y - (beforeBox.y - before.player.y)),
+      `${selector} footer offset: ${beforeBox.y - before.player.y} -> ${afterBox.y - after.player.y}`,
+    ).toBeLessThanOrEqual(1);
+  }
+  for (const edge of ['x', 'width', 'height'] as const) {
+    expect(
+      Math.abs(after.player[edge] - before.player[edge]),
+      `player ${edge}: ${before.player[edge]} -> ${after.player[edge]}`,
+    ).toBeLessThanOrEqual(1);
+  }
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
@@ -418,6 +556,8 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1366');
+  await waitForBrowserLayoutFrames(page);
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
   const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
@@ -425,6 +565,7 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
   await expect(page.locator('.builtin-pager-status')).toContainText('Page 1 of 5');
   await expect(page.locator('.builtin-pager-range')).toHaveText('1–100 of 500 songs');
   await expect(page.locator('.builtin-pager')).toHaveCSS('flex-wrap', 'nowrap');
+  const unforcedBrowserLayout = await readBrowserPanePagerLayout(page);
 
   await jumpToBuiltinPage(page, 3);
   const pageThree = page.getByRole('grid', { name: 'Built-in Songs, page 3' });
@@ -497,24 +638,101 @@ test('Built-in Songs pages keep local row semantics and adapt to the browser con
     );
   }
 
-  await page.setViewportSize({ width: 1366, height: 768 });
-  const browserPane = page.locator('.track-browser-workbench-pane');
+  const narrowPaneMeasurements: Array<Record<string, unknown>> = [];
+  await jumpToBuiltinPage(page, 3);
+
+  await page.setViewportSize({ width: 872, height: 560 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '872');
+  const navigatorSeparator = page.getByRole('separator', { name: 'Resize library navigator' });
+  await navigatorSeparator.focus();
+  await page.keyboard.press('End');
+  await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '340');
+  const browserAt520 = await waitForBrowserPaneWidth(page, 520);
+  narrowPaneMeasurements.push({ path: 'navigator keyboard resize at 872px', ...browserAt520 });
+
+  await page.setViewportSize({ width: 800, height: 560 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '800');
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  const utilitySeparator = page.getByRole('separator', { name: 'Resize utility pane' });
+  await expect(utilitySeparator).toHaveAttribute('aria-valuenow', '316');
+  const browserAtMinimum = await waitForBrowserPaneWidth(page, 420);
+  narrowPaneMeasurements.push({ path: 'utility docked at its maximum', ...browserAtMinimum });
+
+  const utilitySeparatorBounds = await utilitySeparator.boundingBox();
+  expect(utilitySeparatorBounds).not.toBeNull();
+  const utilitySeparatorX = utilitySeparatorBounds!.x + utilitySeparatorBounds!.width / 2;
+  const utilitySeparatorY = utilitySeparatorBounds!.y + utilitySeparatorBounds!.height / 2;
+  await page.mouse.move(utilitySeparatorX, utilitySeparatorY);
+  await page.mouse.down();
+  await page.mouse.move(utilitySeparatorX + 20, utilitySeparatorY, { steps: 1 });
+  await page.mouse.up();
+  await expect(utilitySeparator).toHaveAttribute('aria-valuenow', '296');
+  const browserAt440 = await waitForBrowserPaneWidth(page, 440);
+  narrowPaneMeasurements.push({ path: 'utility pointer resize at 800px', ...browserAt440 });
+
+  console.info(
+    '[Browser pane pager layout diagnostic]',
+    JSON.stringify({ unforcedBrowserLayout, narrowPaneMeasurements }),
+  );
+
   for (const width of [520, 440]) {
-    await browserPane.evaluate((element, targetWidth) => {
-      element.style.flex = `0 0 ${targetWidth}px`;
-      element.style.minWidth = '0';
-    }, width);
-    const pagerGeometry = await page.locator('.builtin-pager-wrap').evaluate((element) => ({
-      width: element.clientWidth,
-      scrollWidth: element.scrollWidth,
-    }));
-    expect(pagerGeometry.scrollWidth).toBeLessThanOrEqual(pagerGeometry.width);
-    await expect(page.locator('.builtin-pager-jump-trigger')).toBeVisible();
+    await jumpToBuiltinPage(page, 3);
+    const paneLayout = width === 520 ? browserAt520 : browserAt440;
+    const pagerWrap = paneLayout.pagerWrap;
+    if (!pagerWrap) throw new Error('Missing pager wrapper geometry');
+    expect(pagerWrap.scrollWidth).toBeLessThanOrEqual(pagerWrap.clientWidth);
+    expect(paneLayout.browserPane?.minWidth).toBe('420px');
+
+    const previous = page.getByRole('button', { name: 'Previous page' });
+    const next = page.getByRole('button', { name: 'Next page' });
+    const trigger = page.getByRole('button', { name: builtinPageTriggerName(3, 5) });
+    await expect(previous).toBeVisible();
+    await expect(next).toBeVisible();
+    await expect(trigger).toBeVisible();
+    await expect(previous).toBeEnabled();
+    await expect(next).toBeEnabled();
+    const viewGeometry = await readBuiltinPagerGeometry(page);
+    const pagerControlHitTargets = await page
+      .locator('.builtin-pager button')
+      .evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const rect = button.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return hit === button || button.contains(hit);
+        }),
+      );
+    expect(pagerControlHitTargets).toEqual([true, true, true]);
+
+    await previous.focus();
+    await page.keyboard.press('Tab');
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(next).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 4' })).toBeVisible();
+    expectBuiltinPagerGeometryStable(viewGeometry, await readBuiltinPagerGeometry(page));
+
+    const pageFourTrigger = page.getByRole('button', { name: builtinPageTriggerName(4, 5) });
+    await pageFourTrigger.click();
+    const input = page.getByRole('textbox', { name: 'Page number, from 1 to 5' });
+    const confirm = page.getByRole('button', { name: 'Confirm page change' });
+    await expect(input).toBeFocused();
+    await expect(confirm).toBeVisible();
+    const editor = await readBuiltinPagerEditorGeometry(page);
+    expectBuiltinPagerGeometryStable(viewGeometry, await readBuiltinPagerGeometry(page));
+    expect(editor.input.width).toBeGreaterThanOrEqual(20);
+    expect(editor.confirm.width).toBeGreaterThanOrEqual(32);
+    expect(editor.confirm.height).toBeGreaterThanOrEqual(32);
+    expect(editor.receivesPointer).toBe(true);
+    await input.press('Tab');
+    await expect(confirm).toBeFocused();
+    await input.focus();
+    await input.press('Escape');
+    await expect(pageFourTrigger).toBeFocused();
+    expectBuiltinPagerGeometryStable(viewGeometry, await readBuiltinPagerGeometry(page));
   }
-  await browserPane.evaluate((element) => {
-    element.style.removeProperty('flex');
-    element.style.removeProperty('min-width');
-  });
 });
 
 test('F3.5 two-page Built-in pager spacing stays compact through inline editing and navigation', async ({
@@ -709,7 +927,7 @@ test('page indicator switches between compact view and full-width editing withou
   await page.setViewportSize({ width: 995, height: 706 });
   const measurements: Array<Record<string, unknown>> = [];
 
-  for (const total of [106, 501, 2438, 10_000]) {
+  for (const total of [106, 500, 501, 2438, 10_000]) {
     const delay = total === 106 ? '&mockSearchDelayMs=150' : '';
     await page.goto(`/?mockCatalogCount=${total}${delay}`);
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
@@ -986,12 +1204,9 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
   }
 
   await page.setViewportSize({ width: 1366, height: 768 });
-  const browserPane = page.locator('.track-browser-workbench-pane');
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1366');
   for (const width of [520, 440]) {
-    await browserPane.evaluate((element, constrainedWidth) => {
-      element.style.flex = `0 0 ${constrainedWidth}px`;
-      element.style.minWidth = '0';
-    }, width);
+    await constrainBrowserPaneForPagerTest(page, width);
     await assertVisualContract(`track-browser container ${width}px`);
     const constrainedGlyphGeometry = await readBuiltinPagerGlyphGeometry(page);
     expectBuiltinPagerIndicatorFitsCompactly(constrainedGlyphGeometry);
@@ -1000,7 +1215,7 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
     pagerGlyphMeasurements.push({ paneWidth: width, pageOne: constrainedGlyphGeometry });
   }
   console.info('[F3.5 compact pager viewport gaps]', JSON.stringify(pagerGlyphMeasurements));
-  await browserPane.evaluate((element) => {
+  await page.locator('.track-browser-workbench-pane').evaluate((element) => {
     element.style.removeProperty('flex');
     element.style.removeProperty('min-width');
   });
@@ -1139,6 +1354,8 @@ test('Built-in pager control centers stay fixed across 9→10 and 99→100', asy
       page.getByRole('grid', { name: `Built-in Songs, page ${transition.to}` }),
     ).toBeVisible();
     const after = await readBuiltinPagerGeometry(page);
+    const afterGlyphs = await readBuiltinPagerGlyphGeometry(page);
+    expectBuiltinPagerIndicatorFitsCompactly(afterGlyphs);
     expectBuiltinPagerGeometryStable(before, after);
     await expect(page.locator('.builtin-pager-jump-trigger')).toHaveAccessibleName(
       builtinPageTriggerName(transition.to, Math.ceil(transition.total / 100)),
@@ -2416,6 +2633,8 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
     await expect(
       page.getByRole('grid', { name: `Built-in Songs, page ${pageCount}` }),
     ).toBeVisible();
+    const afterGlyphs = await readBuiltinPagerGlyphGeometry(page);
+    expectBuiltinPagerIndicatorFitsCompactly(afterGlyphs);
     const lastRow = page.getByRole('row', { name: new RegExp(`Song ${total}`) });
     await page.getByRole('grid', { name: `Built-in Songs, page ${pageCount}` }).focus();
     await page.keyboard.press('End');
@@ -2429,6 +2648,7 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
       pageCount,
       before,
       editing,
+      afterGlyphs,
       after: await readBuiltinPagerGeometry(page),
     });
   }
@@ -2498,6 +2718,8 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
   await manyPageInput.fill('25');
   await page.getByRole('button', { name: 'Confirm page change' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 25' })).toBeVisible();
+  const twentyFivePageGlyphs = await readBuiltinPagerGlyphGeometry(page);
+  expectBuiltinPagerIndicatorFitsCompactly(twentyFivePageGlyphs);
   expectBuiltinPagerGeometryStable(beforeTwentyFive, await readBuiltinPagerGeometry(page));
   await expect(page.locator('.builtin-pager-range')).toHaveText('2401–2438 of 2438 songs');
   await expect(
@@ -2529,23 +2751,101 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
   await expect(
     page.getByRole('button', { name: '100 / 100, Page 100 of 100. Jump to page' }),
   ).toBeFocused();
+  const hundredPageGlyphs = await readBuiltinPagerGlyphGeometry(page);
+  expectBuiltinPagerIndicatorFitsCompactly(hundredPageGlyphs);
   expectBuiltinPagerGeometryStable(beforeHundred, await readBuiltinPagerGeometry(page));
+  const hundredPageZoomMeasurements: Array<Record<string, unknown>> = [];
+  for (const zoom of [1.25, 1.5]) {
+    await page.evaluate((scale) => {
+      document.documentElement.style.zoom = String(scale);
+    }, zoom);
+    await waitForBrowserLayoutFrames(page);
+    const view = await readBuiltinPagerGeometry(page);
+    const glyphs = await readBuiltinPagerGlyphGeometry(page);
+    expectBuiltinPagerIndicatorFitsCompactly(glyphs, zoom);
+    const zoomViewPosition = await page.evaluate(() => {
+      const workbench = document.querySelector<HTMLElement>('.workbench');
+      const player = document.querySelector<HTMLElement>('.player-bar');
+      return {
+        scrollY: window.scrollY,
+        visualOffsetTop: window.visualViewport?.offsetTop,
+        rootZoom: getComputedStyle(document.documentElement).zoom,
+        appShellScrollTop: document.querySelector<HTMLElement>('.app-shell')?.scrollTop,
+        workbenchY: workbench?.getBoundingClientRect().y,
+        playerY: player?.getBoundingClientRect().y,
+      };
+    });
+
+    const trigger = page.getByRole('button', {
+      name: '100 / 100, Page 100 of 100. Jump to page',
+    });
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    const input = page.getByRole('textbox', { name: 'Page number, from 1 to 100' });
+    await expect(input).toBeFocused();
+    const editing = await readBuiltinPagerGeometry(page);
+    const zoomEditPosition = await page.evaluate(() => {
+      const workbench = document.querySelector<HTMLElement>('.workbench');
+      const player = document.querySelector<HTMLElement>('.player-bar');
+      return {
+        scrollY: window.scrollY,
+        visualOffsetTop: window.visualViewport?.offsetTop,
+        rootZoom: getComputedStyle(document.documentElement).zoom,
+        appShellScrollTop: document.querySelector<HTMLElement>('.app-shell')?.scrollTop,
+        workbenchY: workbench?.getBoundingClientRect().y,
+        playerY: player?.getBoundingClientRect().y,
+      };
+    });
+    console.info(
+      '[F3.4 hundred-page zoom geometry]',
+      JSON.stringify({
+        zoom,
+        zoomViewPosition,
+        zoomEditPosition,
+        indicator: {
+          slotWidth: view.indicator.width,
+          textWidth: glyphs.pageText.width,
+          leftGap: glyphs.internalLeftSpace,
+          rightGap: glyphs.internalRightSpace,
+        },
+        viewFooterOffset: view.toolbar.y - view.player.y,
+        editFooterOffset: editing.toolbar.y - editing.player.y,
+        editToolbar: editing.toolbar,
+      }),
+    );
+    expectBuiltinPagerLayoutStableDuringZoomedFocus(view, editing);
+    const editor = await readBuiltinPagerEditorGeometry(page);
+    expect(editor.input.width).toBeGreaterThanOrEqual(20 * zoom);
+    expect(editor.confirm.width).toBeGreaterThanOrEqual(32 * zoom);
+    expect(editor.confirm.height).toBeGreaterThanOrEqual(32 * zoom);
+    expect(editor.pageCountFits).toBe(true);
+    expect(editor.receivesPointer).toBe(true);
+    await input.press('Tab');
+    await expect(page.getByRole('button', { name: 'Confirm page change' })).toBeFocused();
+    await input.focus();
+    await input.press('Escape');
+    await expect(trigger).toBeFocused();
+    expectBuiltinPagerLayoutStableDuringZoomedFocus(view, await readBuiltinPagerGeometry(page));
+    hundredPageZoomMeasurements.push({ zoom, glyphs, editor });
+    await page.evaluate(() => document.documentElement.style.removeProperty('zoom'));
+    await waitForBrowserLayoutFrames(page);
+  }
+  console.info('[F3.4 hundred-page zoom geometry]', JSON.stringify(hundredPageZoomMeasurements));
   measurements.push({
     total: 10_000,
     before: beforeHundred,
     editing: editingHundred,
     editor: editorHundredGeometry,
+    afterGlyphs: hundredPageGlyphs,
+    zoom: hundredPageZoomMeasurements,
     after: await readBuiltinPagerGeometry(page),
   });
 
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/?mockCatalogCount=10000');
-  const browserPane = page.locator('.track-browser-workbench-pane');
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1366');
   for (const width of [520, 440]) {
-    await browserPane.evaluate((element, targetWidth) => {
-      element.style.flex = '0 0 ' + targetWidth + 'px';
-      element.style.minWidth = '0';
-    }, width);
+    await constrainBrowserPaneForPagerTest(page, width);
     const trigger = page.getByRole('button', {
       name: '1 / 100, Page 1 of 100. Jump to page',
     });
@@ -2577,7 +2877,7 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
     await field.press('Escape');
     await expect(trigger).toBeFocused();
   }
-  await browserPane.evaluate((element) => {
+  await page.locator('.track-browser-workbench-pane').evaluate((element) => {
     element.style.removeProperty('flex');
     element.style.removeProperty('min-width');
   });
