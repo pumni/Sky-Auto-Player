@@ -474,15 +474,42 @@ test('Light keyboard focus, hover, pressed, disabled, forced colors, and reduced
 
   const searchInput = page.locator('.global-search input');
   await searchInput.focus();
+  const searchFocusState = () =>
+    page.locator('.global-search').evaluate((element) => {
+      const input = element.querySelector('input');
+      const style = getComputedStyle(element);
+      return {
+        activeElementIsInput: document.activeElement === input,
+        colorMode: document.documentElement.dataset.colorMode,
+        forcedColors: matchMedia('(forced-colors: active)').matches,
+        inputFocusVisible: input?.matches(':focus-visible') ?? false,
+        outlineColor: style.outlineColor,
+        outlineStyle: style.outlineStyle,
+        outlineWidth: style.outlineWidth,
+        reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        wrapperFocusWithin: element.matches(':focus-within'),
+        wrapperHasFocusVisible: element.matches(':has(input:focus-visible)'),
+      };
+    });
+  const expectedSearchFocus = {
+    activeElementIsInput: true,
+    colorMode: 'light',
+    forcedColors: false,
+    inputFocusVisible: true,
+    outlineColor: 'rgb(11, 88, 165)',
+    outlineStyle: 'solid',
+    outlineWidth: '2px',
+    reducedMotion: true,
+    wrapperFocusWithin: true,
+    wrapperHasFocusVisible: true,
+  };
   await expect
-    .poll(() => searchInput.evaluate((element) => element.matches(':focus-visible')))
-    .toBe(true);
-  const searchFocus = await page.locator('.global-search').evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { color: style.outlineColor, width: style.outlineWidth, style: style.outlineStyle };
-  });
-  expect(searchFocus).toMatchObject({ color: 'rgb(11, 88, 165)', width: '2px', style: 'solid' });
-  expect(contrastRatio(searchFocus.color, 'rgb(255, 255, 255)')).toBeGreaterThanOrEqual(3);
+    .poll(searchFocusState, {
+      message: 'Light search focus outline must settle from the focused input through :has()',
+    })
+    .toMatchObject(expectedSearchFocus);
+  const searchFocus = await searchFocusState();
+  expect(contrastRatio(searchFocus.outlineColor, 'rgb(255, 255, 255)')).toBeGreaterThanOrEqual(3);
 
   const minimize = page.getByRole('button', { name: 'Minimize window' });
   await minimize.hover();
