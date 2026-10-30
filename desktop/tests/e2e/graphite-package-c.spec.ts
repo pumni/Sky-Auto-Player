@@ -279,17 +279,17 @@ async function preparePopulated(page: Page, tab: 'Details' | 'Runtime' = 'Detail
 
 async function preparePlaybackConfirmation(page: Page) {
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
-  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Playback confirmation' })).toBeVisible();
 }
 
 async function preparePlaybackError(page: Page) {
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
-  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
-  const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
-  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  await expect(page.getByRole('group', { name: 'Playback confirmation' })).toBeVisible();
+  await player.getByRole('button', { name: 'Proceed with current settings' }).click();
   await expect(page.getByRole('alert')).toContainText('Sky window was not found');
 }
 
