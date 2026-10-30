@@ -263,7 +263,7 @@ test('Chromium fallback emulation keeps compact Inspector interactions usable', 
   await page.goto('/');
   const trigger = page.locator('.player-utility-button');
   const details = page.getByRole('region', { name: 'Utility: Song Details' });
-  const grid = page.getByRole('grid', { name: 'Songs' });
+  const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
 
   await trigger.focus();
   await page.keyboard.press('Enter');
@@ -382,7 +382,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       });
     }
 
-    await page.getByRole('searchbox', { name: 'Search All Songs' }).fill('Moonlit');
+    await page.getByRole('searchbox', { name: 'Search Built-in Songs' }).fill('Moonlit');
     await expect(page.getByText('Select a song to view details.')).toBeVisible();
     await expectInspectorGeometry(page, presentation);
     await record('cleared');
@@ -810,9 +810,15 @@ test('Graphite overlay width is responsive and preserves docked width preference
 test('long Song Details content scrolls independently in the compact overlay', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 448 });
   await page.goto('/');
+  for (let pageNumber = 2; pageNumber <= 5; pageNumber += 1) {
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await expect(
+      page.getByRole('grid', { name: `Built-in Songs, page ${pageNumber}` }),
+    ).toBeVisible();
+  }
   const trackTable = page.locator('.track-table');
   await trackTable.evaluate((element) => {
-    element.scrollTop = 495 * 46;
+    element.scrollTop = 95 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const longTitle = /A sheet with an intentionally long title/;

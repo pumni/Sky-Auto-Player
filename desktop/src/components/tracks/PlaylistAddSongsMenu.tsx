@@ -55,12 +55,12 @@ export function PlaylistAddSongsMenu({
       <Popover className="track-menu-popover" placement="bottom end" offset={6}>
         <Menu aria-label="Add songs">
           <MenuItem
-            id="browse-all-songs"
+            id="browse-builtin-songs"
             onAction={() => void openPlaylistAdd(playlistId)}
             className="library-menu-item"
           >
             <ListMusic size={15} aria-hidden="true" />
-            <span>Browse All Songs…</span>
+            <span>Browse Built-in Songs…</span>
           </MenuItem>
           <MenuItem
             id="import-files-to-playlist"

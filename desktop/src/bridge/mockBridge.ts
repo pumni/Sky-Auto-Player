@@ -32,6 +32,8 @@ import type {
 } from './DesktopBridge';
 import type { DiagnosticsBackend } from './DesktopBridge';
 import type { WholeStreamTimingAdvisoryDto } from './generated';
+import { getMockUpdateFixtureOptions } from './mockUpdateFixtures';
+import type { MockUpdateFixtureOptions } from './mockUpdateFixtures';
 
 function mockTimingAdvisory(
   fingerprint: string,
@@ -161,6 +163,10 @@ function initialSettings(): Settings {
 
 export interface MockBridgeOptions {
   catalogRows?: SearchResult['items'];
+  catalogCount?: number;
+  builtinSongIds?: readonly string[];
+  builtinAvailable?: boolean;
+  libraryNavigationFailures?: number;
   searchDelayMs?: number;
   diagnosticsBackendStatus?: DiagnosticsBackend;
   readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
@@ -203,7 +209,28 @@ export interface MockBridgeOptions {
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
-  const catalogRows = options.catalogRows ?? rows;
+  const urlUpdateFixtures: MockUpdateFixtureOptions =
+    typeof window === 'undefined' ? {} : getMockUpdateFixtureOptions(window.location.search);
+  const updateSnapshot = options.updateSnapshot ?? urlUpdateFixtures.updateSnapshot;
+  const updateCheckTransportError =
+    options.updateCheckTransportError ?? urlUpdateFixtures.updateCheckTransportError;
+  const requestedCatalogCount = options.catalogCount;
+  const catalogRows =
+    options.catalogRows ??
+    (Number.isSafeInteger(requestedCatalogCount) &&
+    requestedCatalogCount !== undefined &&
+    requestedCatalogCount >= 0 &&
+    requestedCatalogCount <= 10_000
+      ? Array.from({ length: requestedCatalogCount }, (_, index) => row(index, `Song ${index + 1}`))
+      : rows);
+  const builtinSongIds = options.builtinSongIds ? new Set(options.builtinSongIds) : null;
+  const builtinRows = builtinSongIds
+    ? catalogRows.filter((item) => builtinSongIds.has(item.song_id))
+    : catalogRows;
+  const builtinAvailable = options.builtinAvailable ?? true;
+  let libraryNavigationFailuresRemaining = Number.isFinite(options.libraryNavigationFailures)
+    ? Math.max(0, Math.min(Math.floor(options.libraryNavigationFailures ?? 0), 3))
+    : 0;
   const searchDelayMs = Math.max(0, Math.min(options.searchDelayMs ?? 0, 5_000));
   const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
   const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
@@ -258,7 +285,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
-  let updateRevision = options.updateSnapshot?.revision ?? 0;
+  let updateRevision = updateSnapshot?.revision ?? 0;
   let currentUpdateSnapshot: UpdateSnapshotPayload = {
     revision: updateRevision,
     state: 'idle',
@@ -272,7 +299,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     retry_action: 'none',
     operation_id: null,
     progress: null,
-    ...(options.updateSnapshot ?? {}),
+    ...(updateSnapshot ?? {}),
   };
   const emitUpdateSnapshot = (snapshot: Omit<UpdateSnapshotPayload, 'revision'>) => {
     updateRevision += 1;
@@ -558,21 +585,27 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         update_preferences: settings.update_preferences,
         catalog_state: 'ready',
         catalog_generation: generation,
+        gui_smoke: false,
       };
     },
     async searchSongs(request: SearchRequest) {
       if (searchDelayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, searchDelayMs));
       }
+      if (request.source.kind === 'smart' && request.source.id === 'builtin' && !builtinAvailable) {
+        throw new Error('builtin songs are unavailable');
+      }
       const query = request.query.trim().toLocaleLowerCase();
       const sourceRows =
         request.source.kind === 'smart' && request.source.id === 'liked'
           ? allRows().filter((item) => likedSongIds.has(item.song_id))
-          : request.source.kind === 'playlist'
-            ? allRows().filter((item) =>
-                playlistMembership.get(request.source.id)?.has(item.song_id),
-              )
-            : catalogRows;
+          : request.source.kind === 'smart' && request.source.id === 'builtin'
+            ? builtinRows
+            : request.source.kind === 'playlist'
+              ? allRows().filter((item) =>
+                  playlistMembership.get(request.source.id)?.has(item.song_id),
+                )
+              : catalogRows;
       const filtered = query
         ? sourceRows.filter((item) => item.title.toLocaleLowerCase().includes(query))
         : sourceRows;
@@ -648,7 +681,13 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return { song_id: request.songId, liked: request.liked, total: likedSongIds.size };
     },
     async listLibraryNavigation(): Promise<LibraryNavigation> {
+      if (libraryNavigationFailuresRemaining > 0) {
+        libraryNavigationFailuresRemaining -= 1;
+        throw new Error('Library navigation request failed.');
+      }
       return {
+        builtin_available: builtinAvailable,
+        builtin_song_count: builtinAvailable ? builtinRows.length : 0,
         playlists: playlists.map((playlist) => ({ ...playlist })),
       };
     },
@@ -772,7 +811,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings;
     },
     async checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheck> {
-      const transportError = options.updateCheckTransportError;
+      const transportError = updateCheckTransportError;
       if (transportError) {
         throw new Error(transportError);
       }
@@ -835,8 +874,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         return { disposition: 'performed' };
       }
 
-      if (options.updateSnapshot) {
-        if (options.updateSnapshot.state === 'error') {
+      if (updateSnapshot) {
+        if (updateSnapshot.state === 'error') {
           settings = {
             ...settings,
             update_preferences: {
@@ -855,17 +894,17 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           };
         }
         emitUpdateChanged({
-          state: options.updateSnapshot.state ?? 'idle',
-          current_version: options.updateSnapshot.current_version ?? '4.0.0-alpha.1-mock',
-          available_version: options.updateSnapshot.available_version ?? null,
-          channel: options.updateSnapshot.channel ?? settings.update_preferences.channel,
-          release_notes: options.updateSnapshot.release_notes ?? null,
-          published_at: options.updateSnapshot.published_at ?? null,
-          error_code: options.updateSnapshot.error_code ?? null,
-          error_detail: options.updateSnapshot.error_detail ?? null,
-          retry_action: options.updateSnapshot.retry_action ?? 'none',
-          operation_id: options.updateSnapshot.operation_id ?? null,
-          progress: options.updateSnapshot.progress ?? null,
+          state: updateSnapshot.state ?? 'idle',
+          current_version: updateSnapshot.current_version ?? '4.0.0-alpha.1-mock',
+          available_version: updateSnapshot.available_version ?? null,
+          channel: updateSnapshot.channel ?? settings.update_preferences.channel,
+          release_notes: updateSnapshot.release_notes ?? null,
+          published_at: updateSnapshot.published_at ?? null,
+          error_code: updateSnapshot.error_code ?? null,
+          error_detail: updateSnapshot.error_detail ?? null,
+          retry_action: updateSnapshot.retry_action ?? 'none',
+          operation_id: updateSnapshot.operation_id ?? null,
+          progress: updateSnapshot.progress ?? null,
         });
         return { disposition: 'performed' };
       }

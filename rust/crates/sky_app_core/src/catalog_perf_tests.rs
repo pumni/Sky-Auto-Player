@@ -206,6 +206,60 @@ fn short_query_pagination_matches_preoptimization_at_high_cardinality() {
 }
 
 #[test]
+fn cached_search_orders_match_the_wratio_reference_across_scopes_and_pages() {
+    const PAGE_SIZE: usize = 200;
+    let ranker = WRatioRanker;
+    for size in [0, 1, 96, 100, 101, 199, 200, 201, 1_000, 10_000] {
+        let (catalog, all, liked, playlist) = measured_catalog(size);
+        for allowed_ids in [None, Some(&all), Some(&liked), Some(&playlist)] {
+            for query in ["", "o", "  Moon Child  ", "Dawn R"] {
+                let generation = Some(catalog.generation());
+                let expected_total = preoptimization_search(
+                    &catalog,
+                    &ranker,
+                    query,
+                    0,
+                    PAGE_SIZE,
+                    generation,
+                    allowed_ids,
+                )
+                .expect("reference search")
+                .total;
+                let order = catalog
+                    .search_order_with_allowed_ids(&ranker, query, generation, allowed_ids)
+                    .expect("exact search order");
+                assert_eq!(order.index_count(), expected_total);
+                for offset in [
+                    0,
+                    expected_total / 2,
+                    expected_total.saturating_sub(PAGE_SIZE),
+                    expected_total,
+                    expected_total.saturating_add(1),
+                ] {
+                    let expected = preoptimization_search(
+                        &catalog,
+                        &ranker,
+                        query,
+                        offset,
+                        PAGE_SIZE,
+                        generation,
+                        allowed_ids,
+                    )
+                    .expect("reference page");
+                    let actual = catalog
+                        .page_from_search_order(&order, query, offset, PAGE_SIZE, generation)
+                        .expect("cached page");
+                    assert_eq!(
+                        actual, expected,
+                        "size={size}, query={query:?}, offset={offset}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn allowed_song_counts_match_preoptimization_for_sparse_and_dense_sets() {
     for size in [100, 1_000, 10_000] {
         let (catalog, all, liked, playlist) = measured_catalog(size);
@@ -246,6 +300,103 @@ fn median_microseconds(mut operation: impl FnMut()) -> f64 {
     }
     samples.sort_by(f64::total_cmp);
     samples[SAMPLES / 2]
+}
+
+#[derive(Debug)]
+struct TimingDistribution {
+    min_us: f64,
+    p50_us: f64,
+    p90_us: f64,
+    max_us: f64,
+}
+
+fn timing_distribution(mut operation: impl FnMut()) -> TimingDistribution {
+    use std::time::{Duration, Instant};
+
+    const SAMPLES: usize = 9;
+    const SAMPLE_DURATION: Duration = Duration::from_millis(25);
+
+    operation();
+    let mut samples = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let started = Instant::now();
+        let mut iterations = 0_u64;
+        while started.elapsed() < SAMPLE_DURATION {
+            operation();
+            iterations += 1;
+        }
+        samples.push(started.elapsed().as_secs_f64() * 1_000_000.0 / iterations as f64);
+    }
+    samples.sort_by(f64::total_cmp);
+    TimingDistribution {
+        min_us: samples[0],
+        p50_us: samples[samples.len() / 2],
+        p90_us: samples[(samples.len() * 9 / 10).min(samples.len() - 1)],
+        max_us: samples[samples.len() - 1],
+    }
+}
+
+/// Reproducible Package B query benchmark. Run before and after the catalog
+/// changes with the same pinned Rust toolchain and release profile:
+/// `cargo test --manifest-path rust/Cargo.toml -p sky_app_core --release --locked
+/// opt_in_package_b_catalog_query_benchmark -- --ignored --nocapture`.
+/// Fixtures, scopes, queries, and page offsets are deterministic; timing is
+/// diagnostic output only and is never asserted.
+#[test]
+#[ignore = "opt-in Package B catalog query benchmark"]
+fn opt_in_package_b_catalog_query_benchmark() {
+    const PAGE_SIZE: usize = 200;
+    let ranker = WRatioRanker;
+    println!(
+        "package_b_bench layer=catalog-index fixture=package-b-catalog-fixture-v1 seed=0x560 size_set=96,1000,10000 profile=release warmup=1 sample_ms=25 samples=9"
+    );
+
+    for size in [96, 1_000, 10_000] {
+        let (catalog, _all, liked, playlist) = measured_catalog(size);
+        let scopes = [
+            ("all", None),
+            ("liked", Some(&liked)),
+            ("playlist", Some(&playlist)),
+        ];
+        for (scope_name, allowed_ids) in scopes {
+            for (query_name, query) in [
+                ("empty", ""),
+                ("one-char", "o"),
+                ("fuzzy-normalized", "  Moon Child  "),
+            ] {
+                let generation = Some(catalog.generation());
+                let total = catalog
+                    .search_with_allowed_ids(&ranker, query, 0, PAGE_SIZE, generation, allowed_ids)
+                    .expect("benchmark probe")
+                    .total;
+                let windows = [
+                    ("first", 0),
+                    ("middle", total / 2),
+                    ("late", total.saturating_sub(PAGE_SIZE)),
+                ];
+                for (window_name, offset) in windows {
+                    let timing = timing_distribution(|| {
+                        std::hint::black_box(
+                            catalog
+                                .search_with_allowed_ids(
+                                    &ranker,
+                                    query,
+                                    offset,
+                                    PAGE_SIZE,
+                                    generation,
+                                    allowed_ids,
+                                )
+                                .expect("benchmark search"),
+                        );
+                    });
+                    println!(
+                        "package_b_query size={size} scope={scope_name} query={query_name} window={window_name} offset={offset} limit={PAGE_SIZE} p50_us={:.3} p90_us={:.3} min_us={:.3} max_us={:.3}",
+                        timing.p50_us, timing.p90_us, timing.min_us, timing.max_us
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn bench_viewport_refresh(index: &CatalogIndex, first: usize, width: usize) {

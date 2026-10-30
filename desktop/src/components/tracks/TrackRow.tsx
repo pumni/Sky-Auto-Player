@@ -7,6 +7,7 @@ import { TrackActionsMenu } from './TrackActionsMenu';
 
 interface TrackRowProps {
   index: number;
+  ordinal?: number;
   row: SongRow;
   selected: boolean;
   playing?: boolean;
@@ -41,6 +42,7 @@ function isInteractiveRowTarget(target: EventTarget | null): boolean {
 
 export const TrackRow = memo(function TrackRow({
   index,
+  ordinal = index + 1,
   row,
   selected,
   playing = false,
@@ -70,7 +72,7 @@ export const TrackRow = memo(function TrackRow({
       }}
     >
       <span className="track-cell track-cell-index" role="gridcell">
-        {playing ? <Volume2 size={14} aria-hidden="true" /> : index + 1}
+        {playing ? <Volume2 size={14} aria-hidden="true" /> : ordinal}
       </span>
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         <span className="track-title-text">{row.title}</span>
@@ -128,21 +130,25 @@ export const TrackRow = memo(function TrackRow({
 
 interface VirtualTrackRowProps {
   index: number;
+  sourceIndex?: number;
   start: number;
   useStore: DesktopStoreHook;
 }
 
 export const VirtualTrackRow = memo(function VirtualTrackRow({
   index,
+  sourceIndex = index,
   start,
   useStore,
 }: VirtualTrackRowProps) {
-  const row = useStore((store) => selectRowAtIndex(store.library, index));
+  const row = useStore((store) => selectRowAtIndex(store.library, sourceIndex));
   const selected = useStore(
-    (store) => selectRowAtIndex(store.library, index)?.song_id === store.library.selectedSongId,
+    (store) =>
+      selectRowAtIndex(store.library, sourceIndex)?.song_id === store.library.selectedSongId,
   );
   const playing = useStore(
-    (store) => selectRowAtIndex(store.library, index)?.song_id === selectNowPlayingSongId(store),
+    (store) =>
+      selectRowAtIndex(store.library, sourceIndex)?.song_id === selectNowPlayingSongId(store),
   );
   const setSongLiked = useStore((store) => store.setSongLiked);
   const selectSong = useStore((store) => store.selectSong);
@@ -157,7 +163,7 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
         style={{ transform: `translateY(${start}px)` }}
       >
         <span className="track-cell track-cell-index" role="gridcell">
-          {index + 1}
+          {sourceIndex + 1}
         </span>
         <span className="track-cell track-cell-title" role="gridcell">
           Loading song…
@@ -170,6 +176,7 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
     <TrackRow
       row={row}
       index={index}
+      ordinal={sourceIndex + 1}
       selected={selected}
       playing={playing}
       start={start}

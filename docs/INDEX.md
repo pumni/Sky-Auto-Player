@@ -45,7 +45,9 @@ measurements, and limitations intact.
   [dispatch forensics qualification](dispatch-forensics-cost-qualification.md),
   [final Down qualification](final-down-admission-qualification.md),
   [test-pipeline report](maintenance-test-pipeline-report.md),
-  [PowerShell migration ledger](powershell-dependency-ledger.md).
+  [PowerShell migration ledger](powershell-dependency-ledger.md), and
+  [Issue #560 Package D qualification](evidence/issue-560-package-d/README.md)
+  (source-bound 96-song paging/Windows profile; not current 106-song or installed-upgrade evidence).
 - **Release-specific records:** [releases](releases/).
 - Other issue- and phase-scoped reports remain in `docs/` (for example,
   `gate-*-evidence.md`, `r3-*.md`, and `prepared-*-evidence.md`);

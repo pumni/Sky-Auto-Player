@@ -80,11 +80,22 @@ export interface LibraryState {
   query: string;
   generation: number;
   catalogTotal: number;
+  builtinPage: {
+    committedPage: number;
+    pendingPage: number | null;
+    intentId: number;
+    failedPage: number | null;
+    focusNowPlaying: { id: number; index: number } | null;
+  };
   likedTotal: number;
   resultTotal: number;
   pages: Map<number, readonly SongRow[]>;
   indexById: Map<string, number>;
   selectedSongId: string | null;
+  selectedSongSummary: SongRow | null;
+  selectedSongIndex: number | null;
+  membershipRevision: number;
+  indexMembershipRevision: number;
   visibleRange: { first: number; last: number };
   loading: boolean;
   searchRequestGeneration: number;
@@ -93,6 +104,8 @@ export interface LibraryState {
 
 export interface LibraryNavigationState {
   loadState: 'idle' | 'loading' | 'ready' | 'error';
+  builtinAvailable: boolean;
+  builtinSongCount: number;
   playlistOrder: string[];
   playlistsById: Map<string, LibraryPlaylistSummary>;
   pendingMutations: Set<string>;
@@ -184,6 +197,9 @@ export interface DesktopStore {
   search: (query?: string, source?: LibrarySource) => Promise<void>;
   selectSong: (songId: string) => Promise<void>;
   setViewport: (first: number, last: number) => Promise<void>;
+  navigateBuiltinPage: (page: number) => Promise<void>;
+  retryBuiltinPage: () => Promise<void>;
+  showNowPlaying: () => Promise<void>;
   selectLibrarySource: (source: LibrarySource) => Promise<void>;
   openPlaylistAdd: (playlistId: string) => Promise<void>;
   exitPlaylistAdd: () => Promise<void>;
@@ -226,7 +242,8 @@ export interface DesktopStore {
 export const MAX_DIAGNOSTIC_SAMPLES = 600;
 export const MAX_DIAGNOSTIC_EVENTS = 500;
 export const MAX_DIAGNOSTIC_LINE_LENGTH = 4096;
-export const LIBRARY_PAGE_SIZE = 200;
+export const LIBRARY_PAGE_SIZE = 100;
+export const MAX_ACTIVE_LIBRARY_PAGES = 3;
 export const DETAIL_CACHE_LIMIT = 64;
 export const AUTO_PLAY_HANDOFF_MS = 450;
 

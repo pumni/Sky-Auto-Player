@@ -873,6 +873,41 @@ mod ipc_tests {
     }
 
     #[test]
+    fn bootstrap_reports_native_gui_smoke_authorization() {
+        let (paths, _cleanup) = test_install_root();
+        let state = AppState::with_test_paths(paths);
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .invoke_handler(tauri::generate_handler![super::commands::bootstrap])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let ordinary = tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 0))
+            .expect("ordinary bootstrap should succeed");
+        let ordinary: serde_json::Value = ordinary.deserialize().expect("bootstrap JSON");
+        assert_eq!(ordinary["gui_smoke"], false);
+
+        let mut legacy = ordinary.clone();
+        legacy
+            .as_object_mut()
+            .expect("bootstrap response object")
+            .remove("gui_smoke");
+        let legacy: super::commands::BootstrapDto =
+            serde_json::from_value(legacy).expect("legacy bootstrap without gui_smoke");
+        assert!(!legacy.gui_smoke);
+
+        state.set_gui_smoke_exit(true);
+        let authorized =
+            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 2))
+                .expect("authorized bootstrap should succeed");
+        let authorized: serde_json::Value = authorized.deserialize().expect("bootstrap JSON");
+        assert_eq!(authorized["gui_smoke"], true);
+    }
+
+    #[test]
     fn generated_tauri_handler_decodes_params_envelope() {
         let (paths, _cleanup) = test_install_root();
         let app = tauri::test::mock_builder()

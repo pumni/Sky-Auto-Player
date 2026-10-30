@@ -298,6 +298,41 @@ describe('UpdateDialog', () => {
     expect(screen.getByText('Downloading update (32000/40000 bytes)')).toBeInTheDocument();
   });
 
+  it.each([
+    { state: 'ready' as const, heading: 'Update ready to install' },
+    { state: 'installing' as const, heading: 'Installing update…' },
+  ])(
+    'keeps the $state progress state busy and native-authoritative',
+    async ({ state, heading }) => {
+      const bridge = createMockBridge();
+      const useStore = createDesktopStore(bridge);
+      await act(async () => useStore.getState().initialize());
+
+      act(() => {
+        useStore.setState({
+          update: {
+            ...useStore.getState().update,
+            state,
+            availableVersion: '4.2.0',
+            dialogOpen: true,
+            progress: {
+              completed: 32_000,
+              total: 40_000,
+              message: 'Native progress message',
+            },
+          },
+        });
+      });
+
+      render(<UpdateDialog useStore={useStore} />);
+
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+      expect(screen.getByText('Native progress message (32000/40000 bytes)')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Close update' })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Update and restart' })).not.toBeInTheDocument();
+    },
+  );
+
   it('does not close dialog if skipping version fails to persist', async () => {
     const bridge = createMockBridge();
     bridge.patchSettings = async () => {

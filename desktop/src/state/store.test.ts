@@ -2,6 +2,7 @@ import { act, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type {
+  LibraryNavigation,
   LibrarySource,
   SearchRequest,
   SearchResult,
@@ -18,16 +19,32 @@ import {
   playbackIssuePresentation,
   selectNowPlayingSongId,
   selectRowAtIndex,
+  selectSongById,
   type PlaybackContext,
   selectSelectedDetail,
 } from './store';
+import { activeLibraryPageOffsets } from './libraryHelpers';
 import { MAX_CACHED_SEARCH_PAGES } from './librarySlice';
+import { LIBRARY_PAGE_SIZE } from './types';
 import { WORKBENCH_STORAGE_KEY } from './workbenchPreferences';
 
 afterEach(() => window.localStorage.clear());
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
   return selectRowAtIndex(store.getState().library, index);
+}
+
+function syntheticRows(count: number): SearchResult['items'] {
+  return Array.from({ length: count }, (_, index) => ({
+    song_id: (100_000 + index).toString(16).padStart(32, '0'),
+    title: `Fixture Song ${String(index + 1).padStart(5, '0')}`,
+    format_label: 'TXT',
+    duration_us: 90_000_000 + index,
+    note_count: 100 + index,
+    risk_level: 'low' as const,
+    metadata_state: 'ready' as const,
+    liked: false,
+  }));
 }
 
 function deferred<T>() {
@@ -71,8 +88,195 @@ describe('desktop store', () => {
   it('defaults Shuffle off and persists Auto Play on', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().playback.shuffleEnabled).toBe(false);
     expect(store.getState().settings?.auto_play).toBe(true);
+  });
+
+  it('loads authoritative navigation while the first catalog page is still pending', async () => {
+    const builtinSongIds = Array.from({ length: 96 }, (_, index) =>
+      index.toString(16).padStart(32, '0'),
+    );
+    const bridge = createMockBridge({ builtinSongIds });
+    const originalSearch = bridge.searchSongs.bind(bridge);
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const pendingSearch = deferred<SearchResult>();
+    const searchStarted = deferred<SearchRequest>();
+    bridge.searchSongs = async (request) => {
+      searchStarted.resolve(request);
+      return pendingSearch.promise;
+    };
+    const listNavigation = vi.spyOn(bridge, 'listLibraryNavigation');
+    const store = createDesktopStore(bridge);
+
+    const nativeNavigation = await originalListNavigation();
+    expect(nativeNavigation).toMatchObject({ builtin_available: true, builtin_song_count: 96 });
+
+    const initialization = store.getState().initialize();
+    const request = await searchStarted.promise;
+    try {
+      await waitFor(() => expect(store.getState().libraryNavigation.loadState).toBe('ready'));
+      expect(listNavigation).toHaveBeenCalledTimes(1);
+      expect(store.getState().libraryNavigation).toMatchObject({
+        builtinAvailable: true,
+        builtinSongCount: 96,
+      });
+    } finally {
+      pendingSearch.resolve(await originalSearch(request));
+    }
+    await initialization;
+  });
+
+  it('loads native navigation when bootstrap reports that catalog loading is still in progress', async () => {
+    const builtinSongIds = Array.from({ length: 96 }, (_, index) =>
+      index.toString(16).padStart(32, '0'),
+    );
+    const bridge = createMockBridge({ builtinSongIds });
+    const originalBootstrap = bridge.bootstrap.bind(bridge);
+    bridge.bootstrap = async () => ({
+      ...(await originalBootstrap()),
+      catalog_state: 'loading',
+      catalog_generation: null,
+    });
+    const store = createDesktopStore(bridge);
+
+    await act(async () => store.getState().initialize());
+    await waitFor(() => expect(store.getState().libraryNavigation.loadState).toBe('ready'));
+
+    expect(store.getState().libraryNavigation).toMatchObject({
+      builtinAvailable: true,
+      builtinSongCount: 96,
+    });
+  });
+
+  it('ignores older navigation after a catalog generation change and repeated event', async () => {
+    const bridge = createMockBridge({ builtinSongIds: ['00000000000000000000000000000001'] });
+    const originalSearch = bridge.searchSongs.bind(bridge);
+    bridge.searchSongs = async (request) => {
+      const result = await originalSearch(request);
+      return request.generation === undefined
+        ? result
+        : { ...result, generation: request.generation };
+    };
+    const firstNavigation = deferred<LibraryNavigation>();
+    const secondNavigation = deferred<LibraryNavigation>();
+    let navigationCalls = 0;
+    bridge.listLibraryNavigation = vi.fn(() => {
+      navigationCalls += 1;
+      return navigationCalls === 1 ? firstNavigation.promise : secondNavigation.promise;
+    });
+    const store = createDesktopStore(bridge);
+
+    const initialization = store.getState().initialize();
+    await waitFor(() => expect(navigationCalls).toBe(1));
+    await initialization;
+    const changed = {
+      v: 1 as const,
+      name: 'catalog.changed' as const,
+      payload: { generation: 2, total: 500 },
+    };
+    store.getState().applyEvent(changed);
+    store.getState().applyEvent(changed);
+    await waitFor(() => expect(navigationCalls).toBe(2));
+    secondNavigation.resolve({ builtin_available: true, builtin_song_count: 96, playlists: [] });
+    await waitFor(() => expect(store.getState().libraryNavigation.builtinSongCount).toBe(96));
+    firstNavigation.resolve({ builtin_available: false, builtin_song_count: 0, playlists: [] });
+
+    await waitFor(() => {
+      expect(store.getState().libraryNavigation.loadState).toBe('ready');
+      expect(store.getState().libraryNavigation.builtinAvailable).toBe(true);
+      expect(store.getState().libraryNavigation.builtinSongCount).toBe(96);
+    });
+  });
+
+  it('refreshes navigation after an older response overlaps a playlist rename', async () => {
+    const bridge = createMockBridge();
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const originalRenamePlaylist = bridge.renamePlaylist.bind(bridge);
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await store.getState().createPlaylist('Morning');
+    const playlistId = store.getState().libraryNavigation.playlistOrder[0];
+    if (!playlistId) throw new Error('mock playlist creation failed');
+    const staleNavigation = await originalListNavigation();
+    const pendingNavigation = deferred<LibraryNavigation>();
+    const renameGate = deferred<void>();
+    let navigationCalls = 0;
+    bridge.listLibraryNavigation = vi.fn(() => {
+      navigationCalls += 1;
+      return navigationCalls === 1 ? pendingNavigation.promise : originalListNavigation();
+    });
+    bridge.renamePlaylist = async (playlistId, name) => {
+      await renameGate.promise;
+      return originalRenamePlaylist(playlistId, name);
+    };
+
+    const navigationRequest = store.getState().loadLibraryNavigation();
+    const rename = store.getState().renamePlaylist(playlistId, 'Evening');
+    expect(
+      store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+    ).toBe(true);
+    renameGate.resolve();
+    await rename;
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe('Evening');
+
+    pendingNavigation.resolve(staleNavigation);
+    await navigationRequest;
+    await waitFor(() => {
+      expect(navigationCalls).toBe(2);
+      expect(store.getState().libraryNavigation.loadState).toBe('ready');
+      expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe(
+        'Evening',
+      );
+      expect(
+        store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+      ).toBe(false);
+    });
+  });
+
+  it('keeps pending playlist mutation state and refreshes after stale navigation settles', async () => {
+    const bridge = createMockBridge();
+    const originalListNavigation = bridge.listLibraryNavigation.bind(bridge);
+    const originalRenamePlaylist = bridge.renamePlaylist.bind(bridge);
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await store.getState().createPlaylist('Morning');
+    const playlistId = store.getState().libraryNavigation.playlistOrder[0];
+    if (!playlistId) throw new Error('mock playlist creation failed');
+    const staleNavigation = await originalListNavigation();
+    const pendingNavigation = deferred<LibraryNavigation>();
+    const renameGate = deferred<void>();
+    let navigationCalls = 0;
+    bridge.listLibraryNavigation = vi.fn(() => {
+      navigationCalls += 1;
+      return navigationCalls === 1 ? pendingNavigation.promise : originalListNavigation();
+    });
+    bridge.renamePlaylist = async (id, name) => {
+      await renameGate.promise;
+      return originalRenamePlaylist(id, name);
+    };
+
+    const navigationRequest = store.getState().loadLibraryNavigation();
+    const rename = store.getState().renamePlaylist(playlistId, 'Evening');
+    pendingNavigation.resolve(staleNavigation);
+    await navigationRequest;
+    expect(
+      store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+    ).toBe(true);
+
+    renameGate.resolve();
+    await rename;
+    await waitFor(() => {
+      expect(navigationCalls).toBe(2);
+      expect(store.getState().libraryNavigation.loadState).toBe('ready');
+      expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe(
+        'Evening',
+      );
+      expect(
+        store.getState().libraryNavigation.pendingMutations.has(`playlist:${playlistId}:rename`),
+      ).toBe(false);
+    });
   });
 
   it('keeps catalog loading and failure states separate from shell readiness', () => {
@@ -230,11 +434,39 @@ describe('desktop store', () => {
     }
   });
 
+  it('builds Built-in Shuffle traversal from the full source rather than the visible page', () => {
+    const total = 500;
+    const originIndex = 99;
+    const traversal = createShuffleTraversal(total, originIndex, 'package-d-builtin-shuffle');
+    if (!traversal) throw new Error('Built-in shuffle traversal was not created');
+    const context: PlaybackContext = {
+      source: { kind: 'smart', id: 'builtin' },
+      query: '',
+      generation: 1,
+      total,
+      currentIndex: originIndex,
+      currentSongId: 'built-in-song-100',
+      shuffleTraversal: traversal,
+      dryRun: false,
+      membershipRevision: 0,
+      valid: true,
+    };
+
+    const order = Array.from({ length: total }, (_, position) =>
+      playbackContextIndexAt(context, position),
+    );
+    expect(order[0]).toBe(originIndex);
+    expect(order).toHaveLength(500);
+    expect(new Set(order).size).toBe(500);
+    expect(order.some((index) => index !== null && index >= 100)).toBe(true);
+  });
+
   it('boots, searches, selects a song, and applies a catalog event', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
 
     await act(async () => store.getState().initialize());
+    await act(async () => store.getState().search('', { kind: 'smart', id: 'all' }));
     expect(store.getState().bootstrapState).toBe('ready');
     expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
     expect(store.getState().library.catalogTotal).toBe(500);
@@ -527,6 +759,7 @@ describe('desktop store', () => {
     const initialGeneration = store.getState().library.generation;
 
     await store.getState().search('Aurora');
+    await store.getState().search('Aurora', { kind: 'smart', id: 'all' });
     const afterAllSongs = requests.length;
     const playlistSource = { kind: 'playlist' as const, id: 'cache-playlist' };
     await store.getState().search('Aurora', playlistSource);
@@ -568,6 +801,163 @@ describe('desktop store', () => {
     expect(requests.at(-1)?.generation).toBe(currentGeneration);
   });
 
+  it('invalidates the Liked Songs projection while preserving unrelated search pages', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    const requests: SearchRequest[] = [];
+    bridge.searchSongs = async (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().search('Aurora'));
+    expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+
+    await act(async () => store.getState().setSongLiked(first.song_id, true));
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    await act(async () => store.getState().search('Aurora'));
+
+    expect(rowAt(store, 0)?.liked).toBe(true);
+    expect(
+      requests.filter(
+        (request) =>
+          request.query === 'Aurora' &&
+          request.source.kind === 'smart' &&
+          request.source.id === 'all',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('invalidates playlist membership pages without clearing All Songs pages', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    const requests: SearchRequest[] = [];
+    bridge.searchSongs = async (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().search('Aurora'));
+
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    await act(async () => store.getState().addSongToPlaylist(playlistId, first.song_id));
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    await act(async () => store.getState().search('Aurora'));
+
+    expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+    expect(
+      requests.filter(
+        (request) =>
+          request.query === 'Aurora' &&
+          request.source.kind === 'smart' &&
+          request.source.id === 'all',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('reloads the active Liked page after a membership change at a deep viewport', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+
+    for (const start of [0, 200, 400]) {
+      const end = Math.min(start + 199, 449);
+      await store.getState().setViewport(start, end);
+      for (let index = start; index <= end; index += 1) {
+        const row = rowAt(store, index);
+        if (!row) throw new Error(`catalog row ${index} was not loaded`);
+        await store.getState().setSongLiked(row.song_id, true);
+      }
+    }
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    expect(store.getState().library.resultTotal).toBe(450);
+    await act(async () => store.getState().setViewport(400, 410));
+    const removed = rowAt(store, 400);
+    const next = rowAt(store, 401);
+    if (!removed || !next) throw new Error('deep Liked page is incomplete');
+
+    await act(async () => store.getState().setSongLiked(removed.song_id, false));
+
+    expect(store.getState().library.resultTotal).toBe(449);
+    expect(store.getState().library.pages.has(400)).toBe(true);
+    expect(rowAt(store, 400)?.song_id).toBe(next.song_id);
+    expect(store.getState().library.pages.size).toBeLessThanOrEqual(3);
+    expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
+  });
+
+  it('does not reuse an evicted selected ordinal after an earlier Liked member is removed', async () => {
+    const rows = syntheticRows(3000);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      playbackDurationMs: 60_000,
+      startDelayMs: 1,
+    });
+    for (const row of rows) await bridge.setSongLiked({ songId: row.song_id, liked: true });
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    const earlierMember = rowAt(store, 5);
+    if (!earlierMember) throw new Error('early Liked member was not loaded');
+    await act(async () => store.getState().selectSong(earlierMember.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().setViewport(1490, 1510));
+    const selected = rowAt(store, 1500);
+    if (!selected) throw new Error('deep Liked member was not loaded');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    await act(async () => store.getState().setViewport(2500, 2510));
+    expect(store.getState().library.pages.has(1400)).toBe(false);
+    expect(store.getState().library.selectedSongIndex).toBe(1500);
+
+    try {
+      await act(async () => store.getState().setSongLiked(earlierMember.song_id, false));
+      expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+      expect(store.getState().library.selectedSongSummary?.song_id).toBe(selected.song_id);
+      expect(store.getState().library.selectedSongIndex).toBeNull();
+      expect(store.getState().library.indexMembershipRevision).toBe(
+        store.getState().library.membershipRevision,
+      );
+
+      await act(async () => store.getState().stopPlayback());
+      await waitFor(() => expect(store.getState().playback.sessionId).toBeNull());
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.preparedContext).toBeNull();
+      expect(store.getState().playback.error).toMatch(/Select a loaded Library row/);
+
+      await act(async () => store.getState().setViewport(1490, 1510));
+      const newSelectedIndex = 1499;
+      expect(rowAt(store, newSelectedIndex)?.song_id).toBe(selected.song_id);
+      expect(store.getState().library.selectedSongIndex).toBe(newSelectedIndex);
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.preparedContext?.currentIndex).toBe(newSelectedIndex);
+      await act(async () => store.getState().startPreparedPlayback('proceed'));
+      await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+      await act(async () => store.getState().nextPlayback());
+      expect(store.getState().playback.currentSong?.songId).toBe(rows[1501]!.song_id);
+      expect(store.getState().playback.context?.currentIndex).toBe(1500);
+    } finally {
+      await act(async () => store.getState().stopPlayback());
+    }
+  });
+
   it('clears browser selection when its source or playlist-add scope changes', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
@@ -585,14 +975,30 @@ describe('desktop store', () => {
 
     await act(async () => store.getState().openPlaylistAdd(playlistId));
     expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().library.selectedSongId).toBeNull();
     expect(selectSelectedDetail(store.getState()).value).toBeNull();
 
     const availableRow = rowAt(store, 0);
-    if (!availableRow) throw new Error('All Songs was not loaded in playlist-add mode');
+    if (!availableRow) throw new Error('Built-in Songs were not loaded in playlist-add mode');
     await act(async () => store.getState().selectSong(availableRow.song_id));
+    const playbackBeforePage = store.getState().playback;
+
+    await act(async () => store.getState().navigateBuiltinPage(2));
+    const row101 = rowAt(store, 100);
+    if (!row101) throw new Error('Built-in picker could not reach song #101');
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.selectedSongId).toBe(availableRow.song_id);
+    expect(selectSelectedDetail(store.getState()).value?.song_id).toBe(availableRow.song_id);
+    expect(store.getState().playback).toBe(playbackBeforePage);
+    await act(async () => store.getState().addSongToPlaylist(playlistId, row101.song_id));
+    expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.song_count).toBe(2);
+
     await act(async () => store.getState().exitPlaylistAdd());
     expect(store.getState().library.playlistAddMode).toBeNull();
+    expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+    expect(store.getState().library.resultTotal).toBe(2);
+    expect(rowAt(store, 1)?.song_id).toBe(row101.song_id);
     expect(store.getState().library.selectedSongId).toBeNull();
 
     const playlistRow = rowAt(store, 0);
@@ -619,8 +1025,468 @@ describe('desktop store', () => {
 
     await act(async () => store.getState().selectSong(rowAt(store, 400)!.song_id));
     expect(selectSelectedDetail(store.getState()).value?.title).toBe('Song 401');
-    expect(requestedOffsets).toContain(200);
+    expect(requestedOffsets).toContain(300);
     expect(requestedOffsets).toContain(400);
+  });
+
+  it('keeps the 96-song catalog complete with a single bounded active page', async () => {
+    const store = createDesktopStore(createMockBridge({ catalogRows: syntheticRows(96) }));
+    await act(async () => store.getState().initialize());
+
+    expect(store.getState().library.resultTotal).toBe(96);
+    expect(store.getState().library.pages.size).toBe(1);
+    expect(store.getState().library.indexById.size).toBe(96);
+
+    await act(async () => store.getState().setViewport(80, 95));
+
+    expect(store.getState().library.pages.size).toBe(1);
+    expect(store.getState().library.indexById.size).toBe(96);
+    expect(rowAt(store, 95)?.title).toBe('Fixture Song 00096');
+  });
+
+  it('uses explicit built-in membership instead of the All Songs result set', async () => {
+    const rows = syntheticRows(3);
+    const builtinIds = [rows[0]!.song_id, rows[2]!.song_id];
+    const store = createDesktopStore(
+      createMockBridge({ catalogRows: rows, builtinSongIds: builtinIds }),
+    );
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    expect(store.getState().library.catalogTotal).toBe(3);
+    expect(store.getState().libraryNavigation.builtinSongCount).toBe(2);
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    expect(store.getState().library.resultTotal).toBe(2);
+    expect(rowAt(store, 0)?.song_id).toBe(builtinIds[0]);
+    expect(rowAt(store, 1)?.song_id).toBe(builtinIds[1]);
+    expect(store.getState().library.indexById.has(rows[1]!.song_id)).toBe(false);
+  });
+
+  it.each([0, 1, 96, 99, 100, 101, 199, 200, 201, 2_438, 10_000])(
+    'pages the explicit built-in membership for %i songs in 100-row transfers',
+    async (count) => {
+      const rows = syntheticRows(count);
+      const requests: SearchRequest[] = [];
+      const bridge = createMockBridge({
+        catalogRows: rows,
+        builtinSongIds: rows.map((row) => row.song_id),
+      });
+      const originalSearch = bridge.searchSongs;
+      bridge.searchSongs = async (request) => {
+        requests.push(request);
+        return originalSearch(request);
+      };
+      const store = createDesktopStore(bridge);
+      await act(async () => store.getState().initialize());
+      await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+
+      expect(store.getState().library.resultTotal).toBe(count);
+      expect(store.getState().libraryNavigation.builtinAvailable).toBe(true);
+      expect(store.getState().libraryNavigation.builtinSongCount).toBe(count);
+      expect(
+        requests
+          .filter((request) => request.source.kind === 'smart' && request.source.id === 'builtin')
+          .every((request) => request.limit === 100),
+      ).toBe(true);
+      expect(store.getState().library.builtinPage.committedPage).toBe(1);
+
+      if (count > LIBRARY_PAGE_SIZE) {
+        const pageCount = Math.ceil(count / LIBRARY_PAGE_SIZE);
+        const targetPage = count === 2_438 ? 25 : pageCount;
+        await act(async () => store.getState().navigateBuiltinPage(targetPage));
+        const offset = (targetPage - 1) * LIBRARY_PAGE_SIZE;
+        const expectedLength = Math.min(LIBRARY_PAGE_SIZE, count - offset);
+        expect(store.getState().library.builtinPage.committedPage).toBe(targetPage);
+        expect(store.getState().library.builtinPage.pendingPage).toBeNull();
+        expect(store.getState().library.pages.get(offset)).toHaveLength(expectedLength);
+        expect(rowAt(store, offset + expectedLength - 1)?.title).toBe(
+          `Fixture Song ${String(offset + expectedLength).padStart(5, '0')}`,
+        );
+      } else {
+        if (count === 0) expect(store.getState().library.pages.size).toBe(0);
+        else expect(store.getState().library.pages.get(0)).toHaveLength(count);
+      }
+      expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
+    },
+  );
+
+  it.each(['library', 'playlist-add'] as const)(
+    'commits only the latest built-in page intent in %s context and keeps the prior page visible',
+    async (context) => {
+      const rows = syntheticRows(500);
+      const bridge = createMockBridge({
+        catalogRows: rows,
+        builtinSongIds: rows.map((row) => row.song_id),
+      });
+      const originalSearch = bridge.searchSongs;
+      const delayed = new Map<number, ReturnType<typeof deferred<void>>>();
+      bridge.searchSongs = async (request) => {
+        if (
+          request.source.kind === 'smart' &&
+          request.source.id === 'builtin' &&
+          request.offset > 0
+        ) {
+          const gate = deferred<void>();
+          delayed.set(request.offset, gate);
+          await gate.promise;
+        }
+        return originalSearch(request);
+      };
+      const store = createDesktopStore(bridge);
+      await act(async () => store.getState().initialize());
+      let playlistId: string | null = null;
+      if (context === 'playlist-add') {
+        await act(async () => store.getState().createPlaylist('Practice'));
+        const source = store.getState().library.source;
+        if (source.kind !== 'playlist') throw new Error('new playlist was not selected');
+        playlistId = source.id;
+        await act(async () => store.getState().openPlaylistAdd(source.id));
+      } else {
+        await act(async () =>
+          store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }),
+        );
+      }
+
+      let pageTwo!: Promise<void>;
+      let pageFour!: Promise<void>;
+      let pageThree!: Promise<void>;
+      act(() => {
+        pageTwo = store.getState().navigateBuiltinPage(2);
+        pageFour = store.getState().navigateBuiltinPage(4);
+        pageThree = store.getState().navigateBuiltinPage(3);
+      });
+      await waitFor(() => expect(delayed.size).toBe(3));
+      expect(store.getState().library.builtinPage.committedPage).toBe(1);
+      expect(store.getState().library.builtinPage.pendingPage).toBe(3);
+      expect(rowAt(store, 0)?.title).toBe('Fixture Song 00001');
+
+      await act(async () => {
+        delayed.get(300)?.resolve();
+        delayed.get(100)?.resolve();
+        delayed.get(200)?.resolve();
+        await Promise.all([pageTwo, pageFour, pageThree]);
+      });
+      expect(store.getState().library.builtinPage.committedPage).toBe(3);
+      expect(store.getState().library.builtinPage.pendingPage).toBeNull();
+      expect(rowAt(store, 200)?.title).toBe('Fixture Song 00201');
+      expect(rowAt(store, 100)).toBeUndefined();
+      if (playlistId) {
+        expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
+        expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+      }
+    },
+  );
+
+  it('drops an older built-in page response after the query changes', async () => {
+    const rows = syntheticRows(500);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      builtinSongIds: rows.map((row) => row.song_id),
+    });
+    const originalSearch = bridge.searchSongs;
+    const pageTwoStarted = deferred<void>();
+    const releasePageTwo = deferred<void>();
+    bridge.searchSongs = async (request) => {
+      if (
+        request.source.kind === 'smart' &&
+        request.source.id === 'builtin' &&
+        request.query === '' &&
+        request.offset === 100
+      ) {
+        pageTwoStarted.resolve();
+        await releasePageTwo.promise;
+      }
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+
+    let oldNavigation!: Promise<void>;
+    act(() => {
+      oldNavigation = store.getState().navigateBuiltinPage(2);
+    });
+    await pageTwoStarted.promise;
+    await act(async () => store.getState().search('Fixture Song 00002'));
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+    expect(rowAt(store, 0)?.title).toBe('Fixture Song 00002');
+
+    await act(async () => {
+      releasePageTwo.resolve();
+      await oldNavigation;
+    });
+    expect(store.getState().library.query).toBe('Fixture Song 00002');
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+    expect(store.getState().library.builtinPage.pendingPage).toBeNull();
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(rowAt(store, 0)?.title).toBe('Fixture Song 00002');
+  });
+
+  it('drops an older built-in page response after source navigation', async () => {
+    const rows = syntheticRows(500);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      builtinSongIds: rows.map((row) => row.song_id),
+    });
+    const originalSearch = bridge.searchSongs;
+    const pageTwoStarted = deferred<void>();
+    const releasePageTwo = deferred<void>();
+    bridge.searchSongs = async (request) => {
+      if (
+        request.source.kind === 'smart' &&
+        request.source.id === 'builtin' &&
+        request.offset === 100
+      ) {
+        pageTwoStarted.resolve();
+        await releasePageTwo.promise;
+      }
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+
+    let oldNavigation!: Promise<void>;
+    act(() => {
+      oldNavigation = store.getState().navigateBuiltinPage(2);
+    });
+    await pageTwoStarted.promise;
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+
+    await act(async () => {
+      releasePageTwo.resolve();
+      await oldNavigation;
+    });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+    expect(store.getState().library.resultTotal).toBe(500);
+    expect(rowAt(store, 0)?.title).toBe('Fixture Song 00001');
+  });
+
+  it('preserves selection and detail on page-load failure and retries that target', async () => {
+    const rows = syntheticRows(250);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      builtinSongIds: rows.map((row) => row.song_id),
+    });
+    const originalSearch = bridge.searchSongs;
+    let failFirstPageTwo = true;
+    bridge.searchSongs = async (request) => {
+      if (
+        request.source.kind === 'smart' &&
+        request.source.id === 'builtin' &&
+        request.offset === 100 &&
+        failFirstPageTwo
+      ) {
+        failFirstPageTwo = false;
+        throw new Error('temporary page failure');
+      }
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    const selected = rowAt(store, 4);
+    if (!selected) throw new Error('built-in page one was not loaded');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    const selectedDetail = selectSelectedDetail(store.getState()).value;
+
+    await act(async () => store.getState().navigateBuiltinPage(2));
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+    expect(store.getState().library.builtinPage.failedPage).toBe(2);
+    expect(rowAt(store, 4)?.song_id).toBe(selected.song_id);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(selectSelectedDetail(store.getState()).value).toEqual(selectedDetail);
+
+    await act(async () => store.getState().retryBuiltinPage());
+    expect(store.getState().library.builtinPage.committedPage).toBe(2);
+    expect(store.getState().library.builtinPage.failedPage).toBeNull();
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(store.getState().library.selectedSongSummary?.song_id).toBe(selected.song_id);
+    expect(selectSelectedDetail(store.getState()).value).toEqual(selectedDetail);
+  });
+
+  it('rejects a page response with a mismatched result count before committing it', async () => {
+    const rows = syntheticRows(250);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      builtinSongIds: rows.map((row) => row.song_id),
+    });
+    const originalSearch = bridge.searchSongs;
+    let pageTwoRequests = 0;
+    bridge.searchSongs = async (request) => {
+      const result = await originalSearch(request);
+      if (
+        request.source.kind === 'smart' &&
+        request.source.id === 'builtin' &&
+        request.offset === 100
+      ) {
+        pageTwoRequests += 1;
+        if (pageTwoRequests === 1) return { ...result, total: result.total - 1 };
+      }
+      return result;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+
+    await act(async () => store.getState().navigateBuiltinPage(2));
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
+    expect(store.getState().library.builtinPage.failedPage).toBe(2);
+    expect(rowAt(store, 0)?.title).toBe('Fixture Song 00001');
+    expect(rowAt(store, 100)).toBeUndefined();
+
+    await act(async () => store.getState().retryBuiltinPage());
+    expect(store.getState().library.builtinPage.committedPage).toBe(2);
+    expect(store.getState().library.builtinPage.failedPage).toBeNull();
+    expect(pageTwoRequests).toBe(2);
+    expect(rowAt(store, 100)?.title).toBe('Fixture Song 00101');
+  });
+
+  it('bounds a 10,000-song scroll sweep, pins selection/playback, and reloads evicted pages', async () => {
+    const bridge = createMockBridge({ catalogRows: syntheticRows(10_000) });
+    const originalSearch = bridge.searchSongs;
+    const requestedOffsets: number[] = [];
+    bridge.searchSongs = async (request) => {
+      if (request.query === '') requestedOffsets.push(request.offset);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const selected = rowAt(store, 0);
+    if (!selected) throw new Error('synthetic catalog is empty');
+    await act(async () => store.getState().selectSong(selected.song_id));
+
+    for (let offset = 0; offset < 10_000; offset += LIBRARY_PAGE_SIZE) {
+      await act(async () => store.getState().setViewport(offset, offset));
+      expect(store.getState().library.pages.size).toBeLessThanOrEqual(3);
+      expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
+    }
+
+    expect(store.getState().library.pages.has(0)).toBe(false);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(store.getState().library.selectedSongSummary?.title).toBe(selected.title);
+    expect(selectSongById(store.getState().library, selected.song_id)?.title).toBe(selected.title);
+    expect(store.getState().library.selectedSongIndex).toBe(0);
+
+    await act(async () => store.getState().prepareSelectedPlayback());
+    expect(store.getState().playback.prepared?.song.title).toBe(selected.title);
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.currentSong?.title).toBe(selected.title));
+
+    const initialZeroPageRequests = requestedOffsets.filter((offset) => offset === 0).length;
+    await act(async () => store.getState().setViewport(0, 0));
+
+    expect(requestedOffsets.filter((offset) => offset === 0)).toHaveLength(
+      initialZeroPageRequests + 1,
+    );
+    expect(rowAt(store, 0)?.song_id).toBe(selected.song_id);
+    expect(store.getState().library.selectedSongSummary?.title).toBe(selected.title);
+    expect(store.getState().playback.currentSong?.title).toBe(selected.title);
+    expect(store.getState().library.pages.size).toBeLessThanOrEqual(3);
+    expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
+  });
+
+  it('keeps All-page reads and Next moving while a Like write is deferred', async () => {
+    const rows = syntheticRows(10_000);
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      playbackDurationMs: 60_000,
+      startDelayMs: 1,
+    });
+    const originalSearch = bridge.searchSongs;
+    const requestedOffsets: number[] = [];
+    bridge.searchSongs = async (request) => {
+      if (request.query === '') requestedOffsets.push(request.offset);
+      return originalSearch(request);
+    };
+    const likeStarted = deferred<void>();
+    const releaseLike = deferred<Awaited<ReturnType<typeof bridge.setSongLiked>>>();
+    bridge.setSongLiked = async () => {
+      likeStarted.resolve();
+      return releaseLike.promise;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().setViewport(5190, 5200));
+    const playing = rowAt(store, 5199);
+    if (!playing) throw new Error('page-boundary playback row was not loaded');
+    await act(async () => store.getState().selectSong(playing.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    for (let offset = 5400; offset <= 7200; offset += LIBRARY_PAGE_SIZE) {
+      await act(async () => store.getState().setViewport(offset, offset));
+    }
+    await act(async () => store.getState().setViewport(9000, 9010));
+    expect(requestedOffsets.filter((offset) => offset === 5100)).toHaveLength(1);
+    expect(requestedOffsets.filter((offset) => offset === 5200)).toHaveLength(1);
+
+    const likePromise = store.getState().setSongLiked(playing.song_id, true);
+    await likeStarted.promise;
+    let viewportPromise: Promise<void> | undefined;
+    let nextPromise: Promise<void> | undefined;
+    try {
+      viewportPromise = store.getState().setViewport(5100, 5110);
+      await waitFor(
+        () => expect(requestedOffsets.filter((offset) => offset === 5100)).toHaveLength(2),
+        { timeout: 1_000 },
+      );
+      await viewportPromise;
+      expect(rowAt(store, 5199)?.liked).toBe(true);
+      expect(store.getState().library.likedTotal).toBe(1);
+
+      await act(async () => store.getState().setViewport(5190, 5199));
+      expect(rowAt(store, 5199)?.liked).toBe(true);
+      expect(store.getState().library.likedTotal).toBe(1);
+
+      nextPromise = store.getState().nextPlayback();
+      await waitFor(
+        () => expect(requestedOffsets.filter((offset) => offset === 5200)).toHaveLength(2),
+        { timeout: 1_000 },
+      );
+      await waitFor(() =>
+        expect(store.getState().playback.currentSong?.songId).toBe(rows[5200]!.song_id),
+      );
+      await nextPromise;
+      expect(store.getState().playback.context?.currentIndex).toBe(5200);
+    } finally {
+      releaseLike.resolve({ song_id: playing.song_id, liked: true, total: 1 });
+      await Promise.allSettled([likePromise, viewportPromise, nextPromise].filter(Boolean));
+      await act(async () => store.getState().stopPlayback());
+    }
+  });
+
+  it('rejects a visible range spanning four pages instead of omitting its last page', async () => {
+    const bridge = createMockBridge({ catalogRows: syntheticRows(800) });
+    const originalSearch = bridge.searchSongs;
+    const requestedOffsets: number[] = [];
+    bridge.searchSongs = async (request) => {
+      requestedOffsets.push(request.offset);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const before = store.getState().library;
+    const requestsBefore = requestedOffsets.length;
+
+    expect(activeLibraryPageOffsets(0, 299, 800)).toEqual([0, 100, 200]);
+    expect(() => activeLibraryPageOffsets(0, 300, 800)).toThrow(/spans 4 pages/);
+    await act(async () => store.getState().setViewport(0, 300));
+
+    const after = store.getState().library;
+    expect(after.error).toMatch(/spans 4 pages/);
+    expect(after.visibleRange).toEqual(before.visibleRange);
+    expect([...after.pages.keys()]).toEqual([...before.pages.keys()]);
+    expect([...after.indexById]).toEqual([...before.indexById]);
+    expect(requestedOffsets).toHaveLength(requestsBefore);
+
+    await act(async () => store.getState().setViewport(0, 20));
+    expect(store.getState().library.error).toBeNull();
   });
 
   it('reuses deep detail from the bounded song cache', async () => {
@@ -709,7 +1575,8 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    await act(async () => store.getState().search('Song'));
+    await act(async () => store.getState().search('', { kind: 'smart', id: 'all' }));
+    await act(async () => store.getState().search('Song', { kind: 'smart', id: 'all' }));
     await act(async () => store.getState().setViewport(200, 220));
     expect(viewportCalls).toBe(1);
     expect(viewportSongIds).toHaveLength(21);
@@ -801,6 +1668,121 @@ describe('desktop store', () => {
     expect(viewportCalls).toBe(2);
   });
 
+  it('retries viewport hydration when a Like mutation overtakes its response', async () => {
+    const bridge = createMockBridge();
+    const originalViewport = bridge.setLibraryViewport;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let viewportCalls = 0;
+    bridge.setLibraryViewport = async (request) => {
+      viewportCalls += 1;
+      if (viewportCalls === 1) {
+        const result = await originalViewport(request);
+        entered.resolve();
+        await release.promise;
+        return result;
+      }
+      return originalViewport(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+
+    let viewport!: Promise<void>;
+    await act(async () => {
+      viewport = store.getState().setViewport(0, 10);
+      await entered.promise;
+    });
+    await act(async () => store.getState().setSongLiked(first.song_id, true));
+    await act(async () => {
+      release.resolve();
+      await viewport;
+    });
+
+    expect(viewportCalls).toBe(2);
+    expect(rowAt(store, 0)?.liked).toBe(true);
+    expect(store.getState().library.likedTotal).toBe(1);
+  });
+
+  it('drops viewport hydration from a source that is no longer active', async () => {
+    const bridge = createMockBridge();
+    const originalViewport = bridge.setLibraryViewport;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let viewportCalls = 0;
+    bridge.setLibraryViewport = async (request) => {
+      viewportCalls += 1;
+      if (viewportCalls === 1) {
+        const result = await originalViewport(request);
+        entered.resolve();
+        await release.promise;
+        return {
+          ...result,
+          items: result.items.map((row) => ({ ...row, title: 'Stale source title' })),
+        };
+      }
+      return originalViewport(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().setSongLiked(first.song_id, true));
+
+    let staleViewport!: Promise<void>;
+    await act(async () => {
+      staleViewport = store.getState().setViewport(0, 10);
+      await entered.promise;
+    });
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    await act(async () => store.getState().setViewport(0, 10));
+    release.resolve();
+    await act(async () => staleViewport);
+
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'liked' });
+    expect(rowAt(store, 0)?.title).toBe(first.title);
+    expect(rowAt(store, 0)?.liked).toBe(true);
+    expect(viewportCalls).toBe(2);
+  });
+
+  it('drops an older viewport response after rapid scrolling within one source', async () => {
+    const bridge = createMockBridge();
+    const originalViewport = bridge.setLibraryViewport;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let viewportCalls = 0;
+    bridge.setLibraryViewport = async (request) => {
+      viewportCalls += 1;
+      if (viewportCalls === 1) {
+        const result = await originalViewport(request);
+        entered.resolve();
+        await release.promise;
+        return {
+          ...result,
+          items: result.items.map((row) => ({ ...row, title: 'Obsolete viewport title' })),
+        };
+      }
+      return originalViewport(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    let firstViewport!: Promise<void>;
+    await act(async () => {
+      firstViewport = store.getState().setViewport(0, 10);
+      await entered.promise;
+    });
+    await act(async () => store.getState().setViewport(400, 410));
+    release.resolve();
+    await act(async () => firstViewport);
+
+    expect(viewportCalls).toBe(2);
+    expect(rowAt(store, 400)?.title).toBe('Song 401');
+    expect(store.getState().library.pages.size).toBeLessThanOrEqual(3);
+    expect(store.getState().library.indexById.size).toBeLessThanOrEqual(3 * LIBRARY_PAGE_SIZE);
+  });
+
   it('persists liked source state through the native bridge contract', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
@@ -817,6 +1799,43 @@ describe('desktop store', () => {
     expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'liked' });
     expect(store.getState().library.resultTotal).toBe(1);
     expect(rowAt(store, 0)?.song_id).toBe(first.song_id);
+  });
+
+  it('serializes repeated Like changes so the latest mutation owns the result', async () => {
+    const bridge = createMockBridge();
+    const originalSetLiked = bridge.setSongLiked;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const requests: boolean[] = [];
+    bridge.setSongLiked = async (request) => {
+      requests.push(request.liked);
+      const result = await originalSetLiked(request);
+      if (requests.length === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+
+    let addLike!: Promise<void>;
+    await act(async () => {
+      addLike = store.getState().setSongLiked(first.song_id, true);
+      await entered.promise;
+    });
+    const removeLike = store.getState().setSongLiked(first.song_id, false);
+    expect(rowAt(store, 0)?.liked).toBe(false);
+    expect(requests).toEqual([true]);
+
+    release.resolve();
+    await act(async () => Promise.all([addLike, removeLike]));
+
+    expect(requests).toEqual([true, false]);
+    expect(rowAt(store, 0)?.liked).toBe(false);
+    expect(store.getState().library.likedTotal).toBe(0);
   });
 
   it('loads playlist navigation summaries and keeps membership out of catalog pages', async () => {
@@ -853,7 +1872,7 @@ describe('desktop store', () => {
     await act(async () => store.getState().renamePlaylist(playlistId, 'Morning'));
     expect(store.getState().libraryNavigation.playlistsById.get(playlistId)?.name).toBe('Morning');
     await act(async () => store.getState().deletePlaylist(playlistId));
-    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.source).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().libraryNavigation.playlistOrder).toHaveLength(0);
   });
 
@@ -879,7 +1898,7 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.title).not.toBe('Local Song B');
   });
 
-  it('keeps the playlist selected while browsing All Songs to add', async () => {
+  it('keeps the playlist selected while browsing Built-in Songs to add', async () => {
     const bridge = createMockBridge();
     const requests: SearchRequest[] = [];
     const originalSearch = bridge.searchSongs;
@@ -898,16 +1917,16 @@ describe('desktop store', () => {
     requests.length = 0;
 
     await act(async () => store.getState().openPlaylistAdd(playlistId));
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(requests).toHaveLength(0);
     expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
     expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
-    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
     expect(store.getState().library.resultTotal).toBe(500);
+    expect(rowAt(store, 0)?.liked).toBe(true);
 
     requests.length = 0;
     await act(async () => store.getState().search('Song 1'));
-    expect(requests.at(-1)?.source).toEqual({ kind: 'smart', id: 'all' });
+    expect(requests.at(-1)?.source).toEqual({ kind: 'smart', id: 'builtin' });
 
     await act(async () => store.getState().exitPlaylistAdd());
     expect(store.getState().library.source).toEqual({ kind: 'playlist', id: playlistId });
@@ -2228,7 +3247,7 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    const first = rowAt(store, 199);
+    const first = rowAt(store, 99);
     if (!first) throw new Error('last row in first page was not loaded');
     await act(async () => store.getState().selectSong(first.song_id));
     await act(async () => store.getState().prepareSelectedPlayback());
@@ -2237,13 +3256,63 @@ describe('desktop store', () => {
 
     await act(async () => store.getState().nextPlayback());
 
-    expect(searchOffsets).toContain(200);
-    expect(store.getState().playback.preparedIdentity?.title).toBe('Song 201');
+    expect(searchOffsets).toContain(100);
+    expect(store.getState().playback.preparedIdentity?.title).toBe('Song 101');
     expect(store.getState().playback.prepared?.admission).toBe('confirmation_required');
     expect(store.getState().playback.sessionId).toBeNull();
     await act(async () => store.getState().startPreparedPlayback('proceed'));
-    expect(store.getState().playback.currentSong?.title).toBe('Song 201');
+    expect(store.getState().playback.currentSong?.title).toBe('Song 101');
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('auto-plays across a Built-in Songs page boundary using the full source context', async () => {
+    const rows = syntheticRows(500).map((row) => ({ ...row, risk_level: 'low' as const }));
+    const requests: SearchRequest[] = [];
+    const bridge = createMockBridge({
+      catalogRows: rows,
+      builtinSongIds: rows.map((row) => row.song_id),
+      playbackDurationMs: 120,
+      startDelayMs: 5,
+    });
+    const originalSearch = bridge.searchSongs;
+    bridge.searchSongs = async (request) => {
+      requests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    await act(async () => store.getState().setViewport(99, 99));
+
+    const selected = rowAt(store, 99);
+    if (!selected) throw new Error('last row in the first Built-in Songs page was not loaded');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+
+    await waitFor(() => {
+      expect(store.getState().playback.state).toBe('playing');
+      expect(store.getState().playback.currentSong?.songId).toBe(rows[100]?.song_id);
+    });
+
+    const context = store.getState().playback.context;
+    expect(context?.source).toEqual({ kind: 'smart', id: 'builtin' });
+    expect(context?.query).toBe('');
+    expect(context?.total).toBe(500);
+    expect(context?.currentIndex).toBe(100);
+    expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'builtin' });
+    expect(store.getState().library.resultTotal).toBe(500);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(store.getState().library.selectedSongSummary?.song_id).toBe(selected.song_id);
+    expect(
+      requests.some(
+        (request) =>
+          request.source.kind === 'smart' &&
+          request.source.id === 'builtin' &&
+          request.offset === 100 &&
+          request.limit === 100,
+      ),
+    ).toBe(true);
   });
 
   it('keeps a next-song risk confirmation owned until confirm or cancel', async () => {
@@ -2256,10 +3325,10 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    await act(async () => store.getState().setViewport(199, 200));
-    await waitFor(() => expect(rowAt(store, 200)).toBeDefined());
-    const first = rowAt(store, 199);
-    const next = rowAt(store, 200);
+    await act(async () => store.getState().setViewport(99, 100));
+    await waitFor(() => expect(rowAt(store, 100)).toBeDefined());
+    const first = rowAt(store, 99);
+    const next = rowAt(store, 100);
     if (!first || !next) throw new Error('mock library page was not loaded');
     await act(async () => store.getState().selectSong(first.song_id));
     await act(async () => store.getState().prepareSelectedPlayback());

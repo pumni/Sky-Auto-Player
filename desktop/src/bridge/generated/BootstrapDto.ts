@@ -7,6 +7,10 @@ import type { SettingsDto } from "./SettingsDto";
 import type { TimingMarginRecommendationDto } from "./TimingMarginRecommendationDto";
 import type { UpdatePreferencesDto } from "./UpdatePreferencesDto";
 
+/**
+ * Bootstrap payload. `gui_smoke` is a native-authoritative packaged GUI-smoke
+ * mode indicator, not a security capability or an unforgeable renderer token.
+ */
 export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto, 
 /**
  * Authoritative coherent settings snapshot for initial frontend state.
@@ -23,4 +27,4 @@ palette: string,
 /**
  * Legacy/deprecated protocol-v1 compatibility alias for `palette`.
  */
-theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_state: CatalogReadiness, catalog_generation: number | null, };
+theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_state: CatalogReadiness, catalog_generation: number | null, gui_smoke: boolean, };

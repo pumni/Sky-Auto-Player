@@ -12,6 +12,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+mod search_order;
+
 pub const SUPPORTED_EXTENSIONS: [&str; 3] = ["json", "skysheet", "txt"];
 pub const SONG_ID_LENGTH: usize = 32;
 pub const MAX_PAGE_SIZE: usize = 200;
@@ -104,6 +106,22 @@ pub struct CatalogPage {
     pub generation: u64,
 }
 
+/// Exact in-memory row order for one normalized query and catalog generation.
+/// The native adapter may keep this order in a bounded, source-scoped cache;
+/// it is never persisted or treated as identity authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogSearchOrder {
+    generation: u64,
+    normalized_query: String,
+    indices: Vec<usize>,
+}
+
+impl CatalogSearchOrder {
+    pub fn index_count(&self) -> usize {
+        self.indices.len()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSnapshot {
     pub items: Vec<CatalogRow>,
@@ -137,6 +155,8 @@ pub enum CatalogError {
     UnknownSongId,
     #[error("fuzzy ranking is not available for this shadow index")]
     FuzzyRankingUnavailable,
+    #[error("catalog search order does not match the requested query")]
+    SearchOrderMismatch,
 }
 
 pub trait FuzzyRanker {
@@ -393,10 +413,12 @@ impl CatalogIndex {
                 .map(|(_, entry)| entry.search_key.clone())
                 .collect::<Vec<_>>();
             let mut ranked = Vec::new();
+            let mut seen = vec![false; candidates.len()];
             for candidate_index in ranker.rank(&normalized, &keys, FUZZY_SCORE_CUTOFF) {
                 if let Some((index, _)) = candidates.get(candidate_index)
-                    && !ranked.contains(index)
+                    && !seen[candidate_index]
                 {
+                    seen[candidate_index] = true;
                     ranked.push(*index);
                 }
             }

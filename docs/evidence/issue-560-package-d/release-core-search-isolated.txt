@@ -1,0 +1,112 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.154
+   Compiling memchr v2.8.3
+   Compiling quote v1.0.47
+   Compiling syn v3.0.9
+   Compiling thiserror-impl v2.0.21
+   Compiling serde_derive v1.0.229
+   Compiling thiserror v2.0.21
+   Compiling sky_app_core v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_app_core)
+    Finished `release` profile [optimized] target(s) in 13.44s
+     Running unittests src\lib.rs (rust\target\package-d-bench\release\deps\sky_app_core-02df7b606524e6b8.exe)
+
+running 1 test
+package_b_bench layer=catalog-index fixture=package-b-catalog-fixture-v1 seed=0x560 size_set=96,1000,10000 profile=release warmup=1 sample_ms=25 samples=9
+package_b_query size=96 scope=all query=empty window=first offset=0 limit=200 p50_us=10.233 p90_us=11.252 min_us=9.768 max_us=11.252
+package_b_query size=96 scope=all query=empty window=middle offset=48 limit=200 p50_us=4.860 p90_us=4.899 min_us=4.830 max_us=4.899
+package_b_query size=96 scope=all query=empty window=late offset=0 limit=200 p50_us=9.725 p90_us=9.752 min_us=9.716 max_us=9.752
+package_b_query size=96 scope=all query=one-char window=first offset=0 limit=200 p50_us=11.049 p90_us=11.340 min_us=10.980 max_us=11.340
+package_b_query size=96 scope=all query=one-char window=middle offset=48 limit=200 p50_us=6.209 p90_us=6.289 min_us=6.197 max_us=6.289
+package_b_query size=96 scope=all query=one-char window=late offset=0 limit=200 p50_us=11.074 p90_us=11.109 min_us=11.040 max_us=11.109
+package_b_query size=96 scope=all query=fuzzy-normalized window=first offset=0 limit=200 p50_us=1286.955 p90_us=1311.295 min_us=1276.875 max_us=1311.295
+package_b_query size=96 scope=all query=fuzzy-normalized window=middle offset=12 limit=200 p50_us=1282.595 p90_us=1286.790 min_us=1279.970 max_us=1286.790
+package_b_query size=96 scope=all query=fuzzy-normalized window=late offset=0 limit=200 p50_us=1284.525 p90_us=1308.225 min_us=1278.440 max_us=1308.225
+package_b_query size=96 scope=liked query=empty window=first offset=0 limit=200 p50_us=3.647 p90_us=3.678 min_us=3.618 max_us=3.678
+package_b_query size=96 scope=liked query=empty window=middle offset=12 limit=200 p50_us=2.111 p90_us=2.191 min_us=2.107 max_us=2.191
+package_b_query size=96 scope=liked query=empty window=late offset=0 limit=200 p50_us=3.611 p90_us=3.669 min_us=3.604 max_us=3.669
+package_b_query size=96 scope=liked query=one-char window=first offset=0 limit=200 p50_us=4.321 p90_us=4.369 min_us=4.289 max_us=4.369
+package_b_query size=96 scope=liked query=one-char window=middle offset=12 limit=200 p50_us=2.787 p90_us=2.802 min_us=2.767 max_us=2.802
+package_b_query size=96 scope=liked query=one-char window=late offset=0 limit=200 p50_us=4.331 p90_us=4.383 min_us=4.284 max_us=4.383
+package_b_query size=96 scope=liked query=fuzzy-normalized window=first offset=0 limit=200 p50_us=330.711 p90_us=340.245 min_us=329.380 max_us=340.245
+package_b_query size=96 scope=liked query=fuzzy-normalized window=middle offset=3 limit=200 p50_us=329.314 p90_us=329.632 min_us=328.330 max_us=329.632
+package_b_query size=96 scope=liked query=fuzzy-normalized window=late offset=0 limit=200 p50_us=329.886 p90_us=331.725 min_us=329.254 max_us=331.725
+package_b_query size=96 scope=playlist query=empty window=first offset=0 limit=200 p50_us=8.570 p90_us=8.907 min_us=8.531 max_us=8.907
+package_b_query size=96 scope=playlist query=empty window=middle offset=19 limit=200 p50_us=6.413 p90_us=6.431 min_us=6.392 max_us=6.431
+package_b_query size=96 scope=playlist query=empty window=late offset=0 limit=200 p50_us=8.594 p90_us=9.025 min_us=8.555 max_us=9.025
+package_b_query size=96 scope=playlist query=one-char window=first offset=0 limit=200 p50_us=9.423 p90_us=9.832 min_us=9.376 max_us=9.832
+package_b_query size=96 scope=playlist query=one-char window=middle offset=19 limit=200 p50_us=7.325 p90_us=7.471 min_us=7.283 max_us=7.471
+package_b_query size=96 scope=playlist query=one-char window=late offset=0 limit=200 p50_us=9.362 p90_us=9.726 min_us=9.339 max_us=9.726
+package_b_query size=96 scope=playlist query=fuzzy-normalized window=first offset=0 limit=200 p50_us=525.679 p90_us=539.353 min_us=524.340 max_us=539.353
+package_b_query size=96 scope=playlist query=fuzzy-normalized window=middle offset=5 limit=200 p50_us=524.658 p90_us=526.887 min_us=523.969 max_us=526.887
+package_b_query size=96 scope=playlist query=fuzzy-normalized window=late offset=0 limit=200 p50_us=525.960 p90_us=529.337 min_us=524.335 max_us=529.337
+package_b_query size=1000 scope=all query=empty window=first offset=0 limit=200 p50_us=18.497 p90_us=19.384 min_us=18.269 max_us=19.384
+package_b_query size=1000 scope=all query=empty window=middle offset=500 limit=200 p50_us=18.347 p90_us=18.490 min_us=18.277 max_us=18.490
+package_b_query size=1000 scope=all query=empty window=late offset=800 limit=200 p50_us=18.383 p90_us=18.868 min_us=18.348 max_us=18.868
+package_b_query size=1000 scope=all query=one-char window=first offset=0 limit=200 p50_us=29.574 p90_us=33.655 min_us=29.364 max_us=33.655
+package_b_query size=1000 scope=all query=one-char window=middle offset=500 limit=200 p50_us=29.839 p90_us=30.470 min_us=29.623 max_us=30.470
+package_b_query size=1000 scope=all query=one-char window=late offset=800 limit=200 p50_us=28.959 p90_us=30.683 min_us=28.709 max_us=30.683
+package_b_query size=1000 scope=all query=fuzzy-normalized window=first offset=0 limit=200 p50_us=13529.000 p90_us=13893.900 min_us=13231.700 max_us=13893.900
+package_b_query size=1000 scope=all query=fuzzy-normalized window=middle offset=125 limit=200 p50_us=13251.550 p90_us=13319.450 min_us=13200.150 max_us=13319.450
+package_b_query size=1000 scope=all query=fuzzy-normalized window=late offset=50 limit=200 p50_us=13270.550 p90_us=13352.050 min_us=13220.200 max_us=13352.050
+package_b_query size=1000 scope=liked query=empty window=first offset=0 limit=200 p50_us=28.699 p90_us=28.808 min_us=28.589 max_us=28.808
+package_b_query size=1000 scope=liked query=empty window=middle offset=125 limit=200 p50_us=21.392 p90_us=21.564 min_us=21.348 max_us=21.564
+package_b_query size=1000 scope=liked query=empty window=late offset=50 limit=200 p50_us=28.628 p90_us=28.838 min_us=28.567 max_us=28.838
+package_b_query size=1000 scope=liked query=one-char window=first offset=0 limit=200 p50_us=33.303 p90_us=33.673 min_us=33.267 max_us=33.673
+package_b_query size=1000 scope=liked query=one-char window=middle offset=125 limit=200 p50_us=26.060 p90_us=26.244 min_us=26.029 max_us=26.244
+package_b_query size=1000 scope=liked query=one-char window=late offset=50 limit=200 p50_us=33.286 p90_us=33.406 min_us=33.253 max_us=33.406
+package_b_query size=1000 scope=liked query=fuzzy-normalized window=first offset=0 limit=200 p50_us=3392.325 p90_us=3395.887 min_us=3388.412 max_us=3395.887
+package_b_query size=1000 scope=liked query=fuzzy-normalized window=middle offset=31 limit=200 p50_us=3405.237 p90_us=3429.275 min_us=3396.888 max_us=3429.275
+package_b_query size=1000 scope=liked query=fuzzy-normalized window=late offset=0 limit=200 p50_us=3404.900 p90_us=3415.775 min_us=3394.037 max_us=3415.775
+package_b_query size=1000 scope=playlist query=empty window=first offset=0 limit=200 p50_us=107.440 p90_us=107.760 min_us=106.786 max_us=107.760
+package_b_query size=1000 scope=playlist query=empty window=middle offset=200 limit=200 p50_us=107.579 p90_us=108.271 min_us=107.485 max_us=108.271
+package_b_query size=1000 scope=playlist query=empty window=late offset=200 limit=200 p50_us=108.244 p90_us=109.627 min_us=108.138 max_us=109.627
+package_b_query size=1000 scope=playlist query=one-char window=first offset=0 limit=200 p50_us=113.593 p90_us=114.126 min_us=113.500 max_us=114.126
+package_b_query size=1000 scope=playlist query=one-char window=middle offset=200 limit=200 p50_us=115.012 p90_us=115.585 min_us=114.200 max_us=115.585
+package_b_query size=1000 scope=playlist query=one-char window=late offset=200 limit=200 p50_us=114.071 p90_us=114.594 min_us=113.321 max_us=114.594
+package_b_query size=1000 scope=playlist query=fuzzy-normalized window=first offset=0 limit=200 p50_us=5409.220 p90_us=5439.140 min_us=5400.800 max_us=5439.140
+package_b_query size=1000 scope=playlist query=fuzzy-normalized window=middle offset=50 limit=200 p50_us=5401.740 p90_us=5433.380 min_us=5379.260 max_us=5433.380
+package_b_query size=1000 scope=playlist query=fuzzy-normalized window=late offset=0 limit=200 p50_us=5406.300 p90_us=5448.960 min_us=5387.560 max_us=5448.960
+package_b_query size=10000 scope=all query=empty window=first offset=0 limit=200 p50_us=18.470 p90_us=18.547 min_us=18.423 max_us=18.547
+package_b_query size=10000 scope=all query=empty window=middle offset=5000 limit=200 p50_us=18.476 p90_us=18.530 min_us=18.459 max_us=18.530
+package_b_query size=10000 scope=all query=empty window=late offset=9800 limit=200 p50_us=18.379 p90_us=18.550 min_us=18.349 max_us=18.550
+package_b_query size=10000 scope=all query=one-char window=first offset=0 limit=200 p50_us=135.903 p90_us=137.031 min_us=135.368 max_us=137.031
+package_b_query size=10000 scope=all query=one-char window=middle offset=5000 limit=200 p50_us=135.004 p90_us=135.995 min_us=134.656 max_us=135.995
+package_b_query size=10000 scope=all query=one-char window=late offset=9800 limit=200 p50_us=131.975 p90_us=132.432 min_us=131.632 max_us=132.432
+package_b_query size=10000 scope=all query=fuzzy-normalized window=first offset=0 limit=200 p50_us=133878.500 p90_us=134521.000 min_us=133710.500 max_us=134521.000
+package_b_query size=10000 scope=all query=fuzzy-normalized window=middle offset=1250 limit=200 p50_us=133872.300 p90_us=138185.000 min_us=133540.600 max_us=138185.000
+package_b_query size=10000 scope=all query=fuzzy-normalized window=late offset=2300 limit=200 p50_us=133998.600 p90_us=136820.300 min_us=133439.000 max_us=136820.300
+package_b_query size=10000 scope=liked query=empty window=first offset=0 limit=200 p50_us=160.553 p90_us=162.655 min_us=159.699 max_us=162.655
+package_b_query size=10000 scope=liked query=empty window=middle offset=1250 limit=200 p50_us=160.503 p90_us=161.452 min_us=160.115 max_us=161.452
+package_b_query size=10000 scope=liked query=empty window=late offset=2300 limit=200 p50_us=160.022 p90_us=161.133 min_us=159.913 max_us=161.133
+package_b_query size=10000 scope=liked query=one-char window=first offset=0 limit=200 p50_us=226.592 p90_us=263.943 min_us=226.077 max_us=263.943
+package_b_query size=10000 scope=liked query=one-char window=middle offset=1250 limit=200 p50_us=226.630 p90_us=228.642 min_us=225.938 max_us=228.642
+package_b_query size=10000 scope=liked query=one-char window=late offset=2300 limit=200 p50_us=226.071 p90_us=227.036 min_us=225.768 max_us=227.036
+package_b_query size=10000 scope=liked query=fuzzy-normalized window=first offset=0 limit=200 p50_us=35467.500 p90_us=35856.600 min_us=35169.800 max_us=35856.600
+package_b_query size=10000 scope=liked query=fuzzy-normalized window=middle offset=312 limit=200 p50_us=35615.200 p90_us=35895.200 min_us=35504.800 max_us=35895.200
+package_b_query size=10000 scope=liked query=fuzzy-normalized window=late offset=425 limit=200 p50_us=35515.800 p90_us=35774.400 min_us=35349.100 max_us=35774.400
+package_b_query size=10000 scope=playlist query=empty window=first offset=0 limit=200 p50_us=1551.200 p90_us=1786.050 min_us=1535.882 max_us=1786.050
+package_b_query size=10000 scope=playlist query=empty window=middle offset=2000 limit=200 p50_us=1564.219 p90_us=1729.320 min_us=1550.029 max_us=1729.320
+package_b_query size=10000 scope=playlist query=empty window=late offset=3800 limit=200 p50_us=1554.024 p90_us=1572.744 min_us=1542.235 max_us=1572.744
+package_b_query size=10000 scope=playlist query=one-char window=first offset=0 limit=200 p50_us=1640.494 p90_us=1658.262 min_us=1618.894 max_us=1658.262
+package_b_query size=10000 scope=playlist query=one-char window=middle offset=2000 limit=200 p50_us=1623.162 p90_us=1674.760 min_us=1614.500 max_us=1674.760
+package_b_query size=10000 scope=playlist query=one-char window=late offset=3800 limit=200 p50_us=1640.619 p90_us=1774.040 min_us=1613.462 max_us=1774.040
+package_b_query size=10000 scope=playlist query=fuzzy-normalized window=first offset=0 limit=200 p50_us=56309.700 p90_us=56452.700 min_us=56108.700 max_us=56452.700
+package_b_query size=10000 scope=playlist query=fuzzy-normalized window=middle offset=500 limit=200 p50_us=56370.600 p90_us=57781.800 min_us=56035.300 max_us=57781.800
+package_b_query size=10000 scope=playlist query=fuzzy-normalized window=late offset=800 limit=200 p50_us=56361.500 p90_us=57446.500 min_us=56057.300 max_us=57446.500
+test catalog::perf_tests::opt_in_package_b_catalog_query_benchmark ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 23.65s
+
+     Running tests\settings_catalog_update_fixtures.rs (rust\target\package-d-bench\release\deps\settings_catalog_update_fixtures-596f6f82fcd057ce.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests\song_planning_fixtures.rs (rust\target\package-d-bench\release\deps\song_planning_fixtures-be95d0ddc16974e5.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s

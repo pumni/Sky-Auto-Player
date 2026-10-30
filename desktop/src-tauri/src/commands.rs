@@ -29,6 +29,7 @@ pub enum CatalogSourceId {
     #[default]
     All,
     Liked,
+    Builtin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -313,6 +314,8 @@ pub struct UpdatePreferencesDto {
     pub last_error_ts: i64,
 }
 
+/// Bootstrap payload. `gui_smoke` is a native-authoritative packaged GUI-smoke
+/// mode indicator, not a security capability or an unforgeable renderer token.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct BootstrapDto {
@@ -333,6 +336,8 @@ pub struct BootstrapDto {
     pub update_preferences: UpdatePreferencesDto,
     pub catalog_state: CatalogReadiness,
     pub catalog_generation: Option<u64>,
+    #[serde(default)]
+    pub gui_smoke: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -582,6 +587,8 @@ pub struct LibraryPlaylistSummaryDto {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LibraryNavigationDto {
+    pub builtin_available: bool,
+    pub builtin_song_count: u64,
     pub playlists: Vec<LibraryPlaylistSummaryDto>,
 }
 
@@ -749,6 +756,7 @@ pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapDto, Strin
         let (catalog_state, catalog_generation) = runtime.catalog_readiness()?;
         result.catalog_state = catalog_state;
         result.catalog_generation = catalog_generation;
+        result.gui_smoke = app_state.should_exit_after_close();
         Ok(result)
     })
     .await

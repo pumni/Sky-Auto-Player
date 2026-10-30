@@ -801,6 +801,12 @@ fn snapshot(session_id: &str, seq: u64) -> UiEvent {
 mod calibration;
 #[path = "tests/catalog.rs"]
 mod catalog;
+#[path = "tests/catalog_package_b.rs"]
+mod catalog_package_b;
+#[path = "tests/catalog_viewport_benchmark.rs"]
+mod catalog_viewport_benchmark;
+#[path = "tests/catalog_viewport_projection.rs"]
+mod catalog_viewport_projection;
 #[path = "tests/event_delivery.rs"]
 mod event_delivery;
 #[path = "tests/playback_integration.rs"]

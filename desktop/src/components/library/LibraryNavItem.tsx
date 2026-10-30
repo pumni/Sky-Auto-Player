@@ -5,6 +5,7 @@ interface LibraryNavItemProps {
   collapsed?: boolean;
   children: ReactNode;
   count?: number;
+  disabled?: boolean;
   icon: ReactNode;
   iconTone?: 'default' | 'liked';
   label: string;
@@ -16,6 +17,7 @@ export function LibraryNavItem({
   collapsed = false,
   children,
   count,
+  disabled = false,
   icon,
   iconTone = 'default',
   label,
@@ -26,10 +28,11 @@ export function LibraryNavItem({
       className={`library-nav-item${active ? ' is-active' : ''}`}
       data-icon-tone={iconTone}
       type="button"
+      disabled={disabled}
       aria-current={active ? 'page' : undefined}
       onClick={onPress}
       aria-label={collapsed ? label : undefined}
-      title={collapsed ? label : undefined}
+      title={collapsed || disabled ? label : undefined}
     >
       <span className="library-nav-item-icon" aria-hidden="true">
         {icon}

@@ -1,5 +1,7 @@
-import { ChevronLeft, ChevronRight, Heart, Music2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Heart, Library, ListMusic, RefreshCw } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { Button } from 'react-aria-components';
+import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { PlaylistCreateDialog } from './PlaylistCreateDialog';
 import { PlaylistNavItem } from './PlaylistNavItem';
@@ -8,6 +10,65 @@ import { LibraryAddMenu } from './LibraryAddMenu';
 import { LibraryConfirmDialog } from './LibraryConfirmDialog';
 import { LibraryNavItem } from './LibraryNavItem';
 import { LibrarySection } from './LibrarySection';
+
+const playlistNameSegmenter =
+  typeof Intl.Segmenter === 'undefined'
+    ? null
+    : new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+function playlistMonogram(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed || !playlistNameSegmenter) return null;
+  return playlistNameSegmenter.segment(trimmed)[Symbol.iterator]().next().value?.segment ?? null;
+}
+
+interface CollapsedPlaylistTileProps {
+  id: string;
+  displayName: string;
+  accessibleName: string;
+  monogram: string | null;
+  active: boolean;
+  onSelect: () => void;
+}
+
+function CollapsedPlaylistTile({
+  id,
+  displayName,
+  accessibleName,
+  monogram,
+  active,
+  onSelect,
+}: CollapsedPlaylistTileProps) {
+  const [focusTooltipOpen, setFocusTooltipOpen] = useState(false);
+  const [interactionTooltipOpen, setInteractionTooltipOpen] = useState(false);
+
+  return (
+    <TooltipTrigger
+      delay={350}
+      closeDelay={0}
+      isOpen={focusTooltipOpen || interactionTooltipOpen}
+      onOpenChange={setInteractionTooltipOpen}
+    >
+      <Button
+        className={`library-nav-item library-collapsed-playlist-tile${active ? ' is-active' : ''}`}
+        type="button"
+        aria-label={accessibleName}
+        aria-current={active ? 'page' : undefined}
+        data-playlist-id={id}
+        onFocus={() => setFocusTooltipOpen(true)}
+        onBlur={() => setFocusTooltipOpen(false)}
+        onPress={onSelect}
+      >
+        <span className="library-playlist-monogram" aria-hidden="true">
+          {monogram ? <span>{monogram}</span> : <ListMusic size={18} />}
+        </span>
+      </Button>
+      <Tooltip className="library-playlist-tooltip" placement="right">
+        {displayName}
+      </Tooltip>
+    </TooltipTrigger>
+  );
+}
 
 interface LibraryNavigatorProps {
   collapsed: boolean;
@@ -20,10 +81,18 @@ export function LibraryNavigator({
   onToggleCollapsed,
   useStore,
 }: LibraryNavigatorProps) {
-  const catalogTotal = useStore((store: DesktopStore) => store.library.catalogTotal);
   const likedTotal = useStore((store: DesktopStore) => store.library.likedTotal);
   const source = useStore((store: DesktopStore) => store.library.source);
   const navigation = useStore((store: DesktopStore) => store.libraryNavigation);
+  const navigationReady = navigation.loadState === 'ready';
+  const builtinChecking = navigation.loadState === 'idle' || navigation.loadState === 'loading';
+  const builtinLabel = builtinChecking
+    ? 'Checking Built-in Songs'
+    : navigation.loadState === 'error'
+      ? 'Built-in Songs status unknown'
+      : navigation.builtinAvailable
+        ? 'Built-in Songs'
+        : 'Built-in Songs unavailable';
   const selectLibrarySource = useStore((store: DesktopStore) => store.selectLibrarySource);
   const openPlaylistAdd = useStore((store: DesktopStore) => store.openPlaylistAdd);
   const createPlaylist = useStore((store: DesktopStore) => store.createPlaylist);
@@ -36,6 +105,14 @@ export function LibraryNavigator({
 
   const renameTarget = renameId ? navigation.playlistsById.get(renameId) : undefined;
   const deleteTarget = deleteId ? navigation.playlistsById.get(deleteId) : undefined;
+  const collapsedPlaylists = navigation.playlistOrder.flatMap((id) => {
+    const playlist = navigation.playlistsById.get(id);
+    return playlist ? [playlist] : [];
+  });
+  const playlistNameCounts = new Map<string, number>();
+  for (const playlist of collapsedPlaylists) {
+    playlistNameCounts.set(playlist.name, (playlistNameCounts.get(playlist.name) ?? 0) + 1);
+  }
 
   const runAndClose = async (operation: () => Promise<void>, close: () => void) => {
     await operation();
@@ -69,6 +146,19 @@ export function LibraryNavigator({
       <div className="library-primary-items">
         <LibraryNavItem
           collapsed={collapsed}
+          label={builtinLabel}
+          active={source.kind === 'smart' && source.id === 'builtin'}
+          {...(navigationReady && navigation.builtinAvailable
+            ? { count: navigation.builtinSongCount }
+            : {})}
+          disabled={!navigationReady || !navigation.builtinAvailable}
+          icon={<Library size={18} />}
+          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
+        >
+          {builtinChecking ? 'Checking Built-in Songs…' : 'Built-in Songs'}
+        </LibraryNavItem>
+        <LibraryNavItem
+          collapsed={collapsed}
           label="Liked Songs"
           active={source.kind === 'smart' && source.id === 'liked'}
           count={likedTotal}
@@ -78,31 +168,83 @@ export function LibraryNavigator({
         >
           Liked Songs
         </LibraryNavItem>
-        <LibraryNavItem
-          collapsed={collapsed}
-          label="All Songs"
-          active={source.kind === 'smart' && source.id === 'all'}
-          count={catalogTotal}
-          icon={<Music2 size={18} />}
-          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'all' })}
-        >
-          All Songs
-        </LibraryNavItem>
       </div>
 
+      {!collapsed && builtinChecking && (
+        <p className="library-loading muted" role="status">
+          Checking Built-in Songs…
+        </p>
+      )}
+      {!collapsed && navigation.loadState === 'error' && (
+        <div className="library-empty-playlists" aria-label="Library navigation recovery">
+          <p role="alert">
+            Couldn’t check Built-in Songs or playlists.
+            {navigation.lastError ? ` ${navigation.lastError}` : ''}
+          </p>
+          <button
+            className="button library-empty-playlists-create"
+            type="button"
+            aria-label="Retry library navigation"
+            onClick={() => void useStore.getState().loadLibraryNavigation()}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {!collapsed && navigation.loadState === 'ready' && !navigation.builtinAvailable && (
+        <p className="library-loading muted" role="status">
+          Built-in Songs aren’t available in this installation. Liked Songs and playlists remain
+          available.
+        </p>
+      )}
+
       {collapsed ? (
-        navigation.playlistOrder.length > 0 ? (
-          <div className="library-collapsed-launchers">
-            <LibraryNavItem
-              collapsed
-              label="Playlists"
-              icon={<Music2 size={18} />}
-              onPress={onToggleCollapsed}
-            >
-              Playlists
-            </LibraryNavItem>
+        <div className="library-collapsed-launchers">
+          <div className="library-collapsed-playlist-scroller" role="group" aria-label="Playlists">
+            {collapsedPlaylists.map((playlist, index) => {
+              const active = source.kind === 'playlist' && source.id === playlist.id;
+              const duplicateName = (playlistNameCounts.get(playlist.name) ?? 0) > 1;
+              const displayName = playlist.name.trim() ? playlist.name : `Playlist ${index + 1}`;
+              const accessibleName = duplicateName
+                ? `${displayName}, playlist ${index + 1}`
+                : displayName;
+              const monogram = playlistMonogram(playlist.name);
+
+              return (
+                <CollapsedPlaylistTile
+                  key={playlist.id}
+                  id={playlist.id}
+                  displayName={displayName}
+                  accessibleName={accessibleName}
+                  monogram={monogram}
+                  active={active}
+                  onSelect={() => void selectLibrarySource({ kind: 'playlist', id: playlist.id })}
+                />
+              );
+            })}
+            {navigation.loadState === 'error' && (
+              <>
+                <span className="visually-hidden" role="alert">
+                  Couldn’t load playlists. {navigation.lastError ?? ''}
+                </span>
+                <Button
+                  className="library-collapsed-retry"
+                  type="button"
+                  aria-label="Retry library navigation"
+                  title="Retry library navigation"
+                  onPress={() => void useStore.getState().loadLibraryNavigation()}
+                >
+                  <RefreshCw size={16} aria-hidden="true" />
+                </Button>
+              </>
+            )}
+            {!navigationReady && navigation.loadState !== 'error' && (
+              <span className="visually-hidden" role="status">
+                Loading playlists.
+              </span>
+            )}
           </div>
-        ) : null
+        </div>
       ) : (
         <div className="library-secondary-sections">
           <LibrarySection label="Playlists" showWhenEmpty>
@@ -127,7 +269,7 @@ export function LibraryNavigator({
             })}
             {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
               <div className="library-empty-playlists">
-                {catalogTotal === 0 && (
+                {(!navigation.builtinAvailable || navigation.builtinSongCount === 0) && (
                   <p>Create a playlist to collect songs or import local sheet files and folders.</p>
                 )}
                 <button
@@ -139,23 +281,11 @@ export function LibraryNavigator({
                 </button>
               </div>
             )}
-            {navigation.loadState === 'error' && (
-              <div className="library-empty-playlists" role="status">
-                <p>Playlists couldn’t be loaded.</p>
-                <button
-                  className="button library-empty-playlists-create"
-                  type="button"
-                  onClick={() => void useStore.getState().loadLibraryNavigation()}
-                >
-                  Try again
-                </button>
-              </div>
-            )}
           </LibrarySection>
         </div>
       )}
 
-      {navigation.lastError && (
+      {!collapsed && navigation.lastError && navigation.loadState !== 'error' && (
         <p className="library-inline-error" role="status">
           {navigation.lastError}
         </p>
@@ -168,9 +298,6 @@ export function LibraryNavigator({
             triggerRef={addTriggerRef}
             onNewPlaylist={() => setCreateOpen(true)}
           />
-        )}
-        {!collapsed && navigation.loadState === 'loading' && (
-          <span className="library-loading muted">Updating library…</span>
         )}
       </div>
 

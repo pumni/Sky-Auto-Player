@@ -8,10 +8,12 @@ import type {
   SongRow,
 } from '../bridge/DesktopBridge';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
-import { selectRowAtIndex, selectSongById } from './selectors';
+import { playbackContextMatchesLibrary, selectRowAtIndex, selectSongById } from './selectors';
 import {
+  activeLibraryPageOffsets,
   cacheDetail,
   navigationFromDto,
+  retainActiveLibraryPages,
   sourceKey,
   updateLoadedRows,
   updatePlaylistSummary,
@@ -20,9 +22,8 @@ import { LIBRARY_PAGE_SIZE } from './types';
 import type { DetailEntry, DesktopStore } from './types';
 
 const MAX_CATALOG_RECONCILIATION_ATTEMPTS = 3;
-// At 200 rows per page, retain at most 12,800 lightweight song summaries
-// across query/source/generation history. In-flight requests are tracked apart.
-export const MAX_CACHED_SEARCH_PAGES = 64;
+// Keep a small cross-scope LRU for back-scroll and repeated source navigation.
+export const MAX_CACHED_SEARCH_PAGES = 8;
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
@@ -42,6 +43,9 @@ export type LibrarySliceActions = Pick<
   | 'search'
   | 'selectSong'
   | 'setViewport'
+  | 'navigateBuiltinPage'
+  | 'retryBuiltinPage'
+  | 'showNowPlaying'
   | 'selectLibrarySource'
   | 'openPlaylistAdd'
   | 'exitPlaylistAdd'
@@ -75,14 +79,117 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const { bridge, get, set } = context;
   const pageSize = LIBRARY_PAGE_SIZE;
   const pageCache = new Map<string, SearchResult>();
-  const pageRequests = new Map<string, Promise<SearchResult>>();
+  const pageRequests = new Map<
+    string,
+    {
+      promise: Promise<SearchResult>;
+      likeWriteRevision: number;
+      membershipRevision: number;
+    }
+  >();
   const viewportRequests = new Map<string, Promise<void>>();
+  const pendingLikeWrites = new Set<Promise<unknown>>();
+  const pendingLikeStateBySongId = new Map<string, { liked: boolean; mutationSequence: number }>();
+  const likeWriteTails = new Map<string, Promise<unknown>>();
+  const latestLikeMutationBySongId = new Map<string, number>();
+  const membershipWritesBySource = new Map<string, { pending: number; revision: number }>();
+  let likeMutationRevision = 0;
+  let likeWriteRevision = 0;
+  let likeMutationSequence = 0;
+  let libraryNavigationRequestId = 0;
+  let libraryNavigationMutationRevision = 0;
+  let refreshNavigationAfterMutation = false;
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
   let catalogReadyRecorded = false;
+  let builtinPageIntentSequence = 0;
+  let builtinFocusSequence = 0;
+  let pendingBuiltinFocus: { intentId: number; index: number; id: number } | null = null;
+
+  const isBuiltinPageContext = (library: DesktopStore['library']): boolean => {
+    if (library.searchSource.kind !== 'smart' || library.searchSource.id !== 'builtin') {
+      return false;
+    }
+    if (library.source.kind === 'smart') {
+      return library.source.id === 'builtin' && library.playlistAddMode === null;
+    }
+    return (
+      library.source.kind === 'playlist' &&
+      library.playlistAddMode?.playlistId === library.source.id
+    );
+  };
 
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
   const pageKey = (key: string, offset: number) => `${key}\u0000${offset}`;
+  const membershipRevisionFor = (source: LibrarySource): number =>
+    membershipWritesBySource.get(sourceKey(source))?.revision ?? 0;
+  const hasPendingMembershipWrite = (source: LibrarySource): boolean =>
+    (membershipWritesBySource.get(sourceKey(source))?.pending ?? 0) > 0;
+
+  const beginMembershipMutation = (source: LibrarySource): void => {
+    const key = sourceKey(source);
+    const membership = membershipWritesBySource.get(key) ?? { pending: 0, revision: 0 };
+    const nextMembership = { pending: membership.pending + 1, revision: membership.revision + 1 };
+    membershipWritesBySource.set(key, nextMembership);
+    invalidateSourceCache(source);
+
+    const current = get().library;
+    if (sourceKey(current.searchSource) !== key) return;
+    set({
+      library: {
+        ...current,
+        membershipRevision: nextMembership.revision,
+        selectedSongIndex: null,
+        searchRequestGeneration: current.searchRequestGeneration + 1,
+      },
+    });
+  };
+
+  const finishMembershipMutation = (source: LibrarySource): boolean => {
+    const key = sourceKey(source);
+    const membership = membershipWritesBySource.get(key) ?? { pending: 0, revision: 0 };
+    const pending = Math.max(0, membership.pending - 1);
+    const nextMembership = { pending, revision: membership.revision + 1 };
+    membershipWritesBySource.set(key, nextMembership);
+    invalidateSourceCache(source);
+
+    const current = get().library;
+    if (sourceKey(current.searchSource) === key) {
+      set({
+        library: {
+          ...current,
+          membershipRevision: nextMembership.revision,
+          selectedSongIndex: null,
+        },
+      });
+    }
+    return pending === 0;
+  };
+
+  const refreshMembershipSource = async (source: LibrarySource): Promise<void> => {
+    const current = get().library;
+    if (sourceKey(current.searchSource) === sourceKey(source)) await get().search();
+  };
+
+  const rebasePendingLikeState = (result: SearchResult): SearchResult => {
+    let items = result.items;
+    for (let index = 0; index < result.items.length; index += 1) {
+      const row = result.items[index]!;
+      const pending = pendingLikeStateBySongId.get(row.song_id);
+      if (!pending || row.liked === pending.liked) continue;
+      if (items === result.items) items = [...result.items];
+      items[index] = { ...row, liked: pending.liked };
+    }
+    const likedTotal = pendingLikeWrites.size > 0 ? get().library.likedTotal : result.liked_total;
+    if (items === result.items && likedTotal === result.liked_total) return result;
+    return { ...result, items, liked_total: likedTotal };
+  };
+
+  const rebasePendingLikeRows = (rows: readonly SongRow[]): SongRow[] =>
+    rows.map((row) => {
+      const pending = pendingLikeStateBySongId.get(row.song_id);
+      return pending && pending.liked !== row.liked ? { ...row, liked: pending.liked } : row;
+    });
 
   const getCachedPage = (key: string, offset: number): SearchResult | undefined => {
     const cacheKey = pageKey(key, offset);
@@ -122,12 +229,31 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     }
   };
 
+  const patchCachedLike = (songId: string, liked: boolean, likedTotal: number): void => {
+    for (const [key, result] of pageCache) {
+      const index = result.items.findIndex((row) => row.song_id === songId);
+      if (index < 0 && result.liked_total === likedTotal) continue;
+      const items = index < 0 ? result.items : [...result.items];
+      if (index >= 0) items[index] = { ...items[index]!, liked };
+      pageCache.set(key, { ...result, items, liked_total: likedTotal });
+    }
+  };
+
+  const patchCachedLikedTotal = (likedTotal: number): void => {
+    for (const [key, result] of pageCache) {
+      if (result.liked_total !== likedTotal) {
+        pageCache.set(key, { ...result, liked_total: likedTotal });
+      }
+    }
+  };
+
   const setLibraryMutationPending = (key: string, pending: boolean): boolean => {
     const current = get().libraryNavigation;
     if (pending && current.pendingMutations.has(key)) return false;
     const nextPending = new Set(current.pendingMutations);
     if (pending) nextPending.add(key);
     else nextPending.delete(key);
+    libraryNavigationMutationRevision += 1;
     set({
       libraryNavigation: {
         ...current,
@@ -135,6 +261,10 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         lastError: current.lastError,
       },
     });
+    if (!pending && nextPending.size === 0 && refreshNavigationAfterMutation) {
+      refreshNavigationAfterMutation = false;
+      void get().loadLibraryNavigation();
+    }
     return true;
   };
 
@@ -165,22 +295,81 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     });
   };
 
+  const canApplyNavigationResponse = (
+    requestId: number,
+    generation: number,
+    mutationRevision: number,
+  ): boolean => {
+    if (requestId !== libraryNavigationRequestId) return false;
+    if (generation !== get().library.generation) {
+      void get().loadLibraryNavigation();
+      return false;
+    }
+    const pendingMutations = get().libraryNavigation.pendingMutations;
+    if (mutationRevision !== libraryNavigationMutationRevision || pendingMutations.size > 0) {
+      refreshNavigationAfterMutation = true;
+      if (pendingMutations.size === 0) {
+        refreshNavigationAfterMutation = false;
+        void get().loadLibraryNavigation();
+      }
+      return false;
+    }
+    return true;
+  };
+
   const mergePage = (result: SearchResult, token: number): boolean => {
     const current = get().library;
     if (current.searchRequestGeneration !== token || current.generation !== result.generation) {
       return false;
     }
-    const pages = new Map(current.pages);
-    const indexById = new Map(current.indexById);
+    if (
+      hasPendingMembershipWrite(current.searchSource) ||
+      current.membershipRevision !== membershipRevisionFor(current.searchSource)
+    ) {
+      return false;
+    }
+    let activeOffsets: Set<number>;
+    try {
+      activeOffsets = new Set(
+        activeLibraryPageOffsets(
+          current.visibleRange.first,
+          current.visibleRange.last,
+          current.resultTotal || result.total,
+        ),
+      );
+    } catch {
+      return false;
+    }
+    if (!activeOffsets.has(result.offset)) return false;
+
+    const retained = retainActiveLibraryPages(current);
+    const pages = new Map(retained.pages);
     pages.set(result.offset, result.items);
+    for (const offset of pages.keys()) {
+      if (!activeOffsets.has(offset)) pages.delete(offset);
+    }
+    const indexById = new Map<string, number>();
+    let selectedSongSummary = current.selectedSongSummary;
+    let selectedSongIndex = current.selectedSongIndex;
     result.items.forEach((row, index) => {
       indexById.set(row.song_id, result.offset + index);
+      if (row.song_id === current.selectedSongId) {
+        selectedSongSummary = row;
+        selectedSongIndex = result.offset + index;
+      }
     });
+    for (const [offset, rows] of pages) {
+      if (offset === result.offset) continue;
+      rows.forEach((row, index) => indexById.set(row.song_id, offset + index));
+    }
     set({
       library: {
         ...current,
         pages,
         indexById,
+        indexMembershipRevision: current.membershipRevision,
+        selectedSongSummary,
+        selectedSongIndex,
         catalogTotal:
           current.searchSource.kind === 'smart' &&
           current.searchSource.id === 'all' &&
@@ -205,19 +394,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     mergeIntoLibrary = true,
   ): Promise<SearchResult> => {
     const key = cacheKey(source, query, generation);
-    const cached = getCachedPage(key, offset);
-    if (cached) {
-      if (mergeIntoLibrary) mergePage(cached, token);
-      return cached;
-    }
     const requestKey = pageKey(key, offset);
-    const inFlight = pageRequests.get(requestKey);
-    if (inFlight) {
-      const result = await inFlight;
-      if (mergeIntoLibrary) mergePage(result, token);
-      return result;
-    }
-
     const request: SearchRequest = {
       query,
       offset,
@@ -225,20 +402,56 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       source,
       ...(generation > 0 ? { generation } : {}),
     };
-    const requestPromise = bridge.searchSongs(request);
-    pageRequests.set(requestKey, requestPromise);
-    try {
-      const result = await requestPromise;
-      if (
-        pageRequests.get(requestKey) === requestPromise &&
-        result.generation >= get().library.generation
-      ) {
-        cachePage(cacheKey(source, query, result.generation), result);
+    for (;;) {
+      const cached = getCachedPage(key, offset);
+      if (cached) {
+        const rebased = rebasePendingLikeState(cached);
+        if (mergeIntoLibrary) mergePage(rebased, token);
+        return rebased;
       }
-      if (mergeIntoLibrary) mergePage(result, token);
-      return result;
-    } finally {
-      if (pageRequests.get(requestKey) === requestPromise) pageRequests.delete(requestKey);
+
+      const inFlight = pageRequests.get(requestKey);
+      if (inFlight) {
+        const result = await inFlight.promise;
+        if (
+          pageRequests.get(requestKey) !== inFlight ||
+          inFlight.likeWriteRevision !== likeWriteRevision ||
+          inFlight.membershipRevision !== membershipRevisionFor(source)
+        ) {
+          continue;
+        }
+        const rebased = rebasePendingLikeState(result);
+        if (mergeIntoLibrary) mergePage(rebased, token);
+        return rebased;
+      }
+
+      const requestLikeWriteRevision = likeWriteRevision;
+      const requestMembershipRevision = membershipRevisionFor(source);
+      const requestPromise = bridge.searchSongs(request);
+      const requestState = {
+        promise: requestPromise,
+        likeWriteRevision: requestLikeWriteRevision,
+        membershipRevision: requestMembershipRevision,
+      };
+      pageRequests.set(requestKey, requestState);
+      try {
+        const result = await requestPromise;
+        if (
+          pageRequests.get(requestKey) !== requestState ||
+          requestLikeWriteRevision !== likeWriteRevision ||
+          requestMembershipRevision !== membershipRevisionFor(source)
+        ) {
+          continue;
+        }
+        const rebased = rebasePendingLikeState(result);
+        if (result.generation >= get().library.generation && !hasPendingMembershipWrite(source)) {
+          cachePage(cacheKey(source, query, result.generation), rebased);
+        }
+        if (mergeIntoLibrary) mergePage(rebased, token);
+        return rebased;
+      } finally {
+        if (pageRequests.get(requestKey) === requestState) pageRequests.delete(requestKey);
+      }
     }
   };
 
@@ -246,10 +459,11 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     if (last < first) return;
     const current = get().library;
     if (current.resultTotal === 0) return;
-    const offsets: number[] = [];
     const firstPage = Math.floor(Math.max(0, first) / pageSize) * pageSize;
     const lastPage = Math.floor(Math.max(0, last) / pageSize) * pageSize;
-    for (let offset = firstPage; offset <= lastPage; offset += pageSize) offsets.push(offset);
+    const offsets = activeLibraryPageOffsets(first, last, current.resultTotal).filter(
+      (offset) => offset >= firstPage && offset <= lastPage && !current.pages.has(offset),
+    );
     try {
       await Promise.all(
         offsets.map((offset) =>
@@ -257,14 +471,316 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         ),
       );
     } catch (error) {
-      if (get().library.searchRequestGeneration !== token) return;
-      set({ library: { ...get().library, loading: false, error: errorMessage(error) } });
+      const latest = get().library;
+      if (
+        latest.searchRequestGeneration !== token ||
+        latest.generation !== current.generation ||
+        latest.visibleRange.first !== first ||
+        latest.visibleRange.last !== last
+      ) {
+        return;
+      }
+      set({ library: { ...latest, loading: false, error: errorMessage(error) } });
+    }
+  };
+
+  const navigateBuiltinPage = async (page: number, focusIndex?: number): Promise<void> => {
+    const current = get().library;
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      !isBuiltinPageContext(current) ||
+      current.resultTotal <= 0
+    ) {
+      return;
+    }
+    const pageCount = Math.ceil(current.resultTotal / pageSize);
+    if (page > pageCount) return;
+
+    const intentId = Math.max(builtinPageIntentSequence, current.builtinPage.intentId) + 1;
+    builtinPageIntentSequence = intentId;
+    pendingBuiltinFocus = null;
+    const focusId = focusIndex === undefined ? null : ++builtinFocusSequence;
+    if (page === current.builtinPage.committedPage) {
+      const latest = get().library;
+      set({
+        library: {
+          ...latest,
+          builtinPage: {
+            ...latest.builtinPage,
+            pendingPage: null,
+            intentId,
+            failedPage: null,
+            ...(focusIndex !== undefined && focusId !== null
+              ? { focusNowPlaying: { id: focusId, index: focusIndex } }
+              : {}),
+          },
+        },
+      });
+      return;
+    }
+
+    const offset = (page - 1) * pageSize;
+    const requestGeneration = current.generation;
+    const requestSearchGeneration = current.searchRequestGeneration;
+    const requestMembershipRevision = current.membershipRevision;
+    const requestSource = current.searchSource;
+    const requestQuery = current.query;
+    if (focusIndex !== undefined && focusId !== null) {
+      pendingBuiltinFocus = { intentId, index: focusIndex, id: focusId };
+    }
+    set({
+      library: {
+        ...current,
+        builtinPage: {
+          ...current.builtinPage,
+          pendingPage: page,
+          intentId,
+          failedPage: null,
+        },
+      },
+    });
+
+    try {
+      const result = await loadPage(
+        requestQuery,
+        requestSource,
+        offset,
+        requestGeneration,
+        requestSearchGeneration,
+        false,
+      );
+      const latest = get().library;
+      if (
+        latest.builtinPage.intentId !== intentId ||
+        latest.builtinPage.pendingPage !== page ||
+        latest.searchRequestGeneration !== requestSearchGeneration ||
+        latest.generation !== requestGeneration ||
+        latest.membershipRevision !== requestMembershipRevision ||
+        membershipRevisionFor(latest.searchSource) !== requestMembershipRevision ||
+        latest.query !== requestQuery ||
+        sourceKey(latest.searchSource) !== sourceKey(requestSource) ||
+        !isBuiltinPageContext(latest)
+      ) {
+        return;
+      }
+      const responseIds = new Set(result.items.map((row) => row.song_id));
+      if (
+        latest.resultTotal !== result.total ||
+        result.generation !== requestGeneration ||
+        result.offset !== offset ||
+        result.limit !== pageSize ||
+        result.items.length !== Math.min(pageSize, result.total - offset) ||
+        responseIds.size !== result.items.length
+      ) {
+        invalidateSourceCache(requestSource);
+        pendingBuiltinFocus = null;
+        set({
+          library: {
+            ...latest,
+            builtinPage: {
+              ...latest.builtinPage,
+              pendingPage: null,
+              failedPage: page,
+            },
+          },
+        });
+        return;
+      }
+
+      const pages = new Map<number, readonly SongRow[]>([[offset, result.items]]);
+      const indexById = new Map<string, number>();
+      let selectedSongSummary = latest.selectedSongSummary;
+      let selectedSongIndex = latest.selectedSongIndex;
+      result.items.forEach((row, index) => {
+        indexById.set(row.song_id, offset + index);
+        if (row.song_id === latest.selectedSongId) {
+          selectedSongSummary = row;
+          selectedSongIndex = offset + index;
+        }
+      });
+      const focus = pendingBuiltinFocus?.intentId === intentId ? pendingBuiltinFocus : null;
+      pendingBuiltinFocus = null;
+      set({
+        library: {
+          ...latest,
+          pages,
+          indexById,
+          indexMembershipRevision: latest.membershipRevision,
+          selectedSongSummary,
+          selectedSongIndex,
+          visibleRange: { first: offset, last: offset + result.items.length - 1 },
+          builtinPage: {
+            ...latest.builtinPage,
+            committedPage: page,
+            pendingPage: null,
+            failedPage: null,
+            ...(focus ? { focusNowPlaying: { id: focus.id, index: focus.index } } : {}),
+          },
+        },
+      });
+    } catch {
+      const latest = get().library;
+      if (
+        latest.builtinPage.intentId !== intentId ||
+        latest.builtinPage.pendingPage !== page ||
+        latest.searchRequestGeneration !== requestSearchGeneration ||
+        latest.generation !== requestGeneration ||
+        latest.membershipRevision !== requestMembershipRevision ||
+        membershipRevisionFor(latest.searchSource) !== requestMembershipRevision ||
+        latest.query !== requestQuery ||
+        sourceKey(latest.searchSource) !== sourceKey(requestSource) ||
+        !isBuiltinPageContext(latest)
+      ) {
+        return;
+      }
+      pendingBuiltinFocus = null;
+      set({
+        library: {
+          ...latest,
+          builtinPage: {
+            ...latest.builtinPage,
+            pendingPage: null,
+            failedPage: page,
+          },
+        },
+      });
+    }
+  };
+
+  const hydrateViewport = async (
+    first: number,
+    last: number,
+    scope: {
+      generation: number;
+      membershipRevision: number;
+      searchRequestGeneration: number;
+      source: LibrarySource;
+      searchSource: LibrarySource;
+      query: string;
+    },
+  ): Promise<void> => {
+    const isCurrentScope = (library: DesktopStore['library']): boolean =>
+      library.generation === scope.generation &&
+      library.membershipRevision === scope.membershipRevision &&
+      membershipRevisionFor(library.searchSource) === scope.membershipRevision &&
+      library.searchRequestGeneration === scope.searchRequestGeneration &&
+      sourceKey(library.source) === sourceKey(scope.source) &&
+      sourceKey(library.searchSource) === sourceKey(scope.searchSource) &&
+      library.query === scope.query &&
+      library.visibleRange.first === first &&
+      library.visibleRange.last === last;
+
+    for (;;) {
+      const current = get().library;
+      if (!isCurrentScope(current)) return;
+
+      const songIds: string[] = [];
+      for (let index = Math.max(0, first); index <= Math.max(0, last); index += 1) {
+        const row = selectRowAtIndex(current, index);
+        if (row) songIds.push(row.song_id);
+      }
+      const selectedSongId = current.selectedSongId;
+      const requestLikeRevision = likeMutationRevision;
+      const requestKey = JSON.stringify([
+        sourceKey(current.source),
+        sourceKey(current.searchSource),
+        current.query,
+        current.generation,
+        current.membershipRevision,
+        current.searchRequestGeneration,
+        requestLikeRevision,
+        first,
+        last,
+        selectedSongId,
+        songIds,
+      ]);
+      const pendingRequest = viewportRequests.get(requestKey);
+      if (pendingRequest) {
+        await pendingRequest;
+        return;
+      }
+
+      let staleLikeSnapshot = false;
+      const requestLikeWriteRevision = likeWriteRevision;
+      const hydration = (async () => {
+        try {
+          const result = await bridge.setLibraryViewport({
+            generation: scope.generation,
+            firstIndex: first,
+            lastIndex: last,
+            selectedSongId,
+            songIds,
+          });
+          const latest = get().library;
+          if (!isCurrentScope(latest)) return;
+          if (
+            requestLikeRevision !== likeMutationRevision ||
+            requestLikeWriteRevision !== likeWriteRevision ||
+            latest.selectedSongId !== selectedSongId
+          ) {
+            staleLikeSnapshot = true;
+            return;
+          }
+          if (
+            !result.accepted ||
+            result.generation !== scope.generation ||
+            result.first_index !== first ||
+            result.last_index !== last ||
+            result.selected_song_id !== selectedSongId ||
+            result.items.length === 0
+          ) {
+            return;
+          }
+
+          const cachedSearchKey = cacheKey(latest.searchSource, latest.query, latest.generation);
+          const updatesByPage = new Map<number, SongRow[]>();
+          const rebasedItems = rebasePendingLikeRows(result.items);
+          for (const row of rebasedItems) {
+            const index =
+              latest.indexById.get(row.song_id) ??
+              (latest.selectedSongId === row.song_id
+                ? (latest.selectedSongIndex ?? undefined)
+                : undefined);
+            if (index === undefined) continue;
+            const offset = Math.floor(index / pageSize) * pageSize;
+            let items = updatesByPage.get(offset);
+            if (!items) {
+              const cached = getCachedPage(cachedSearchKey, offset);
+              if (!cached) continue;
+              items = [...cached.items];
+              updatesByPage.set(offset, items);
+            }
+            items[index - offset] = row;
+          }
+          for (const [offset, items] of updatesByPage) {
+            const cached = getCachedPage(cachedSearchKey, offset);
+            if (cached) cachePage(cachedSearchKey, { ...cached, items });
+          }
+          set({ library: updateLoadedRows(latest, rebasedItems) });
+        } catch {
+          // Metadata hydration is best effort for a moving viewport. A later
+          // viewport event retries the bounded request without blocking rows.
+        }
+      })();
+      viewportRequests.set(requestKey, hydration);
+      try {
+        await hydration;
+      } finally {
+        if (viewportRequests.get(requestKey) === hydration) {
+          viewportRequests.delete(requestKey);
+        }
+      }
+      if (!staleLikeSnapshot) return;
     }
   };
 
   const syncCatalogGeneration = async (generation: number): Promise<void> => {
     const current = get().library;
     if (generation <= current.generation) return;
+    const pageIntentId = Math.max(builtinPageIntentSequence, current.builtinPage.intentId) + 1;
+    builtinPageIntentSequence = pageIntentId;
+    pendingBuiltinFocus = null;
     invalidateStaleGenerations(generation);
     context.nextDetailRequestToken();
     const playback = get().playback;
@@ -274,9 +790,21 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       library: {
         ...current,
         generation,
+        builtinPage: {
+          committedPage: 1,
+          pendingPage: null,
+          intentId: pageIntentId,
+          failedPage: null,
+          focusNowPlaying: null,
+        },
         pages: new Map(),
         indexById: new Map(),
+        membershipRevision: membershipRevisionFor(current.searchSource),
+        indexMembershipRevision: -1,
         selectedSongId: null,
+        selectedSongSummary: null,
+        selectedSongIndex: null,
+        visibleRange: { first: 0, last: 0 },
         resultTotal: 0,
         loading: true,
         error: null,
@@ -290,6 +818,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         transportOperation: cancelPreparing ? null : playback.transportOperation,
       },
     });
+    void get().loadLibraryNavigation();
     await get().search();
   };
 
@@ -303,7 +832,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         if (afterSearch.error !== null) return;
         if (afterSearch.loading || afterSearch.generation !== requestedGeneration) continue;
 
-        await get().loadLibraryNavigation();
         const settled = get().library;
         if (settled.error !== null || settled.loading || settled.generation !== requestedGeneration)
           continue;
@@ -326,7 +854,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const nextSource = source ?? current.source;
       const nextSearchSource: LibrarySource =
         nextSource.kind === 'playlist' && current.playlistAddMode?.playlistId === nextSource.id
-          ? { kind: 'smart', id: 'all' }
+          ? { kind: 'smart', id: 'builtin' }
           : nextSource;
       const scopeChanged =
         current.query !== nextQuery ||
@@ -348,13 +876,38 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const clearBrowserSelection = scopeChanged;
       if (clearBrowserSelection) context.nextDetailRequestToken();
       const token = current.searchRequestGeneration + 1;
+      const pageIntentId = scopeChanged
+        ? Math.max(builtinPageIntentSequence, current.builtinPage.intentId) + 1
+        : current.builtinPage.intentId;
+      if (scopeChanged) {
+        builtinPageIntentSequence = pageIntentId;
+        pendingBuiltinFocus = null;
+      }
       set({
         library: {
           ...current,
           source: nextSource,
           searchSource: nextSearchSource,
           query: nextQuery,
+          ...(scopeChanged
+            ? {
+                builtinPage: {
+                  committedPage: 1,
+                  pendingPage: null,
+                  intentId: pageIntentId,
+                  failedPage: null,
+                  focusNowPlaying: null,
+                },
+              }
+            : {}),
+          membershipRevision: scopeChanged
+            ? membershipRevisionFor(nextSearchSource)
+            : current.membershipRevision,
+          indexMembershipRevision: scopeChanged ? -1 : current.indexMembershipRevision,
           selectedSongId: clearBrowserSelection ? null : current.selectedSongId,
+          selectedSongSummary: clearBrowserSelection ? null : current.selectedSongSummary,
+          selectedSongIndex: clearBrowserSelection ? null : current.selectedSongIndex,
+          visibleRange: clearBrowserSelection ? { first: 0, last: 0 } : current.visibleRange,
           pages: new Map(),
           indexById: new Map(),
           resultTotal: 0,
@@ -385,12 +938,43 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             likedTotal: result.liked_total,
             resultTotal: result.total,
             generation: result.generation,
+            ...(generationChanged
+              ? {
+                  builtinPage: {
+                    committedPage: 1,
+                    pendingPage: null,
+                    intentId: Math.max(builtinPageIntentSequence, latest.builtinPage.intentId) + 1,
+                    failedPage: null,
+                    focusNowPlaying: null,
+                  },
+                }
+              : {}),
+            membershipRevision: membershipRevisionFor(nextSearchSource),
+            indexMembershipRevision: generationChanged ? -1 : latest.indexMembershipRevision,
             selectedSongId: generationChanged ? null : latest.selectedSongId,
+            selectedSongSummary: generationChanged ? null : latest.selectedSongSummary,
+            selectedSongIndex: generationChanged ? null : latest.selectedSongIndex,
+            visibleRange: generationChanged ? { first: 0, last: 0 } : latest.visibleRange,
             loading: false,
             error: null,
           },
           ...(generationChanged ? { details: { bySongId: new Map() } } : {}),
         });
+        if (generationChanged) {
+          mergePage(result, token);
+          void get().loadLibraryNavigation();
+        }
+        if (!generationChanged && result.total > 0) {
+          const afterSearch = get().library;
+          const lastIndex = result.total - 1;
+          const first = Math.min(Math.max(0, afterSearch.visibleRange.first), lastIndex);
+          const last = Math.min(Math.max(first, afterSearch.visibleRange.last), lastIndex);
+          if (first !== afterSearch.visibleRange.first || last !== afterSearch.visibleRange.last) {
+            const ranged = { ...afterSearch, visibleRange: { first, last } };
+            set({ library: retainActiveLibraryPages(ranged, first, last) });
+          }
+          await ensureRange(first, last, token);
+        }
       } catch (error) {
         if (get().library.searchRequestGeneration !== token) return;
         if (get().library.generation !== current.generation) return;
@@ -429,8 +1013,20 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           value: null,
           error: null,
         } satisfies DetailEntry);
+      const selectedSummary = selectSongById(current.library, songId);
+      const indexIsCurrent =
+        current.library.indexMembershipRevision === current.library.membershipRevision;
+      const selectedIndex = indexIsCurrent
+        ? (current.library.indexById.get(songId) ??
+          (current.library.selectedSongId === songId ? current.library.selectedSongIndex : null))
+        : null;
       set({
-        library: { ...current.library, selectedSongId: songId },
+        library: {
+          ...current.library,
+          selectedSongId: songId,
+          selectedSongSummary: selectedSummary ?? null,
+          selectedSongIndex: selectedIndex,
+        },
         details: {
           bySongId: cached
             ? cacheDetail(current.details.bySongId, songId, cached)
@@ -479,94 +1075,100 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
     },
 
     async setViewport(first, last) {
-      const library = get().library;
-      if (library.visibleRange.first !== first || library.visibleRange.last !== last) {
-        set({ library: { ...library, visibleRange: { first, last } } });
+      const initial = get().library;
+      try {
+        activeLibraryPageOffsets(first, last, initial.resultTotal);
+      } catch (error) {
+        set({ library: { ...initial, error: errorMessage(error) } });
+        return;
       }
+      const ranged =
+        initial.visibleRange.first !== first ||
+        initial.visibleRange.last !== last ||
+        initial.error?.startsWith('The visible Library range spans ') === true
+          ? { ...initial, visibleRange: { first, last } }
+          : initial;
+      const retained = retainActiveLibraryPages(
+        ranged.error?.startsWith('The visible Library range spans ')
+          ? { ...ranged, error: null }
+          : ranged,
+        first,
+        last,
+      );
+      if (retained !== initial) set({ library: retained });
+      const library = get().library;
       if (library.generation === 0 || first > last) return;
-      await ensureRange(first, last, library.searchRequestGeneration);
+      const scope = {
+        generation: library.generation,
+        membershipRevision: library.membershipRevision,
+        searchRequestGeneration: library.searchRequestGeneration,
+        source: library.source,
+        searchSource: library.searchSource,
+        query: library.query,
+      };
+      await ensureRange(first, last, scope.searchRequestGeneration);
       const current = get().library;
       if (
-        current.searchRequestGeneration !== library.searchRequestGeneration ||
-        current.generation !== library.generation
+        current.searchRequestGeneration !== scope.searchRequestGeneration ||
+        current.generation !== scope.generation ||
+        sourceKey(current.source) !== sourceKey(scope.source) ||
+        sourceKey(current.searchSource) !== sourceKey(scope.searchSource) ||
+        current.query !== scope.query ||
+        current.visibleRange.first !== first ||
+        current.visibleRange.last !== last
       ) {
         return;
       }
-      const songIds: string[] = [];
-      for (let index = Math.max(0, first); index <= Math.max(0, last); index += 1) {
-        const row = selectRowAtIndex(current, index);
-        if (row) songIds.push(row.song_id);
-      }
-      const requestKey = JSON.stringify([
-        sourceKey(current.source),
-        sourceKey(current.searchSource),
-        current.query,
-        current.generation,
-        first,
-        last,
-        current.selectedSongId,
-        songIds,
-      ]);
-      const pendingRequest = viewportRequests.get(requestKey);
-      if (pendingRequest) return pendingRequest;
+      await hydrateViewport(first, last, scope);
+    },
 
-      const hydration = (async () => {
-        try {
-          const result = await bridge.setLibraryViewport({
-            generation: current.generation,
-            firstIndex: first,
-            lastIndex: last,
-            selectedSongId: current.selectedSongId,
-            songIds,
-          });
-          if (result.generation !== get().library.generation || result.items.length === 0) return;
-          const latest = get().library;
-          const cachedSearchKey = cacheKey(latest.searchSource, latest.query, latest.generation);
-          const updatesByPage = new Map<number, SongRow[]>();
-          for (const row of result.items) {
-            const index = latest.indexById.get(row.song_id);
-            if (index === undefined) continue;
-            const offset = Math.floor(index / pageSize) * pageSize;
-            let items = updatesByPage.get(offset);
-            if (!items) {
-              const cached = getCachedPage(cachedSearchKey, offset);
-              if (!cached) continue;
-              items = [...cached.items];
-              updatesByPage.set(offset, items);
-            }
-            items[index - offset] = row;
-          }
-          for (const [offset, items] of updatesByPage) {
-            const cached = getCachedPage(cachedSearchKey, offset);
-            if (cached) cachePage(cachedSearchKey, { ...cached, items });
-          }
-          set({
-            library: updateLoadedRows(latest, result.items),
-          });
-        } catch {
-          // Metadata hydration is best effort for a moving viewport. A later
-          // viewport event retries the bounded request without blocking rows.
-        }
-      })();
-      viewportRequests.set(requestKey, hydration);
-      try {
-        await hydration;
-      } finally {
-        if (viewportRequests.get(requestKey) === hydration) {
-          viewportRequests.delete(requestKey);
-        }
+    async navigateBuiltinPage(page) {
+      await navigateBuiltinPage(page);
+    },
+
+    async retryBuiltinPage() {
+      const failedPage = get().library.builtinPage.failedPage;
+      if (failedPage !== null) await navigateBuiltinPage(failedPage);
+    },
+
+    async showNowPlaying() {
+      const current = get();
+      const library = current.library;
+      const playbackContext = current.playback.context;
+      const currentSong = current.playback.currentSong;
+      if (
+        !playbackContextMatchesLibrary(playbackContext, library) ||
+        library.source.kind !== 'smart' ||
+        library.source.id !== 'builtin' ||
+        library.searchSource.kind !== 'smart' ||
+        library.searchSource.id !== 'builtin' ||
+        !currentSong ||
+        playbackContext.currentSongId !== currentSong.songId ||
+        playbackContext.total !== library.resultTotal ||
+        !Number.isSafeInteger(playbackContext.currentIndex) ||
+        playbackContext.currentIndex < 0 ||
+        playbackContext.currentIndex >= library.resultTotal
+      ) {
+        return;
       }
+      const page = Math.floor(playbackContext.currentIndex / pageSize) + 1;
+      await navigateBuiltinPage(page, playbackContext.currentIndex);
     },
 
     async loadLibraryNavigation() {
+      const requestId = ++libraryNavigationRequestId;
+      const generation = get().library.generation;
+      const mutationRevision = libraryNavigationMutationRevision;
       const current = get().libraryNavigation;
       set({
         libraryNavigation: { ...current, loadState: 'loading', lastError: null },
       });
       try {
         const navigation = await bridge.listLibraryNavigation();
+        if (!canApplyNavigationResponse(requestId, generation, mutationRevision)) return;
         updateNavigation(navigation);
       } catch (error) {
+        if (!canApplyNavigationResponse(requestId, generation, mutationRevision)) return;
         set({
           libraryNavigation: {
             ...get().libraryNavigation,
@@ -621,6 +1223,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       try {
         const removed = await bridge.deletePlaylist(playlistId);
         if (removed) {
+          invalidateSourceCache({ kind: 'playlist', id: playlistId });
           const current = get().libraryNavigation;
           const playlistsById = new Map(current.playlistsById);
           playlistsById.delete(playlistId);
@@ -632,7 +1235,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             },
           });
           if (active.kind === 'playlist' && active.id === playlistId) {
-            await get().selectLibrarySource({ kind: 'smart', id: 'all' });
+            await get().selectLibrarySource({ kind: 'smart', id: 'builtin' });
           }
         }
       } catch (error) {
@@ -683,20 +1286,20 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const key = `playlist:${playlistId}:song:${songId}:add`;
       if (!setLibraryMutationPending(key, true)) return;
       setLibraryError(null);
-      context.invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
+      const source: LibrarySource = { kind: 'playlist', id: playlistId };
+      context.invalidatePlaybackMembershipContext(source);
+      beginMembershipMutation(source);
       try {
         const summary = await bridge.addSongsToPlaylist(playlistId, [songId]);
         set({
           libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
         });
-        invalidateSourceCache({ kind: 'playlist', id: playlistId });
-        const active = get().library.source;
-        if (active.kind === 'playlist' && active.id === playlistId) await get().search();
       } catch (error) {
         setLibraryError(errorMessage(error));
         throw error;
       } finally {
         setLibraryMutationPending(key, false);
+        if (finishMembershipMutation(source)) await refreshMembershipSource(source);
       }
     },
 
@@ -704,29 +1307,35 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const key = `playlist:${playlistId}:song:${songId}:remove`;
       if (!setLibraryMutationPending(key, true)) return;
       setLibraryError(null);
-      context.invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
+      const source: LibrarySource = { kind: 'playlist', id: playlistId };
+      context.invalidatePlaybackMembershipContext(source);
+      beginMembershipMutation(source);
       try {
         const summary = await bridge.removeSongsFromPlaylist(playlistId, [songId]);
         set({
           libraryNavigation: updatePlaylistSummary(get().libraryNavigation, summary),
         });
-        invalidateSourceCache({ kind: 'playlist', id: playlistId });
         const active = get().library.source;
         if (active.kind === 'playlist' && active.id === playlistId) {
           if (get().library.selectedSongId === songId) {
             context.nextDetailRequestToken();
             set({
-              library: { ...get().library, selectedSongId: null },
+              library: {
+                ...get().library,
+                selectedSongId: null,
+                selectedSongSummary: null,
+                selectedSongIndex: null,
+              },
               details: { bySongId: new Map() },
             });
           }
-          await get().search();
         }
       } catch (error) {
         setLibraryError(errorMessage(error));
         throw error;
       } finally {
         setLibraryMutationPending(key, false);
+        if (finishMembershipMutation(source)) await refreshMembershipSource(source);
       }
     },
 
@@ -735,7 +1344,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       if (sourceKey(current.source) !== sourceKey(source) || current.playlistAddMode !== null) {
         context.nextDetailRequestToken();
         set({
-          library: { ...get().library, selectedSongId: null, playlistAddMode: null },
+          library: {
+            ...get().library,
+            selectedSongId: null,
+            selectedSongSummary: null,
+            selectedSongIndex: null,
+            playlistAddMode: null,
+          },
           details: { bySongId: new Map() },
           playback: context.playbackAfterBrowserNavigation(get().playback),
         });
@@ -753,6 +1368,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           source: playlistSource,
           playlistAddMode: { playlistId },
           selectedSongId: null,
+          selectedSongSummary: null,
+          selectedSongIndex: null,
         },
         details: { bySongId: new Map() },
         playback: context.playbackAfterBrowserNavigation(get().playback),
@@ -772,6 +1389,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           source: playlistSource,
           playlistAddMode: null,
           selectedSongId: null,
+          selectedSongSummary: null,
+          selectedSongIndex: null,
         },
         details: { bySongId: new Map() },
         playback: context.playbackAfterBrowserNavigation(get().playback),
@@ -788,68 +1407,119 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       if (!previous && !currentPlaybackSong) return;
       const previousLiked = previous?.liked ?? currentPlaybackSong?.liked ?? false;
       if (previousLiked === liked) return;
-      context.invalidatePlaybackMembershipContext({ kind: 'smart', id: 'liked' });
+      const mutationSequence = ++likeMutationSequence;
+      const mutationRevision = ++likeMutationRevision;
+      const likedSource: LibrarySource = { kind: 'smart', id: 'liked' };
+      latestLikeMutationBySongId.set(songId, mutationSequence);
+      pendingLikeStateBySongId.set(songId, { liked, mutationSequence });
+      context.invalidatePlaybackMembershipContext(likedSource);
       const optimistic = previous ? { ...previous, liked } : null;
       const likedDelta = liked ? 1 : -1;
-      pageCache.clear();
+      const optimisticLikedTotal = Math.max(0, current.likedTotal + likedDelta);
+      patchCachedLike(songId, liked, optimisticLikedTotal);
       set({
         library: {
           ...(optimistic ? updateLoadedRows(current, [optimistic]) : current),
-          likedTotal: Math.max(0, current.likedTotal + likedDelta),
+          likedTotal: optimisticLikedTotal,
         },
         playback: currentPlaybackSong
           ? { ...get().playback, currentSong: { ...currentPlaybackSong, liked } }
           : get().playback,
       });
+      beginMembershipMutation(likedSource);
       const targetGeneration = currentPlaybackSong?.generation ?? current.generation;
       const generation = targetGeneration > 0 ? targetGeneration : undefined;
+      const request = {
+        songId,
+        liked,
+        ...(generation === undefined ? {} : { generation }),
+      };
+      const previousWrite = likeWriteTails.get(songId);
+      const write = (previousWrite ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() => bridge.setSongLiked(request));
+      likeWriteTails.set(songId, write);
+      pendingLikeWrites.add(write);
+
+      const clearWrite = () => {
+        pendingLikeWrites.delete(write);
+        likeWriteRevision += 1;
+        if (likeWriteTails.get(songId) === write) likeWriteTails.delete(songId);
+      };
+
       try {
-        const result = await bridge.setSongLiked({
-          songId,
-          liked,
-          ...(generation === undefined ? {} : { generation }),
-        });
+        const result = await write;
+        clearWrite();
+        const membershipRefresh = finishMembershipMutation(likedSource);
+        if (latestLikeMutationBySongId.get(songId) !== mutationSequence) {
+          if (membershipRefresh) await refreshMembershipSource(likedSource);
+          return;
+        }
+        latestLikeMutationBySongId.delete(songId);
+        if (pendingLikeStateBySongId.get(songId)?.mutationSequence === mutationSequence) {
+          pendingLikeStateBySongId.delete(songId);
+        }
+        if (mutationRevision === likeMutationRevision && pendingLikeWrites.size === 0) {
+          set({ library: { ...get().library, likedTotal: result.total } });
+          patchCachedLikedTotal(result.total);
+        }
         const library = get().library;
-        set({
-          library: {
-            ...library,
-            likedTotal: result.total,
-          },
-        });
-        if (library.source.kind === 'smart' && library.source.id === 'liked') {
+        if (sourceKey(library.searchSource) === sourceKey(likedSource)) {
           if (!liked && get().library.selectedSongId === songId) {
             context.nextDetailRequestToken();
             set({
-              library: { ...get().library, selectedSongId: null },
+              library: {
+                ...get().library,
+                selectedSongId: null,
+                selectedSongSummary: null,
+                selectedSongIndex: null,
+              },
               details: { bySongId: new Map() },
             });
           }
-          await get().search();
         }
+        if (membershipRefresh) await refreshMembershipSource(likedSource);
       } catch (error) {
+        clearWrite();
+        const membershipRefresh = finishMembershipMutation(likedSource);
+        if (latestLikeMutationBySongId.get(songId) !== mutationSequence) {
+          if (membershipRefresh) await refreshMembershipSource(likedSource);
+          return;
+        }
+        latestLikeMutationBySongId.delete(songId);
+        if (pendingLikeStateBySongId.get(songId)?.mutationSequence === mutationSequence) {
+          pendingLikeStateBySongId.delete(songId);
+        }
         const message = errorMessage(error);
         const latest = get().library;
         const row = selectSongById(latest, songId);
-        const shouldRollback = row?.liked === liked;
-        const rollback = shouldRollback
-          ? updateLoadedRows(latest, [{ ...row!, liked: previousLiked }])
-          : latest;
         const latestPlayback = get().playback;
+        const playbackSong =
+          latestPlayback.currentSong?.songId === songId ? latestPlayback.currentSong : null;
+        const shouldRollback = (row?.liked ?? playbackSong?.liked) === liked;
+        const rollbackTotal = shouldRollback
+          ? Math.max(0, latest.likedTotal - likedDelta)
+          : latest.likedTotal;
+        const rollback = shouldRollback
+          ? row
+            ? updateLoadedRows(latest, [{ ...row, liked: previousLiked }])
+            : latest
+          : latest;
+        if (shouldRollback) patchCachedLike(songId, previousLiked, rollbackTotal);
         set({
           library: {
             ...rollback,
-            likedTotal: shouldRollback
-              ? Math.max(0, latest.likedTotal - likedDelta)
-              : rollback.likedTotal,
+            likedTotal: rollbackTotal,
           },
           playback:
-            latestPlayback.currentSong?.songId === songId
+            playbackSong && shouldRollback
               ? {
                   ...latestPlayback,
-                  currentSong: { ...latestPlayback.currentSong, liked: previousLiked },
+                  currentSong: { ...playbackSong, liked: previousLiked },
                 }
               : latestPlayback,
         });
+        if (membershipRefresh) await refreshMembershipSource(likedSource);
         set({ library: { ...get().library, error: message } });
       }
     },

@@ -95,7 +95,7 @@ async function createLongPlaylistAndOpenMenu(page: Page) {
   await expect(addButton).toBeVisible();
   await addButton.click();
   const menu = page.getByRole('menu', { name: 'Add songs' });
-  await expect(menu.getByRole('menuitem', { name: 'Browse All Songs…' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Browse Built-in Songs…' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: 'Import files…' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: 'Import folder…' })).toBeVisible();
   return menu;

@@ -21,6 +21,7 @@ export {
   playbackContextIndexAt,
   previousPlaybackPosition,
   selectNowPlayingSongId,
+  selectNowPlayingIndex,
   selectRowAtIndex,
   selectSelectedDetail,
   selectSongById,
@@ -94,18 +95,29 @@ export function createDesktopStore(bridge: DesktopBridge) {
       bootstrap: null,
       fatal: null,
       library: {
-        source: { kind: 'smart', id: 'all' },
-        searchSource: { kind: 'smart', id: 'all' },
+        source: { kind: 'smart', id: 'builtin' },
+        searchSource: { kind: 'smart', id: 'builtin' },
         playlistAddMode: null,
         query: '',
         generation: 0,
         catalogTotal: 0,
+        builtinPage: {
+          committedPage: 1,
+          pendingPage: null,
+          intentId: 0,
+          failedPage: null,
+          focusNowPlaying: null,
+        },
         likedTotal: 0,
         resultTotal: 0,
         pages: new Map(),
         indexById: new Map(),
 
         selectedSongId: null,
+        selectedSongSummary: null,
+        selectedSongIndex: null,
+        membershipRevision: 0,
+        indexMembershipRevision: 0,
         visibleRange: { first: 0, last: 0 },
         loading: false,
         searchRequestGeneration: 0,
@@ -113,6 +125,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
       libraryNavigation: {
         loadState: 'idle',
+        builtinAvailable: false,
+        builtinSongCount: 0,
         playlistOrder: [],
         playlistsById: new Map(),
         pendingMutations: new Set(),
@@ -210,6 +224,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
                 : currentLibrary.error,
             },
           });
+          void get().loadLibraryNavigation();
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
             await librarySlice.reconcileCatalog();
           }
@@ -307,10 +322,22 @@ export function createDesktopStore(bridge: DesktopBridge) {
               ...get().library,
               generation: eventState.catalogGeneration,
               catalogTotal: eventState.catalogTotal,
+              builtinPage: {
+                committedPage: 1,
+                pendingPage: null,
+                intentId: get().library.builtinPage.intentId + 1,
+                failedPage: null,
+                focusNowPlaying: null,
+              },
               resultTotal: eventState.catalogTotal,
               pages: new Map(),
               indexById: new Map(),
               selectedSongId: null,
+              selectedSongSummary: null,
+              selectedSongIndex: null,
+              membershipRevision: get().library.membershipRevision,
+              indexMembershipRevision: -1,
+              visibleRange: { first: 0, last: 0 },
               error: null,
               loading: true,
             },
@@ -323,6 +350,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             },
           });
           set({ details: { bySongId: new Map() } });
+          void get().loadLibraryNavigation();
           void librarySlice.reconcileCatalog();
           return;
         }

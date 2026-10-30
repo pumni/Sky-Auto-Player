@@ -59,4 +59,24 @@ describe('SongDetailsView', () => {
       'TXT · … · … notes',
     );
   });
+
+  it('keeps the selected song visible after its browser page is evicted', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const selected = selectRowAtIndex(store.getState().library, 0);
+    if (!selected) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    store.setState({
+      library: {
+        ...store.getState().library,
+        pages: new Map(),
+        indexById: new Map(),
+      },
+    });
+
+    render(<SongDetailsView useStore={store} />);
+
+    expect(store.getState().library.selectedSongSummary?.song_id).toBe(selected.song_id);
+    expect(screen.getByRole('heading', { name: selected.title })).toBeInTheDocument();
+  });
 });

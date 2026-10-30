@@ -6,7 +6,7 @@ import { PlayerBar } from '../components/player/PlayerBar';
 import { Workbench } from '../components/workbench/Workbench';
 import { createDesktopStore } from '../state/store';
 import { createWindowControls } from '../platform/windowControls';
-import { usePackagedSmokeTest } from './usePackagedSmokeTest';
+import { PackagedSmokeTest } from './usePackagedSmokeTest';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 import { applyAppearance } from '../appearance/applyAppearance';
 import {
@@ -98,10 +98,9 @@ export function App({ bridge }: AppProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [settingsOpen, useStore]);
 
-  usePackagedSmokeTest({ bridge, useStore });
-
   return (
     <BootstrapGate useStore={useStore}>
+      {bootstrap?.gui_smoke === true && <PackagedSmokeTest bridge={bridge} useStore={useStore} />}
       {bootstrap && (
         <div className="app-shell">
           <AppTitleBar

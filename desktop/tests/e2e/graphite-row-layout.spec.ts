@@ -370,7 +370,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   await page.setViewportSize({ width: 789, height: 555 });
   await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '789');
   await page.keyboard.press('/');
-  const nativeLikeSearch = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const nativeLikeSearch = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await expect(nativeLikeSearch).toBeFocused();
   const nativeLikeHoveredRow = page.getByRole('row', { name: /Aurora Landing/ });
   await nativeLikeHoveredRow.hover({ position: { x: 24, y: 23 } });
@@ -658,8 +658,12 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
     element.style.flex = flex;
   }, originalWideFlex);
 
-  await page.getByRole('searchbox', { name: 'Search All Songs' }).fill('no graphite match 9472');
-  await expect(page.getByText('No songs match your search', { exact: true })).toBeVisible();
+  await page
+    .getByRole('searchbox', { name: 'Search Built-in Songs' })
+    .fill('no graphite match 9472');
+  await expect(
+    page.getByText('No Built-in Songs match your search', { exact: true }),
+  ).toBeVisible();
   const emptyStateGeometry = await page.evaluate(() => {
     const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
     const browser = document.querySelector<HTMLElement>('.track-browser');

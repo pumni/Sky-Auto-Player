@@ -1,5 +1,4 @@
 use super::*;
-
 #[test]
 fn catalog_cache_reconciles_add_change_delete_and_matches_clean_compose() {
     let suffix = SystemTime::now()
@@ -639,7 +638,11 @@ fn warmed_native_catalog_routes_avoid_full_snapshot_clones() {
         .lock()
         .expect("analysis cache lock")
         .insert(
-            first_song_id.clone(),
+            super::super::AnalysisKey {
+                song_id: first_song_id.clone(),
+                generation,
+                settings_revision: 0,
+            },
             super::super::CachedSongAnalysis {
                 metadata: super::super::CatalogMetadata {
                     format_label: "JSON".into(),
@@ -976,123 +979,6 @@ fn settings_and_catalog_changes_invalidate_prepared_native_playback() {
             )
             .is_err()
     );
-    runtime.shutdown();
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn catalog_reload_completes_while_prepare_model_is_paused_and_supersedes_it() {
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("sky-prepare-catalog-race-{suffix}"));
-    fs::create_dir_all(root.join("songs")).expect("songs root");
-    fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
-    fs::write(
-        root.join("songs/demo.json"),
-        r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
-    )
-    .expect("song");
-    let runtime = Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime"));
-    let generation = catalog_generation(&runtime);
-    let search = runtime
-        .dispatch(
-            "catalog.search",
-            serde_json::json!({"query":"demo","offset":0,"limit":10,"generation":generation}),
-        )
-        .expect("search");
-    let song_id = search["items"][0]["song_id"]
-        .as_str()
-        .expect("song ID")
-        .to_owned();
-    let request = crate::commands::PlaybackPrepareRequest {
-        song_id: song_id.clone(),
-        generation,
-        config: PlaybackConfigDto {
-            hold_frames: 1.0,
-            timing_margin_us: 800,
-            tempo_scale: 1.0,
-            fps: 60,
-            dry_run: true,
-        },
-    };
-    let entered = Arc::new(Barrier::new(2));
-    let release = Arc::new(Barrier::new(2));
-    let entered_hook = Arc::clone(&entered);
-    let release_hook = Arc::clone(&release);
-    *runtime
-        .playback
-        .prepare_before_model_test_hook
-        .lock()
-        .expect("model hook") = Some(Arc::new(move || {
-        entered_hook.wait();
-        release_hook.wait();
-    }));
-
-    let prepare_runtime = Arc::clone(&runtime);
-    let prepare = thread::spawn(move || prepare_runtime.prepare_playback(request));
-    entered.wait();
-    // This direct lock probe is deterministic: advisory analysis must not
-    // own the catalog mutex, and a reload must not wait for model work.
-    assert!(runtime.catalog.try_lock().is_ok());
-    let reload_runtime = Arc::clone(&runtime);
-    let (started_tx, started_rx) = mpsc::channel();
-    let (reload_tx, reload_rx) = mpsc::channel();
-    let reload = thread::spawn(move || {
-        started_tx.send(()).expect("reload started marker");
-        let result = reload_runtime.dispatch("catalog.reload", Value::Object(Default::default()));
-        reload_tx.send(result).expect("reload result");
-    });
-    started_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("reload thread started");
-    let reload_result = reload_rx.recv_timeout(Duration::from_secs(5));
-    if reload_result.is_err() {
-        release.wait();
-        let _ = prepare.join();
-        let _ = reload.join();
-        runtime.shutdown();
-        let _ = fs::remove_dir_all(root);
-        panic!("catalog reload waited for paused whole-stream analysis");
-    }
-    reload_result
-        .expect("reload result received")
-        .expect("catalog reload");
-    reload.join().expect("catalog reload thread");
-    let new_generation = catalog_generation(&runtime);
-    assert!(new_generation > generation);
-    release.wait();
-    assert!(
-        prepare
-            .join()
-            .expect("Prepare worker")
-            .expect_err("catalog generation invalidates old source snapshot")
-            .contains("superseded")
-    );
-    assert!(
-        runtime
-            .playback
-            .prepared
-            .lock()
-            .expect("prepared cache")
-            .is_empty()
-    );
-
-    let latest = runtime
-        .prepare_playback(crate::commands::PlaybackPrepareRequest {
-            song_id,
-            generation: new_generation,
-            config: PlaybackConfigDto {
-                hold_frames: 1.0,
-                timing_margin_us: 800,
-                tempo_scale: 1.0,
-                fps: 60,
-                dry_run: true,
-            },
-        })
-        .expect("new-generation Prepare succeeds");
-    assert!(latest.prepared_id.is_some());
     runtime.shutdown();
     let _ = fs::remove_dir_all(root);
 }

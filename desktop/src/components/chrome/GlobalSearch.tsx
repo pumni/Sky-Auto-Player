@@ -20,12 +20,14 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
       : null;
   });
   const searchLabel = playlistAddMode
-    ? `Search All Songs to add to ${playlistName ?? 'playlist'}`
+    ? `Search Built-in Songs to add to ${playlistName ?? 'playlist'}`
     : source.kind === 'playlist'
       ? `Search ${playlistName ?? 'playlist'}`
       : source.id === 'liked'
         ? 'Search Liked Songs'
-        : 'Search All Songs';
+        : source.id === 'builtin'
+          ? 'Search Built-in Songs'
+          : 'Search Library';
   return (
     <SearchInput
       key={playlistAddMode?.playlistId ?? 'library'}
@@ -33,7 +35,7 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
       {...(inputRef ? { inputRef } : {})}
       useStore={useStore}
       searchLabel={searchLabel}
-      placeholder={playlistAddMode ? 'Search All Songs…' : `${searchLabel}…`}
+      placeholder={playlistAddMode ? 'Search Built-in Songs…' : `${searchLabel}…`}
     />
   );
 }

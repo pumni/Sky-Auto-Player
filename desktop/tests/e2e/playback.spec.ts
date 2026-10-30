@@ -354,14 +354,18 @@ test('natural finish retires the old session and starts the next context song', 
   await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
 });
 
-test('Now Playing stays separate from selection and follows an offscreen Auto Play successor', async ({
+test('Auto Play advances while Built-in browsing keeps selection and page separate', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
   const list = page.locator('.track-table');
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
   await list.evaluate((element) => {
-    element.scrollTop = 248 * 46;
+    element.scrollTop = 48 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const selectedRow = page.getByRole('row', { name: /Song 249/ });
@@ -388,21 +392,31 @@ test('Now Playing stays separate from selection and follows an offscreen Auto Pl
   await expect(player.locator('.player-track-copy strong')).toHaveText('Song 250');
 
   const nowPlayingRow = page.getByRole('row', { name: /Song 250/ });
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
+  await expect(nowPlayingRow).toHaveCount(0);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(0);
+  await list.evaluate((element) => {
+    element.scrollTop = 48 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
   await expect(nowPlayingRow).toHaveAttribute('aria-current', 'true');
   await expect(nowPlayingRow).toHaveAttribute('aria-selected', 'false');
   await expect(nowPlayingRow).toBeInViewport();
-  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(200 * 46);
   await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
 });
 
-test('natural Auto Play follows an offscreen successor without changing the selected row', async ({
+test('natural Auto Play preserves the Built-in page and selection while advancing playback', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
   await page.goto('/?mockPlaybackDurationMs=850,120000&mockStartDelayMs=10');
   const list = page.locator('.track-table');
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
   await list.evaluate((element) => {
-    element.scrollTop = 248 * 46;
+    element.scrollTop = 48 * 46;
     element.dispatchEvent(new Event('scroll'));
   });
   const selectedRow = page.getByRole('row', { name: /Song 249/ });
@@ -423,10 +437,17 @@ test('natural Auto Play follows an offscreen successor without changing the sele
   });
 
   const nowPlayingRow = page.getByRole('row', { name: /Song 250/ });
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
+  await expect(nowPlayingRow).toHaveCount(0);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(0);
+  await list.evaluate((element) => {
+    element.scrollTop = 48 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
   await expect(nowPlayingRow).toHaveAttribute('aria-current', 'true');
   await expect(nowPlayingRow).toHaveAttribute('aria-selected', 'false');
   await expect(nowPlayingRow).toBeInViewport();
-  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(200 * 46);
+  await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
 });
 
 test('Now Playing does not pull a browsed search context back to the playback context', async ({
@@ -438,7 +459,7 @@ test('Now Playing does not pull a browsed search context back to the playback co
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
-  await page.getByLabel('Search All Songs').fill('Song');
+  await page.getByLabel('Search Built-in Songs').fill('Song');
   const list = page.locator('.track-table');
   await expect(page.locator('.track-browser-count')).toHaveText('488 songs');
   await list.evaluate((element) => {
@@ -458,7 +479,7 @@ test('natural Auto Play continues its frozen context after browsing a search', a
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
-  const search = page.getByLabel('Search All Songs');
+  const search = page.getByLabel('Search Built-in Songs');
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
 
@@ -535,47 +556,51 @@ test('browsing and liking another Library row keeps Player Bar identity on Now P
 test('dry-run playback is labeled in the dock and explains that no physical input is sent', async ({
   page,
 }) => {
-  for (const viewport of [
+  const viewports = [
     { width: 640, height: 448 },
     { width: 800, height: 560 },
     { width: 1366, height: 768 },
-  ]) {
+  ];
+  await page.setViewportSize(viewports[0]!);
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Candle Run/ }).click();
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
+
+  const profile = page.getByRole('dialog', { name: 'Playback profile' });
+  await expect(
+    profile.getByText(
+      'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
+    ),
+  ).toBeVisible();
+  await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
+
+  const playbackStatus = player.locator('.player-track-status');
+  await expect(playbackStatus).toHaveText('Dry run · Playing');
+  await expect(playbackStatus).toHaveAttribute('aria-label', /No physical input is sent/);
+  await expect(playbackStatus).toHaveCount(1);
+  const playbackStatusLayout = await playbackStatus.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return {
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      display: style.display,
+      minWidth: style.minWidth,
+      gridColumn: style.gridColumn,
+      palette: document.documentElement.dataset.palette,
+    };
+  });
+  if (!(await playbackStatus.isVisible())) {
+    console.error(`Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`);
+  }
+  await expect(
+    playbackStatus,
+    `Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`,
+  ).toBeVisible();
+
+  for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
-    const player = page.getByRole('contentinfo', { name: 'Player controls' });
-    await page.getByRole('row', { name: /Candle Run/ }).click();
-    await player.getByRole('button', { name: 'Configure playback profile' }).click();
-
-    const profile = page.getByRole('dialog', { name: 'Playback profile' });
-    await expect(
-      profile.getByText(
-        'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
-      ),
-    ).toBeVisible();
-    await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
-
-    const playbackStatus = player.locator('.player-track-status');
     await expect(playbackStatus).toHaveText('Dry run · Playing');
-    await expect(playbackStatus).toHaveAttribute('aria-label', /No physical input is sent/);
-    await expect(playbackStatus).toHaveCount(1);
-    const playbackStatusLayout = await playbackStatus.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      return {
-        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        display: style.display,
-        minWidth: style.minWidth,
-        gridColumn: style.gridColumn,
-        palette: document.documentElement.dataset.palette,
-      };
-    });
-    if (!(await playbackStatus.isVisible())) {
-      console.error(`Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`);
-    }
-    await expect(
-      playbackStatus,
-      `Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`,
-    ).toBeVisible();
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
     const titleBox = await player.locator('.player-track-copy strong').boundingBox();
     const trackInfoBox = await player.locator('.player-track-info').boundingBox();
@@ -591,43 +616,43 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     if (viewport.width <= 800) {
       const statusBox = await playbackStatus.boundingBox();
       expect(statusBox).not.toBeNull();
-      expect(statusBox).not.toBeNull();
       if (statusBox && titleBox) expect(statusBox.y).toBeGreaterThan(titleBox.y);
     }
-    await page.getByRole('row', { name: /Blue Bird/ }).click();
-    await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
-    await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    const utilityToggle = player.getByRole('button', { name: /utility panel/ });
-    if ((await utilityToggle.getAttribute('aria-expanded')) !== 'true') {
-      await utilityToggle.click();
-    }
-    const details = page.getByRole('tabpanel', { name: 'Details' });
-    await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
-    await expect(details.locator('.song-details-context')).toHaveCount(0);
-
-    await expectNoSeriousAccessibilityViolations(page);
-
-    await page.getByRole('tab', { name: 'Runtime' }).click();
-    const diagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
-    await expect(diagnostics.getByText('Playback status: Playing', { exact: true })).toBeVisible();
-    await expect(diagnostics.getByText('Now Playing: Candle Run', { exact: true })).toBeVisible();
-    await expect(
-      diagnostics.getByText('Mode: Dry run · no physical input sent', { exact: true }),
-    ).toBeVisible();
-    await expectNoSeriousAccessibilityViolations(page);
-
-    const playerBox = await player.boundingBox();
-    expect(playerBox).not.toBeNull();
-    if (playerBox) {
-      expect(playerBox.x).toBeGreaterThanOrEqual(0);
-      expect(playerBox.x + playerBox.width).toBeLessThanOrEqual(viewport.width + 1);
-    }
-    await player.getByRole('button', { name: 'Stop' }).click();
-    await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
   }
+
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  const utilityToggle = player.getByRole('button', { name: /utility panel/ });
+  if ((await utilityToggle.getAttribute('aria-expanded')) !== 'true') {
+    await utilityToggle.click();
+  }
+  const details = page.getByRole('tabpanel', { name: 'Details' });
+  await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  await expect(details.locator('.song-details-context')).toHaveCount(0);
+
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.getByRole('tab', { name: 'Runtime' }).click();
+  const diagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
+  await expect(diagnostics.getByText('Playback status: Playing', { exact: true })).toBeVisible();
+  await expect(diagnostics.getByText('Now Playing: Candle Run', { exact: true })).toBeVisible();
+  await expect(
+    diagnostics.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+  ).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+
+  const playerBox = await player.boundingBox();
+  expect(playerBox).not.toBeNull();
+  if (playerBox) {
+    expect(playerBox.x).toBeGreaterThanOrEqual(0);
+    expect(playerBox.x + playerBox.width).toBeLessThanOrEqual(viewports.at(-1)!.width + 1);
+  }
+  await player.getByRole('button', { name: 'Stop' }).click();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 });
 
 test('physical playback omits the dry-run indicator at responsive viewport sizes', async ({

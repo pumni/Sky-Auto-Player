@@ -4,6 +4,7 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   background: var(--workbench-content);
 }
 
@@ -277,6 +278,231 @@
   }
 }
 
+.builtin-pager-wrap {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.builtin-pager-range {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builtin-pager {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+  font-size: 11px;
+  min-width: 0;
+  height: 36px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.builtin-pager[data-editing='true'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.builtin-pager-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.builtin-pager-control {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.builtin-pager-page-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 36px;
+  min-width: 36px;
+  box-sizing: border-box;
+}
+
+.builtin-pager-jump-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 36px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.builtin-pager-control:hover:not(:disabled),
+.builtin-pager-jump-trigger:hover,
+.builtin-pager-confirm:hover {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+
+.builtin-pager-control:disabled {
+  opacity: 0.48;
+}
+
+.builtin-pager-control:focus-visible,
+.builtin-pager-jump-trigger:focus-visible,
+.builtin-pager-editor input:focus-visible,
+.builtin-pager-confirm:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.builtin-pager-editor {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 32px;
+  align-items: center;
+  width: 100%;
+  height: 36px;
+  gap: 3px;
+}
+
+.builtin-pager-editor input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding-inline: 4px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--workbench-content);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.builtin-pager-page-count {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.builtin-pager-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.builtin-pager-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.builtin-pager-error {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  max-width: calc(100vw - 24px);
+  padding: 4px 7px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--danger-fg);
+  background: var(--surface-raised);
+  box-shadow: 0 4px 12px var(--shadow-dialog);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.builtin-page-feedback {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 0;
+  padding: 4px 18px;
+}
+
+.builtin-page-feedback .button {
+  min-height: 28px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+@container track-browser (max-width: 640px) {
+  .builtin-pager-wrap {
+    gap: 4px 8px;
+    padding-inline: 6px;
+  }
+
+  .builtin-pager {
+    gap: 4px;
+  }
+
+  .builtin-page-feedback {
+    padding-inline: 6px;
+  }
+}
+
+@media (forced-colors: active) {
+  .builtin-pager-jump-trigger[aria-current='page'] {
+    outline: 1px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
 .track-browser-workbench-pane {
   background: var(--workbench-content);
   box-shadow: none;
@@ -285,7 +511,7 @@
 .track-browser-header h1 {
   color: var(--text-primary);
   font-size: var(--workbench-source-title-size);
-  line-height: 18px;
+  line-height: 1.4;
   font-weight: 600;
   letter-spacing: 0;
   min-width: 0;
@@ -316,7 +542,7 @@
 
 .track-browser-heading {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   flex: 1 1 auto;
   min-width: 0;
   gap: 8px;
@@ -324,7 +550,7 @@
 
 .track-browser-source-label {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
@@ -353,6 +579,7 @@
   margin: 0;
   color: var(--text-tertiary);
   font-size: var(--workbench-source-count-size);
+  line-height: 1.4;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -412,10 +639,6 @@
     padding-inline: 6px;
   }
 
-  .track-browser .track-browser-header h1 {
-    line-height: 16px;
-  }
-
   .track-browser .track-browser-heading {
     gap: 6px;
   }
@@ -437,10 +660,6 @@
   .track-browser .track-browser-source-label {
     min-height: 24px;
     padding-inline: 6px;
-  }
-
-  .track-browser .track-browser-header h1 {
-    line-height: 16px;
   }
 
   .track-browser .track-browser-heading {

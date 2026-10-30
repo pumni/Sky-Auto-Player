@@ -17,8 +17,8 @@ test.beforeEach(async ({ page }) => {
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
-  await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+  await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
   const navigatorPane = await page.locator('.navigator-workbench-pane').boundingBox();
   const trackPane = await page.locator('.track-browser-workbench-pane').boundingBox();
@@ -129,7 +129,7 @@ test('Chromium checks layout at Tauri-supported desktop dimensions', async ({ pa
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
     await expect(page.locator('.app-titlebar')).toBeVisible();
-    await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
+    await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
 
     const dimensions = await page.evaluate(() => ({
@@ -175,7 +175,7 @@ test('Titlebar Search uses the available center axis and Player controls stay vi
     if (!leading || !trailing) throw new Error('Titlebar occupied boundaries are unavailable');
     return (leading.getBoundingClientRect().right + trailing.getBoundingClientRect().left) / 2;
   });
-  const searchBox = await page.getByLabel('Search All Songs').boundingBox();
+  const searchBox = await page.getByLabel('Search Built-in Songs').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();

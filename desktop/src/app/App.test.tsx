@@ -39,11 +39,13 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => nativeWindow 
 function PackagedSmokeHarness({
   bridge,
   useStore,
+  authorized = true,
 }: {
   bridge: DesktopBridge;
   useStore: DesktopStoreHook;
+  authorized?: boolean;
 }) {
-  usePackagedSmokeTest({ bridge, useStore });
+  usePackagedSmokeTest({ bridge, useStore, authorized });
   return <div className="app-shell" />;
 }
 
@@ -99,11 +101,14 @@ function installStrictSingletonEvents(bridge: DesktopBridge) {
   };
 }
 
-async function createPackagedSmokeFixture() {
+async function createPackagedSmokeFixture(authorized = true) {
   const bridge = createMockBridge();
   const nativeEvents = installStrictSingletonEvents(bridge);
   const useStore = createDesktopStore(bridge);
   const shutdown = vi.spyOn(bridge, 'shutdown');
+  const patchSettings = vi.spyOn(bridge, 'patchSettings');
+  const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
+  const startCalibration = vi.spyOn(bridge, 'startCalibration');
   await act(async () => {
     await useStore.getState().initialize();
   });
@@ -118,8 +123,36 @@ async function createPackagedSmokeFixture() {
     };
   });
 
-  render(<PackagedSmokeHarness bridge={bridge} useStore={useStore} />);
-  return { bridge, nativeEvents, useStore, shutdown, observerUnsubscribe };
+  render(<PackagedSmokeHarness bridge={bridge} useStore={useStore} authorized={authorized} />);
+  return {
+    bridge,
+    nativeEvents,
+    useStore,
+    shutdown,
+    patchSettings,
+    setDiagnosticsEnabled,
+    startCalibration,
+    observerUnsubscribe,
+  };
+}
+
+async function renderOrdinaryAppWithSmokeSpies() {
+  const bridge = createMockBridge();
+  const patchSettings = vi.spyOn(bridge, 'patchSettings');
+  const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
+  const startCalibration = vi.spyOn(bridge, 'startCalibration');
+  const shutdown = vi.spyOn(bridge, 'shutdown');
+  render(<App bridge={bridge} />);
+  await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
+  return { bridge, patchSettings, setDiagnosticsEnabled, startCalibration, shutdown };
+}
+
+function authorizeGuiSmoke(bridge: DesktopBridge) {
+  const originalBootstrap = bridge.bootstrap.bind(bridge);
+  bridge.bootstrap = vi.fn(async () => {
+    const bootstrap = await originalBootstrap();
+    return { ...bootstrap, gui_smoke: true };
+  });
 }
 
 describe('desktop application shell', () => {
@@ -146,8 +179,11 @@ describe('desktop application shell', () => {
     await waitFor(() =>
       expect(screen.getByRole('row', { name: /Aurora Landing/ })).toBeInTheDocument(),
     );
-    expect(screen.getByRole('navigation', { name: 'Library' })).toHaveTextContent('All Songs');
-    expect(screen.getByRole('grid', { name: 'Songs' })).toBeInTheDocument();
+    const navigator = screen.getByRole('navigation', { name: 'Library' });
+    expect(navigator).toHaveTextContent('Built-in Songs');
+    expect(navigator).not.toHaveTextContent('All Songs');
+    expect(navigator).not.toHaveTextContent('My Songs');
+    expect(screen.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeInTheDocument();
 
     const firstSong = screen.getByRole('row', { name: /Aurora Landing/ });
     fireEvent.click(firstSong);
@@ -188,7 +224,7 @@ describe('desktop application shell', () => {
 
   it('supports keyboard navigation in the virtualized track table', async () => {
     render(<App bridge={createMockBridge()} />);
-    const grid = await screen.findByRole('grid', { name: 'Songs' });
+    const grid = await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     grid.focus();
     fireEvent.keyDown(grid, { key: 'ArrowDown' });
     await waitFor(() =>
@@ -241,15 +277,15 @@ describe('desktop application shell', () => {
     });
   });
 
-  it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {
+  it('selects the last row on the active Built-in page with End', async () => {
     render(<App bridge={createMockBridge()} />);
-    const grid = await screen.findByRole('grid', { name: 'Songs' });
+    const grid = await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     grid.focus();
     fireEvent.keyDown(grid, { key: 'End' });
     await waitFor(() =>
       expect(
         screen
-          .getAllByRole('row', { name: /Song 500/ })
+          .getAllByRole('row', { name: /Song 100/ })
           .some((row) => row.getAttribute('aria-selected') === 'true'),
       ).toBe(true),
     );
@@ -282,7 +318,7 @@ describe('desktop application shell', () => {
     });
 
     render(<App bridge={bridge} />);
-    await screen.findByRole('grid', { name: 'Songs' });
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
 
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
     expect(acknowledgeStartupReveal).toHaveBeenCalledTimes(1);
@@ -340,13 +376,14 @@ describe('desktop application shell', () => {
   it('keeps StrictMode startup to one native subscription and one window reveal', async () => {
     isTauriRuntimeMock.mockReturnValue(true);
     const bridge = createMockBridge();
+    const listNavigation = vi.spyOn(bridge, 'listLibraryNavigation');
     const nativeEvents = installStrictSingletonEvents(bridge);
     const { rerender } = render(
       <StrictMode>
         <App bridge={bridge} />
       </StrictMode>,
     );
-    await screen.findByRole('grid', { name: 'Songs' });
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     rerender(
       <StrictMode>
         <App bridge={bridge} />
@@ -354,6 +391,7 @@ describe('desktop application shell', () => {
     );
 
     expect(nativeEvents.subscriptionCount).toBe(1);
+    expect(listNavigation).toHaveBeenCalledTimes(1);
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
   });
 
@@ -513,6 +551,153 @@ describe('desktop application shell', () => {
     expect(fixture.shutdown).toHaveBeenCalledWith();
     expect(fixture.observerUnsubscribe).toHaveBeenCalledTimes(1);
     expect(fixture.nativeEvents.subscriptionCount).toBe(1);
+  });
+
+  it.each(['event', 'global', 'event-and-global'] as const)(
+    'ordinary App ignores a forged %s smoke trigger',
+    async (mode) => {
+      if (mode !== 'event') {
+        (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ =
+          true;
+      }
+      const { patchSettings, setDiagnosticsEnabled, startCalibration, shutdown } =
+        await renderOrdinaryAppWithSmokeSpies();
+
+      await act(async () => {
+        if (mode !== 'global') {
+          window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+          window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      });
+
+      expect(patchSettings).not.toHaveBeenCalled();
+      expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
+      expect(startCalibration).not.toHaveBeenCalled();
+      expect(shutdown).not.toHaveBeenCalled();
+    },
+  );
+
+  it('ordinary App ignores a smoke event dispatched before React mounts', async () => {
+    window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+    const { patchSettings, setDiagnosticsEnabled, startCalibration, shutdown } =
+      await renderOrdinaryAppWithSmokeSpies();
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    });
+
+    expect(patchSettings).not.toHaveBeenCalled();
+    expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
+    expect(startCalibration).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('ordinary App fails closed when bootstrap omits gui_smoke', async () => {
+    const bridge = createMockBridge();
+    const originalBootstrap = bridge.bootstrap.bind(bridge);
+    bridge.bootstrap = vi.fn(async () => {
+      const bootstrap = await originalBootstrap();
+      const { gui_smoke: _guiSmoke, ...legacyBootstrap } = bootstrap;
+      return legacyBootstrap as typeof bootstrap;
+    });
+    const patchSettings = vi.spyOn(bridge, 'patchSettings');
+    const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
+    const startCalibration = vi.spyOn(bridge, 'startCalibration');
+    const shutdown = vi.spyOn(bridge, 'shutdown');
+    (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
+
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
+    await act(async () => {
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    });
+
+    expect(patchSettings).not.toHaveBeenCalled();
+    expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
+    expect(startCalibration).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('ordinary App fails closed when bootstrap is unavailable', async () => {
+    const bridge = createMockBridge();
+    bridge.subscribeUiEvents = vi.fn(async () => {
+      throw new Error('Native application is unavailable');
+    });
+    const shutdown = vi.spyOn(bridge, 'shutdown');
+    (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
+
+    render(<App bridge={bridge} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Native application is unavailable');
+    await act(async () => {
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    });
+
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('isolated smoke hook ignores triggers when authorized is false', async () => {
+    const fixture = await createPackagedSmokeFixture(false);
+    (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
+
+    await act(async () => {
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    });
+
+    expect(fixture.patchSettings).not.toHaveBeenCalled();
+    expect(fixture.setDiagnosticsEnabled).not.toHaveBeenCalled();
+    expect(fixture.startCalibration).not.toHaveBeenCalled();
+    expect(fixture.shutdown).not.toHaveBeenCalled();
+  });
+
+  it('native-authorized App runs the smoke once from the persistent global', async () => {
+    const bridge = createMockBridge();
+    authorizeGuiSmoke(bridge);
+    const patchSettings = vi.spyOn(bridge, 'patchSettings');
+    const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
+    const startCalibration = vi.spyOn(bridge, 'startCalibration');
+    const shutdown = vi.spyOn(bridge, 'shutdown');
+    (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
+
+    render(
+      <StrictMode>
+        <App bridge={bridge} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+
+    expect(patchSettings).toHaveBeenCalledTimes(2);
+    expect(setDiagnosticsEnabled).toHaveBeenCalledTimes(2);
+    expect(startCalibration).toHaveBeenCalledTimes(1);
+  });
+
+  it('native-authorized App starts from a post-mount event and stays one-shot', async () => {
+    const bridge = createMockBridge();
+    authorizeGuiSmoke(bridge);
+    const startCalibration = vi.spyOn(bridge, 'startCalibration');
+    const shutdown = vi.spyOn(bridge, 'shutdown');
+
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+    });
+    await waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(startCalibration).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    });
+
+    expect(startCalibration).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
   it('opens the docked utility diagnostics and closes with Escape', async () => {
