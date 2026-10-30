@@ -149,6 +149,43 @@ The controllers mutate the same store through the composition root. Library
 paging limits, selection versus playing identity, Playback session retirement,
 and native updater authority remain feature invariants.
 
+### Desktop UI composition and verification ownership
+
+The frontend view tree composes the state owners; it does not introduce a
+second domain store or take authority from `DesktopBridge`:
+
+- `desktop/src/components/workbench/Workbench.tsx` composes the Navigator, Track Browser,
+  Inspector, separators, and Player Dock. `desktop/src/components/workbench/workbenchGeometry.ts`
+  owns the pure geometry calculation and the shared 420 px Track Browser minimum.
+  `desktop/src/components/workbench/useWorkbenchLayout.ts` applies measured viewport geometry and input state;
+  `desktop/src/components/workbench/workbenchDragPolicy.ts` owns transient drag/topology rebasing.
+  `desktop/src/components/workbench/useWorkbenchPreferences.ts` coordinates UI preference updates,
+  while `desktop/src/state/workbenchPreferences.ts` owns v5 validation, normalization, and
+  persistence. Only explicit completed preference changes are persisted;
+  resize-derived overlay/collapse state remains transient.
+- `desktop/src/components/settings/SettingsPanel.tsx` owns the modal, category navigation,
+  and focus lifecycle. `desktop/src/components/settings/SettingsCategoryContent.tsx` owns the
+  category content and palette choices. Settings writes continue through the existing store and
+  typed bridge; the split does not change the settings schema or native owner.
+- `desktop/src/components/utility/DiagnosticsView.tsx` composes the Diagnostics view.
+  `desktop/src/components/utility/diagnosticsPresentation.ts` owns pure presentation mapping, and the playback
+  summary, readout, event, timing, and performance components own their bounded
+  render surfaces. Reported session, sender, and timing facts remain sourced
+  from native state; unavailable and dry-run measurements are not fabricated.
+
+Regression ownership follows those boundaries. `desktop/src/state/store.test.ts` covers
+request fencing, generation-aware bounded Library caches, selection versus
+playing identity, page hydration, and Playback preparation/session lifecycles.
+`desktop/tests/e2e/library.spec.ts` and `desktop/tests/e2e/playback.spec.ts` cover visible paging,
+full-source traversal, and cross-page selection/playback behavior.
+`desktop/src/components/workbench` unit tests plus
+`desktop/tests/e2e/workbench-layout.spec.ts`, `workbench-resize.spec.ts`, and
+`workbench-state-regression.spec.ts` cover geometry, drag, keyboard/ARIA state, and
+v5 persistence. Settings, Diagnostics, palette, and Graphite appearance suites
+cover modal/accessibility behavior and all palette consumers. Browser bridge
+tests establish frontend behavior only; they do not replace packaged Tauri,
+Windows focus, or physical-input qualification.
+
 ## Playback boundary
 
 ```text
