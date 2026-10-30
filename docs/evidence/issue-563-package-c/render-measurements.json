@@ -1,0 +1,3844 @@
+{
+  "captureSourceSha": "c074b88660891567252c17e3153e40193f69d9ea",
+  "environment": {
+    "osPlatform": "win32",
+    "osRelease": "10.0.26300",
+    "osVersion": "Windows 11 Home",
+    "architecture": "x64",
+    "browser": "Chromium",
+    "browserVersion": "156.0.8078.4",
+    "deviceScaleFactor": 1,
+    "bridge": "deterministic Playwright mock bridge; no Tauri/native runtime",
+    "viewportUnits": "CSS pixels; screenshots are browser viewport captures"
+  },
+  "screenshots": [
+    "../docs/evidence/issue-563-package-c/A-current/populated-1366x768.png",
+    "../docs/evidence/issue-563-package-c/A-current/compact-800x560.png",
+    "../docs/evidence/issue-563-package-c/A-current/inspector-overlay-640x448-browser-fallback.png",
+    "../docs/evidence/issue-563-package-c/A-current/settings-1366x768.png",
+    "../docs/evidence/issue-563-package-c/A-current/playback-confirmation-1366x768.png",
+    "../docs/evidence/issue-563-package-c/A-current/playback-error-800x560.png",
+    "../docs/evidence/issue-563-package-c/A-current/diagnostics-1366x768.png",
+    "../docs/evidence/issue-563-package-c/A-current/populated-1920x1080.png",
+    "../docs/evidence/issue-563-package-c/A-current/diagnostics-1920x1080.png",
+    "../docs/evidence/issue-563-package-c/A-current/forced-colors-1366x768.png",
+    "../docs/evidence/issue-563-package-c/A-current/reduced-motion-1366x768.png",
+    "../docs/evidence/issue-563-package-c/B-preview/populated-1366x768.png",
+    "../docs/evidence/issue-563-package-c/B-preview/compact-800x560.png",
+    "../docs/evidence/issue-563-package-c/B-preview/inspector-overlay-640x448-browser-fallback.png",
+    "../docs/evidence/issue-563-package-c/B-preview/settings-1366x768.png",
+    "../docs/evidence/issue-563-package-c/B-preview/playback-confirmation-1366x768.png",
+    "../docs/evidence/issue-563-package-c/B-preview/playback-error-800x560.png",
+    "../docs/evidence/issue-563-package-c/B-preview/diagnostics-1366x768.png",
+    "../docs/evidence/issue-563-package-c/B-preview/populated-1920x1080.png",
+    "../docs/evidence/issue-563-package-c/B-preview/diagnostics-1920x1080.png",
+    "../docs/evidence/issue-563-package-c/B-preview/forced-colors-1366x768.png",
+    "../docs/evidence/issue-563-package-c/B-preview/reduced-motion-1366x768.png"
+  ],
+  "scenes": {
+    "A-current/populated-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/populated-1366x768.png",
+      "variant": "A-current",
+      "scene": "populated-1366x768",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/compact-800x560": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/compact-800x560.png",
+      "variant": "A-current",
+      "scene": "compact-800x560",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 800,
+          "height": 560,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 800,
+            "height": 428
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 48,
+            "height": 424
+          },
+          "tracks": {
+            "x": 56,
+            "y": 40,
+            "width": 420,
+            "height": 424
+          },
+          "inspector": {
+            "x": 480,
+            "y": 40,
+            "width": 316,
+            "height": 424
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 468,
+            "width": 800,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 61,
+            "y": 105,
+            "width": 404,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 61,
+            "y": 151,
+            "width": 404,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 61,
+            "y": 197,
+            "width": 404,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 800
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/inspector-overlay-640x448-browser-fallback": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/inspector-overlay-640x448-browser-fallback.png",
+      "variant": "A-current",
+      "scene": "inspector-overlay-640x448-browser-fallback",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 640,
+          "height": 448,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "overlay",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 640,
+            "height": 316
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 48,
+            "height": 312
+          },
+          "tracks": {
+            "x": 56,
+            "y": 40,
+            "width": 580,
+            "height": 312
+          },
+          "inspector": {
+            "x": 348,
+            "y": 40,
+            "width": 288,
+            "height": 312
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 356,
+            "width": 640,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 63,
+            "y": 105,
+            "width": 562,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 63,
+            "y": 151,
+            "width": 562,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 63,
+            "y": 197,
+            "width": 562,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 640
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/settings-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/settings-1366x768.png",
+      "variant": "A-current",
+      "scene": "settings-1366x768",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "closed",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1114,
+            "height": 632
+          },
+          "inspector": null,
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1096,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 1096,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 1096,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": "Graphite (Default)"
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": {
+            "color": "rgb(178, 165, 233)",
+            "backgroundColor": "rgb(59, 54, 70)",
+            "fontSize": "14px",
+            "outlineColor": "rgb(178, 165, 233)",
+            "outlineWidth": "3px"
+          },
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/playback-confirmation-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/playback-confirmation-1366x768.png",
+      "variant": "A-current",
+      "scene": "playback-confirmation-1366x768",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "closed",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1114,
+            "height": 632
+          },
+          "inspector": null,
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1096,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1096,
+            "height": 46
+          },
+          "playingRow": null,
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Aurora Landing",
+          "selectedAria": "true",
+          "playingSong": null,
+          "playingAria": null,
+          "dryRunStatus": "Prepared",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(139, 140, 144)",
+            "backgroundColor": "rgb(36, 37, 38)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(139, 140, 144)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": null,
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/playback-error-800x560": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/playback-error-800x560.png",
+      "variant": "A-current",
+      "scene": "playback-error-800x560",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 800,
+          "height": 560,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "closed",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 800,
+            "height": 428
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 48,
+            "height": 424
+          },
+          "tracks": {
+            "x": 56,
+            "y": 40,
+            "width": 740,
+            "height": 424
+          },
+          "inspector": null,
+          "playerDock": {
+            "x": 0,
+            "y": 468,
+            "width": 800,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 63,
+            "y": 105,
+            "width": 722,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 63,
+            "y": 151,
+            "width": 722,
+            "height": 46
+          },
+          "playingRow": null,
+          "trackMinimum": "420px",
+          "documentWidth": 800
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": null,
+          "playingAria": null,
+          "dryRunStatus": "Prepared",
+          "alert": "Sky window was not foundSky window was not found. Open Sky and make sure its window is visible, then try again.Try again",
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(117, 100, 180)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": null,
+          "settingsActive": null,
+          "error": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(36, 37, 38)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/diagnostics-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/diagnostics-1366x768.png",
+      "variant": "A-current",
+      "scene": "diagnostics-1366x768",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": "12px"
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          }
+        }
+      }
+    },
+    "A-current/populated-1920x1080": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/populated-1920x1080.png",
+      "variant": "A-current",
+      "scene": "populated-1920x1080",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1920,
+          "height": 1080,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1920,
+            "height": 948
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 944
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1344,
+            "height": 944
+          },
+          "inspector": {
+            "x": 1596,
+            "y": 40,
+            "width": 320,
+            "height": 944
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 988,
+            "width": 1920,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1326,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 1326,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 1326,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1920
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/diagnostics-1920x1080": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/diagnostics-1920x1080.png",
+      "variant": "A-current",
+      "scene": "diagnostics-1920x1080",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1920,
+          "height": 1080,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1920,
+            "height": 948
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 944
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1344,
+            "height": 944
+          },
+          "inspector": {
+            "x": 1596,
+            "y": 40,
+            "width": 320,
+            "height": 944
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 988,
+            "width": 1920,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1326,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 1326,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 1326,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1920
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": "12px"
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          }
+        }
+      }
+    },
+    "A-current/forced-colors-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/forced-colors-1366x768.png",
+      "variant": "A-current",
+      "scene": "forced-colors-1366x768",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": true,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(0, 0, 0)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(0, 0, 0)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(55, 0, 110)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(0, 0, 0)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(0, 0, 0)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "A-current/reduced-motion-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/A-current/reduced-motion-1366x768.png",
+      "variant": "A-current",
+      "scene": "reduced-motion-1366x768",
+      "tokens": {
+        "accentInk": "#b2a5e9",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#705eae",
+        "primaryFillHover": "#7564b4",
+        "primaryFillPressed": "#6553a0",
+        "onPrimary": "#ffffff",
+        "focusRing": "#b2a5e9",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#b2a5e9",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#b2a5e9",
+        "workbenchAccentFill": "#705eae"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.37,
+        "accentInkOnSelected": 6.91,
+        "primaryTextOnRest": 5.38,
+        "primaryTextOnHover": 4.95,
+        "primaryTextOnPressed": 6.37,
+        "focusOnPanel": 7.84,
+        "focusOnRaised": 6.91,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": true
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(112, 94, 174)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/populated-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/populated-1366x768.png",
+      "variant": "B-preview",
+      "scene": "populated-1366x768",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/compact-800x560": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/compact-800x560.png",
+      "variant": "B-preview",
+      "scene": "compact-800x560",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 800,
+          "height": 560,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 800,
+            "height": 428
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 48,
+            "height": 424
+          },
+          "tracks": {
+            "x": 56,
+            "y": 40,
+            "width": 420,
+            "height": 424
+          },
+          "inspector": {
+            "x": 480,
+            "y": 40,
+            "width": 316,
+            "height": 424
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 468,
+            "width": 800,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 61,
+            "y": 105,
+            "width": 404,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 61,
+            "y": 151,
+            "width": 404,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 61,
+            "y": 197,
+            "width": 404,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 800
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/inspector-overlay-640x448-browser-fallback": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/inspector-overlay-640x448-browser-fallback.png",
+      "variant": "B-preview",
+      "scene": "inspector-overlay-640x448-browser-fallback",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 640,
+          "height": 448,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "overlay",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 640,
+            "height": 316
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 48,
+            "height": 312
+          },
+          "tracks": {
+            "x": 56,
+            "y": 40,
+            "width": 580,
+            "height": 312
+          },
+          "inspector": {
+            "x": 348,
+            "y": 40,
+            "width": 288,
+            "height": 312
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 356,
+            "width": 640,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 63,
+            "y": 105,
+            "width": 562,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 63,
+            "y": 151,
+            "width": 562,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 63,
+            "y": 197,
+            "width": 562,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 640
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/settings-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/settings-1366x768.png",
+      "variant": "B-preview",
+      "scene": "settings-1366x768",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "closed",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1114,
+            "height": 632
+          },
+          "inspector": null,
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1096,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 1096,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 1096,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": "Graphite (Default)"
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": {
+            "color": "rgb(171, 166, 223)",
+            "backgroundColor": "rgb(59, 54, 70)",
+            "fontSize": "14px",
+            "outlineColor": "rgb(171, 166, 223)",
+            "outlineWidth": "3px"
+          },
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/playback-confirmation-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/playback-confirmation-1366x768.png",
+      "variant": "B-preview",
+      "scene": "playback-confirmation-1366x768",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "closed",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1114,
+            "height": 632
+          },
+          "inspector": null,
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1096,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1096,
+            "height": 46
+          },
+          "playingRow": null,
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Aurora Landing",
+          "selectedAria": "true",
+          "playingSong": null,
+          "playingAria": null,
+          "dryRunStatus": "Prepared",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(139, 140, 144)",
+            "backgroundColor": "rgb(36, 37, 38)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(139, 140, 144)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": null,
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/playback-error-800x560": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/playback-error-800x560.png",
+      "variant": "B-preview",
+      "scene": "playback-error-800x560",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 800,
+          "height": 560,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "closed",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 800,
+            "height": 428
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 48,
+            "height": 424
+          },
+          "tracks": {
+            "x": 56,
+            "y": 40,
+            "width": 740,
+            "height": 424
+          },
+          "inspector": null,
+          "playerDock": {
+            "x": 0,
+            "y": 468,
+            "width": 800,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 63,
+            "y": 105,
+            "width": 722,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 63,
+            "y": 151,
+            "width": 722,
+            "height": 46
+          },
+          "playingRow": null,
+          "trackMinimum": "420px",
+          "documentWidth": 800
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": null,
+          "playingAria": null,
+          "dryRunStatus": "Prepared",
+          "alert": "Sky window was not foundSky window was not found. Open Sky and make sure its window is visible, then try again.Try again",
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(117, 102, 169)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": null,
+          "settingsActive": null,
+          "error": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(36, 37, 38)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/diagnostics-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/diagnostics-1366x768.png",
+      "variant": "B-preview",
+      "scene": "diagnostics-1366x768",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": "12px"
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          }
+        }
+      }
+    },
+    "B-preview/populated-1920x1080": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/populated-1920x1080.png",
+      "variant": "B-preview",
+      "scene": "populated-1920x1080",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1920,
+          "height": 1080,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1920,
+            "height": 948
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 944
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1344,
+            "height": 944
+          },
+          "inspector": {
+            "x": 1596,
+            "y": 40,
+            "width": 320,
+            "height": 944
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 988,
+            "width": 1920,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1326,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 1326,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 1326,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1920
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/diagnostics-1920x1080": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/diagnostics-1920x1080.png",
+      "variant": "B-preview",
+      "scene": "diagnostics-1920x1080",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1920,
+          "height": 1080,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1920,
+            "height": 948
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 944
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 1344,
+            "height": 944
+          },
+          "inspector": {
+            "x": 1596,
+            "y": 40,
+            "width": 320,
+            "height": 944
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 988,
+            "width": 1920,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 1326,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 1326,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 1326,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1920
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": "12px"
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          }
+        }
+      }
+    },
+    "B-preview/forced-colors-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/forced-colors-1366x768.png",
+      "variant": "B-preview",
+      "scene": "forced-colors-1366x768",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": true,
+          "reducedMotion": false
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(0, 0, 0)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(0, 0, 0)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(55, 0, 110)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(0, 0, 0)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(0, 0, 0)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    },
+    "B-preview/reduced-motion-1366x768": {
+      "screenshot": "../docs/evidence/issue-563-package-c/B-preview/reduced-motion-1366x768.png",
+      "variant": "B-preview",
+      "scene": "reduced-motion-1366x768",
+      "tokens": {
+        "accentInk": "#aba6df",
+        "accentInkHover": "#c0b4f1",
+        "primaryFill": "#6b5c9e",
+        "primaryFillHover": "#7566a9",
+        "primaryFillPressed": "#5f528e",
+        "onPrimary": "#ffffff",
+        "focusRing": "#aba6df",
+        "searchFocusRing": "#9688c6",
+        "selectionSurface": "#25242c",
+        "selectionControl": "#302d38",
+        "selectionControlHover": "#3b3646",
+        "selectionControlPressed": "#474151",
+        "neutralHover": "#222324",
+        "neutralPressed": "#404246",
+        "toggleActiveInk": "#b68cff",
+        "toggleInactiveInk": "#808187",
+        "canvas": "#121314",
+        "panel": "#191a1b",
+        "secondarySurface": "#191a1b",
+        "raised": "#242526",
+        "searchSurface": "#202123",
+        "textPrimary": "#d4d4d4",
+        "textSecondary": "#a6a6a6",
+        "textTertiary": "#929292",
+        "controlBoundary": "#72777d",
+        "successText": "#56d69a",
+        "successSurface": "#143326",
+        "warningText": "#f5c451",
+        "warningSurface": "#3a2c11",
+        "dangerText": "#f27a80",
+        "dangerSurface": "#3a1c22",
+        "dangerFill": "#c42b36",
+        "dangerFillHover": "#d13a45",
+        "dangerFillPressed": "#9e1f2a",
+        "onDanger": "#ffffff",
+        "workbenchAccentInk": "#aba6df",
+        "workbenchToggleOn": "#b68cff",
+        "workbenchSearchFocus": "#9688c6",
+        "workbenchFocus": "#aba6df",
+        "workbenchAccentFill": "#6b5c9e"
+      },
+      "contrast": {
+        "accentInkOnCanvas": 8.19,
+        "accentInkOnSelected": 6.77,
+        "primaryTextOnRest": 5.75,
+        "primaryTextOnHover": 4.96,
+        "primaryTextOnPressed": 6.81,
+        "focusOnPanel": 7.68,
+        "focusOnRaised": 6.76,
+        "searchFocusOnSurface": 5.09,
+        "neutralBoundaryOnCanvas": 4.12,
+        "dangerTextOnSurface": 5.75,
+        "warningTextOnSurface": 8.33,
+        "successTextOnSurface": 7.5,
+        "dangerButtonTextOnFill": 5.61,
+        "dangerButtonTextOnHover": 4.77,
+        "dangerButtonTextOnPressed": 7.83
+      },
+      "rendered": {
+        "viewport": {
+          "width": 1366,
+          "height": 768,
+          "devicePixelRatio": 1
+        },
+        "media": {
+          "forcedColors": false,
+          "reducedMotion": true
+        },
+        "palette": "graphite",
+        "colorMode": "dark",
+        "utilityPresentation": "docked",
+        "layoutFits": "true",
+        "geometry": {
+          "workbench": {
+            "x": 0,
+            "y": 40,
+            "width": 1366,
+            "height": 636
+          },
+          "navigator": {
+            "x": 4,
+            "y": 40,
+            "width": 240,
+            "height": 632
+          },
+          "tracks": {
+            "x": 248,
+            "y": 40,
+            "width": 790,
+            "height": 632
+          },
+          "inspector": {
+            "x": 1042,
+            "y": 40,
+            "width": 320,
+            "height": 632
+          },
+          "playerDock": {
+            "x": 0,
+            "y": 676,
+            "width": 1366,
+            "height": 92
+          },
+          "firstRow": {
+            "x": 255,
+            "y": 113,
+            "width": 772,
+            "height": 46
+          },
+          "selectedRow": {
+            "x": 255,
+            "y": 159,
+            "width": 772,
+            "height": 46
+          },
+          "playingRow": {
+            "x": 255,
+            "y": 205,
+            "width": 772,
+            "height": 46
+          },
+          "trackMinimum": "420px",
+          "documentWidth": 1366
+        },
+        "state": {
+          "selectedSong": "Blue Bird",
+          "selectedAria": "true",
+          "playingSong": "Candle Run",
+          "playingAria": "true",
+          "dryRunStatus": "Dry run · Playing",
+          "alert": null,
+          "settingsPaletteLabel": null
+        },
+        "typography": {
+          "playerStatus": "12px",
+          "playerAction": "13px",
+          "diagnosticsStatus": null,
+          "diagnosticsValue": null
+        },
+        "rendered": {
+          "primaryAction": {
+            "color": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(107, 92, 158)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(255, 255, 255)",
+            "outlineWidth": "3px"
+          },
+          "selectedRow": {
+            "color": "rgb(212, 212, 212)",
+            "backgroundColor": "rgb(37, 36, 44)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(212, 212, 212)",
+            "outlineWidth": "3px"
+          },
+          "playingRow": {
+            "color": "rgb(166, 166, 166)",
+            "backgroundColor": "rgb(25, 26, 27)",
+            "fontSize": "13px",
+            "outlineColor": "rgb(166, 166, 166)",
+            "outlineWidth": "3px"
+          },
+          "settingsActive": null,
+          "error": null,
+          "diagnostics": null
+        }
+      }
+    }
+  },
+  "roleStates": {
+    "A-current": {
+      "primaryHover": {
+        "foreground": "rgb(255, 255, 255)",
+        "fill": "rgb(117, 100, 180)"
+      },
+      "primaryHoverScreenshot": "../docs/evidence/issue-563-package-c/A-current/roles/primary-hover-1366x768.png",
+      "primaryPressed": {
+        "foreground": "rgb(255, 255, 255)",
+        "fill": "rgb(101, 83, 160)"
+      },
+      "primaryPressedScreenshot": "../docs/evidence/issue-563-package-c/A-current/roles/primary-pressed-1366x768.png",
+      "primaryFocus": {
+        "outlineColor": "rgb(178, 165, 233)",
+        "outlineWidth": "2px"
+      },
+      "primaryFocusScreenshot": "../docs/evidence/issue-563-package-c/A-current/roles/primary-focus-1366x768.png",
+      "dangerHover": {
+        "foreground": "rgb(255, 255, 255)",
+        "fill": "rgb(196, 43, 54)"
+      },
+      "dangerHoverScreenshot": "../docs/evidence/issue-563-package-c/A-current/roles/danger-hover-1366x768.png"
+    },
+    "B-preview": {
+      "primaryHover": {
+        "foreground": "rgb(255, 255, 255)",
+        "fill": "rgb(117, 102, 169)"
+      },
+      "primaryHoverScreenshot": "../docs/evidence/issue-563-package-c/B-preview/roles/primary-hover-1366x768.png",
+      "primaryPressed": {
+        "foreground": "rgb(255, 255, 255)",
+        "fill": "rgb(95, 82, 142)"
+      },
+      "primaryPressedScreenshot": "../docs/evidence/issue-563-package-c/B-preview/roles/primary-pressed-1366x768.png",
+      "primaryFocus": {
+        "outlineColor": "rgb(171, 166, 223)",
+        "outlineWidth": "2px"
+      },
+      "primaryFocusScreenshot": "../docs/evidence/issue-563-package-c/B-preview/roles/primary-focus-1366x768.png",
+      "dangerHover": {
+        "foreground": "rgb(255, 255, 255)",
+        "fill": "rgb(196, 43, 54)"
+      },
+      "dangerHoverScreenshot": "../docs/evidence/issue-563-package-c/B-preview/roles/danger-hover-1366x768.png"
+    }
+  }
+}

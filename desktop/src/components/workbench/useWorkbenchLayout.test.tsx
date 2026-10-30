@@ -183,10 +183,16 @@ describe('Inspector topology and preference ownership', () => {
 describe('shared palette geometry boundary', () => {
   it('keeps palette selectors color-only and the solver palette-independent', () => {
     const solver = readFileSync(
-      resolve(process.cwd(), 'src/components/workbench/useWorkbenchLayout.ts'),
+      resolve(process.cwd(), 'src/components/workbench/workbenchGeometry.ts'),
       'utf8',
     );
     expect(solver).not.toMatch(/palette|PaletteId/);
+
+    const workbenchCss = readFileSync(resolve(process.cwd(), 'src/styles/workbench.css'), 'utf8');
+    expect(workbenchCss).toContain('min-width: var(--min-track-browser-width);');
+    expect(workbenchCss).not.toMatch(/min-width:\s*420px/);
+    const tokensCss = readFileSync(resolve(process.cwd(), 'src/styles/tokens.css'), 'utf8');
+    expect(tokensCss).not.toMatch(/--min-track-browser-width\s*:/);
 
     const themes = readFileSync(resolve(process.cwd(), 'src/styles/themes.css'), 'utf8');
     const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];

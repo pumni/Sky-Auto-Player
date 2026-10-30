@@ -41,6 +41,7 @@
 
 .track-browser-workbench-pane {
   flex: 1 1 0;
+  /* Set by the workbench from the geometry policy's shared minimum. */
   min-width: var(--min-track-browser-width);
   container: track-browser / inline-size;
 }
@@ -502,7 +503,7 @@ body.is-resizing * {
   min-width: 0;
   overflow: hidden;
   padding-inline: 8px;
-  font-size: 11px;
+  font-size: var(--type-metadata);
   text-overflow: ellipsis;
 }
 
@@ -573,7 +574,7 @@ body.is-resizing * {
 }
 
 .collapsed-playlist-menu-item.is-current svg {
-  color: var(--workbench-accent-ink);
+  color: var(--accent-ink);
 }
 
 .library-menu-item:hover,
@@ -915,8 +916,8 @@ body.is-resizing * {
 }
 
 .utility-view-tabs [role='tab'][aria-selected='true'] {
-  border-bottom-color: var(--workbench-accent-ink);
-  color: var(--workbench-accent-ink);
+  border-bottom-color: var(--accent-ink);
+  color: var(--accent-ink);
   background-color: var(--surface-raised);
 }
 
@@ -1064,7 +1065,7 @@ body.is-resizing * {
   flex: 0 0 auto;
   padding-right: 10px;
   color: var(--risk-color);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -1155,8 +1156,8 @@ body.is-resizing * {
 
 .diagnostics-tabs [role='tab'][aria-selected='true'] {
   border-bottom-color: var(--selection-indicator);
-  color: var(--workbench-accent-ink);
-  background-color: var(--workbench-selected-control);
+  color: var(--accent-ink);
+  background-color: var(--selection-control);
 }
 
 .diagnostics-panel {
@@ -1190,7 +1191,7 @@ body.is-resizing * {
 
 .diagnostics-playback-summary span {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   overflow-wrap: anywhere;
 }
 
@@ -1201,7 +1202,7 @@ body.is-resizing * {
 
 .diagnostics-sender-summary span {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 .diagnostics-metrics {
@@ -1237,13 +1238,13 @@ body.is-resizing * {
 .diagnostics-status,
 .diagnostics-plot figcaption {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
 }
 
 .diagnostics-metric strong {
   color: var(--text-primary);
   font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 11px;
+  font-size: var(--type-metadata);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -1288,7 +1289,7 @@ body.is-resizing * {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1559,7 +1560,7 @@ body.is-resizing * {
 }
 
 .library-menu-item[data-focused='true'] {
-  outline: 2px solid var(--workbench-focus);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -1628,25 +1629,25 @@ body.is-resizing * {
 }
 
 .library-nav-item.is-active .library-nav-item-icon {
-  color: var(--workbench-accent-ink);
+  color: var(--accent-ink);
 }
 
 .library-nav-item.is-active:hover .library-nav-item-icon {
-  color: var(--workbench-accent-ink);
+  color: var(--accent-ink);
 }
 
 .library-nav-action-row.is-active:hover {
-  background-color: var(--workbench-selected-control-hover);
+  background-color: var(--selection-control-hover);
 }
 
 .utility-view-tabs [role='tab'][aria-selected='true']:hover {
-  border-bottom-color: var(--workbench-accent-ink);
-  color: var(--workbench-accent-ink);
+  border-bottom-color: var(--accent-ink);
+  color: var(--accent-ink);
   background-color: var(--workbench-action-hover);
 }
 
 .diagnostics-tabs [role='tab'][aria-selected='true']:hover {
   border-bottom-color: var(--selection-indicator);
-  color: var(--workbench-accent-ink-hover);
-  background-color: var(--workbench-selected-control-hover);
+  color: var(--accent-ink-hover);
+  background-color: var(--selection-control-hover);
 }
