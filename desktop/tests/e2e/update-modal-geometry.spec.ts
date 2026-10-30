@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 const viewports = [
   { width: 1366, height: 768 },
@@ -16,6 +16,59 @@ const fixtures = [
 ] as const;
 
 const finalNoteLine = 'FINAL RELEASE NOTE LINE — Hoàn tất cập nhật.';
+
+async function readReleaseNotesScrollState(notesRegion: Locator) {
+  return notesRegion.evaluate((region, marker) => {
+    const text = region.querySelector<HTMLElement>('.update-notes');
+    const textNode = text?.firstChild;
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Update release notes text node is missing');
+    }
+    const start = Math.max(0, (textNode.textContent?.length ?? 0) - marker.length);
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, textNode.textContent?.length ?? start);
+    const finalMarkerFragments = [...range.getClientRects()].map((rect) => ({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    }));
+    const port = region.getBoundingClientRect();
+    const maxScroll = Math.max(0, region.scrollHeight - region.clientHeight);
+    const style = getComputedStyle(region);
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      zoom: getComputedStyle(document.documentElement).zoom,
+      activeElement: document.activeElement === region,
+      focusedElement: document.activeElement
+        ? `${document.activeElement.tagName.toLowerCase()}.${(document.activeElement as HTMLElement).className}`
+        : null,
+      computedCss: {
+        display: style.display,
+        flex: style.flex,
+        minHeight: style.minHeight,
+        overflowY: style.overflowY,
+        overscrollBehavior: style.overscrollBehavior,
+        scrollbarGutter: style.scrollbarGutter,
+      },
+      scrollTop: region.scrollTop,
+      scrollHeight: region.scrollHeight,
+      clientHeight: region.clientHeight,
+      maxScroll,
+      atBottom: region.scrollTop >= maxScroll - 1,
+      windowScrollY: window.scrollY,
+      port: { top: port.top, bottom: port.bottom },
+      finalMarkerFragments,
+      finalLineVisible:
+        finalMarkerFragments.length > 0 &&
+        finalMarkerFragments.every(
+          (fragment) => fragment.top >= port.top - 1 && fragment.bottom <= port.bottom + 1,
+        ),
+      lastFragment: finalMarkerFragments[finalMarkerFragments.length - 1] ?? null,
+    };
+  }, finalNoteLine);
+}
 
 test('update modal adapts to release-note length and viewport geometry', async ({
   page,
@@ -53,19 +106,29 @@ test('update modal adapts to release-note length and viewport geometry', async (
         const notes = element.querySelector<HTMLElement>('.update-notes');
         const backdrop = document.querySelector<HTMLElement>('.modal-backdrop');
         if (!header || !footer || !backdrop) return null;
+        const notesStyle = notesRegion ? getComputedStyle(notesRegion) : null;
         return {
           viewport: { width: window.innerWidth, height: window.innerHeight },
+          zoom: getComputedStyle(document.documentElement).zoom,
+          activeElement: document.activeElement
+            ? `${document.activeElement.tagName.toLowerCase()}.${(document.activeElement as HTMLElement).className}`
+            : null,
           dialog: rect(element),
           header: rect(header),
           footer: rect(footer),
           notesRegion: notesRegion
             ? {
                 rect: rect(notesRegion),
-                overflowY: getComputedStyle(notesRegion).overflowY,
+                overflowY: notesStyle?.overflowY,
+                display: notesStyle?.display,
+                flex: notesStyle?.flex,
+                minHeight: notesStyle?.minHeight,
+                scrollTop: notesRegion.scrollTop,
                 clientWidth: notesRegion.clientWidth,
                 scrollWidth: notesRegion.scrollWidth,
                 clientHeight: notesRegion.clientHeight,
                 scrollHeight: notesRegion.scrollHeight,
+                maxScroll: Math.max(0, notesRegion.scrollHeight - notesRegion.clientHeight),
               }
             : null,
           notesLength: notes?.textContent?.length ?? 0,
@@ -210,27 +273,32 @@ test('update modal adapts to release-note length and viewport geometry', async (
           expect(firstLine?.bottom).toBeLessThanOrEqual(firstLine?.portBottom ?? 0);
 
           await notesRegion.focus();
+          await expect(notesRegion).toBeFocused();
+          console.info(
+            '[Update modal keyboard End before]',
+            JSON.stringify({
+              viewport,
+              fixture: fixture.name,
+              firstLine,
+              state: await readReleaseNotesScrollState(notesRegion),
+            }),
+          );
           await page.keyboard.press('End');
           await expect
-            .poll(() => notesRegion.evaluate((element) => element.scrollTop))
-            .toBeGreaterThan(0);
-          const lastLine = await notes.evaluate((element, marker) => {
-            const textNode = element.firstChild;
-            if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
-            const range = document.createRange();
-            const start = Math.max(0, (textNode.textContent?.length ?? 0) - marker.length);
-            range.setStart(textNode, start);
-            range.setEnd(textNode, textNode.textContent?.length ?? start);
-            const { top, bottom } = range.getBoundingClientRect();
-            const port = element.closest<HTMLElement>('.update-notes-region');
-            const portRect = port?.getBoundingClientRect();
-            return portRect
-              ? { top, bottom, portTop: portRect.top, portBottom: portRect.bottom }
-              : null;
-          }, finalNoteLine);
-          expect(lastLine).not.toBeNull();
-          expect(lastLine?.top).toBeGreaterThanOrEqual(lastLine?.portTop ?? 0);
-          expect(lastLine?.bottom).toBeLessThanOrEqual(lastLine?.portBottom ?? 0);
+            .poll(() => readReleaseNotesScrollState(notesRegion))
+            .toMatchObject({
+              activeElement: true,
+              atBottom: true,
+              finalLineVisible: true,
+            });
+          console.info(
+            '[Update modal keyboard End after]',
+            JSON.stringify({
+              viewport,
+              fixture: fixture.name,
+              state: await readReleaseNotesScrollState(notesRegion),
+            }),
+          );
         }
       }
     }
@@ -251,6 +319,21 @@ test('update dialog remains usable at 125% and 150% browser zoom', async ({ page
     await expect(dialog.getByRole('button', { name: 'Update and restart' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Later' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Skip this version' })).toBeVisible();
+    const notesRegion = dialog.getByRole('region', { name: 'What’s new' });
+    await notesRegion.focus();
+    await expect(notesRegion).toBeFocused();
+    await page.keyboard.press('End');
+    await expect
+      .poll(() => readReleaseNotesScrollState(notesRegion))
+      .toMatchObject({
+        activeElement: true,
+        atBottom: true,
+        finalLineVisible: true,
+      });
+    console.info(
+      '[Update modal zoom keyboard End]',
+      JSON.stringify({ zoom, state: await readReleaseNotesScrollState(notesRegion) }),
+    );
     const overflow = await page.evaluate(() => ({
       viewportWidth: document.documentElement.clientWidth,
       documentWidth: document.documentElement.scrollWidth,

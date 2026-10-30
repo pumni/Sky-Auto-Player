@@ -308,6 +308,7 @@
   align-items: center;
   justify-self: end;
   gap: 4px;
+  font-size: 11px;
   min-width: 0;
   height: 36px;
   box-sizing: border-box;
@@ -350,7 +351,7 @@
   display: grid;
   place-items: center;
   height: 36px;
-  min-width: 0;
+  min-width: 36px;
   box-sizing: border-box;
 }
 

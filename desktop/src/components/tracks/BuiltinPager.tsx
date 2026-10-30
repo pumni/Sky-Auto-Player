@@ -47,8 +47,9 @@ function BuiltinPagerNavigation({
   }, [editing]);
 
   const pageDigits = String(pageCount).length;
-  const indicatorWidth = `calc(${pageDigits * 2 + 3}ch + 8px)`;
-  const pagerWidth = `calc(${pageDigits * 2 + 3}ch + 88px)`;
+  const indicatorCharacters = pageDigits * 2 + 3;
+  const indicatorWidth = `max(36px, ${indicatorCharacters}ch)`;
+  const pagerWidth = `calc(${indicatorWidth} + 80px)`;
 
   const focusTrigger = () => {
     window.setTimeout(() => triggerRef.current?.focus(), 0);
