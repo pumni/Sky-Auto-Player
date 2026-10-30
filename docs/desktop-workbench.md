@@ -1,12 +1,18 @@
 # Desktop Workbench
 
-The desktop workbench keeps the Library Navigator, Track Browser, right Inspector, and fixed
-Player Dock as separate regions. The Inspector presents Song Details and Runtime Diagnostics in
-both docked and compact layouts.
+The app shell presents the Library Navigator, Track Browser, Inspector, and fixed Player Dock.
+`desktop/src/app/App.tsx` renders `<Workbench />` and `<PlayerBar />` as siblings inside
+`.app-shell`. `Workbench.tsx` contains the Library Navigator, Track Browser, Inspector, and their
+separators only. `PlayerBar.tsx` owns the fixed 92 px Player Dock outside the Workbench subtree.
+The Inspector presents Song Details and Runtime Diagnostics in both docked and compact layouts.
 
 ## Frontend ownership
 
-`desktop/src/components/workbench/Workbench.tsx` composes the four regions and their separators.
+`desktop/src/app/App.tsx` owns the app-shell composition: it renders `AppTitleBar`, `<Workbench />`,
+and `<PlayerBar />` as sibling children inside `.app-shell`.
+`desktop/src/components/workbench/Workbench.tsx` composes the Library Navigator, Track Browser,
+Inspector, and their separators only. `desktop/src/components/player/PlayerBar.tsx` owns the fixed
+92 px Player Dock and is outside the Workbench subtree.
 `desktop/src/components/workbench/workbenchGeometry.ts` is the pure geometry owner;
 `MIN_TRACK_BROWSER_WIDTH` is the single 420 px source passed to the workbench as
 `--min-track-browser-width`. `desktop/src/components/workbench/useWorkbenchLayout.ts` connects

@@ -155,7 +155,10 @@ The frontend view tree composes the state owners; it does not introduce a
 second domain store or take authority from `DesktopBridge`:
 
 - `desktop/src/components/workbench/Workbench.tsx` composes the Navigator, Track Browser,
-  Inspector, separators, and Player Dock. `desktop/src/components/workbench/workbenchGeometry.ts`
+  Inspector, and their resize separators only. `desktop/src/app/App.tsx` owns the
+  `.app-shell` view composition and renders `<Workbench />` and `<PlayerBar />` as sibling
+  children. `desktop/src/components/player/PlayerBar.tsx` owns the fixed 92 px Player Dock,
+  outside the Workbench subtree. `desktop/src/components/workbench/workbenchGeometry.ts`
   owns the pure geometry calculation and the shared 420 px Track Browser minimum.
   `desktop/src/components/workbench/useWorkbenchLayout.ts` applies measured viewport geometry and input state;
   `desktop/src/components/workbench/workbenchDragPolicy.ts` owns transient drag/topology rebasing.
