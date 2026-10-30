@@ -1,47 +1,36 @@
 import type {
   DesktopBridge,
   LibrarySource,
-  PlaybackConfig,
   PlaybackDecisionAcceptance,
   PlaybackDecisionId,
-  PlaybackStatus,
   SearchResult,
-  SongRow,
   UiEvent,
 } from '../bridge/DesktopBridge';
-import { rememberRetiredSession } from './retiredSessions';
+import { createPlaybackSessionLedger } from './playbackSessionLedger';
+import type { PendingPlaybackStart } from './playbackSessionLedger';
 import { sourceKey } from './libraryHelpers';
+import { identityFromRow, nextPlaybackPosition, selectSongById } from './selectors';
+import { createPlaybackSourceTraversal } from './playbackSourceTraversal';
+import { createPlaybackTransportActions } from './playbackTransport';
+import { createPlaybackPreparationController } from './playbackPreparation';
 import {
-  createShuffleTraversal,
-  identityFromRow,
-  nextPlaybackPosition,
-  playbackContextIndexAt,
-  previousPlaybackPosition,
-  selectRowAtIndex,
-  selectSongById,
-} from './selectors';
-import { AUTO_PLAY_HANDOFF_MS, LIBRARY_PAGE_SIZE } from './types';
+  createPlaybackReconciliation,
+  TRANSPORT_OPERATION_TIMEOUT_MS,
+} from './playbackReconciliation';
 import type {
   DesktopStore,
   LibraryState,
   PlaybackContext,
   PlaybackSongIdentity,
   PlaybackUiState,
-  TransportOperation,
 } from './types';
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
-interface PendingPlaybackStart {
-  epoch: number;
-  preparedId: string;
-  identity: PlaybackSongIdentity;
-  context: PlaybackContext;
-}
-
 export interface PlaybackSliceContext {
   bridge: DesktopBridge;
   get: () => DesktopStore;
+  getLibrary: () => LibraryState;
   set: DesktopStoreSetter;
   loadPage: (
     query: string,
@@ -80,39 +69,46 @@ export interface PlaybackSlice {
 }
 
 export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlice {
-  const { bridge, get, set, loadPage } = context;
-  let startRequestEpoch = 0;
+  const { bridge, get, getLibrary, set, loadPage } = context;
+  const sessionLedger = createPlaybackSessionLedger();
   let shuffleTraversalSequence = 0;
-  const pendingStarts = new Map<number, PendingPlaybackStart>();
-  let transportOperationEpoch = 0;
-  let playbackReconciliationEpoch = 0;
-  let playbackStatusRetryPromise: Promise<void> | null = null;
-  let playbackStatusRetryToken = 0;
-  let transportOperationTimer: ReturnType<typeof setTimeout> | null = null;
-  let terminalReconciliationTimer: ReturnType<typeof setTimeout> | null = null;
-  const retiredSessions = new Map<string, 'finished' | 'failed'>();
-  const retirementWaiters = new Map<string, Set<(outcome: 'finished' | 'failed' | null) => void>>();
-  const TRANSPORT_OPERATION_TIMEOUT_MS = 15_000;
-  const PLAYBACK_RECONCILIATION_TIMEOUT_MS = 2_000;
-  const MAX_PENDING_PLAYBACK_STARTS = 16;
   const sourceMembershipRevisions = new Map<string, number>();
-  let autoPlaySettingsRevision = 0;
-  let pendingAutoAdvanceHandoff: {
-    cancel: () => void;
-    isCurrent: (state: DesktopStore) => boolean;
-  } | null = null;
 
-  const pendingStartForSong = (songId: string): PendingPlaybackStart | null => {
-    const matches = [...pendingStarts.values()].filter((item) => item.identity.songId === songId);
-    return matches[matches.length - 1] ?? null;
-  };
-  const pendingStartForPreparedId = (preparedId: string): PendingPlaybackStart | null =>
-    [...pendingStarts.values()].find((item) => item.preparedId === preparedId) ?? null;
   const membershipRevisionFor = (source: LibrarySource) =>
     sourceMembershipRevisions.get(sourceKey(source)) ?? 0;
   const playbackContextIsCurrent = (playbackContext: PlaybackContext) =>
     playbackContext.valid &&
     playbackContext.membershipRevision === membershipRevisionFor(playbackContext.source);
+
+  const reconciliation = createPlaybackReconciliation({
+    bridge,
+    get,
+    getLibrary,
+    set,
+    sessionLedger,
+  });
+  const {
+    beginOperation,
+    finishOperation,
+    operationIsCurrent,
+    getTransportOperationEpoch,
+    nextReconciliationToken,
+    reconcilePlaybackAfterTimeout,
+    clearOperationFromEvent,
+    armTerminalReconciliationTimer,
+    clearTerminalReconciliationTimer,
+  } = reconciliation;
+  const preparation = createPlaybackPreparationController({
+    bridge,
+    get,
+    getLibrary,
+    set,
+    loadPage,
+    playbackContextIsCurrent,
+    membershipRevisionFor,
+    nextShuffleTraversalSequence: () => ++shuffleTraversalSequence,
+    operationIsCurrent,
+  });
 
   const errorMessage = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
@@ -151,10 +147,10 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
 
   const acceptsSessionEvent = (sessionId: string, songId: string): boolean => {
     const current = get().playback;
-    if (retiredSessions.has(sessionId)) return false;
+    if (sessionLedger.isRetired(sessionId)) return false;
     if (current.sessionId === sessionId) return true;
     if (current.sessionId !== null) return false;
-    const pending = pendingStartForSong(songId);
+    const pending = sessionLedger.pendingStartForSong(songId);
     if (
       pending &&
       (current.startRequestId === null || current.startRequestId === pending.epoch) &&
@@ -173,7 +169,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     if (current.sessionId === sessionId && current.currentSong?.songId === songId) {
       return current.currentSong;
     }
-    const pending = pendingStartForSong(songId);
+    const pending = sessionLedger.pendingStartForSong(songId);
     if (pending) return pending.identity;
     if (current.currentSong?.songId === songId) return current.currentSong;
     return null;
@@ -200,337 +196,6 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     );
   };
 
-  const finishRetirementWaiters = (sessionId: string, outcome: 'finished' | 'failed') => {
-    const waiters = retirementWaiters.get(sessionId);
-    retirementWaiters.delete(sessionId);
-    waiters?.forEach((resolve) => resolve(outcome));
-  };
-
-  const retireSession = (sessionId: string, outcome: 'finished' | 'failed') => {
-    rememberRetiredSession(retiredSessions, sessionId, outcome);
-    finishRetirementWaiters(sessionId, outcome);
-  };
-
-  const waitForRetirement = (sessionId: string): Promise<'finished' | 'failed' | null> => {
-    const retired = retiredSessions.get(sessionId);
-    if (retired) return Promise.resolve(retired);
-    return new Promise((resolve) => {
-      const waiters = retirementWaiters.get(sessionId) ?? new Set();
-      const timeout = setTimeout(() => {
-        waiters.delete(onRetirement);
-        if (waiters.size === 0) retirementWaiters.delete(sessionId);
-        resolve(null);
-      }, TRANSPORT_OPERATION_TIMEOUT_MS);
-      const onRetirement = (outcome: 'finished' | 'failed' | null) => {
-        clearTimeout(timeout);
-        resolve(outcome);
-      };
-      waiters.add(onRetirement);
-      retirementWaiters.set(sessionId, waiters);
-    });
-  };
-
-  const clearTransportTimer = () => {
-    if (transportOperationTimer !== null) clearTimeout(transportOperationTimer);
-    transportOperationTimer = null;
-  };
-
-  const clearTerminalReconciliationTimer = () => {
-    if (terminalReconciliationTimer !== null) clearTimeout(terminalReconciliationTimer);
-    terminalReconciliationTimer = null;
-  };
-
-  const armTerminalReconciliationTimer = (sessionId: string, startRequestId: number | null) => {
-    clearTerminalReconciliationTimer();
-    const token = ++playbackReconciliationEpoch;
-    const epoch = transportOperationEpoch;
-    terminalReconciliationTimer = setTimeout(() => {
-      terminalReconciliationTimer = null;
-      const current = get().playback;
-      if (current.sessionId !== sessionId || current.startRequestId !== startRequestId) return;
-      void reconcilePlaybackAfterTimeout(token, 'stopping', epoch, sessionId, startRequestId);
-    }, TRANSPORT_OPERATION_TIMEOUT_MS);
-  };
-
-  const emitReconciledTerminal = (terminal: NonNullable<PlaybackStatus['last_terminal']>) => {
-    if (retiredSessions.has(terminal.session_id)) return;
-    if (terminal.state === 'failed') {
-      get().applyEvent({
-        v: 1,
-        name: 'playback.failed',
-        payload: {
-          session_id: terminal.session_id,
-          song_id: terminal.song_id,
-          code: terminal.failure_code ?? 'playback_failed',
-          message:
-            terminal.failure_message ??
-            'Playback failed before the terminal event reached the interface.',
-        },
-      });
-    } else {
-      const outcome = terminal.outcome ?? 'quit';
-      get().applyEvent({
-        v: 1,
-        name: 'playback.finished',
-        payload: {
-          session_id: terminal.session_id,
-          song_id: terminal.song_id,
-          outcome,
-          total_us: 0,
-          message: outcome === 'finished' ? 'Playback finished' : 'Playback stopped',
-        },
-      });
-    }
-  };
-
-  const queryPlaybackStatus = async (): Promise<PlaybackStatus> => {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    try {
-      return await Promise.race([
-        bridge.getPlaybackStatus(),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error('Native playback status query timed out.')),
-            PLAYBACK_RECONCILIATION_TIMEOUT_MS,
-          );
-        }),
-      ]);
-    } finally {
-      if (timeout !== null) clearTimeout(timeout);
-    }
-  };
-
-  const reconcilePlaybackAfterTimeout = async (
-    token: number,
-    operation: Exclude<TransportOperation, null>,
-    epoch: number,
-    expectedSessionId: string | null,
-    expectedStartRequestId: number | null,
-  ) => {
-    const canApply = () => {
-      if (playbackReconciliationEpoch !== token) return false;
-      const current = get().playback;
-      return (
-        (current.sessionId === expectedSessionId &&
-          current.startRequestId === expectedStartRequestId) ||
-        (current.transportOperation === operation && transportOperationEpoch === epoch)
-      );
-    };
-
-    try {
-      const status = await queryPlaybackStatus();
-      if (!canApply()) return;
-      const current = get().playback;
-      const pending = status.active ? pendingStartForPreparedId(status.active.prepared_id) : null;
-
-      if (status.active) {
-        const nativeSession = status.active;
-        const library = get().library;
-        const row = selectSongById(library, nativeSession.song_id);
-        const identity =
-          pending?.identity ??
-          (current.currentSong?.songId === nativeSession.song_id
-            ? current.currentSong
-            : row
-              ? identityFromRow(row, library.generation)
-              : {
-                  songId: nativeSession.song_id,
-                  title: nativeSession.title,
-                  liked: false,
-                  durationUs: null,
-                  formatLabel: 'SKY',
-                  noteCount: null,
-                  riskLevel: 'unknown' as const,
-                  generation: library.generation,
-                });
-        const playbackContext =
-          pending?.context ??
-          (current.currentSong?.songId === nativeSession.song_id ? current.context : null);
-        const conflict =
-          (current.sessionId !== null && current.sessionId !== nativeSession.session_id) ||
-          (current.startRequestId !== null && current.startRequestId !== pending?.epoch);
-        if (current.sessionId && conflict) retireSession(current.sessionId, 'failed');
-        clearTransportTimer();
-        clearTerminalReconciliationTimer();
-        transportOperationEpoch += 1;
-        if (pending) pendingStarts.delete(pending.epoch);
-        set({
-          playback: {
-            ...current,
-            sessionId: nativeSession.session_id,
-            currentSong: { ...identity, title: nativeSession.title },
-            context: playbackContext,
-            prepared: null,
-            preparedIdentity: null,
-            preparedContext: null,
-            startRequestId: null,
-            transportOperation: null,
-            state: nativeSession.state,
-            snapshot:
-              current.snapshot?.session_id === nativeSession.session_id ? current.snapshot : null,
-            error: conflict
-              ? 'A different native playback session is active. Stop it before starting another song.'
-              : ['starting', 'stopping'].includes(nativeSession.state)
-                ? 'The app could not confirm the current session state.'
-                : null,
-            statusRetryPending: false,
-          },
-        });
-        return;
-      }
-
-      const terminal = status.last_terminal;
-      const expectedPendingStart =
-        expectedStartRequestId === null ? null : pendingStarts.get(expectedStartRequestId);
-      const matchingTerminal =
-        terminal &&
-        (terminal.session_id === expectedSessionId ||
-          terminal.session_id === current.sessionId ||
-          expectedPendingStart?.preparedId === terminal.prepared_id);
-      if (matchingTerminal) {
-        clearTerminalReconciliationTimer();
-        emitReconciledTerminal(terminal);
-        if (
-          (operation === 'advancing' || operation === 'restarting') &&
-          get().playback.transportOperation === operation &&
-          transportOperationEpoch === epoch
-        ) {
-          armOperationTimer(epoch, operation);
-        }
-        return;
-      }
-
-      if (current.sessionId !== null) {
-        clearTerminalReconciliationTimer();
-        get().applyEvent({
-          v: 1,
-          name: 'playback.failed',
-          payload: {
-            session_id: current.sessionId,
-            song_id: current.currentSong?.songId ?? '',
-            code: 'session_retired',
-            message: 'The native playback session has retired. Press Play to start again.',
-          },
-        });
-        return;
-      }
-
-      clearTransportTimer();
-      clearTerminalReconciliationTimer();
-      transportOperationEpoch += 1;
-      const pendingRequestId = current.startRequestId;
-      if (pendingRequestId !== null) {
-        pendingStarts.delete(pendingRequestId);
-        set({
-          playback: {
-            ...current,
-            prepared: null,
-            preparedIdentity: null,
-            preparedContext: null,
-            startRequestId: null,
-            transportOperation: null,
-            state: 'idle',
-            snapshot: null,
-            error:
-              'Native playback did not create a session. No active playback session was created. Press Play to try again.',
-          },
-        });
-      } else {
-        set({
-          playback: {
-            ...current,
-            transportOperation: null,
-            error:
-              'Playback did not confirm the requested operation. Check the session and try again.',
-          },
-        });
-      }
-    } catch (error) {
-      if (!canApply()) return;
-      clearTransportTimer();
-      clearTerminalReconciliationTimer();
-      transportOperationEpoch += 1;
-      const current = get().playback;
-      set({
-        playback: {
-          ...current,
-          transportOperation: null,
-          error: `Playback status is unavailable: ${errorMessage(error)}`,
-        },
-      });
-    }
-  };
-
-  const operationTimedOut = (epoch: number, operation: Exclude<TransportOperation, null>) => {
-    if (transportOperationEpoch !== epoch) return;
-    transportOperationTimer = null;
-    const current = get().playback;
-    const token = ++playbackReconciliationEpoch;
-    const transitionCanContinue = operation === 'advancing' || operation === 'restarting';
-    if (!transitionCanContinue) {
-      transportOperationEpoch += 1;
-      set({
-        playback: {
-          ...current,
-          transportOperation: null,
-          error: 'Playback confirmation timed out. Checking the native session state…',
-        },
-      });
-    }
-    void reconcilePlaybackAfterTimeout(
-      token,
-      operation,
-      epoch,
-      current.sessionId,
-      current.startRequestId,
-    );
-  };
-
-  const armOperationTimer = (epoch: number, operation: Exclude<TransportOperation, null>) => {
-    clearTransportTimer();
-    clearTerminalReconciliationTimer();
-    transportOperationTimer = setTimeout(
-      () => operationTimedOut(epoch, operation),
-      TRANSPORT_OPERATION_TIMEOUT_MS,
-    );
-  };
-
-  const beginOperation = (
-    operation: Exclude<TransportOperation, null>,
-    preemptTransport = false,
-  ): number | null => {
-    const current = get().playback;
-    if (current.transportOperation !== null && !(preemptTransport && operation === 'stopping'))
-      return null;
-    clearTransportTimer();
-    const epoch = ++transportOperationEpoch;
-    playbackReconciliationEpoch += 1;
-    set({
-      playback: {
-        ...current,
-        transportOperation: operation,
-        error: operation === 'stopping' ? current.error : null,
-      },
-    });
-    armOperationTimer(epoch, operation);
-    return epoch;
-  };
-
-  const operationIsCurrent = (epoch: number) => transportOperationEpoch === epoch;
-
-  const finishOperation = (epoch: number, error: string | null = null) => {
-    if (!operationIsCurrent(epoch)) return false;
-    clearTransportTimer();
-    transportOperationEpoch += 1;
-    set({ playback: { ...get().playback, transportOperation: null, error } });
-    return true;
-  };
-
-  const clearOperationFromEvent = () => {
-    clearTransportTimer();
-    transportOperationEpoch += 1;
-  };
-
   const playbackAfterBrowserNavigation = (
     playback: DesktopStore['playback'],
   ): DesktopStore['playback'] => {
@@ -555,129 +220,6 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     };
   };
 
-  const contextForSong = (library: LibraryState, songId: string): PlaybackContext | null => {
-    if (library.indexMembershipRevision !== library.membershipRevision) return null;
-    const currentIndex =
-      library.indexById.get(songId) ??
-      (library.selectedSongId === songId ? (library.selectedSongIndex ?? undefined) : undefined);
-    if (currentIndex === undefined) return null;
-    const shuffleEnabled = get().playback.shuffleEnabled;
-    return {
-      source: library.searchSource,
-      query: library.query,
-      generation: library.generation,
-      total: library.resultTotal,
-      currentIndex,
-      currentSongId: songId,
-      shuffleTraversal: shuffleEnabled
-        ? createShuffleTraversal(
-            library.resultTotal,
-            currentIndex,
-            `${library.generation}:${sourceKey(library.searchSource)}:${library.query}:${songId}:${++shuffleTraversalSequence}`,
-          )
-        : null,
-      dryRun: false,
-      membershipRevision: membershipRevisionFor(library.searchSource),
-      valid: true,
-    };
-  };
-
-  const resolveContextRow = async (
-    playbackContext: PlaybackContext,
-    index: number,
-  ): Promise<SongRow> => {
-    const library = get().library;
-    if (
-      playbackContext.generation !== library.generation ||
-      !playbackContextIsCurrent(playbackContext)
-    ) {
-      throw new Error(
-        'The Library context changed after playback started. Select a song to create a new playback context.',
-      );
-    }
-    if (!Number.isInteger(index) || index < 0 || index >= playbackContext.total) {
-      throw new Error('There is no song at that playback-context position.');
-    }
-    const offset = Math.floor(index / LIBRARY_PAGE_SIZE) * LIBRARY_PAGE_SIZE;
-    const visibleContext =
-      library.generation === playbackContext.generation &&
-      library.query === playbackContext.query &&
-      sourceKey(library.searchSource) === sourceKey(playbackContext.source);
-    const visibleRow = visibleContext ? selectRowAtIndex(library, index) : undefined;
-    if (visibleRow) return visibleRow;
-    const result = await loadPage(
-      playbackContext.query,
-      playbackContext.source,
-      offset,
-      playbackContext.generation,
-      library.searchRequestGeneration,
-      false,
-    );
-    if (
-      get().library.generation !== playbackContext.generation ||
-      !playbackContextIsCurrent(playbackContext)
-    ) {
-      throw new Error('The Library changed while the adjacent song was being resolved.');
-    }
-    const row = result.items[index - result.offset];
-    if (!row) throw new Error('The adjacent song is no longer available in this Library context.');
-    return row;
-  };
-
-  const makePlaybackConfig = (
-    overrides?: Partial<PlaybackConfig>,
-    inheritedDryRun = false,
-  ): PlaybackConfig => {
-    const settings = get().settings;
-    if (!settings) throw new Error('Playback settings are not ready.');
-    return {
-      hold_frames: overrides?.hold_frames ?? settings.playback_defaults.hold_frames,
-      timing_margin_us: overrides?.timing_margin_us ?? settings.playback_defaults.timing_margin_us,
-      tempo_scale: overrides?.tempo_scale ?? settings.playback_defaults.tempo_scale,
-      fps: overrides?.fps ?? settings.playback_defaults.fps,
-      dry_run: overrides?.dry_run ?? inheritedDryRun,
-    };
-  };
-
-  const prepareForOperation = async (
-    identity: PlaybackSongIdentity,
-    playbackContext: PlaybackContext,
-    overrides: Partial<PlaybackConfig> | undefined,
-    operationEpoch: number,
-  ): Promise<NonNullable<DesktopStore['playback']['prepared']> | null> => {
-    if (!playbackContextIsCurrent(playbackContext)) {
-      throw new Error(
-        'The Library source changed. Select a song to create a new playback context.',
-      );
-    }
-    const config = makePlaybackConfig(overrides, playbackContext.dryRun);
-    const prepared = await bridge.preparePlayback({
-      songId: identity.songId,
-      generation: playbackContext.generation,
-      config,
-    });
-    if (
-      playbackContext.generation !== get().library.generation ||
-      !playbackContextIsCurrent(playbackContext)
-    ) {
-      throw new Error(
-        'The Library context changed while playback was being prepared. Select a song to create a new context.',
-      );
-    }
-    if (!operationIsCurrent(operationEpoch)) return null;
-    const preparedContext = { ...playbackContext, dryRun: config.dry_run };
-    set({
-      playback: {
-        ...get().playback,
-        prepared,
-        preparedIdentity: identity,
-        preparedContext,
-        error: prepared.error_message,
-      },
-    });
-    return prepared;
-  };
-
   const startForOperation = async (
     prepared: NonNullable<DesktopStore['playback']['prepared']>,
     identity: PlaybackSongIdentity,
@@ -689,18 +231,12 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     if (!prepared.prepared_id)
       throw new Error('The prepared playback plan is no longer available.');
     const decisions: PlaybackDecisionAcceptance[] = decision ? [{ decision, accepted: true }] : [];
-    const startEpoch = ++startRequestEpoch;
-    pendingStarts.set(startEpoch, {
-      epoch: startEpoch,
+    const pendingStart = sessionLedger.beginStart({
       preparedId: prepared.prepared_id,
       identity,
       context: playbackContext,
     });
-    while (pendingStarts.size > MAX_PENDING_PLAYBACK_STARTS) {
-      const oldest = pendingStarts.keys().next().value;
-      if (oldest === undefined) break;
-      pendingStarts.delete(oldest);
-    }
+    const startEpoch = pendingStart.epoch;
     const startingPlayback = get().playback;
     const transportOperation =
       startingPlayback.transportOperation === 'advancing' ||
@@ -721,18 +257,18 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         decisions,
       })
       .catch((error: unknown) => {
-        pendingStarts.delete(startEpoch);
+        sessionLedger.removePendingStart(startEpoch);
         const current = get().playback;
         if (current.startRequestId === startEpoch) {
           set({ playback: { ...current, startRequestId: null } });
         }
         throw error;
       });
-    if (!operationIsCurrent(operationEpoch) || retiredSessions.has(session.session_id)) {
-      pendingStarts.delete(startEpoch);
+    if (!operationIsCurrent(operationEpoch) || sessionLedger.isRetired(session.session_id)) {
+      sessionLedger.removePendingStart(startEpoch);
       const current = get().playback;
       const ownsRequest = current.startRequestId === startEpoch;
-      if (retiredSessions.has(session.session_id)) {
+      if (sessionLedger.isRetired(session.session_id)) {
         if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
         return;
       }
@@ -767,7 +303,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       }
       return;
     }
-    pendingStarts.delete(startEpoch);
+    sessionLedger.removePendingStart(startEpoch);
     if (!playbackContextIsCurrent(playbackContext)) {
       const current = get().playback;
       if (current.startRequestId === startEpoch) {
@@ -802,103 +338,34 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     });
   };
 
-  const transitionContextPlayback = async (
-    playbackContext: PlaybackContext,
-    targetPosition: number,
-    operation: 'advancing' | 'restarting',
-    sessionId: string | null,
-    naturalAutoPlayRevision?: number,
-  ) => {
-    const epoch = beginOperation(operation);
-    if (epoch === null) return;
-    try {
-      if (
-        playbackContext.generation !== get().library.generation ||
-        !playbackContextIsCurrent(playbackContext)
-      ) {
-        throw new Error(
-          'The Library context changed after playback started. Select a song to create a new playback context.',
-        );
-      }
-      if (sessionId) {
-        const retirement = waitForRetirement(sessionId);
-        const state = get().playback.state;
-        if (!['finished', 'failed'].includes(state)) {
-          await bridge.skipPlayback({ sessionId });
-        }
-        const outcome = await retirement;
-        if (outcome === null) {
-          throw new Error('The current playback session did not retire in time.');
-        }
-        if (outcome === 'failed') return;
-      }
-      if (!operationIsCurrent(epoch)) return;
-      if (naturalAutoPlayRevision !== undefined) {
-        const handoffIsCurrent = (current: DesktopStore) => {
-          const owner = current.playback.context;
-          return (
-            operationIsCurrent(epoch) &&
-            current.playback.transportOperation === 'advancing' &&
-            autoPlaySettingsRevision === naturalAutoPlayRevision &&
-            current.settings?.auto_play === true &&
-            playbackContext.generation === current.library.generation &&
-            playbackContextIsCurrent(playbackContext) &&
-            owner !== null &&
-            owner === playbackContext &&
-            owner.currentSongId === playbackContext.currentSongId &&
-            owner.currentIndex === playbackContext.currentIndex
-          );
-        };
-        const handoffElapsed = await new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => {
-            if (pendingAutoAdvanceHandoff?.cancel === cancel) {
-              pendingAutoAdvanceHandoff = null;
-            }
-            resolve(true);
-          }, AUTO_PLAY_HANDOFF_MS);
-          const cancel = () => {
-            clearTimeout(timer);
-            if (pendingAutoAdvanceHandoff?.cancel === cancel) {
-              pendingAutoAdvanceHandoff = null;
-            }
-            resolve(false);
-          };
-          pendingAutoAdvanceHandoff = { cancel, isCurrent: handoffIsCurrent };
-        });
-        if (!operationIsCurrent(epoch)) return;
-        if (!handoffElapsed || !handoffIsCurrent(get())) {
-          finishOperation(epoch);
-          return;
-        }
-      }
-      const targetIndex = playbackContextIndexAt(playbackContext, targetPosition);
-      if (targetIndex === null) throw new Error('There is no next playback-context item.');
-      const row = await resolveContextRow(playbackContext, targetIndex);
-      if (!operationIsCurrent(epoch)) return;
-      const nextContext: PlaybackContext = {
-        ...playbackContext,
-        currentIndex: targetIndex,
-        currentSongId: row.song_id,
-        shuffleTraversal: playbackContext.shuffleTraversal
-          ? { ...playbackContext.shuffleTraversal, position: targetPosition }
-          : null,
-      };
-      const identity = identityFromRow(row, playbackContext.generation);
-      const prepared = await prepareForOperation(identity, nextContext, undefined, epoch);
-      if (!prepared || !operationIsCurrent(epoch)) return;
-      if (prepared.admission === 'blocked') {
-        finishOperation(epoch, prepared.error_message ?? 'Playback is blocked for this song.');
-        return;
-      }
-      if (prepared.admission === 'confirmation_required') {
-        finishOperation(epoch);
-        return;
-      }
-      await startForOperation(prepared, identity, nextContext, undefined, epoch);
-    } catch (error) {
-      finishOperation(epoch, errorMessage(error));
-    }
-  };
+  const sourceTraversal = createPlaybackSourceTraversal({
+    bridge,
+    get,
+    getLibrary,
+    playbackContextIsCurrent,
+    resolveContextRow: preparation.resolveContextRow,
+    prepareForOperation: preparation.prepareForOperation,
+    startForOperation,
+    beginOperation: (operation) => beginOperation(operation),
+    finishOperation,
+    operationIsCurrent,
+    waitForRetirement: (sessionId) =>
+      sessionLedger.waitForRetirement(sessionId, TRANSPORT_OPERATION_TIMEOUT_MS),
+  });
+
+  const transportActions = createPlaybackTransportActions({
+    bridge,
+    get,
+    set,
+    beginOperation,
+    finishOperation,
+    getTransportOperationEpoch,
+    nextReconciliationToken,
+    reconcilePlaybackAfterTimeout,
+    playbackContextIsCurrent,
+    transitionContextPlayback: sourceTraversal.transitionContextPlayback,
+    nextShuffleTraversalSequence: () => ++shuffleTraversalSequence,
+  });
 
   const handleEvent = (event: UiEvent): boolean => {
     if (
@@ -912,7 +379,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     if (event.name === 'playback.state_changed') {
       const current = get().playback;
       if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return true;
-      const pending = pendingStartForSong(event.payload.song_id);
+      const pending = sessionLedger.pendingStartForSong(event.payload.song_id);
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
       const confirmsOperation =
@@ -926,7 +393,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
         (current.transportOperation === 'resuming' && event.payload.state === 'playing');
       if (confirmsOperation) clearOperationFromEvent();
-      if (pending) pendingStarts.delete(pending.epoch);
+      if (pending) sessionLedger.removePendingStart(pending.epoch);
       const startRequestId =
         current.sessionId === event.payload.session_id || current.startRequestId === pending?.epoch
           ? null
@@ -955,7 +422,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     if (event.name === 'playback.snapshot') {
       const current = get().playback;
       if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return true;
-      const pending = pendingStartForSong(event.payload.song_id);
+      const pending = sessionLedger.pendingStartForSong(event.payload.song_id);
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
       const confirmsOperation =
@@ -969,7 +436,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
         (current.transportOperation === 'resuming' && event.payload.state === 'playing');
       if (confirmsOperation) clearOperationFromEvent();
-      if (pending) pendingStarts.delete(pending.epoch);
+      if (pending) sessionLedger.removePendingStart(pending.epoch);
       set({
         playback: {
           ...current,
@@ -993,11 +460,11 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const current = get().playback;
       if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return true;
       clearTerminalReconciliationTimer();
-      retireSession(event.payload.session_id, 'finished');
-      const pending = pendingStartForSong(event.payload.song_id);
+      sessionLedger.retire(event.payload.session_id, 'finished');
+      const pending = sessionLedger.pendingStartForSong(event.payload.song_id);
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
-      if (pending) pendingStarts.delete(pending.epoch);
+      if (pending) sessionLedger.removePendingStart(pending.epoch);
       const continueOperation =
         current.transportOperation === 'advancing' || current.transportOperation === 'restarting';
       const autoAdvance =
@@ -1009,7 +476,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         playbackContext !== null &&
         playbackContext.currentSongId === event.payload.song_id &&
         playbackContextIsCurrent(playbackContext) &&
-        playbackContext.generation === get().library.generation &&
+        playbackContext.generation === getLibrary().generation &&
         nextPlaybackPosition(playbackContext) !== null;
       const nextPosition = playbackContext ? nextPlaybackPosition(playbackContext) : null;
       if (!continueOperation) clearOperationFromEvent();
@@ -1034,12 +501,12 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         },
       });
       if (autoAdvance && playbackContext && nextPosition !== null) {
-        void transitionContextPlayback(
+        void sourceTraversal.transitionContextPlayback(
           playbackContext,
           nextPosition,
           'advancing',
           null,
-          autoPlaySettingsRevision,
+          sourceTraversal.autoPlaySettingsRevision(),
         );
       }
       return true;
@@ -1048,11 +515,11 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     const current = get().playback;
     if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return true;
     clearTerminalReconciliationTimer();
-    retireSession(event.payload.session_id, 'failed');
-    const pending = pendingStartForSong(event.payload.song_id);
+    sessionLedger.retire(event.payload.session_id, 'failed');
+    const pending = sessionLedger.pendingStartForSong(event.payload.song_id);
     const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
     const playbackContext = pending?.context ?? current.context;
-    if (pending) pendingStarts.delete(pending.epoch);
+    if (pending) sessionLedger.removePendingStart(pending.epoch);
     clearOperationFromEvent();
     set({
       playback: {
@@ -1078,9 +545,11 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
   };
 
   const actions: PlaybackSliceActions = {
+    ...transportActions,
     async prepareSelectedPlayback(overrides) {
       const current = get();
       const playback = current.playback;
+      const library = getLibrary();
       if (playback.prepared?.admission === 'confirmation_required') return;
       if (
         playback.startRequestId !== null ||
@@ -1092,8 +561,8 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       }
       const selectedSongId =
         playback.context && !playbackContextIsCurrent(playback.context)
-          ? current.library.selectedSongId
-          : (playback.currentSong?.songId ?? current.library.selectedSongId);
+          ? library.selectedSongId
+          : (playback.currentSong?.songId ?? library.selectedSongId);
       if (!selectedSongId || !current.settings) {
         set({
           playback: { ...playback, error: 'Select a song before preparing playback.' },
@@ -1106,7 +575,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         playbackContextIsCurrent(playback.context);
       const playbackContext = reuseCurrentContext
         ? playback.context!
-        : contextForSong(current.library, selectedSongId);
+        : preparation.contextForSong(library, selectedSongId);
       if (!playbackContext) {
         set({
           playback: {
@@ -1116,7 +585,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         });
         return;
       }
-      const row = selectSongById(current.library, selectedSongId);
+      const row = selectSongById(library, selectedSongId);
       const identity =
         reuseCurrentContext && playback.currentSong
           ? playback.currentSong
@@ -1135,7 +604,7 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const operationEpoch = beginOperation('preparing');
       if (operationEpoch === null) return;
       try {
-        const prepared = await prepareForOperation(
+        const prepared = await preparation.prepareForOperation(
           identity,
           playbackContext,
           overrides,
@@ -1209,163 +678,6 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
         },
       });
     },
-
-    async stopPlayback() {
-      const playback = get().playback;
-      const sessionId = playback.sessionId;
-      const preemptTransport = playback.transportOperation !== null;
-      if (
-        !sessionId ||
-        !['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(
-          playback.state,
-        )
-      )
-        return;
-      const operationEpoch = beginOperation('stopping', preemptTransport);
-      if (operationEpoch === null) return;
-      try {
-        const acknowledgement = await bridge.stopPlayback({ sessionId });
-        if (['finished', 'failed'].includes(acknowledgement.state)) {
-          const token = ++playbackReconciliationEpoch;
-          await reconcilePlaybackAfterTimeout(
-            token,
-            'stopping',
-            operationEpoch,
-            sessionId,
-            playback.startRequestId,
-          );
-        }
-      } catch (error) {
-        finishOperation(operationEpoch, errorMessage(error));
-      }
-    },
-
-    retryPlaybackStatus() {
-      if (playbackStatusRetryPromise) return playbackStatusRetryPromise;
-      const playback = get().playback;
-      const token = ++playbackReconciliationEpoch;
-      playbackStatusRetryToken = token;
-      const operation = playback.transportOperation ?? 'starting';
-      const epoch = transportOperationEpoch;
-      set({ playback: { ...playback, statusRetryPending: true } });
-      const retryPromise = reconcilePlaybackAfterTimeout(
-        token,
-        operation,
-        epoch,
-        playback.sessionId,
-        playback.startRequestId,
-      ).finally(() => {
-        if (playbackStatusRetryPromise !== retryPromise || playbackStatusRetryToken !== token)
-          return;
-        playbackStatusRetryPromise = null;
-        const latest = get().playback;
-        set({ playback: { ...latest, statusRetryPending: false } });
-      });
-      playbackStatusRetryPromise = retryPromise;
-      return retryPromise;
-    },
-
-    async pausePlayback() {
-      const playback = get().playback;
-      const sessionId = playback.sessionId;
-      if (!sessionId || playback.state !== 'playing' || playback.transportOperation !== null)
-        return;
-      const operationEpoch = beginOperation('pausing');
-      if (operationEpoch === null) return;
-      try {
-        await bridge.pausePlayback({ sessionId });
-      } catch (error) {
-        finishOperation(operationEpoch, errorMessage(error));
-      }
-    },
-
-    async resumePlayback() {
-      const playback = get().playback;
-      const sessionId = playback.sessionId;
-      if (!sessionId || playback.state !== 'paused' || playback.transportOperation !== null) return;
-      const operationEpoch = beginOperation('resuming');
-      if (operationEpoch === null) return;
-      try {
-        await bridge.resumePlayback({ sessionId });
-      } catch (error) {
-        finishOperation(operationEpoch, errorMessage(error));
-      }
-    },
-
-    setShuffleEnabled(enabled) {
-      const playback = get().playback;
-      if (
-        playback.shuffleEnabled === enabled ||
-        playback.transportOperation !== null ||
-        playback.prepared?.admission === 'confirmation_required'
-      )
-        return;
-      const updateTraversal = (playbackContext: PlaybackContext | null): PlaybackContext | null => {
-        if (!playbackContext || !playbackContextIsCurrent(playbackContext)) return playbackContext;
-        return {
-          ...playbackContext,
-          shuffleTraversal: enabled
-            ? createShuffleTraversal(
-                playbackContext.total,
-                playbackContext.currentIndex,
-                `${playbackContext.generation}:${sourceKey(playbackContext.source)}:${playbackContext.query}:${playbackContext.currentSongId}:${++shuffleTraversalSequence}`,
-              )
-            : null,
-        };
-      };
-      const playbackContext = updateTraversal(playback.context);
-      const preparedContext = updateTraversal(playback.preparedContext);
-      set({
-        playback: {
-          ...playback,
-          shuffleEnabled: enabled,
-          context: playbackContext,
-          preparedContext,
-        },
-      });
-    },
-
-    async previousPlayback() {
-      const playback = get().playback;
-      const playbackContext = playback.context;
-      if (
-        !playbackContext ||
-        !playbackContextIsCurrent(playbackContext) ||
-        playback.prepared?.admission === 'confirmation_required' ||
-        playback.transportOperation !== null
-      )
-        return;
-      const currentUs =
-        playback.snapshot?.session_id === playback.sessionId ? playback.snapshot.current_us : 0;
-      const targetPosition = previousPlaybackPosition(playbackContext, currentUs);
-      if (targetPosition === null) return;
-      await transitionContextPlayback(
-        playbackContext,
-        targetPosition,
-        'restarting',
-        playback.sessionId,
-      );
-    },
-
-    async nextPlayback() {
-      const playback = get().playback;
-      const playbackContext = playback.context;
-      if (
-        !playbackContext ||
-        !playbackContextIsCurrent(playbackContext) ||
-        playback.prepared?.admission === 'confirmation_required' ||
-        playback.transportOperation !== null
-      )
-        return;
-      const targetPosition = nextPlaybackPosition(playbackContext);
-      if (targetPosition === null) return;
-      await transitionContextPlayback(
-        playbackContext,
-        targetPosition,
-        'advancing',
-        playback.sessionId,
-      );
-    },
   };
 
   return {
@@ -1374,14 +686,9 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     invalidatePlaybackMembershipContext,
     playbackAfterBrowserNavigation,
     playbackContextIsCurrent,
-    isSessionRetired: (sessionId) => retiredSessions.has(sessionId),
-    cancelStaleAutoAdvanceHandoff: (state) => {
-      const pending = pendingAutoAdvanceHandoff;
-      if (pending && !pending.isCurrent(state)) pending.cancel();
-    },
+    isSessionRetired: (sessionId) => sessionLedger.isRetired(sessionId),
+    cancelStaleAutoAdvanceHandoff: sourceTraversal.cancelStaleAutoAdvanceHandoff,
     handleEvent,
-    onAutoPlayChanged: () => {
-      autoPlaySettingsRevision += 1;
-    },
+    onAutoPlayChanged: sourceTraversal.onAutoPlayChanged,
   };
 }

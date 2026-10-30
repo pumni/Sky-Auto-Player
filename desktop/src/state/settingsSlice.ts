@@ -12,14 +12,7 @@ export interface SettingsSliceContext {
   onAutoPlayChanged: () => void;
 }
 
-export type SettingsSliceActions = Pick<
-  DesktopStore,
-  | 'patchSettings'
-  | 'checkForUpdate'
-  | 'setUpdateDialogOpen'
-  | 'beginUpdateHandoff'
-  | 'setSettingsOpen'
->;
+export type SettingsSliceActions = Pick<DesktopStore, 'patchSettings' | 'setSettingsOpen'>;
 
 type SettingsSliceWithRefresh = SettingsSliceActions & {
   refreshSettings: () => Promise<void>;
@@ -88,92 +81,6 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           // Keep the last confirmed snapshot when a best-effort refresh fails.
         }
       });
-    },
-
-    async checkForUpdate(origin: 'manual' | 'background' = 'manual') {
-      const isManual = origin === 'manual';
-      const requestRevision = get().update.lastNativeRevision;
-      set({
-        update: {
-          ...get().update,
-          checkRequestPending: true,
-          transportError: null,
-          transportErrorAction: null,
-          dialogOpen: isManual ? true : get().update.dialogOpen,
-        },
-      });
-
-      try {
-        await bridge.checkForUpdate({ origin });
-        set({
-          update: {
-            ...get().update,
-            checkRequestPending: false,
-          },
-        });
-      } catch (error) {
-        const current = get().update;
-        const hasNewerSnapshot = current.lastNativeRevision > requestRevision;
-        set({
-          update: {
-            ...current,
-            checkRequestPending: false,
-            transportError: hasNewerSnapshot
-              ? null
-              : error instanceof Error
-                ? error.message
-                : String(error),
-            transportErrorAction: hasNewerSnapshot ? null : 'check',
-            dialogOpen: isManual ? true : current.dialogOpen,
-          },
-        });
-        // Thrown bridge/IPC failure; do not invent timestamps
-      }
-    },
-
-    setUpdateDialogOpen(open) {
-      set({ update: { ...get().update, dialogOpen: open } });
-    },
-
-    async beginUpdateHandoff() {
-      if (get().update.installRequestPending) {
-        return;
-      }
-      const targetVersion = get().update.availableVersion;
-      if (!targetVersion) return;
-      const requestRevision = get().update.lastNativeRevision;
-      set({
-        update: {
-          ...get().update,
-          installRequestPending: true,
-          transportError: null,
-          transportErrorAction: null,
-        },
-      });
-      try {
-        await bridge.beginUpdateHandoff(targetVersion);
-        set({
-          update: {
-            ...get().update,
-            installRequestPending: false,
-          },
-        });
-      } catch (error) {
-        const current = get().update;
-        const hasNewerSnapshot = current.lastNativeRevision > requestRevision;
-        set({
-          update: {
-            ...current,
-            installRequestPending: false,
-            transportError: hasNewerSnapshot
-              ? null
-              : error instanceof Error
-                ? error.message
-                : String(error),
-            transportErrorAction: hasNewerSnapshot ? null : 'install',
-          },
-        });
-      }
     },
 
     setSettingsOpen(open) {

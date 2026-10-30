@@ -2146,6 +2146,48 @@ describe('desktop store', () => {
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
   });
 
+  it('discards an in-flight prepare when the catalog generation changes', async () => {
+    const bridge = createMockBridge();
+    const originalPrepare = bridge.preparePlayback;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    bridge.preparePlayback = async (request) => {
+      const prepared = await originalPrepare(request);
+      entered.resolve();
+      await release.promise;
+      return prepared;
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    const preparation = store.getState().prepareSelectedPlayback();
+    await entered.promise;
+    expect(store.getState().playback.transportOperation).toBe('preparing');
+
+    act(() =>
+      store.getState().applyEvent({
+        v: 1,
+        name: 'catalog.changed',
+        payload: {
+          generation: store.getState().library.generation + 1,
+          total: store.getState().library.catalogTotal,
+        },
+      }),
+    );
+    expect(store.getState().playback.transportOperation).toBeNull();
+    expect(store.getState().playback.prepared).toBeNull();
+
+    release.resolve();
+    await act(async () => preparation);
+    expect(store.getState().playback.transportOperation).toBeNull();
+    expect(store.getState().playback.prepared).toBeNull();
+    expect(store.getState().playback.preparedIdentity).toBeNull();
+    expect(store.getState().playback.preparedContext).toBeNull();
+  });
+
   it('keeps an in-flight prepare current through a palette patch and accepts its late response', async () => {
     const bridge = createMockBridge({ startDelayMs: 5 });
     const originalPrepare = bridge.preparePlayback;

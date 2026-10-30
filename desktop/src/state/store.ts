@@ -4,7 +4,9 @@ import type { DesktopBridge } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 import { boundedText, eventDetail } from './eventHelpers';
 import { createLibrarySlice } from './librarySlice';
+import { createLibraryPlaybackCoordinator } from './libraryPlaybackCoordinator';
 import { createSettingsSlice } from './settingsSlice';
+import { createUpdateSlice } from './updateSlice';
 import { createDiagnosticsSlice } from './diagnosticsSlice';
 import { createPlaybackSlice } from './playbackSlice';
 import { MAX_DIAGNOSTIC_EVENTS, MAX_DIAGNOSTIC_SAMPLES } from './types';
@@ -64,16 +66,20 @@ export function createDesktopStore(bridge: DesktopBridge) {
       bridge,
       get,
       set,
+      getLibrary: () => get().library,
       loadPage: (...args) => loadPage(...args),
     });
     cancelStaleAutoAdvanceHandoff = playbackSlice.cancelStaleAutoAdvanceHandoff;
+    const libraryPlaybackCoordinator = createLibraryPlaybackCoordinator({
+      get,
+      set,
+      playback: playbackSlice,
+    });
     const librarySlice = createLibrarySlice({
       bridge,
       get,
       set,
-      clearOperationFromEvent: playbackSlice.clearOperationFromEvent,
-      invalidatePlaybackMembershipContext: playbackSlice.invalidatePlaybackMembershipContext,
-      playbackAfterBrowserNavigation: playbackSlice.playbackAfterBrowserNavigation,
+      playback: libraryPlaybackCoordinator,
       nextDetailRequestToken: () => {
         detailRequestToken += 1;
         return detailRequestToken;
@@ -88,6 +94,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       clearOperationFromEvent: playbackSlice.clearOperationFromEvent,
       onAutoPlayChanged: playbackSlice.onAutoPlayChanged,
     });
+    const updateSlice = createUpdateSlice({ bridge, get, set });
     const diagnosticsSlice = createDiagnosticsSlice({ bridge, get, set });
 
     return {
@@ -195,6 +202,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
       ...librarySlice.actions,
       ...settingsSlice,
+      ...updateSlice,
       ...diagnosticsSlice,
       ...playbackSlice.actions,
 
@@ -314,42 +322,10 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (event.name === 'catalog.changed') {
           if (eventState.catalogGeneration <= get().library.generation) return;
           detailRequestToken += 1;
-          const playback = get().playback;
-          const cancelPreparing = playback.transportOperation === 'preparing';
-          if (cancelPreparing) playbackSlice.clearOperationFromEvent();
-          set({
-            library: {
-              ...get().library,
-              generation: eventState.catalogGeneration,
-              catalogTotal: eventState.catalogTotal,
-              builtinPage: {
-                committedPage: 1,
-                pendingPage: null,
-                intentId: get().library.builtinPage.intentId + 1,
-                failedPage: null,
-                focusNowPlaying: null,
-              },
-              resultTotal: eventState.catalogTotal,
-              pages: new Map(),
-              indexById: new Map(),
-              selectedSongId: null,
-              selectedSongSummary: null,
-              selectedSongIndex: null,
-              membershipRevision: get().library.membershipRevision,
-              indexMembershipRevision: -1,
-              visibleRange: { first: 0, last: 0 },
-              error: null,
-              loading: true,
-            },
-            playback: {
-              ...playback,
-              prepared: null,
-              preparedIdentity: null,
-              preparedContext: null,
-              transportOperation: cancelPreparing ? null : playback.transportOperation,
-            },
+          libraryPlaybackCoordinator.applyCatalogGeneration({
+            generation: eventState.catalogGeneration,
+            catalogTotal: eventState.catalogTotal,
           });
-          set({ details: { bySongId: new Map() } });
           void get().loadLibraryNavigation();
           void librarySlice.reconcileCatalog();
           return;

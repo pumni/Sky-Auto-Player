@@ -112,6 +112,43 @@ and builders belong to `engine/tests/support.rs`. The semantic test owners are:
 The architecture audit enforces the exact direct `.rs` owner inventory and a
 2,200-line ceiling for each owner.
 
+### Desktop frontend state ownership
+
+The desktop keeps one canonical Zustand store. `DesktopStore` in
+`desktop/src/state/types.ts` is its state and action contract, and
+`createDesktopStore(bridge)` in `desktop/src/state/store.ts` is the composition
+root. The typed bridge remains the frontend boundary; feature controllers do
+not create separate stores or synchronize state through effects.
+
+- `settingsSlice.ts` owns settings patching and serialized settings updates.
+  `updateSlice.ts` owns update check and install handoff request state, dialog
+  state, and frontend transport errors. Rust `UpdateService` remains the
+  authority for update policy and native update state.
+- `librarySlice.ts` owns Library query intent, bounded page caching,
+  virtualization hydration, and paging. `librarySelectionActions.ts` owns
+  selected-song/detail requests and browser navigation.
+  `libraryMutationActions.ts` owns playlist and Like mutations, their
+  latest-intent behavior, and navigation request fencing. Its mutation ledger
+  is shared with query/cache reconciliation so optimistic Likes and membership
+  revisions remain consistent with cached pages.
+- `libraryCatalog.ts` owns catalog-generation reset and bounded catalog
+  reconciliation. `libraryPlaybackCoordinator.ts` is the composition seam for
+  cross-feature state changes: catalog invalidation, membership invalidation,
+  browser-navigation projection, and playing-song Like projection. It stores
+  no second Library or Playback copy.
+- `playbackSlice.ts` composes Playback state transitions and typed playback
+  event projection. `playbackPreparation.ts` owns playback-context row
+  resolution and native prepare requests. `playbackSessionLedger.ts` owns
+  pending start identities, start epochs, retirement history, and retirement
+  waiters. `playbackReconciliation.ts` owns transport-operation epochs,
+  timeouts, and native status recovery. `playbackTransport.ts` owns transport
+  actions, while `playbackSourceTraversal.ts` owns frozen-source traversal and
+  the natural Auto Play handoff.
+
+The controllers mutate the same store through the composition root. Library
+paging limits, selection versus playing identity, Playback session retirement,
+and native updater authority remain feature invariants.
+
 ## Playback boundary
 
 ```text
@@ -177,11 +214,11 @@ the architecture allowlist. Application orchestration, domain policies
 (`sky_app_core`), Tauri command delivery, catalog indexing, calibration
 validation, and updater policy remain safe Rust.
 
-| Module | Unsafe operation | Safety invariant |
-| --- | --- | --- |
-| `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput` | Platform calls stay in the Windows adapter; owned handles are closed by their owner and physical input uses `SendInput` only. |
-| `rust/crates/sky_native_adapters/src/lib.rs` | `MoveFileExW` atomic settings replacement | NUL-terminated source and destination buffers stay live through the synchronous replace call. |
-| `desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs` | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
+| Module                                                                                                                                                                | Unsafe operation                                                        | Safety invariant                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; owned handles are closed by their owner and physical input uses `SendInput` only.     |
+| `rust/crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
+| `desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 
 The scanner reports unsafe code under `cfg(test)` separately from production
 unsafe. `rust/crates/sky_native_adapters/src/paths.rs` uses unsafe environment
