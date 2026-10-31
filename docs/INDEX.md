@@ -15,7 +15,12 @@ invariants that must not be discarded because an implementation differs.
   (field definitions are current; dated qualification results are historical).
 - **Desktop UI:** [workbench](desktop-workbench.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
+- **Sheet compatibility and playback consent:** [desktop workbench](desktop-workbench.md#sheet-compatibility-and-playback-preparation),
+  [source decoding](song-source-decoding.md), and [15-key planning](song-planning.md).
 - **Security:** [SECURITY.md](../SECURITY.md).
+- **Song source schemas and canonical decoding:** [song source decoding](song-source-decoding.md).
+- **Song numeric compatibility and maintenance inventory:** [numeric compatibility](song-numeric-compatibility.md).
+- **Canonical events to Sky Piano plans:** [song planning](song-planning.md).
 - **Packaging and updater:** [distribution](distribution-and-update.md),
   [Tauri packaging](v4-tauri-packaging.md).
 - **Release operations:** [release authority](v4-release-authority.md),

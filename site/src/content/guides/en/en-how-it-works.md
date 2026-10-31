@@ -84,8 +84,8 @@ The code follows a four-layer design:
 
 A Rust timing worker owns compilation, dispatch, focus, `SendInput` calls, cleanup, and native
 telemetry. The Tauri/React shell renders the desktop UI and native Rust application services own
-settings, catalog, playback, diagnostics, updates, and calibration. The production desktop has
-no Python Core, Python desktop IPC, or Python runtime dependency.
+settings, catalog, playback, diagnostics, updates, and calibration. The production desktop uses
+the native command router and has no auxiliary process or fallback path.
 
 ## What Sky Auto Player does not do
 

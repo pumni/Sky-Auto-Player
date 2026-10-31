@@ -82,7 +82,7 @@ Code tuân theo thiết kế bốn lớp:
 | **Infrastructure** | Theo dõi focus, hotkey listener, real-time sleeper, đăng ký MMCSS.                  |
 | **Platform**       | Backend Windows: `SendInput`, waitable timer, MMCSS. Nơi duy nhất chứa Win32 types. |
 
-Một Rust timing worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp và telemetry native. Tauri/React render desktop UI; các native Rust application service sở hữu settings, catalog, playback, diagnostics, update và calibration. Desktop production không phụ thuộc Python Core, Python desktop IPC hay Python runtime.
+Một Rust timing worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp và telemetry native. Tauri/React render desktop UI; các native Rust application service sở hữu settings, catalog, playback, diagnostics, update và calibration. Desktop production dùng native command router, không có auxiliary process hay fallback path.
 
 ## Những gì Sky Auto Player KHÔNG làm
 

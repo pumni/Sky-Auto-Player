@@ -88,6 +88,32 @@ Song Details and Runtime Diagnostics retain their own scrollable content. Runtim
 plots, events, and trace export remain available in either presentation. The Inspector ends above
 the Player Dock, which keeps its own independent geometry and controls.
 
+## Sheet compatibility and playback preparation
+
+Song Details reports the selected sheet's format, schema, track roster, target pitch, and conversion
+losses. Flat legacy sheets keep the existing key and schedule path. Supported versioned Composed
+and Recorded sheets are prepared from their authoritative decoded events; an unsupported or
+malformed versioned source stays blocked even if it also contains a legacy `songNotes` projection.
+
+Versioned sheets default to **Merge playable tracks** and the source song pitch. The target pitch
+is an explicit mapping choice for the Sky Piano, not an automatic transposition; when the source
+pitch is used, Details labels it as an assumption and reminds the player to tune the in-game Piano.
+Multi-track sheets also offer **Single track** with the source track's stable ID. The details list
+unpitched or unresolved notes, notes outside the selected Piano range, omitted tracks, authored
+sustain that the one-shot Piano cannot reproduce, and distinct source onsets collapsed by tempo
+rounding.
+
+Selecting Play for a lossy plan first shows a review proposal without a prepared plan ID. The
+player must accept the listed conversion losses, and the app prepares the same source bytes,
+selection, and timing configuration represented by that proposal. Changing the selected song,
+track mode, target pitch, catalog generation, playback settings, or source bytes invalidates stale
+analysis or preparation. Native start checks the source hash again before playback begins.
+
+Conversion consent and physical playback admission are separate. After lossy conversion is
+accepted, the existing timing-risk confirmation, focus, integrity, and input gates still apply.
+The app cannot inspect the in-game Piano's tuning, and these controls do not change native timing,
+focus verification, or Windows `SendInput` behavior.
+
 ## Palette and semantic color roles
 
 Native settings schema 10 owns `appearance_mode` (`system`, `light`, or `dark`) independently from
@@ -149,6 +175,17 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
   page caching, Like/membership invalidation, selected-song identity, full-source playback, and
   session retirement races. `desktop/tests/e2e/library.spec.ts` covers 100-result page boundaries,
   page 101 navigation, virtualization, and playback across pages.
+- `desktop/src/components/utility/SongDetailsView.test.tsx`,
+  `desktop/src/state/store.test.ts`, and
+  `desktop/tests/e2e/sheet-compatibility.spec.ts` cover source pitch assumptions, supported and
+  unsupported schemas, track selection, exact loss consent, stale detail fencing, and invalidation.
+  Native detail/prepare parity, loss consent, source rewrite rejection, and the independent physical
+  risk gate are covered by
+  `desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs`.
+- Current browser captures for legacy ready, multitrack loss proposal and acceptance, unsupported
+  schema, and source pitch assumption are recorded in
+  [`Issue #567 WP-C UI evidence`](evidence/issue-567-wp-c/README.md). Browser mock screenshots do
+  not establish native Windows focus or gameplay-input behavior.
 - `desktop/tests/e2e/playback.spec.ts` and
   `desktop/tests/e2e/playback-recovery.spec.ts` cover transport geometry, start and retirement
   races, recovery, and dry-run versus physical labels.

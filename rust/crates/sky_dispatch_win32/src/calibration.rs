@@ -925,7 +925,7 @@ impl CalibrationConfig {
             polyphonies: vec![1, 5, 15],
             // Quick is the publishable interactive protocol. Diagnostic
             // callers pass an explicitly smaller count and are non-publishable
-            // at the Python boundary.
+            // at the publication boundary.
             samples_per_hot_bucket: 100,
             samples_per_cold_bucket: 100,
             warmup_samples: 4,

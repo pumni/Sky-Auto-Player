@@ -8,7 +8,7 @@
 //! - `timing.rs` owns pure typed timing projection (sender start/completion,
 //!   completion errors, strict completion predicates, typed duration
 //!   conversion). It must not import `SharedMetrics`, `TelemetryCollector`,
-//!   `Mutex`, or Python types.
+//!   `Mutex`, or UI/configuration types.
 //! - `observer.rs` owns health observation, the telemetry observer stage,
 //!   worker metric updates, and shared snapshot publication.
 //! - `observer_wake.rs` owns bounded handoff of raw wait results with their

@@ -2,7 +2,7 @@
 
 The Tauri/React desktop is the only supported user-facing product. Its
 commands are handled by the native Rust composition root; the repository has
-no tracked Python runtime or tooling surface.
+no separate scripting runtime in the packaged application.
 
 ## Layers
 
@@ -39,10 +39,10 @@ Each state has one owner and each module has a focused invariant:
 
 All 32 stable request/response commands have one native handler. The separate
 `subscribe_ui_events` Tauri command establishes the UI event subscription; it
-is not a request/response method in the IPC method table. There is no Python
-Core process, desktop Python IPC, or automatic fallback in the production
-router. `core.ready` remains a compatibility wire event name and is produced
-by the native runtime where the frontend contract requires it.
+is not a request/response method in the IPC method table. The production
+router has no auxiliary process or automatic fallback. `core.ready` remains a
+compatibility wire event name and is produced by the native runtime where the
+frontend contract requires it.
 
 `NativeDesktopRuntime` in `desktop/src-tauri/src/native_runtime.rs` remains the
 composition and ownership root for settings, command routing, app coordination,
@@ -274,7 +274,7 @@ unsafe. `rust/crates/sky_native_adapters/src/paths.rs` uses unsafe environment
 mutation only in serialized resolver tests; no production path changes process
 environment state.
 
-Test seams are feature-gated or test-gated and never activated by environment variables alone in production. Production packages compose safe seams explicitly while runtime builds use disabled seams. There is no foreign-language extension crate, wheel build, or Python player binding in the workspace.
+Test seams are feature-gated or test-gated and never activated by environment variables alone in production. Production packages compose safe seams explicitly while runtime builds use disabled seams. The workspace builds no extension modules or alternate player bindings.
 
 ## Evidence and repository tooling
 
@@ -318,4 +318,4 @@ cargo xtask check desktop
 cargo xtask check all
 ```
 
-The `xtask` retirement, architecture, security, branding, and zero-Python checks are canonical.
+The `xtask` architecture, security, branding, and runtime-boundary checks are canonical.

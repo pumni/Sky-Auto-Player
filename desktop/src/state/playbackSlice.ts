@@ -45,6 +45,7 @@ export interface PlaybackSliceContext {
 export type PlaybackSliceActions = Pick<
   DesktopStore,
   | 'prepareSelectedPlayback'
+  | 'acknowledgeSheetLoss'
   | 'startPreparedPlayback'
   | 'cancelPreparedPlayback'
   | 'stopPlayback'
@@ -550,7 +551,11 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const current = get();
       const playback = current.playback;
       const library = getLibrary();
-      if (playback.prepared?.admission === 'confirmation_required') return;
+      if (
+        playback.prepared?.admission === 'confirmation_required' &&
+        playback.prepared.error_code !== 'conversion_confirmation_required'
+      )
+        return;
       if (
         playback.startRequestId !== null ||
         playback.transportOperation !== null ||
@@ -611,10 +616,42 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
           operationEpoch,
         );
         if (!prepared || !operationIsCurrent(operationEpoch)) return;
-        finishOperation(operationEpoch, prepared.error_message);
+        finishOperation(
+          operationEpoch,
+          prepared.error_code === 'conversion_confirmation_required'
+            ? null
+            : prepared.error_message,
+        );
       } catch (error) {
         finishOperation(operationEpoch, errorMessage(error));
       }
+    },
+
+    async acknowledgeSheetLoss() {
+      const current = get();
+      const proposal = current.playback.prepared;
+      const sheet = proposal?.song.sheet_analysis;
+      const fingerprint = sheet?.confirmation_fingerprint;
+      if (
+        proposal?.error_code !== 'conversion_confirmation_required' ||
+        proposal.prepared_id !== null ||
+        !fingerprint ||
+        proposal.song.song_id !== current.library.selectedSongId ||
+        current.playback.preparedIdentity?.generation !== current.library.generation ||
+        JSON.stringify(sheet.conversion_mode) !== JSON.stringify(current.library.conversionMode) ||
+        (current.library.targetPitch !== null &&
+          sheet.target_pitch !== current.library.targetPitch) ||
+        sheet.confirmation_received
+      ) {
+        return;
+      }
+      set({
+        library: {
+          ...current.library,
+          conversionConsentFingerprint: fingerprint,
+        },
+      });
+      await actions.prepareSelectedPlayback(proposal.config);
     },
 
     async startPreparedPlayback(decision) {
@@ -657,7 +694,25 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       try {
         await startForOperation(prepared, identity, playbackContext, decision, operationEpoch);
       } catch (error) {
-        finishOperation(operationEpoch, errorMessage(error));
+        const message = errorMessage(error);
+        finishOperation(operationEpoch, message);
+        if (message.includes('source changed') || message.includes('no longer readable')) {
+          const latest = get();
+          if (latest.playback.prepared?.prepared_id === prepared.prepared_id) {
+            set({
+              library: {
+                ...latest.library,
+                conversionConsentFingerprint: null,
+              },
+              playback: {
+                ...latest.playback,
+                prepared: null,
+                preparedIdentity: null,
+                preparedContext: null,
+              },
+            });
+          }
+        }
       }
     },
 

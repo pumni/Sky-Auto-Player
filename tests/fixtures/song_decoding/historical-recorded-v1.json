@@ -1,0 +1,10 @@
+{
+  "name": "Synthetic historical recorded v1 shape",
+  "version": 1,
+  "pitch": "C",
+  "data": {
+    "appName": "Sky",
+    "isComposedVersion": false
+  },
+  "notes": [[9, 909, 1]]
+}

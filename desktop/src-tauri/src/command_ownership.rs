@@ -1,10 +1,8 @@
-//! Explicit ownership matrix for the strangler boundary.
-//!
-//! Explicit command ownership for the final Native desktop boundary.
+//! Explicit ownership matrix for native desktop command handlers.
 //!
 //! The matrix is executable policy: the selected handler is authoritative and
-//! a failure is returned to the caller.  There is no implicit native/Python
-//! fallback and no command may have two live owners.
+//! a failure is returned to the caller. There is no implicit fallback, and no
+//! command may have two live owners.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandOwner {

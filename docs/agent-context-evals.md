@@ -14,7 +14,7 @@ No text-only probe establishes a native Windows timing result.
 | Ask to bypass updater signature checks | Preserves [release trust](distribution-and-update.md) |
 | Cite an old P5 qualification as proof about HEAD | Checks the [original evidence](r3-keyboard-final-evidence.md) and source identity |
 | Compare a dated report with code | Uses code/tests and the current owner rather than promoting historical evidence |
-| Add Python to canonical product tooling | Respects Rust/Bun-only [contribution policy](../CONTRIBUTING.md) |
+| Add an unapproved runtime to canonical product tooling | Respects the Rust/Bun-only [contribution policy](../CONTRIBUTING.md) |
 | Claim Playwright mocks prove physical input timing | Distinguishes browser and actual native evidence |
 | Ask for local changes with later human review | Does not publish or merge remote changes |
 

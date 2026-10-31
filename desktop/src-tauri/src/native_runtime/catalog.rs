@@ -1,7 +1,8 @@
 use super::{
     CachedSongAnalysis, CatalogCompositionSnapshot, CatalogLoadClaim, CatalogLoadState,
     CatalogLoadWork, CatalogMetadata, NativeDesktopRuntime, NativeLibraryImportRequest,
-    bounded_text, opaque_native_id, settings_error,
+    SheetReadinessDto, SongAnalysisRequest, SongPlan, bounded_text, opaque_native_id,
+    settings_error,
 };
 use crate::commands::{
     CatalogDetailRequest, CatalogReloadDto, CatalogRowDto, CatalogSetLikedDto,
@@ -16,11 +17,7 @@ use crate::ui_events::{
 use sha2::{Digest, Sha256};
 use sky_app_core::catalog::{CatalogError, CatalogSourceIdentity, StableSongId};
 use sky_app_core::library::{ImportedSourceKind, ImportedSourceRef, LibraryError};
-use sky_app_core::settings::ApplicationSettings;
-use sky_app_core::song::{
-    analyze_schedule_with_context, build_schedule_with_policy, parse_song_json,
-};
-use sky_app_core::timing::MaterializedTimingPolicy;
+use sky_app_core::song::{analyze_schedule_with_context, build_song_plan};
 use sky_native_adapters::{
     AppResources, BuiltinCatalogFailureCode, BuiltinCatalogStatus, CatalogCache, CatalogCacheEntry,
     CatalogCacheSourceKind, CatalogComposition, ImportedSourceCatalogStatus,
@@ -793,6 +790,7 @@ impl NativeDesktopRuntime {
 
     pub(super) fn detail(&self, request: CatalogDetailRequest) -> Result<SongDetailDto, String> {
         self.ensure_catalog_loaded()?;
+        self.playback.invalidate_prepared_for_selection()?;
         let (entry, generation) = {
             let catalog = self
                 .catalog
@@ -816,18 +814,29 @@ impl NativeDesktopRuntime {
             settings.playback_defaults.hold_frames,
             settings.playback_defaults.timing_margin_us,
         )?;
+        let source_bytes = fs::read(&path).map_err(|error| format!("song read failed: {error}"))?;
+        let selection = serde_json::to_string(&(request.conversion_mode, request.target_pitch))
+            .map_err(|error| format!("sheet selection encoding failed: {error}"))?;
         let key = super::AnalysisKey {
-            song_id: song_id.clone(),
+            song_id: if request.conversion_mode.is_none() && request.target_pitch.is_none() {
+                song_id.clone()
+            } else {
+                format!("{song_id}\0sheet:{selection}")
+            },
             generation,
             settings_revision,
         };
         let cached = self.analysis_for_request(super::AnalysisRequest {
             key,
+            analysis_song_id: &song_id,
             path: &path,
+            source_bytes: Some(&source_bytes),
             title: &title,
             failure_format_label: &format_label_for_path(&path),
             settings: &settings,
             policy: &policy,
+            conversion_mode: request.conversion_mode,
+            target_pitch: request.target_pitch,
             viewport_revision: None,
             priority: super::AnalysisPriority::Selected,
             cache_failures: false,
@@ -1014,11 +1023,15 @@ impl NativeDesktopRuntime {
             };
             match self.analysis_for_request(super::AnalysisRequest {
                 key,
+                analysis_song_id: song_id,
                 path: Path::new(path),
+                source_bytes: None,
                 title,
                 failure_format_label: &format_label_for_path(Path::new(path)),
                 settings: &settings,
                 policy: &policy,
+                conversion_mode: None,
+                target_pitch: None,
                 viewport_revision: Some(viewport_revision),
                 priority: if selected_id == Some(song_id.as_str()) {
                     super::AnalysisPriority::Selected
@@ -1174,29 +1187,150 @@ impl NativeDesktopRuntime {
 
     pub(super) fn analyze_song(
         &self,
-        path: &Path,
-        song_id: &str,
-        title: &str,
-        fallback: &str,
-        settings: &ApplicationSettings,
-        policy: &MaterializedTimingPolicy,
+        request: SongAnalysisRequest<'_>,
     ) -> Result<CachedSongAnalysis, String> {
-        let bytes = fs::read(path).map_err(|error| format!("song read failed: {error}"))?;
-        let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
-        let schedule =
-            build_schedule_with_policy(&song, settings.playback_defaults.tempo_scale, policy)
-                .map_err(|error| error.to_string())?;
-        let risk = analyze_schedule_with_context(
-            &schedule,
-            Some(&song.notes),
-            settings.playback_defaults.hold_frames,
+        let SongAnalysisRequest {
+            path,
+            source_bytes,
+            song_id,
+            title,
+            fallback,
+            generation,
+            settings,
+            policy,
+            conversion_mode,
+            target_pitch,
+        } = request;
+        let owned_bytes;
+        let bytes = if let Some(source_bytes) = source_bytes {
+            source_bytes
+        } else {
+            owned_bytes = fs::read(path).map_err(|error| format!("song read failed: {error}"))?;
+            owned_bytes.as_slice()
+        };
+        let source_hash = super::sheet::sha256_hex(bytes);
+        let options = super::sheet::planner_options(
+            conversion_mode,
+            target_pitch,
             settings.playback_defaults.tempo_scale,
         );
+        let plan = match build_song_plan(bytes, fallback, &options, policy) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let sheet_analysis =
+                    super::sheet::failed_sheet_analysis(&format_label_for_path(path), &error);
+                let state = match sheet_analysis.readiness {
+                    SheetReadinessDto::Unsupported => "unsupported",
+                    _ => "malformed",
+                };
+                let detail = SongDetailDto {
+                    song_id: song_id.to_owned(),
+                    title: title.to_owned(),
+                    duration_us: 0,
+                    note_count: 0,
+                    format_label: format_label_for_path(path),
+                    risk: RiskSummaryDto {
+                        level: "unknown".into(),
+                        headline: "Sheet cannot be prepared".into(),
+                        reasons: vec![
+                            sheet_analysis
+                                .error_message
+                                .clone()
+                                .unwrap_or_else(|| "The sheet could not be analyzed.".into()),
+                        ],
+                        recommendations: Vec::new(),
+                    },
+                    recommendation: None,
+                    sheet_analysis: Some(sheet_analysis),
+                };
+                return Ok(CachedSongAnalysis {
+                    metadata: CatalogMetadata {
+                        format_label: format_label_for_path(path),
+                        duration_us: None,
+                        note_count: None,
+                        risk_level: "unknown".into(),
+                        state,
+                    },
+                    detail: Some(detail),
+                    source_hash: Some(source_hash),
+                });
+            }
+        };
+        let (note_count, duration_us, risk, sheet_analysis, state) = match plan {
+            SongPlan::LegacyCompatibility(plan) => {
+                let sheet = super::sheet::legacy_sheet_analysis(&plan.song, &plan.schedule);
+                let risk = analyze_schedule_with_context(
+                    &plan.schedule,
+                    Some(&plan.song.notes),
+                    settings.playback_defaults.hold_frames,
+                    settings.playback_defaults.tempo_scale,
+                );
+                (
+                    plan.song.notes.len() as u64,
+                    plan.schedule.source_duration_us,
+                    risk,
+                    sheet,
+                    "ready",
+                )
+            }
+            SongPlan::PianoConversion(plan) => {
+                let fingerprint = super::sheet::sheet_confirmation_fingerprint(
+                    super::sheet::SheetConfirmationIdentity {
+                        song_id,
+                        generation,
+                        path,
+                        bytes,
+                        mode: conversion_mode,
+                        pitch: target_pitch,
+                        fps: settings.playback_defaults.fps,
+                        hold_frames: settings.playback_defaults.hold_frames,
+                        timing_margin_us: settings.playback_defaults.timing_margin_us,
+                        tempo_scale: settings.playback_defaults.tempo_scale,
+                    },
+                )?;
+                let contextual_risk = super::sheet::piano_plan_risk(
+                    &plan,
+                    settings.playback_defaults.hold_frames,
+                    settings.playback_defaults.tempo_scale,
+                );
+                let sheet = super::sheet::piano_plan_sheet_analysis(
+                    &plan,
+                    Some(fingerprint),
+                    contextual_risk.as_ref(),
+                );
+                let state = match sheet.readiness {
+                    SheetReadinessDto::RequiresConfirmation => "requires_confirmation",
+                    SheetReadinessDto::PhysicalRisk => "physical_risk",
+                    SheetReadinessDto::Unplayable => "unplayable",
+                    _ => "ready",
+                };
+                let schedule = plan.schedule.as_ref();
+                let risk = contextual_risk.unwrap_or_else(unknown_risk_report);
+                (
+                    plan.diagnostics.source_tuple_count as u64,
+                    schedule
+                        .map(|value| value.source_duration_us)
+                        .unwrap_or_default(),
+                    risk,
+                    sheet,
+                    state,
+                )
+            }
+        };
         let risk_level = match risk.severity.as_str() {
             "low" | "medium" | "high" => risk.severity.clone(),
-            _ => return Err("song risk analysis returned an unknown level".into()),
+            _ => "unknown".to_owned(),
         };
-        let recommendations = risk.recommendations.clone();
+        let timing_reconsent_required = sheet_analysis.schema_version.is_some()
+            && super::sheet::timing_reconsent_required(
+                &risk,
+                settings.playback_defaults.hold_frames,
+                settings.playback_defaults.tempo_scale,
+            );
+        let mut recommendations = risk.recommendations.clone();
+        if timing_reconsent_required {
+            recommendations.push(super::sheet::TIMING_RECONSENT_NOTE.to_owned());
+        }
         let reasons = if risk_level == "low" {
             Vec::new()
         } else {
@@ -1205,17 +1339,26 @@ impl NativeDesktopRuntime {
         let recommendation = Some(crate::commands::PlaybackRecommendationDto {
             recommended_hold_frames: risk.suggested_hold_frames,
             recommended_tempo_scale: risk.suggested_tempo_scale,
-            summary: recommendations
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "Keep the selected settings.".into()),
+            summary: if timing_reconsent_required {
+                let suggestion = risk
+                    .recommendations
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Consider a timing profile change.".into());
+                format!("{suggestion} {}", super::sheet::TIMING_RECONSENT_NOTE)
+            } else {
+                recommendations
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Keep the selected settings.".into())
+            },
         });
         let format_label = format_label_for_path(path);
         let detail = SongDetailDto {
             song_id: song_id.to_owned(),
             title: title.to_owned(),
-            duration_us: schedule.source_duration_us,
-            note_count: song.notes.len() as u64,
+            duration_us,
+            note_count,
             format_label: format_label.clone(),
             risk: RiskSummaryDto {
                 level: risk_level.clone(),
@@ -1229,17 +1372,38 @@ impl NativeDesktopRuntime {
                 recommendations,
             },
             recommendation,
+            sheet_analysis: Some(sheet_analysis),
         };
         Ok(CachedSongAnalysis {
             metadata: CatalogMetadata {
                 format_label,
-                duration_us: Some(schedule.source_duration_us),
-                note_count: Some(song.notes.len() as u64),
+                duration_us: Some(duration_us),
+                note_count: Some(note_count),
                 risk_level,
-                state: "ready",
+                state,
             },
             detail: Some(detail),
+            source_hash: Some(source_hash),
         })
+    }
+}
+
+fn unknown_risk_report() -> sky_app_core::song::RiskReport {
+    sky_app_core::song::RiskReport {
+        severity: "unknown".into(),
+        reason: "No playable schedule was produced.".into(),
+        recommendations: Vec::new(),
+        dense_clusters: Vec::new(),
+        average_notes_per_second: 0.0,
+        peak_notes_per_second_1s: 0.0,
+        max_polyphony: 0,
+        max_chord_size: 0,
+        chords_count: 0,
+        timing_stress_rate: 0.0,
+        min_any_note_gap_us: None,
+        min_same_key_gap_us: None,
+        suggested_hold_frames: None,
+        suggested_tempo_scale: None,
     }
 }
 
