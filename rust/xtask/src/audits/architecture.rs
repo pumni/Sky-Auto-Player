@@ -269,6 +269,7 @@ const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
     ("rust/xtask/src/calibration.rs", 1_250),
     ("rust/xtask/src/checks.rs", 1_600),
     ("rust/xtask/src/checks/bindings.rs", 700),
+    ("rust/xtask/src/checks/bun_pin.rs", 500),
     ("rust/xtask/src/checks/ci_contracts.rs", 2_100),
     ("rust/xtask/src/checks/hosted_signing.rs", 300),
     ("rust/xtask/src/checks/recovery_auth.rs", 350),

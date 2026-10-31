@@ -1,4 +1,5 @@
 mod bindings;
+mod bun_pin;
 mod ci_contracts;
 mod hosted_signing;
 mod recovery_auth;
@@ -131,6 +132,7 @@ fn run_with_session(
             tauri_metadata::tauri_build_freshness_contract(&root)?;
             verify_builtin_catalog(&root, session)?;
             trust::v4_trust_material_contract(&root)?;
+            bun_pin::bun_pin_contract(&root)?;
             ci_contracts::ci_control_plane_contract(&root)?;
             tauri_metadata::release_metadata_contract(&root)?;
             release_runner::release_runner_contract(&root)?;
