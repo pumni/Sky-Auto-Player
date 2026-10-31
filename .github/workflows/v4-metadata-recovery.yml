@@ -89,12 +89,9 @@ jobs:
           fetch-tags: false
           persist-credentials: false
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Build Rust metadata recovery control before GitHub access
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
 
       - name: Verify public release and write read-only plan
@@ -153,12 +150,9 @@ jobs:
           fetch-tags: false
           persist-credentials: false
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Build Rust metadata recovery control before App token
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
 
       - name: Download operator-reviewed plan artifact

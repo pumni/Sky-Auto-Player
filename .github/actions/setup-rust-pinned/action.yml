@@ -1,0 +1,46 @@
+name: Set up source-pinned Rust toolchain
+description: Install and verify the Rust toolchain declared by rust/rust-toolchain.toml
+inputs:
+  targets:
+    description: Additional Rust targets required by this job, one per line
+    required: false
+    default: ""
+  components:
+    description: Additional Rust components required by this job, one per line
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install Rust from the checked-out source pin
+      shell: pwsh
+      env:
+        RUST_TARGETS: ${{ inputs.targets }}
+        RUST_COMPONENTS: ${{ inputs.components }}
+      run: |
+        $resolved = & node scripts/toolchain-pin.mjs read rust
+        $readExit = $LASTEXITCODE
+        if ($readExit -ne 0) { exit $readExit }
+        $version = (@($resolved) -join "`n").Trim()
+        if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+          throw "The repository Rust pin is not an exact numeric version: '$version'"
+        }
+        $rustupInstallArgs = @('toolchain', 'install', $version, '--profile', 'minimal')
+        foreach ($target in ($env:RUST_TARGETS -split '[,\r\n]+')) {
+          $target = $target.Trim()
+          if ($target) { $rustupInstallArgs += @('--target', $target) }
+        }
+        foreach ($component in ($env:RUST_COMPONENTS -split '[,\r\n]+')) {
+          $component = $component.Trim()
+          if ($component) { $rustupInstallArgs += @('--component', $component) }
+        }
+        & rustup @rustupInstallArgs
+        $installExit = $LASTEXITCODE
+        if ($installExit -ne 0) { exit $installExit }
+        "RUSTUP_TOOLCHAIN=$version" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
+
+    - name: Verify Rustup environment propagation and installed compiler
+      shell: pwsh
+      run: |
+        & node scripts/toolchain-pin.mjs verify rust
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

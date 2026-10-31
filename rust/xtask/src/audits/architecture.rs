@@ -275,6 +275,7 @@ const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
     ("rust/xtask/src/checks/recovery_auth.rs", 350),
     ("rust/xtask/src/checks/release_pipeline.rs", 1_200),
     ("rust/xtask/src/checks/release_runner.rs", 1_900),
+    ("rust/xtask/src/checks/rust_toolchain.rs", 850),
     ("rust/xtask/src/checks/tauri_metadata.rs", 1_300),
     ("rust/xtask/src/checks/trust.rs", 1_050),
     ("rust/xtask/src/checks/workflow.rs", 850),

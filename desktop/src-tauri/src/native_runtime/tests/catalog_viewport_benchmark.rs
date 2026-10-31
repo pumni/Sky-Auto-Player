@@ -126,7 +126,7 @@ fn print_distribution(size: usize, scenario: &str, samples: usize, values: &mut 
 
 /// Paired cold, exact-repeat, shift/back, and selected/detail viewport workload.
 /// Run the same test against the approved B SHA and the correction SHA with
-/// `cargo +1.99.1 test --manifest-path desktop/src-tauri/Cargo.toml --locked
+/// `node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
 /// --release --lib --features tauri-test
 /// native_runtime::tests::catalog_viewport_benchmark::opt_in_package_b_viewport_projection_benchmark
 /// -- --ignored --nocapture`. Timing values are diagnostic only.

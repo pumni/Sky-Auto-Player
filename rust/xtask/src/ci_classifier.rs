@@ -117,6 +117,16 @@ fn classify_path(
         return;
     }
 
+    if [
+        "scripts/toolchain-pin.mjs",
+        ".github/actions/setup-rust-pinned/action.yml",
+    ]
+    .contains(&path)
+    {
+        classification.add_many(&LANES);
+        return;
+    }
+
     if path.starts_with("site/")
         || path.starts_with(".github/actions/site-validate/")
         || path == ".github/workflows/pages.yml"
@@ -1206,6 +1216,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rust_toolchain_resolver_and_setup_action_select_all_validation_lanes() {
+        for path in [
+            "scripts/toolchain-pin.mjs",
+            ".github/actions/setup-rust-pinned/action.yml",
+        ] {
+            assert_lanes(&classify_paths([path.to_owned()]), &LANES);
+        }
+        assert_lanes(
+            &classify_paths(["rust/rust-toolchain.toml".to_owned()]),
+            &[
+                "rust_required",
+                "desktop_required",
+                "desktop_native_required",
+                "package_required",
+                "updater_required",
+                "release_required",
+            ],
+        );
+        assert_lanes(
+            &classify_paths(["site/src/pages/index.astro".to_owned()]),
+            &["site_required"],
+        );
     }
 
     #[test]

@@ -793,7 +793,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "needs: changes",
         "if: needs.changes.outputs.updater_required == 'true'",
         "runs-on: windows-latest",
-        "rustup toolchain install 1.99.1",
+        "uses: ./.github/actions/setup-rust-pinned",
         "bun-version-file: site/package.json",
         "bun install --frozen-lockfile",
         "Test Tauri signer key pair interoperability",

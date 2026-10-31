@@ -41,7 +41,8 @@ PowerShell script. The current workflow and operator policy are defined in
 
 `.github/workflows/hosted-v4-signing-proof.yml` runs on relevant pull requests and can be manually
 dispatched from a feature branch. It uses `windows-latest`, a read-only `contents` token, pinned
-checkout and Bun setup actions, and Rust 1.99.1. It does not use a protected environment, GitHub
+checkout and Bun setup actions, and the Rust version declared in
+`rust/rust-toolchain.toml`, installed by the repository-local setup action. It does not use a protected environment, GitHub
 secrets, the GitHub API, release commands, artifact uploads, or metadata writes.
 
 The workflow builds one canonical NSIS installer with Tauri updater artifact creation disabled and
