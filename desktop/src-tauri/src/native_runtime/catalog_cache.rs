@@ -1,4 +1,6 @@
-use super::{CachedSongAnalysis, MaterializedTimingPolicy, NativeDesktopRuntime};
+use super::{
+    CachedSongAnalysis, MaterializedTimingPolicy, NativeDesktopRuntime, SongAnalysisRequest,
+};
 use crate::commands::{CatalogRowDto, CatalogViewportDto};
 use sky_app_core::catalog::CatalogSearchOrder;
 use sky_app_core::settings::ApplicationSettings;
@@ -585,7 +587,7 @@ impl NativeDesktopRuntime {
             priority,
             cache_failures,
         } = request;
-        let expected_source_hash = source_bytes.map(super::sha256_hex);
+        let expected_source_hash = source_bytes.map(super::sheet::sha256_hex);
         if let Some(analysis) = self.analysis_cache_get(&key)? {
             if expected_source_hash
                 .as_deref()
@@ -670,18 +672,18 @@ impl NativeDesktopRuntime {
                 } else {
                     #[cfg(test)]
                     self.before_song_analysis(analysis_song_id);
-                    let analyzed = self.analyze_song(
+                    let analyzed = self.analyze_song(SongAnalysisRequest {
                         path,
                         source_bytes,
-                        analysis_song_id,
+                        song_id: analysis_song_id,
                         title,
-                        title,
-                        key.generation,
+                        fallback: title,
+                        generation: key.generation,
                         settings,
                         policy,
                         conversion_mode,
                         target_pitch,
-                    );
+                    });
                     let analyzed = if cache_failures {
                         Ok(analyzed.unwrap_or_else(|_| {
                             CachedSongAnalysis::error(failure_format_label.to_owned())

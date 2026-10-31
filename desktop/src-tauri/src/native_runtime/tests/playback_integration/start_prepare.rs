@@ -418,6 +418,11 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
         r#"{"name":"Legacy","songNotes":[{"time":0,"key":"Key0"}]}"#,
     )
     .expect("legacy sheet");
+    fs::write(
+        root.join("songs/legacy-physical.json"),
+        r#"{"name":"Legacy physical","songNotes":[{"time":0,"key":"Key0"},{"time":0,"key":"Key1"},{"time":0,"key":"Key2"},{"time":0,"key":"Key3"},{"time":0,"key":"Key4"},{"time":0,"key":"Key5"},{"time":0,"key":"Key6"},{"time":0,"key":"Key7"},{"time":0,"key":"Key8"},{"time":0,"key":"Key9"}]}"#,
+    )
+    .expect("legacy physical-risk sheet");
     let composed = r#"{
         "type":"composed","version":5,"bpm":120,"pitch":"C",
         "data":{"appName":"Sky"},"columnTempos":[0,0],
@@ -444,6 +449,12 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
     .expect("unsupported sheet with legacy projection");
 
     let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+    runtime
+        .dispatch(
+            "settings.patch",
+            serde_json::json!({"playbackDefaults":{"tempoScale":0.9}}),
+        )
+        .expect("set non-default catalog timing context");
     let generation = catalog_generation(&runtime);
     let find_song = |query: &str| {
         let search = runtime
@@ -465,9 +476,9 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
     let config = serde_json::json!({
         "hold_frames":1.0,
         "timing_margin_us":800,
-        "tempo_scale":1.0,
+        "tempo_scale":0.9,
         "fps":60,
-        "dry_run":true
+        "dry_run":false
     });
 
     let legacy_id = find_song("legacy");
@@ -611,6 +622,16 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
         "requires_confirmation"
     );
     assert_eq!(risk_detail["risk"]["level"], "medium");
+    assert_eq!(
+        risk_detail["recommendation"]["recommended_tempo_scale"],
+        0.9
+    );
+    assert!(
+        risk_detail["recommendation"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("prepare again")
+    );
     let _risk_detail_token = risk_detail["sheet_analysis"]["confirmation_fingerprint"]
         .as_str()
         .expect("risk sheet detail token")
@@ -622,10 +643,48 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
         )
         .expect("risk sheet loss proposal");
     assert!(risk_proposal["prepared_id"].is_null());
+    assert_eq!(
+        risk_proposal["song"]["recommendation"]["recommended_tempo_scale"],
+        0.9
+    );
+    assert_eq!(
+        risk_proposal["song"]["risk"]["level"],
+        risk_detail["risk"]["level"]
+    );
+    assert_eq!(
+        risk_proposal["song"]["risk"]["recommendations"],
+        risk_detail["risk"]["recommendations"]
+    );
     let risk_token = risk_proposal["song"]["sheet_analysis"]["confirmation_fingerprint"]
         .as_str()
         .expect("risk playback config consent token")
         .to_owned();
+    let changed_timing = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({
+                "songId":risk_id,
+                "generation":generation,
+                "config":{
+                    "hold_frames":1.0,
+                    "timing_margin_us":800,
+                    "tempo_scale":0.95,
+                    "fps":60,
+                    "dry_run":false
+                },
+                "conversionConfirmationFingerprint":risk_token.clone()
+            }),
+        )
+        .expect("timing change produces a fresh conversion proposal");
+    assert!(changed_timing["prepared_id"].is_null());
+    assert_eq!(
+        changed_timing["error_code"],
+        "conversion_confirmation_required"
+    );
+    assert_ne!(
+        changed_timing["song"]["sheet_analysis"]["confirmation_fingerprint"],
+        risk_proposal["song"]["sheet_analysis"]["confirmation_fingerprint"]
+    );
     let risk_accepted = runtime
         .dispatch(
             "playback.prepare",
@@ -639,8 +698,60 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
         .expect("loss consent leaves physical risk admission active");
     assert_eq!(risk_accepted["admission"], "confirmation_required");
     assert_eq!(risk_accepted["risk"]["level"], "medium");
-    assert!(!risk_accepted["decisions"].as_array().unwrap().is_empty());
+    let decisions = risk_accepted["decisions"].as_array().unwrap();
+    assert!(decisions.iter().any(|item| item["decision"] == "proceed"));
+    assert!(decisions.iter().any(|item| item["decision"] == "dry_run"));
+    assert!(
+        decisions
+            .iter()
+            .all(|item| item["decision"] != "use_recommended")
+    );
+    let variants = risk_accepted["variants"].as_array().unwrap();
+    let dry_run = variants
+        .iter()
+        .find(|item| item["decision"] == "dry_run")
+        .expect("same-timing dry-run alternative");
+    assert_eq!(
+        dry_run["config"]["hold_frames"],
+        risk_accepted["config"]["hold_frames"]
+    );
+    assert_eq!(
+        dry_run["config"]["tempo_scale"],
+        risk_accepted["config"]["tempo_scale"]
+    );
+    assert_eq!(dry_run["config"]["dry_run"], true);
+    assert!(
+        variants
+            .iter()
+            .all(|item| item["decision"] != "use_recommended")
+    );
+    assert!(
+        risk_accepted["risk"]["reasons"][0]
+            .as_str()
+            .unwrap()
+            .contains("prepare again")
+    );
     assert!(risk_accepted["prepared_id"].as_str().is_some());
+
+    let legacy_risk_id = find_song("legacy-physical");
+    let legacy_risk = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({
+                "songId":legacy_risk_id,
+                "generation":generation,
+                "config":config
+            }),
+        )
+        .expect("legacy risk recommendations remain available");
+    assert_eq!(legacy_risk["risk"]["level"], "medium");
+    assert!(
+        legacy_risk["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["decision"] == "use_recommended")
+    );
 
     let unsupported_id = find_song("unsupported");
     let unsupported_detail = runtime

@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest, Sha256};
 
 impl SenderTraceState {
     pub(in crate::native_runtime) fn begin_physical_session(&mut self, session_id: &str) {
@@ -371,13 +372,21 @@ impl NativePlaybackService {
                 generation,
                 &publication_fingerprint,
             )?;
-            let detail = song_detail(&song_id, &song, &schedule, &risk, sheet_analysis.clone());
+            let detail = song_detail(
+                &song_id,
+                &song,
+                &schedule,
+                &risk,
+                sheet_analysis.clone(),
+                &config,
+            );
+            let risk_summary = risk_summary_for_sheet(&risk, sheet_analysis.as_ref(), &config);
             return Ok(PreparedPlaybackDto {
                 prepared_id: None,
                 song: detail,
                 config,
                 admission: PlaybackAdmission::ConfirmationRequired,
-                risk: risk_summary(&risk),
+                risk: risk_summary,
                 decisions: Vec::new(),
                 plan_fingerprint: None,
                 variants: Vec::new(),
@@ -387,7 +396,14 @@ impl NativePlaybackService {
                 ),
             });
         }
-        let detail = song_detail(&song_id, &song, &schedule, &risk, sheet_analysis.clone());
+        let detail = song_detail(
+            &song_id,
+            &song,
+            &schedule,
+            &risk,
+            sheet_analysis.clone(),
+            &config,
+        );
         if !config.dry_run && schedule.impossible_same_key_repeats > 0 {
             let message = format!(
                 "Detected {} infeasible same-key repeat(s): the authored interval is shorter than the configured hold.",
@@ -449,8 +465,9 @@ impl NativePlaybackService {
                 decision: PlaybackDecision::Proceed,
                 label: "Proceed with current settings".into(),
             });
-            if let (Some(hold_frames), Some(tempo_scale)) =
-                (risk.suggested_hold_frames, risk.suggested_tempo_scale)
+            if plan_source.is_none()
+                && let (Some(hold_frames), Some(tempo_scale)) =
+                    (risk.suggested_hold_frames, risk.suggested_tempo_scale)
                 && (hold_frames != config.hold_frames || tempo_scale != config.tempo_scale)
                 && let Ok(recommended_policy) = MaterializedTimingPolicy::from_user_margin(
                     config.fps,
@@ -552,12 +569,13 @@ impl NativePlaybackService {
                 });
             }
         }
+        let prepared_risk = risk_summary_for_sheet(&risk, sheet_analysis.as_ref(), &config);
         let dto = PreparedPlaybackDto {
             prepared_id: Some(prepared_id.clone()),
             song: detail,
             config,
             admission,
-            risk: risk_summary(&risk),
+            risk: prepared_risk,
             decisions,
             plan_fingerprint: Some(fingerprint.clone()),
             variants: variant_dtos,
@@ -2317,6 +2335,32 @@ pub(in crate::native_runtime) fn risk_summary(risk: &RiskReport) -> RiskSummaryD
     }
 }
 
+fn risk_summary_for_sheet(
+    risk: &RiskReport,
+    sheet_analysis: Option<&crate::commands::SheetAnalysisDto>,
+    config: &PlaybackConfigDto,
+) -> RiskSummaryDto {
+    let mut summary = risk_summary(risk);
+    let versioned = sheet_analysis.is_some_and(|analysis| analysis.schema_version.is_some());
+    if versioned
+        && super::super::sheet::timing_reconsent_required(
+            risk,
+            config.hold_frames,
+            config.tempo_scale,
+        )
+    {
+        let note = super::super::sheet::TIMING_RECONSENT_NOTE;
+        if let Some(reason) = summary.reasons.first_mut() {
+            reason.push(' ');
+            reason.push_str(note);
+        } else {
+            summary.reasons.push(note.to_owned());
+        }
+        summary.recommendations.push(note.to_owned());
+    }
+    summary
+}
+
 pub(in crate::native_runtime) fn blocked_playback_dto(
     song_id: &str,
     config: PlaybackConfigDto,
@@ -2370,15 +2414,30 @@ pub(in crate::native_runtime) fn song_detail(
     schedule: &ScheduleMetadata,
     risk: &RiskReport,
     sheet_analysis: Option<crate::commands::SheetAnalysisDto>,
+    config: &PlaybackConfigDto,
 ) -> SongDetailDto {
+    let versioned = sheet_analysis
+        .as_ref()
+        .is_some_and(|analysis| analysis.schema_version.is_some());
+    let timing_reconsent_required = versioned
+        && super::super::sheet::timing_reconsent_required(
+            risk,
+            config.hold_frames,
+            config.tempo_scale,
+        );
+    let summary = risk
+        .recommendations
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Keep the selected settings.".into());
     let recommendation = crate::commands::PlaybackRecommendationDto {
         recommended_hold_frames: risk.suggested_hold_frames,
         recommended_tempo_scale: risk.suggested_tempo_scale,
-        summary: risk
-            .recommendations
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "Keep the selected settings.".into()),
+        summary: if timing_reconsent_required {
+            format!("{summary} {}", super::super::sheet::TIMING_RECONSENT_NOTE)
+        } else {
+            summary
+        },
     };
     SongDetailDto {
         song_id: song_id.to_owned(),
@@ -2389,7 +2448,7 @@ pub(in crate::native_runtime) fn song_detail(
             .and_then(|analysis| analysis.source_note_count)
             .unwrap_or(song.notes.len() as u64),
         format_label: "SHEET".into(),
-        risk: risk_summary(risk),
+        risk: risk_summary_for_sheet(risk, sheet_analysis.as_ref(), config),
         recommendation: Some(recommendation),
         sheet_analysis,
     }
@@ -2405,7 +2464,11 @@ fn recommended_schedule(
         return build_schedule_with_policy(song, tempo_scale, policy)
             .map_err(|error| error.to_string());
     };
-    let options = super::planner_options(source.conversion_mode, source.target_pitch, tempo_scale);
+    let options = super::super::sheet::planner_options(
+        source.conversion_mode,
+        source.target_pitch,
+        tempo_scale,
+    );
     match build_song_plan(&source.bytes, &source.fallback_name, &options, policy)
         .map_err(|error| error.to_string())?
     {

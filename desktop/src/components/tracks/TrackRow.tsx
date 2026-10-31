@@ -30,7 +30,7 @@ function metadataStatus(state: SongRow['metadata_state']): {
 } {
   switch (state) {
     case 'pending':
-      return { label: 'Sheet analysis loading', value: '…' };
+      return { label: 'Metadata loading', value: '…' };
     case 'unsupported':
       return { label: 'Unsupported sheet format', value: 'Unsupported' };
     case 'malformed':
@@ -42,7 +42,7 @@ function metadataStatus(state: SongRow['metadata_state']): {
     case 'physical_risk':
       return { label: 'Physical timing risk', value: 'Risk' };
     case 'error':
-      return { label: 'Sheet metadata unavailable', value: 'Unavailable' };
+      return { label: 'Metadata unavailable', value: 'Unavailable' };
     case 'ready':
       return { label: 'Sheet ready', value: 'Ready' };
   }
