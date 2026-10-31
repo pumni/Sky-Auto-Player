@@ -928,7 +928,7 @@ test('page indicator switches between compact view and full-width editing withou
   const measurements: Array<Record<string, unknown>> = [];
 
   for (const total of [106, 500, 501, 2438, 10_000]) {
-    const delay = total === 106 ? '&mockSearchDelayMs=150' : '';
+    const delay = total === 106 ? '&mockSearchDelayMs=1000' : '';
     await page.goto(`/?mockCatalogCount=${total}${delay}`);
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     const pageCount = Math.ceil(total / 100);

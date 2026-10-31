@@ -130,6 +130,9 @@ not create separate stores or synchronize state through effects.
   applies it before the normal startup reveal; the bounded 2.5-second fail-open
   can reveal the OS-media startup screen before native settings arrive when
   bootstrap is delayed. The effective mode is not stored in browser storage.
+  The final A–C integration audit, qualification matrix, and complete changed-path
+  inventory are recorded in
+  [issue-565 Package D evidence](evidence/issue-565-package-d/README.md).
 - `librarySlice.ts` owns Library query intent, bounded page caching,
   virtualization hydration, and paging. `librarySelectionActions.ts` owns
   selected-song/detail requests and browser navigation.

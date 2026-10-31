@@ -127,6 +127,10 @@ Package C's Windows/WebView2, startup, focus and contrast qualification is recor
 [`issue-565-package-c evidence`](evidence/issue-565-package-c/README.md). It distinguishes the
 release-profile Windows WebView run from browser media emulation and lists the packaged startup
 cases that could not be forced in this environment.
+Package D's final A–C integration audit and PASS/FAILED/SKIPPED/UNVERIFIED matrix is recorded in
+[`issue-565-package-d evidence`](evidence/issue-565-package-d/README.md). The Package B compact
+utility-overlay PNGs are explicitly loading-state captures: Diagnostics Runtime still displayed
+`Loading diagnostics…`; they are not described as settled runtime evidence.
 
 Soft Graphite B is a review preview only. Its override exists in the opt-in
 `desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and

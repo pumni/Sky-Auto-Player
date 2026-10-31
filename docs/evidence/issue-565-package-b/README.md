@@ -8,19 +8,23 @@ The capture contains 22 full-page PNGs: Light and Graphite Dark at all five requ
 
 ## Light / Graphite Dark screenshot pairs
 
-| State                           | Light                                            | Graphite Dark                                            |
-| ------------------------------- | ------------------------------------------------ | -------------------------------------------------------- |
-| Populated 1366×768              | [PNG](light/populated-1366x768.png)              | [PNG](graphite-dark/populated-1366x768.png)              |
-| Populated 1200×760              | [PNG](light/populated-1200x760.png)              | [PNG](graphite-dark/populated-1200x760.png)              |
-| Populated 1024×768              | [PNG](light/populated-1024x768.png)              | [PNG](graphite-dark/populated-1024x768.png)              |
-| Populated 800×560               | [PNG](light/populated-800x560.png)               | [PNG](graphite-dark/populated-800x560.png)               |
-| Populated 640×448               | [PNG](light/populated-640x448.png)               | [PNG](graphite-dark/populated-640x448.png)               |
-| Settings · Appearance           | [PNG](light/settings-appearance-1366x768.png)    | [PNG](graphite-dark/settings-appearance-1366x768.png)    |
-| Diagnostics · Runtime           | [PNG](light/diagnostics-runtime-1366x768.png)    | [PNG](graphite-dark/diagnostics-runtime-1366x768.png)    |
-| Playback error                  | [PNG](light/playback-error-1366x768.png)         | [PNG](graphite-dark/playback-error-1366x768.png)         |
-| Playback confirmation           | [PNG](light/playback-confirmation-1366x768.png)  | [PNG](graphite-dark/playback-confirmation-1366x768.png)  |
-| Search focus + Like hover       | [PNG](light/focus-hover-1366x768.png)            | [PNG](graphite-dark/focus-hover-1366x768.png)            |
-| Compact utility overlay 640×448 | [PNG](light/compact-utility-overlay-640x448.png) | [PNG](graphite-dark/compact-utility-overlay-640x448.png) |
+| State                                                               | Light                                            | Graphite Dark                                            |
+| ------------------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------- |
+| Populated 1366×768                                                  | [PNG](light/populated-1366x768.png)              | [PNG](graphite-dark/populated-1366x768.png)              |
+| Populated 1200×760                                                  | [PNG](light/populated-1200x760.png)              | [PNG](graphite-dark/populated-1200x760.png)              |
+| Populated 1024×768                                                  | [PNG](light/populated-1024x768.png)              | [PNG](graphite-dark/populated-1024x768.png)              |
+| Populated 800×560                                                   | [PNG](light/populated-800x560.png)               | [PNG](graphite-dark/populated-800x560.png)               |
+| Populated 640×448                                                   | [PNG](light/populated-640x448.png)               | [PNG](graphite-dark/populated-640x448.png)               |
+| Settings · Appearance                                               | [PNG](light/settings-appearance-1366x768.png)    | [PNG](graphite-dark/settings-appearance-1366x768.png)    |
+| Diagnostics · Runtime                                               | [PNG](light/diagnostics-runtime-1366x768.png)    | [PNG](graphite-dark/diagnostics-runtime-1366x768.png)    |
+| Playback error                                                      | [PNG](light/playback-error-1366x768.png)         | [PNG](graphite-dark/playback-error-1366x768.png)         |
+| Playback confirmation                                               | [PNG](light/playback-confirmation-1366x768.png)  | [PNG](graphite-dark/playback-confirmation-1366x768.png)  |
+| Search focus + Like hover                                           | [PNG](light/focus-hover-1366x768.png)            | [PNG](graphite-dark/focus-hover-1366x768.png)            |
+| Compact utility overlay 640×448 — Diagnostics Runtime loading state | [PNG](light/compact-utility-overlay-640x448.png) | [PNG](graphite-dark/compact-utility-overlay-640x448.png) |
+
+The compact overlay captures show the Diagnostics Runtime tab while it displays `Loading diagnostics…`.
+Treat those two PNGs as **loading-state examples**, not settled Diagnostics runtime evidence. The
+1366×768 Diagnostics Runtime screenshots above show the settled dry-run panel.
 
 ## Computed contrast
 
