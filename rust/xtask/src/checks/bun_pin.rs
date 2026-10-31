@@ -55,8 +55,8 @@ fn list_item_indent(line: &str) -> Option<usize> {
         .then(|| indentation(line))
 }
 
-fn block_end(lines: &[&str], start: usize, list_indent: usize) -> usize {
-    for (index, line) in lines.iter().enumerate().skip(start + 1) {
+fn block_end(lines: &[&str], start: usize, list_indent: usize, limit: usize) -> usize {
+    for (index, line) in lines.iter().enumerate().take(limit).skip(start + 1) {
         let code = active_line(line);
         if code.is_empty() {
             continue;
@@ -68,7 +68,7 @@ fn block_end(lines: &[&str], start: usize, list_indent: usize) -> usize {
             return index;
         }
     }
-    lines.len()
+    limit
 }
 
 fn yaml_scalar(value: &str) -> &str {
@@ -82,6 +82,119 @@ fn yaml_scalar(value: &str) -> &str {
         }
     }
     value
+}
+
+fn contract_error<T>(message: impl Into<String>) -> Result<T> {
+    Err(message.into().into())
+}
+
+fn containing_steps_end(
+    lines: &[&str],
+    step_start: usize,
+    list_indent: usize,
+    path: &Path,
+) -> Result<usize> {
+    for (index, line) in lines.iter().enumerate().take(step_start).rev() {
+        let steps_indent = indentation(line);
+        if active_line(line) != "steps:" || list_indent != steps_indent + 2 {
+            continue;
+        }
+        let steps_end = (index + 1..lines.len())
+            .find(|candidate| {
+                !active_line(lines[*candidate]).is_empty()
+                    && indentation(lines[*candidate]) <= steps_indent
+            })
+            .unwrap_or(lines.len());
+        if step_start < steps_end {
+            return Ok(steps_end);
+        }
+    }
+    contract_error(format!(
+        "{} setup-bun use is outside a steps: list",
+        path.display()
+    ))
+}
+
+fn validate_step_controls(
+    lines: &[&str],
+    step_start: usize,
+    step_end: usize,
+    list_indent: usize,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    let direct_indent = list_indent + 2;
+    let mut saw_continue = false;
+    for line in &lines[step_start + 1..step_end] {
+        if indentation(line) != direct_indent {
+            continue;
+        }
+        let Some((key, value)) = active_line(line).split_once(':') else {
+            continue;
+        };
+        match key.trim() {
+            "if" => {
+                return contract_error(format!("{} {label} step is conditional", path.display()));
+            }
+            "continue-on-error"
+                if saw_continue || !yaml_scalar(value).eq_ignore_ascii_case("false") =>
+            {
+                return contract_error(format!(
+                    "{} {label} step can ignore failures",
+                    path.display()
+                ));
+            }
+            "continue-on-error" => saw_continue = true,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_verifier_step(
+    lines: &[&str],
+    step_start: usize,
+    step_end: usize,
+    list_indent: usize,
+    path: &Path,
+) -> Result<()> {
+    let direct_indent = list_indent + 2;
+    let mut seen_fields = Vec::new();
+    let mut run_value = None;
+
+    for line in &lines[step_start + 1..step_end] {
+        if active_line(line).is_empty() || indentation(line) != direct_indent {
+            continue;
+        }
+        let Some((key, value)) = active_line(line).split_once(':') else {
+            return contract_error("invalid Bun verifier field".to_owned());
+        };
+        let key = key.trim();
+        if seen_fields.contains(&key) {
+            return contract_error(format!("{} duplicate verifier field {key}", path.display()));
+        }
+        seen_fields.push(key);
+
+        match key {
+            "run" => run_value = Some(yaml_scalar(value)),
+            "name" | "id" | "timeout-minutes" => (),
+            "shell" if matches!(yaml_scalar(value), "bash" | "pwsh" | "powershell") => (),
+            _ => {
+                return contract_error(format!(
+                    "{} unsupported verifier field {key}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if run_value != Some(BUN_VERIFIER_STEP) {
+        return contract_error(format!(
+            "{} verifier requires one supported run command",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn validate_setup_step(lines: &[&str], uses_index: usize, path: &Path) -> Result<()> {
@@ -117,7 +230,27 @@ fn validate_setup_step(lines: &[&str], uses_index: usize, path: &Path) -> Result
                 path.display()
             )
         })?;
-    let step_end = block_end(lines, uses_index, step_indent);
+    if uses_indent != step_indent + 2 {
+        return Err(format!(
+            "{} setup-bun use must be a direct step field",
+            path.display()
+        )
+        .into());
+    }
+    let step_start = (0..uses_index)
+        .rev()
+        .find(|index| list_item_indent(lines[*index]) == Some(step_indent))
+        .ok_or_else(|| format!("{} setup-bun use has no containing step", path.display()))?;
+    let steps_end = containing_steps_end(lines, step_start, step_indent, path)?;
+    let step_end = block_end(lines, step_start, step_indent, steps_end);
+    if uses_index >= step_end {
+        return Err(format!(
+            "{} setup-bun use is outside its containing step",
+            path.display()
+        )
+        .into());
+    }
+    validate_step_controls(lines, step_start, step_end, step_indent, path, "setup-bun")?;
     let with_indices = (uses_index + 1..step_end)
         .filter(|index| {
             indentation(lines[*index]) == uses_indent && active_line(lines[*index]) == "with:"
@@ -174,7 +307,7 @@ fn validate_setup_step(lines: &[&str], uses_index: usize, path: &Path) -> Result
     }
 
     let next_step_start =
-        (step_end..lines.len()).find(|index| list_item_indent(lines[*index]) == Some(step_indent));
+        (step_end..steps_end).find(|index| list_item_indent(lines[*index]) == Some(step_indent));
     let Some(next_step_start) = next_step_start else {
         return Err(format!(
             "{} setup-bun step must be followed immediately by the Bun pin verifier",
@@ -182,30 +315,22 @@ fn validate_setup_step(lines: &[&str], uses_index: usize, path: &Path) -> Result
         )
         .into());
     };
-    let next_step_end = block_end(lines, next_step_start, step_indent);
-    let next_step = lines[next_step_start..next_step_end]
-        .iter()
-        .map(|line| active_line(line))
-        .collect::<Vec<_>>();
-    if !next_step
-        .iter()
-        .any(|line| line.strip_prefix("run: ") == Some(BUN_VERIFIER_STEP))
-    {
-        return Err(format!(
-            "{} setup-bun step must immediately verify the installed Bun version",
-            path.display()
-        )
-        .into());
-    }
-    Ok(())
+    let next_step_end = block_end(lines, next_step_start, step_indent, steps_end);
+    validate_verifier_step(lines, next_step_start, next_step_end, step_indent, path)
 }
 
 fn validate_yaml_source(source: &str, path: &Path) -> Result<usize> {
     let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
     let lines = normalized.lines().collect::<Vec<_>>();
     let mut consumers = 0;
+    let mut verifier_definitions = 0;
     for (index, line) in lines.iter().enumerate() {
         let code = active_line(line);
+        if code.split_once(':').is_some_and(|(key, value)| {
+            key.trim() == "run" && yaml_scalar(value) == BUN_VERIFIER_STEP
+        }) {
+            verifier_definitions += 1;
+        }
         if !code.contains(BUN_ACTION) {
             continue;
         }
@@ -218,6 +343,13 @@ fn validate_yaml_source(source: &str, path: &Path) -> Result<usize> {
         }
         validate_setup_step(&lines, index, path)?;
         consumers += 1;
+    }
+    if verifier_definitions != consumers {
+        return Err(format!(
+            "{} must define exactly one Bun verifier command per setup-bun consumer (found {verifier_definitions} for {consumers})",
+            path.display()
+        )
+        .into());
     }
     Ok(consumers)
 }
@@ -278,7 +410,8 @@ mod tests {
 
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
     const PACKAGE: &str = r#"{"name":"fixture","packageManager":"bun@9.8.7"}"#;
-    const VALID_STEP: &str = "      - name: Set up Bun\n        uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n        with:\n          bun-version-file: site/package.json\n      - name: Verify Bun pin\n        run: bun scripts/verify-bun-pin.mjs\n";
+    const VALID_STEP: &str = "jobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Set up Bun\n        uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n        with:\n          bun-version-file: site/package.json\n      - name: Verify Bun pin\n        run: bun scripts/verify-bun-pin.mjs\n";
+    const VALID_COMPOSITE: &str = "runs:\n  using: composite\n  steps:\n    - name: Set up Bun\n      uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n      with:\n        bun-version-file: site/package.json\n    - name: Verify Bun pin\n      shell: bash\n      run: bun scripts/verify-bun-pin.mjs\n";
 
     fn fixture_root() -> PathBuf {
         let path = ci_artifacts::unique_sibling(&std::env::temp_dir().join("sky-bun-pin"), "test");
@@ -293,6 +426,13 @@ mod tests {
         let path = root.join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, source).unwrap();
+    }
+
+    fn assert_rejected(source: &str, name: &str) {
+        assert!(
+            validate_yaml_source(source, Path::new(name)).is_err(),
+            "{name}"
+        );
     }
 
     #[test]
@@ -320,52 +460,92 @@ mod tests {
 
     #[test]
     fn rejects_missing_wrong_literal_and_implicit_latest_inputs() {
-        let missing = VALID_STEP.replace("          bun-version-file: site/package.json\n", "");
-        assert!(validate_yaml_source(&missing, Path::new("missing.yml")).is_err());
-
-        let wrong = VALID_STEP.replace("site/package.json", ".bun-version");
-        assert!(validate_yaml_source(&wrong, Path::new("wrong.yml")).is_err());
-
-        let literal = VALID_STEP.replace(
-            "          bun-version-file: site/package.json",
-            "          bun-version: 9.8.7\n          bun-version-file: site/package.json",
-        );
-        assert!(validate_yaml_source(&literal, Path::new("literal.yml")).is_err());
-
-        let latest = VALID_STEP.replace(
-            "          bun-version-file: site/package.json",
-            "          bun-version: latest",
-        );
-        assert!(validate_yaml_source(&latest, Path::new("latest.yml")).is_err());
+        for (name, source) in [
+            (
+                "missing.yml",
+                VALID_STEP.replace("          bun-version-file: site/package.json\n", ""),
+            ),
+            (
+                "wrong.yml",
+                VALID_STEP.replace("site/package.json", ".bun-version"),
+            ),
+            (
+                "literal.yml",
+                VALID_STEP.replace(
+                    "          bun-version-file: site/package.json",
+                    "          bun-version: 9.8.7\n          bun-version-file: site/package.json",
+                ),
+            ),
+            (
+                "latest.yml",
+                VALID_STEP.replace(
+                    "          bun-version-file: site/package.json",
+                    "          bun-version: latest",
+                ),
+            ),
+        ] {
+            assert_rejected(&source, name);
+        }
     }
 
     #[test]
     fn rejects_unpinned_and_unrecognized_new_consumers() {
         let pinned_reference = format!("@{SHA}");
         let unpinned = VALID_STEP.replace(&pinned_reference, "@v2");
-        assert!(validate_yaml_source(&unpinned, Path::new("tag.yml")).is_err());
+        assert_rejected(&unpinned, "tag.yml");
 
         let inline = VALID_STEP.replace(
             "        uses: oven-sh/setup-bun@",
             "      - uses: oven-sh/setup-bun@",
         );
-        assert!(validate_yaml_source(&inline, Path::new("inline.yml")).is_err());
+        assert_rejected(&inline, "inline.yml");
+    }
+
+    #[test]
+    fn rejects_conditionally_skipped_or_failure_ignored_verifier() {
+        for control in ["if: false", "continue-on-error: true"] {
+            let source = VALID_STEP.replace(
+                "        run: bun scripts/verify-bun-pin.mjs",
+                &format!("        {control}\n        run: bun scripts/verify-bun-pin.mjs"),
+            );
+            assert_rejected(&source, "verification-bypass.yml");
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_ambiguous_and_unsupported_verifier_definitions() {
+        let run = "        run: bun scripts/verify-bun-pin.mjs";
+        for source in [
+            VALID_STEP.replace(run, &format!("{run}\n{run}")),
+            VALID_STEP.replace(
+                run,
+                &format!("{run}\n      - name: Duplicate verifier\n{run}"),
+            ),
+            VALID_STEP.replace(run, "        uses: local/verify-bun-pin@v1"),
+            VALID_STEP.replace(
+                run,
+                "        run: |\n          bun scripts/verify-bun-pin.mjs",
+            ),
+        ] {
+            assert_rejected(&source, "ambiguous-verifier.yml");
+        }
+    }
+
+    #[test]
+    fn rejects_verifier_in_a_different_job() {
+        let source = "jobs:\n  setup:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Set up Bun\n        uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n        with:\n          bun-version-file: site/package.json\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Verify Bun pin\n        run: bun scripts/verify-bun-pin.mjs\n";
+        let error = validate_yaml_source(source, Path::new("two-jobs.yml")).unwrap_err();
+        assert!(error.to_string().contains("must be followed immediately"));
     }
 
     #[test]
     fn repository_scan_discovers_new_workflows_and_composite_actions() {
         let root = fixture_root();
         write_workflow(&root, ".github/workflows/first.yml", VALID_STEP);
-        let composite = VALID_STEP
-            .replace("      - name:", "    - name:")
-            .replace("        uses:", "      uses:")
-            .replace("        with:", "      with:")
-            .replace("          bun-version-file:", "        bun-version-file:")
-            .replace("        run:", "      run:");
         write_workflow(
             &root,
             ".github/actions/site-validate/action.yml",
-            &composite,
+            VALID_COMPOSITE,
         );
         assert_eq!(validate_repository(&root).unwrap(), 2);
 
