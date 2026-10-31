@@ -16,6 +16,7 @@ invariants that must not be discarded because an implementation differs.
 - **Desktop UI:** [workbench](desktop-workbench.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Security:** [SECURITY.md](../SECURITY.md).
+- **Song source schemas and canonical decoding:** [song source decoding](song-source-decoding.md).
 - **Packaging and updater:** [distribution](distribution-and-update.md),
   [Tauri packaging](v4-tauri-packaging.md).
 - **Release operations:** [release authority](v4-release-authority.md),

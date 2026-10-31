@@ -1,0 +1,15 @@
+{
+  "name": "Composed v5 absolute notes",
+  "type": "composed",
+  "version": 5,
+  "bpm": 120,
+  "pitch": "C",
+  "data": { "appName": "Sky" },
+  "columnTempos": [0, 0],
+  "tracks": [
+    {
+      "instrument": { "name": "Cello", "pitch": "D" },
+      "notes": [[0, 50], [1, 52]]
+    }
+  ]
+}

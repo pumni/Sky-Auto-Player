@@ -1,0 +1,16 @@
+{
+  "name": "Composed v4 nominal notes and spans",
+  "type": "composed",
+  "version": 4,
+  "bpm": 120,
+  "pitch": "C",
+  "data": { "appName": "Sky" },
+  "columnTempos": [0, 1, 0],
+  "tracks": [
+    {
+      "instrument": { "name": "Cello", "pitch": "D" },
+      "notes": [[0, 72, 2], [2, 74]]
+    }
+  ],
+  "songNotes": [{ "key": "NotAKey", "time": -99 }]
+}

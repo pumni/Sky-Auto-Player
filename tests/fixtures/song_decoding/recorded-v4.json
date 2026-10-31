@@ -1,0 +1,13 @@
+{
+  "name": "Recorded v4 absolute notes",
+  "type": "recorded",
+  "version": 4,
+  "pitch": "C",
+  "data": { "appName": "Genshin" },
+  "tracks": [
+    {
+      "instrument": { "name": "Vintage-Lyre", "pitch": "" },
+      "notes": [[73, 12.5, 20]]
+    }
+  ]
+}
