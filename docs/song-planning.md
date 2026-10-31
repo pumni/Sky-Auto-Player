@@ -56,8 +56,13 @@ not reinterpreted as correctly pitched Piano notes.
 PianoOnset retains the authored onset_us, resulting scheduled_onset_us, target
 button/scan code, and all source event provenance that maps to the physical
 onset. Events are ordered by onset and stable source identity. Exact same
-scheduled-onset/button events are merged into one physical onset while
-retaining each source note and track in provenance.
+authored-onset/button events are merged into one physical onset without loss.
+If different authored onsets collapse to the same scheduled-onset/button after
+tempo scaling, the planner keeps all provenance, increments
+tempo_quantization_collapse_count, and records a
+TempoQuantizationCollapse loss. Such a playable plan requires confirmation.
+The count of these quantization losses is separate from
+merged_duplicate_count, which covers only equal-authored-onset merges.
 
 PianoPlanDiagnostics keeps serialized source tuples distinct from canonical
 decoded events, including legacy layer expansion. Its counts reconcile as:
@@ -66,13 +71,16 @@ decoded events, including legacy layer expansion. Its counts reconcile as:
     selected events = resolved + source unpitched + source unresolved
     resolved events = mapped source events + target-unplayable events
     mapped source events = unique mapped onsets + merged duplicates
+                           + tempo quantization collapses
 
 Track omissions, unpitched or unresolved source notes, target-unplayable
 notes, and mapped authored sustains that become one-shot Piano notes each have
-an exact PlanLoss reason and source provenance. A lossy plan with playable
-events is requires_confirmation; a plan with no playable event is unsupported;
-a conversion with no losses is ready. An empty source also reports
-NoPlayableNotes. Decoder source_warnings remain separate from physical_risk.
+an exact PlanLoss reason and source provenance. Distinct source onsets merged
+by tempo scaling are a lossy conversion even though their physical onset and
+button match. A lossy plan with playable events is requires_confirmation; a
+plan with no playable event is unsupported; a conversion with no losses is
+ready. An empty source also reports NoPlayableNotes. Decoder source_warnings
+remain separate from physical_risk.
 
 Authored sustain is retained as a diagnostic only. Physical Piano key holds
 still come from the supplied MaterializedTimingPolicy; note duration does not
@@ -80,14 +88,16 @@ change hold, release, FPS, or margin behavior.
 
 ## Existing schedule and risk path
 
-The planner passes source microsecond onsets and target scan codes into the
-existing schedule builder. The requested tempo scale is applied once when the
-builder materializes schedule times. The plan retains both source and
-scheduled onsets so this transformation is visible. Same-key repeats are not
-delayed to avoid conflicts: impossible_same_key_repeats, physical timing
-conflicts, and RiskReport come from the existing scheduler and analyzer.
-Conversion status does not override a downstream preparation or physical-risk
-gate.
+The planner applies tempo_scale once to produce each scheduled microsecond
+onset, then passes those timestamps and target scan codes into the existing
+schedule builder. The plan retains both source and scheduled onsets so this
+transformation is visible. Before scheduling each mapped onset, the planner
+rejects a scaled timestamp outside the u64 range or one that cannot
+accommodate the materialized minimum physical hold; it never uses saturating
+time arithmetic for the new conversion path. Same-key repeats are not delayed
+to avoid conflicts: impossible_same_key_repeats, physical timing conflicts,
+and RiskReport come from the existing scheduler and analyzer. Conversion
+status does not override a downstream preparation or physical-risk gate.
 
 ## Regression evidence
 
@@ -95,7 +105,9 @@ rust/crates/sky_app_core/tests/piano_planner.rs covers C and D target pitch,
 v4 nominal versus v5 absolute notes, all fifteen simultaneous keys, merged
 provenance, duplicate instrument names with explicit track selection, loss
 reconciliation, unplayable and unpitched notes, sustain degradation, repeated
-same-key onsets, tempo scaling, stable planning order, and legacy compatibility.
+same-key onsets, legitimate simultaneous merges versus tempo-quantization
+losses, scaled-time overflow and minimum-hold boundary rejection, stable
+planning order, and legacy compatibility.
 The checked-in piano_planner_cases.json provides small synthetic golden
 inputs. legacy_song_corpus.rs separately pins the existing 106-song schedule
 fingerprints.

@@ -3,7 +3,8 @@ use sha2::{Digest, Sha256};
 use sky_app_core::song::{
     ActionKind, ConversionMode, LegacyCompatibilityPlan, PianoPlannerOptions, PlanStatus,
     PlannerError, SKY_SCAN_CODES, SongDecodeError, SongPlan, analyze_schedule_with_notes,
-    build_schedule_with_policy, build_song_plan, parse_song_json,
+    build_schedule_with_policy, build_song_plan, decode_song_json, parse_song_json,
+    plan_canonical_song,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use std::collections::BTreeSet;
@@ -23,6 +24,18 @@ fn planner_cases() -> Value {
 
 fn policy() -> MaterializedTimingPolicy {
     MaterializedTimingPolicy::from_user_margin(60, 1.0, 0).expect("valid fixed policy")
+}
+
+fn canonical_single_note_source() -> sky_app_core::song::CanonicalSong {
+    let sheet = json!({
+        "type": "recorded", "version": 4,
+        "data": {"appName": "Sky"},
+        "tracks": [{
+            "instrument": {"name": "Piano"},
+            "notes": [[72, 0]]
+        }]
+    });
+    decode_song_json(&serde_json::to_vec(&sheet).unwrap(), "timing boundary").unwrap()
 }
 
 fn run_case(case: &Value) -> sky_app_core::song::PianoPlan {
@@ -237,7 +250,9 @@ fn layer_expansion_is_counted_separately_from_serialized_source_tuples() {
     );
     assert_eq!(
         plan.diagnostics.mapped_source_event_count,
-        plan.diagnostics.mapped_onset_count + plan.diagnostics.merged_duplicate_count
+        plan.diagnostics.mapped_onset_count
+            + plan.diagnostics.merged_duplicate_count
+            + plan.diagnostics.tempo_quantization_collapse_count
     );
 }
 
@@ -321,10 +336,101 @@ fn tempo_rounding_merges_same_key_schedule_collisions_with_provenance() {
     assert_eq!(plan.events.len(), 1);
     assert_eq!(plan.events[0].scheduled_onset_us, 0);
     assert_eq!(plan.events[0].provenance.len(), 2);
+    assert_eq!(
+        plan.events[0]
+            .provenance
+            .iter()
+            .map(|source| source.source_onset_us)
+            .collect::<Vec<_>>(),
+        [0, 1_000]
+    );
+    assert_eq!(plan.diagnostics.mapped_source_event_count, 2);
+    assert_eq!(plan.diagnostics.mapped_onset_count, 1);
+    assert_eq!(plan.diagnostics.merged_duplicate_count, 0);
+    assert_eq!(plan.diagnostics.tempo_quantization_collapse_count, 1);
+    assert_eq!(plan.status, PlanStatus::RequiresConfirmation);
+    assert_eq!(
+        plan.diagnostics
+            .losses
+            .iter()
+            .map(|loss| loss.reason)
+            .collect::<Vec<_>>(),
+        [sky_app_core::song::PlanLossReason::TempoQuantizationCollapse]
+    );
+    assert_eq!(plan.schedule.as_ref().unwrap().duplicate_note_count, 0);
+}
+
+#[test]
+fn equal_authored_same_key_onsets_merge_without_conversion_loss() {
+    let sheet = json!({
+        "type": "recorded", "version": 4,
+        "data": {"appName": "Sky"},
+        "tracks": [
+            {"instrument": {"name": "Piano"}, "notes": [[72, 0]]},
+            {"instrument": {"name": "Piano"}, "notes": [[72, 0]]}
+        ]
+    });
+    let plan = build_song_plan(
+        &serde_json::to_vec(&sheet).unwrap(),
+        "simultaneous voices",
+        &PianoPlannerOptions::default(),
+        &policy(),
+    )
+    .unwrap();
+    let SongPlan::PianoConversion(plan) = plan else {
+        panic!("recorded source did not use conversion path")
+    };
+
+    assert_eq!(plan.events.len(), 1);
+    assert_eq!(plan.events[0].provenance.len(), 2);
+    assert_eq!(plan.events[0].provenance[0].source_onset_us, 0);
+    assert_eq!(plan.events[0].provenance[1].source_onset_us, 0);
     assert_eq!(plan.diagnostics.mapped_source_event_count, 2);
     assert_eq!(plan.diagnostics.mapped_onset_count, 1);
     assert_eq!(plan.diagnostics.merged_duplicate_count, 1);
-    assert_eq!(plan.schedule.as_ref().unwrap().duplicate_note_count, 0);
+    assert_eq!(plan.diagnostics.tempo_quantization_collapse_count, 0);
+    assert!(plan.diagnostics.losses.is_empty());
+    assert_eq!(plan.status, PlanStatus::Ready);
+}
+
+#[test]
+fn tiny_positive_tempo_scale_rejects_out_of_range_scaled_onset() {
+    let mut source = canonical_single_note_source();
+    source.events[0].onset_us = 1_000;
+    let options = PianoPlannerOptions {
+        tempo_scale: 1e-300,
+        ..PianoPlannerOptions::default()
+    };
+
+    let error = plan_canonical_song(&source, &options, &policy()).unwrap_err();
+    assert_eq!(
+        error,
+        PlannerError::ScaledOnsetOutOfRange {
+            source_index: 0,
+            track_id: 0,
+            source_onset_us: 1_000,
+        }
+    );
+}
+
+#[test]
+fn scaled_onset_must_leave_room_for_the_minimum_physical_hold() {
+    let mut source = canonical_single_note_source();
+    let timing_policy = policy();
+    let scheduled_onset_us = u64::MAX - timing_policy.min_hold_us + 1;
+    source.events[0].onset_us = scheduled_onset_us;
+
+    let error =
+        plan_canonical_song(&source, &PianoPlannerOptions::default(), &timing_policy).unwrap_err();
+    assert_eq!(
+        error,
+        PlannerError::ReleaseTimeOutOfRange {
+            source_index: 0,
+            track_id: 0,
+            scheduled_onset_us,
+            minimum_hold_us: timing_policy.min_hold_us,
+        }
+    );
 }
 
 #[test]

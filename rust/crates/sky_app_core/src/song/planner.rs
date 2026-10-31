@@ -9,7 +9,6 @@ use super::{
     RiskReport, SKY_SCAN_CODES, ScheduleMetadata, Song, SongDecodeError, SongError, SourcePosition,
     SourceTrack, analyze_schedule, analyze_schedule_with_notes, build_schedule_from_scaled_onsets,
     build_schedule_with_policy, decode_song_json, detect_song_format, parse_song_json,
-    scale_source_onset_us,
 };
 use crate::timing::MaterializedTimingPolicy;
 use serde::{Deserialize, Serialize};
@@ -143,6 +142,7 @@ pub enum PlanLossReason {
     SourceUnresolved,
     TargetPianoUnplayable,
     AuthoredSustainNotReproduced,
+    TempoQuantizationCollapse,
     NoPlayableNotes,
 }
 
@@ -188,6 +188,9 @@ pub struct PianoPlanDiagnostics {
     /// Resolved source events mapped before same-onset/key deduplication.
     pub mapped_source_event_count: usize,
     pub mapped_onset_count: usize,
+    /// Mapped source events collapsed from a distinct authored onset by scaling.
+    pub tempo_quantization_collapse_count: usize,
+    /// Mapped events merged at the same authored onset and target button.
     pub merged_duplicate_count: usize,
     pub source_unpitched_count: usize,
     pub source_unresolved_count: usize,
@@ -248,6 +251,23 @@ pub enum PlannerError {
     InvalidLegacyKeyIndex { key_index: u8 },
     #[error("canonical source pitch `{value}` cannot be used as the default target pitch")]
     InvalidSourcePitch { value: String },
+    #[error(
+        "scaled onset for source event {source_index} on track {track_id} at {source_onset_us} us is outside the u64 schedule range"
+    )]
+    ScaledOnsetOutOfRange {
+        source_index: usize,
+        track_id: usize,
+        source_onset_us: u64,
+    },
+    #[error(
+        "scaled onset {scheduled_onset_us} us for source event {source_index} on track {track_id} cannot accommodate the required {minimum_hold_us} us physical hold"
+    )]
+    ReleaseTimeOutOfRange {
+        source_index: usize,
+        track_id: usize,
+        scheduled_onset_us: u64,
+        minimum_hold_us: u64,
+    },
 }
 
 /// Selects the unchanged legacy compatibility route or plans a versioned sheet.
@@ -345,6 +365,7 @@ pub fn plan_canonical_song(
         resolved_event_count: 0,
         mapped_source_event_count: 0,
         mapped_onset_count: 0,
+        tempo_quantization_collapse_count: 0,
         merged_duplicate_count: 0,
         source_unpitched_count: 0,
         source_unresolved_count: 0,
@@ -440,10 +461,36 @@ pub fn plan_canonical_song(
                 source_event: Some(provenance.clone()),
             });
         }
-        let scheduled_onset_us = scale_source_onset_us(event.onset_us, options.tempo_scale);
+        let scheduled_onset_us = checked_scale_source_onset_us(event.onset_us, options.tempo_scale)
+            .ok_or(PlannerError::ScaledOnsetOutOfRange {
+                source_index: event.source_index,
+                track_id: event.track_index,
+                source_onset_us: event.onset_us,
+            })?;
+        scheduled_onset_us.checked_add(policy.min_hold_us).ok_or(
+            PlannerError::ReleaseTimeOutOfRange {
+                source_index: event.source_index,
+                track_id: event.track_index,
+                scheduled_onset_us,
+                minimum_hold_us: policy.min_hold_us,
+            },
+        )?;
         if let Some(existing_index) = onset_indices.get(&(scheduled_onset_us, button_index)) {
-            diagnostics.merged_duplicate_count += 1;
-            events[*existing_index].provenance.push(provenance);
+            let existing = &mut events[*existing_index];
+            let simultaneous_source_onset = existing
+                .provenance
+                .iter()
+                .any(|source| source.source_onset_us == event.onset_us);
+            if simultaneous_source_onset {
+                diagnostics.merged_duplicate_count += 1;
+            } else {
+                diagnostics.tempo_quantization_collapse_count += 1;
+                diagnostics.losses.push(PlanLoss {
+                    reason: PlanLossReason::TempoQuantizationCollapse,
+                    source_event: Some(provenance.clone()),
+                });
+            }
+            existing.provenance.push(provenance);
         } else {
             let event_index = events.len();
             onset_indices.insert((scheduled_onset_us, button_index), event_index);
@@ -494,6 +541,32 @@ pub fn plan_canonical_song(
         schedule,
         physical_risk,
     })
+}
+
+fn checked_scale_source_onset_us(source_at_us: u64, tempo_scale: f64) -> Option<u64> {
+    if tempo_scale == 1.0 {
+        return Some(source_at_us);
+    }
+
+    let scaled = source_at_us as f64 / tempo_scale;
+    if !scaled.is_finite() || scaled < 0.0 || scaled >= u64::MAX as f64 {
+        return None;
+    }
+
+    let lower = scaled.floor();
+    let fraction = scaled - lower;
+    let lower_integer = lower as u64;
+    let rounded = if fraction < 0.5 {
+        lower
+    } else if fraction > 0.5 || lower_integer % 2 == 1 {
+        lower + 1.0
+    } else {
+        lower
+    };
+    if !rounded.is_finite() || !(0.0..u64::MAX as f64).contains(&rounded) {
+        return None;
+    }
+    Some(rounded as u64)
 }
 
 fn source_provenance(event: &CanonicalEvent, track: &SourceTrack) -> SourceEventProvenance {

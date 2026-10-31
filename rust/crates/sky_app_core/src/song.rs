@@ -429,14 +429,6 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     })
 }
 
-pub(crate) fn scale_source_onset_us(source_at_us: u64, tempo_scale: f64) -> u64 {
-    if tempo_scale == 1.0 {
-        source_at_us
-    } else {
-        python_round_nonnegative(source_at_us as f64 / tempo_scale)
-    }
-}
-
 /// Python's `round(float)` uses bankers rounding.  Schedule timestamps are
 /// non-negative, so this small helper mirrors that observable rule without
 /// pulling floating-point tie behavior from Rust's `round()`.
