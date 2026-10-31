@@ -1,0 +1,835 @@
+{
+  "captured_at": "2026-10-31T00:49:02.091Z",
+  "source": {
+    "sha": "ae1b8469b5081ecad5ac8e803ebf71f0cfa5fe3c",
+    "branch": "feat/desktop-system-light-mode",
+    "worktree_porcelain": "clean"
+  },
+  "executable": {
+    "path": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\dist\\sky_desktop_shell.exe",
+    "sha256": "bdaf0ac1f4489b688f9d12626549794bb7ce97a770589e28678579bc89a8d9e6",
+    "native_build": {
+      "native_build_commit": "ae1b8469b5081ecad5ac8e803ebf71f0cfa5fe3c",
+      "native_version": "4.2.0",
+      "rustc_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+      "schema_version": 1,
+      "win32_backend": true
+    }
+  },
+  "environment": {
+    "os": {
+      "Caption": "Microsoft Windows 11 Home",
+      "Version": "10.0.26300",
+      "BuildNumber": "26300"
+    },
+    "webview2": {
+      "name": "Ngôn ngữ chung thời gian chạy WebView2 Microsoft Edge",
+      "pv": "157.0.4341.24"
+    },
+    "display": {
+      "primaryBounds": "{X=0,Y=0,Width=1536,Height=864}",
+      "primaryBitsPerPixel": 32,
+      "videoMode": {
+        "CurrentHorizontalResolution": 1920,
+        "CurrentVerticalResolution": 1080,
+        "CurrentRefreshRate": 60
+      }
+    },
+    "native_window_background": [
+      18,
+      19,
+      20,
+      255
+    ],
+    "node": "v24.21.0",
+    "architecture": "x64",
+    "test_harness": "Packaged Windows Tauri release executable attached to its actual WebView2 via CDP.",
+    "theme_toggle": "HKCU AppsUseLightTheme DWord + WM_SETTINGCHANGE ImmersiveColorSet broadcast; the harness restores both app/system values from the pre-test snapshot.",
+    "original_windows_app_theme": {
+      "apps_value_exists": true,
+      "apps_use_light_theme": 0,
+      "system_value_exists": true,
+      "system_use_light_theme": 0
+    },
+    "no_gameplay_input": true
+  },
+  "checks": [
+    {
+      "name": "fresh profile follows Windows Apps Light, native System/Graphite config",
+      "pass": true,
+      "appearance": {
+        "mode": "light",
+        "palette": "graphite",
+        "colorScheme": "light",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 938
+        },
+        "htmlBackground": "rgb(255, 255, 255)",
+        "bodyBackground": "rgb(255, 255, 255)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 801.6000366210938
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 938
+        },
+        "localStorageThemeKeys": []
+      }
+    },
+    {
+      "name": "live Windows Apps Light ↔ Dark events update System mode",
+      "pass": true,
+      "transitions": [
+        {
+          "mode": "dark",
+          "palette": "graphite",
+          "colorScheme": "dark",
+          "devicePixelRatio": 1.25,
+          "visualViewportScale": 1,
+          "rootZoom": "1",
+          "viewport": {
+            "width": 786,
+            "height": 938
+          },
+          "htmlBackground": "rgb(18, 19, 20)",
+          "bodyBackground": "rgb(18, 19, 20)",
+          "tauriBridge": true,
+          "geometry": {
+            ".app-titlebar": {
+              "width": 786.4000244140625,
+              "height": 40
+            },
+            ".track-browser-workbench-pane": {
+              "width": 534.4000244140625,
+              "height": 801.6000366210938
+            },
+            ".track-row": {
+              "width": 516.4000244140625,
+              "height": 46
+            },
+            ".player-bar": {
+              "width": 786.4000244140625,
+              "height": 92
+            }
+          },
+          "documentSize": {
+            "width": 786,
+            "height": 938
+          },
+          "localStorageThemeKeys": []
+        },
+        {
+          "mode": "light",
+          "palette": "graphite",
+          "colorScheme": "light",
+          "devicePixelRatio": 1.25,
+          "visualViewportScale": 1,
+          "rootZoom": "1",
+          "viewport": {
+            "width": 786,
+            "height": 938
+          },
+          "htmlBackground": "rgb(255, 255, 255)",
+          "bodyBackground": "rgb(255, 255, 255)",
+          "tauriBridge": true,
+          "geometry": {
+            ".app-titlebar": {
+              "width": 786.4000244140625,
+              "height": 40
+            },
+            ".track-browser-workbench-pane": {
+              "width": 534.4000244140625,
+              "height": 801.6000366210938
+            },
+            ".track-row": {
+              "width": 516.4000244140625,
+              "height": 46
+            },
+            ".player-bar": {
+              "width": 786.4000244140625,
+              "height": 92
+            }
+          },
+          "documentSize": {
+            "width": 786,
+            "height": 938
+          },
+          "localStorageThemeKeys": []
+        }
+      ]
+    },
+    {
+      "name": "manual Dark ignores Windows app theme changes and persists natively",
+      "pass": true
+    },
+    {
+      "name": "manual Light ignores Windows Dark; returning to System resumes live following",
+      "pass": true,
+      "transitions": [
+        {
+          "mode": "light",
+          "palette": "graphite",
+          "colorScheme": "light",
+          "devicePixelRatio": 1.25,
+          "visualViewportScale": 1,
+          "rootZoom": "1",
+          "viewport": {
+            "width": 786,
+            "height": 938
+          },
+          "htmlBackground": "rgb(255, 255, 255)",
+          "bodyBackground": "rgb(255, 255, 255)",
+          "tauriBridge": true,
+          "geometry": {
+            ".app-titlebar": {
+              "width": 786.4000244140625,
+              "height": 40
+            },
+            ".track-browser-workbench-pane": {
+              "width": 534.4000244140625,
+              "height": 801.6000366210938
+            },
+            ".track-row": {
+              "width": 516.4000244140625,
+              "height": 46
+            },
+            ".player-bar": {
+              "width": 786.4000244140625,
+              "height": 92
+            }
+          },
+          "documentSize": {
+            "width": 786,
+            "height": 938
+          },
+          "localStorageThemeKeys": []
+        },
+        {
+          "mode": "dark",
+          "palette": "graphite",
+          "colorScheme": "dark",
+          "devicePixelRatio": 1.25,
+          "visualViewportScale": 1,
+          "rootZoom": "1",
+          "viewport": {
+            "width": 786,
+            "height": 938
+          },
+          "htmlBackground": "rgb(18, 19, 20)",
+          "bodyBackground": "rgb(18, 19, 20)",
+          "tauriBridge": true,
+          "geometry": {
+            ".app-titlebar": {
+              "width": 786.4000244140625,
+              "height": 40
+            },
+            ".track-browser-workbench-pane": {
+              "width": 534.4000244140625,
+              "height": 801.6000366210938
+            },
+            ".track-row": {
+              "width": 516.4000244140625,
+              "height": 46
+            },
+            ".player-bar": {
+              "width": 786.4000244140625,
+              "height": 92
+            }
+          },
+          "documentSize": {
+            "width": 786,
+            "height": 938
+          },
+          "localStorageThemeKeys": []
+        },
+        {
+          "mode": "light",
+          "palette": "graphite",
+          "colorScheme": "light",
+          "devicePixelRatio": 1.25,
+          "visualViewportScale": 1,
+          "rootZoom": "1",
+          "viewport": {
+            "width": 786,
+            "height": 938
+          },
+          "htmlBackground": "rgb(255, 255, 255)",
+          "bodyBackground": "rgb(255, 255, 255)",
+          "tauriBridge": true,
+          "geometry": {
+            ".app-titlebar": {
+              "width": 786.4000244140625,
+              "height": 40
+            },
+            ".track-browser-workbench-pane": {
+              "width": 534.4000244140625,
+              "height": 801.6000366210938
+            },
+            ".track-row": {
+              "width": 516.4000244140625,
+              "height": 46
+            },
+            ".player-bar": {
+              "width": 786.4000244140625,
+              "height": 92
+            }
+          },
+          "documentSize": {
+            "width": 786,
+            "height": 938
+          },
+          "localStorageThemeKeys": []
+        }
+      ]
+    },
+    {
+      "name": "Global Search keyboard focus remains visible in packaged WebView2 Light and Dark",
+      "pass": true,
+      "light": {
+        "activeElementIsSearch": true,
+        "inputFocusVisible": true,
+        "wrapperFocusWithin": true,
+        "wrapperHasFocusVisible": true,
+        "outlineColor": "rgb(11, 88, 165)",
+        "outlineStyle": "solid",
+        "outlineWidth": "1.6px",
+        "devicePixelRatio": 1.25,
+        "background": "rgb(255, 255, 255)",
+        "forcedColors": false,
+        "reducedMotion": false,
+        "ratio": 7.11,
+        "physicalOutlineWidth": 2
+      },
+      "dark": {
+        "activeElementIsSearch": true,
+        "inputFocusVisible": true,
+        "wrapperFocusWithin": true,
+        "wrapperHasFocusVisible": true,
+        "outlineColor": "rgb(150, 136, 198)",
+        "outlineStyle": "solid",
+        "outlineWidth": "1.6px",
+        "devicePixelRatio": 1.25,
+        "background": "rgb(32, 33, 35)",
+        "forcedColors": false,
+        "reducedMotion": false,
+        "ratio": 5.09,
+        "physicalOutlineWidth": 2
+      }
+    },
+    {
+      "name": "fresh System preference and Graphite palette survive restart",
+      "pass": true,
+      "appearance": {
+        "mode": "light",
+        "palette": "graphite",
+        "colorScheme": "light",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 967
+        },
+        "htmlBackground": "rgb(255, 255, 255)",
+        "bodyBackground": "rgb(255, 255, 255)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 831.2000122070312
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 967
+        },
+        "localStorageThemeKeys": []
+      }
+    },
+    {
+      "name": "legacy schema 9 config migrates to Dark and retains Slate while Windows Apps is Light",
+      "pass": true,
+      "appearance": {
+        "mode": "dark",
+        "palette": "slate",
+        "colorScheme": "dark",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 996
+        },
+        "htmlBackground": "rgb(16, 23, 29)",
+        "bodyBackground": "rgb(16, 23, 29)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 860
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 996
+        },
+        "localStorageThemeKeys": []
+      },
+      "migrated_config": {
+        "allow_title_fallback": false,
+        "appearance_mode": "dark",
+        "auto_play": true,
+        "default_hold_frames": 1,
+        "default_tempo_scale": 1,
+        "default_timing_margin_us": 500,
+        "game_fps": 60,
+        "hotkeys": {
+          "panic": "ctrl+alt+backspace",
+          "pause": "f8",
+          "quit": "f10",
+          "refocus": "f6",
+          "skip": "f9"
+        },
+        "palette": "slate",
+        "safety": {
+          "prompt_on_high_risk": true,
+          "prompt_on_medium_risk": true
+        },
+        "schema_version": 10,
+        "sky_process_names": [
+          "Sky.exe",
+          "Sky Children of the Light.exe"
+        ],
+        "songs_dir": "songs",
+        "telemetry_enabled_by_default": false,
+        "ui_background_mode": "transparent",
+        "update": {
+          "auto_check": true,
+          "channel": "stable",
+          "check_interval_s": 86400,
+          "last_check_ts": 1793407756,
+          "last_error_ts": 0,
+          "skip_version": ""
+        },
+        "verbose_hud": false
+      }
+    },
+    {
+      "name": "legacy Dark and Slate survive packaged restart",
+      "pass": true,
+      "appearance": {
+        "mode": "dark",
+        "palette": "slate",
+        "colorScheme": "dark",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 1026
+        },
+        "htmlBackground": "rgb(16, 23, 29)",
+        "bodyBackground": "rgb(16, 23, 29)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 890.4000244140625
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 1026
+        },
+        "localStorageThemeKeys": []
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "fresh-system-light-webview2.png",
+      "view": {
+        "mode": "light",
+        "palette": "graphite",
+        "colorScheme": "light",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 938
+        },
+        "htmlBackground": "rgb(255, 255, 255)",
+        "bodyBackground": "rgb(255, 255, 255)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 801.6000366210938
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 938
+        },
+        "localStorageThemeKeys": []
+      },
+      "theme": "system",
+      "contrast": {
+        "visibleTextSamples": 104,
+        "inactiveControlExemptions": 0,
+        "minimumRatio": 4.97,
+        "failures": [],
+        "lowestSamples": [
+          {
+            "text": "106",
+            "element": "span.library-nav-item-count",
+            "ratio": 4.97,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "0",
+            "element": "span.library-nav-item-count",
+            "ratio": 5.27,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "Playlists",
+            "element": "h3.library-section-heading",
+            "ratio": 5.27,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "Select a song from your Library",
+            "element": "span.muted.player-track-status",
+            "ratio": 5.27,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "PREFERENCES",
+            "element": "p.eyebrow",
+            "ratio": 5.27,
+            "minimum": 4.5,
+            "exemption": null
+          }
+        ]
+      }
+    },
+    {
+      "file": "fresh-light-search-focus-webview2.png",
+      "view": {
+        "mode": "light",
+        "palette": "graphite",
+        "colorScheme": "light",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 938
+        },
+        "htmlBackground": "rgb(255, 255, 255)",
+        "bodyBackground": "rgb(255, 255, 255)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 801.6000366210938
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 938
+        },
+        "localStorageThemeKeys": []
+      },
+      "focus": {
+        "activeElementIsSearch": true,
+        "inputFocusVisible": true,
+        "wrapperFocusWithin": true,
+        "wrapperHasFocusVisible": true,
+        "outlineColor": "rgb(11, 88, 165)",
+        "outlineStyle": "solid",
+        "outlineWidth": "1.6px",
+        "devicePixelRatio": 1.25,
+        "background": "rgb(255, 255, 255)",
+        "forcedColors": false,
+        "reducedMotion": false,
+        "ratio": 7.11,
+        "physicalOutlineWidth": 2
+      }
+    },
+    {
+      "file": "fresh-system-dark-focus-webview2.png",
+      "view": {
+        "mode": "dark",
+        "palette": "graphite",
+        "colorScheme": "dark",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 938
+        },
+        "htmlBackground": "rgb(18, 19, 20)",
+        "bodyBackground": "rgb(18, 19, 20)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 801.6000366210938
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 938
+        },
+        "localStorageThemeKeys": []
+      },
+      "focus": {
+        "activeElementIsSearch": true,
+        "inputFocusVisible": true,
+        "wrapperFocusWithin": true,
+        "wrapperHasFocusVisible": true,
+        "outlineColor": "rgb(150, 136, 198)",
+        "outlineStyle": "solid",
+        "outlineWidth": "1.6px",
+        "devicePixelRatio": 1.25,
+        "background": "rgb(32, 33, 35)",
+        "forcedColors": false,
+        "reducedMotion": false,
+        "ratio": 5.09,
+        "physicalOutlineWidth": 2
+      },
+      "contrast": {
+        "visibleTextSamples": 91,
+        "inactiveControlExemptions": 0,
+        "minimumRatio": 4.94,
+        "failures": [],
+        "lowestSamples": [
+          {
+            "text": "106",
+            "element": "span.library-nav-item-count",
+            "ratio": 4.94,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "2",
+            "element": "span.track-cell.track-cell-index",
+            "ratio": 5.06,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "0",
+            "element": "span.library-nav-item-count",
+            "ratio": 5.6,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "Playlists",
+            "element": "h3.library-section-heading",
+            "ratio": 5.6,
+            "minimum": 4.5,
+            "exemption": null
+          },
+          {
+            "text": "Select a song from your Library",
+            "element": "span.muted.player-track-status",
+            "ratio": 5.6,
+            "minimum": 4.5,
+            "exemption": null
+          }
+        ]
+      }
+    },
+    {
+      "file": "legacy-dark-windows-light-webview2.png",
+      "view": {
+        "mode": "dark",
+        "palette": "slate",
+        "colorScheme": "dark",
+        "devicePixelRatio": 1.25,
+        "visualViewportScale": 1,
+        "rootZoom": "1",
+        "viewport": {
+          "width": 786,
+          "height": 996
+        },
+        "htmlBackground": "rgb(16, 23, 29)",
+        "bodyBackground": "rgb(16, 23, 29)",
+        "tauriBridge": true,
+        "geometry": {
+          ".app-titlebar": {
+            "width": 786.4000244140625,
+            "height": 40
+          },
+          ".track-browser-workbench-pane": {
+            "width": 534.4000244140625,
+            "height": 860
+          },
+          ".track-row": {
+            "width": 516.4000244140625,
+            "height": 46
+          },
+          ".player-bar": {
+            "width": 786.4000244140625,
+            "height": 92
+          }
+        },
+        "documentSize": {
+          "width": 786,
+          "height": 996
+        },
+        "localStorageThemeKeys": []
+      },
+      "migrated_config": {
+        "allow_title_fallback": false,
+        "appearance_mode": "dark",
+        "auto_play": true,
+        "default_hold_frames": 1,
+        "default_tempo_scale": 1,
+        "default_timing_margin_us": 500,
+        "game_fps": 60,
+        "hotkeys": {
+          "panic": "ctrl+alt+backspace",
+          "pause": "f8",
+          "quit": "f10",
+          "refocus": "f6",
+          "skip": "f9"
+        },
+        "palette": "slate",
+        "safety": {
+          "prompt_on_high_risk": true,
+          "prompt_on_medium_risk": true
+        },
+        "schema_version": 10,
+        "sky_process_names": [
+          "Sky.exe",
+          "Sky Children of the Light.exe"
+        ],
+        "songs_dir": "songs",
+        "telemetry_enabled_by_default": false,
+        "ui_background_mode": "transparent",
+        "update": {
+          "auto_check": true,
+          "channel": "stable",
+          "check_interval_s": 86400,
+          "last_check_ts": 1793407756,
+          "last_error_ts": 0,
+          "skip_version": ""
+        },
+        "verbose_hud": false
+      }
+    }
+  ],
+  "restoration": {
+    "restored": true,
+    "after": {
+      "apps_value_exists": true,
+      "apps_use_light_theme": 0,
+      "system_value_exists": true,
+      "system_use_light_theme": 0
+    }
+  },
+  "failure": null
+}
