@@ -535,6 +535,7 @@ fn native_analysis_cache_uses_a_128_entry_lru() {
                     state: "ready",
                 },
                 detail: None,
+                source_hash: None,
             },
         );
     }
@@ -554,6 +555,7 @@ fn native_analysis_cache_uses_a_128_entry_lru() {
             super::super::CachedSongAnalysis {
                 metadata: super::super::CatalogMetadata::error("JSON".into()),
                 detail: None,
+                source_hash: None,
             },
         );
     }
@@ -574,6 +576,8 @@ fn native_analysis_cache_recomputes_safely_after_lru_eviction() {
             .detail(crate::commands::CatalogDetailRequest {
                 song_id: song_id.to_owned(),
                 generation: Some(generation),
+                conversion_mode: None,
+                target_pitch: None,
             })
             .expect("detail analysis")
     };
@@ -641,6 +645,8 @@ fn native_analysis_admission_caps_two_active_workers_and_sixty_four_queued_ids()
                 runtime.detail(crate::commands::CatalogDetailRequest {
                     song_id,
                     generation: Some(generation),
+                    conversion_mode: None,
+                    target_pitch: None,
                 })
             })
         })
@@ -1011,6 +1017,9 @@ fn catalog_reload_completes_while_prepare_model_is_paused_and_supersedes_it() {
             fps: 60,
             dry_run: true,
         },
+        conversion_mode: None,
+        target_pitch: None,
+        conversion_confirmation_fingerprint: None,
     };
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
@@ -1097,6 +1106,9 @@ fn catalog_reload_completes_while_prepare_model_is_paused_and_supersedes_it() {
                 fps: 60,
                 dry_run: true,
             },
+            conversion_mode: None,
+            target_pitch: None,
+            conversion_confirmation_fingerprint: None,
         })
         .expect("new-generation Prepare succeeds");
     assert!(latest.prepared_id.is_some());

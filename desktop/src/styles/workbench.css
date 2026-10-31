@@ -1096,6 +1096,105 @@ body.is-resizing * {
   padding-left: 17px;
 }
 
+.sheet-compatibility {
+  display: grid;
+  gap: 9px;
+}
+
+.sheet-compatibility h4,
+.sheet-compatibility p,
+.sheet-compatibility ul {
+  margin: 0;
+}
+
+.sheet-format-label {
+  color: var(--text-primary) !important;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.sheet-choice {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sheet-choice select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+.sheet-pitch-warning,
+.sheet-sustain-note {
+  padding: 8px 9px;
+  border-left: 2px solid var(--warning-fg, var(--risk-medium));
+  background: var(--surface-raised);
+}
+
+.sheet-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  margin: 0;
+}
+
+.sheet-diagnostics-grid div {
+  min-width: 0;
+}
+
+.sheet-diagnostics-grid dt {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.sheet-diagnostics-grid dd {
+  margin: 1px 0 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sheet-loss-list {
+  padding-left: 17px;
+}
+
+.sheet-consent-hint,
+.sheet-consent-accepted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sheet-consent-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.sheet-consent-panel button {
+  min-height: 34px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+  cursor: pointer;
+}
+
+.sheet-consent-panel button:focus-visible,
+.sheet-choice select:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
 .recommendation-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -28,9 +28,24 @@ function metadataStatus(state: SongRow['metadata_state']): {
   label: string;
   value: string;
 } {
-  return state === 'pending'
-    ? { label: 'Metadata loading', value: '…' }
-    : { label: 'Metadata unavailable', value: 'Unavailable' };
+  switch (state) {
+    case 'pending':
+      return { label: 'Sheet analysis loading', value: '…' };
+    case 'unsupported':
+      return { label: 'Unsupported sheet format', value: 'Unsupported' };
+    case 'malformed':
+      return { label: 'Malformed sheet', value: 'Invalid' };
+    case 'unplayable':
+      return { label: 'No playable Piano notes', value: 'Unplayable' };
+    case 'requires_confirmation':
+      return { label: 'Conversion review required', value: 'Review' };
+    case 'physical_risk':
+      return { label: 'Physical timing risk', value: 'Risk' };
+    case 'error':
+      return { label: 'Sheet metadata unavailable', value: 'Unavailable' };
+    case 'ready':
+      return { label: 'Sheet ready', value: 'Ready' };
+  }
 }
 
 function isInteractiveRowTarget(target: EventTarget | null): boolean {

@@ -207,6 +207,10 @@ pub struct PianoPlanDiagnostics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PianoPlan {
     pub name: String,
+    /// Authoritative versioned family selected by the decoder.
+    pub format: super::SongFormat,
+    /// Decoder-resolved source roster used by the UI for explicit selection.
+    pub source_tracks: Vec<SourceTrack>,
     pub mode: ConversionMode,
     pub target_pitch: PianoTargetPitch,
     pub status: PlanStatus,
@@ -533,6 +537,8 @@ pub fn plan_canonical_song(
 
     Ok(PianoPlan {
         name: source.name.clone(),
+        format: source.format,
+        source_tracks: source.tracks.clone(),
         mode,
         target_pitch,
         status,

@@ -251,11 +251,15 @@ pub(super) struct AnalysisPermit<'a> {
 
 pub(super) struct AnalysisRequest<'a> {
     pub(super) key: AnalysisKey,
+    pub(super) analysis_song_id: &'a str,
     pub(super) path: &'a Path,
+    pub(super) source_bytes: Option<&'a [u8]>,
     pub(super) title: &'a str,
     pub(super) failure_format_label: &'a str,
     pub(super) settings: &'a ApplicationSettings,
     pub(super) policy: &'a MaterializedTimingPolicy,
+    pub(super) conversion_mode: Option<crate::commands::SheetConversionModeDto>,
+    pub(super) target_pitch: Option<crate::commands::SheetPitchDto>,
     pub(super) viewport_revision: Option<u64>,
     pub(super) priority: AnalysisPriority,
     pub(super) cache_failures: bool,
@@ -491,6 +495,15 @@ impl NativeDesktopRuntime {
             .map(|mut cache| cache.get(key))
     }
 
+    fn analysis_cache_remove(&self, key: &AnalysisKey) -> Result<(), String> {
+        self.analysis_cache
+            .lock()
+            .map_err(|_| "native analysis cache lock poisoned".to_string())?
+            .entries
+            .remove(key);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn set_analysis_test_gate(
         &self,
@@ -559,17 +572,28 @@ impl NativeDesktopRuntime {
     ) -> Result<CachedSongAnalysis, String> {
         let AnalysisRequest {
             key,
+            analysis_song_id,
             path,
+            source_bytes,
             title,
             failure_format_label,
             settings,
             policy,
+            conversion_mode,
+            target_pitch,
             viewport_revision,
             priority,
             cache_failures,
         } = request;
+        let expected_source_hash = source_bytes.map(super::sha256_hex);
         if let Some(analysis) = self.analysis_cache_get(&key)? {
-            return Ok(analysis);
+            if expected_source_hash
+                .as_deref()
+                .is_none_or(|expected| analysis.source_hash.as_deref() == Some(expected))
+            {
+                return Ok(analysis);
+            }
+            self.analysis_cache_remove(&key)?;
         }
         let (flight, owner) = {
             let mut cache = self
@@ -577,7 +601,13 @@ impl NativeDesktopRuntime {
                 .lock()
                 .map_err(|_| "native analysis cache lock poisoned".to_string())?;
             if let Some(analysis) = cache.get(&key) {
-                return Ok(analysis);
+                if expected_source_hash
+                    .as_deref()
+                    .is_none_or(|expected| analysis.source_hash.as_deref() == Some(expected))
+                {
+                    return Ok(analysis);
+                }
+                cache.entries.remove(&key);
             }
             if let Some(flight) = cache.flights.get(&key).cloned()
                 && !flight.cancelled.load(Ordering::Acquire)
@@ -618,7 +648,13 @@ impl NativeDesktopRuntime {
                 .map_err(|_| "native analysis flight lock poisoned".to_string())?;
             loop {
                 if let Some(result) = result.as_ref() {
-                    return result.clone();
+                    let result = result.clone();
+                    if let (Some(expected), Ok(analysis)) = (&expected_source_hash, &result)
+                        && analysis.source_hash.as_deref() != Some(expected.as_str())
+                    {
+                        return Err("selected sheet source changed during analysis".into());
+                    }
+                    return result;
                 }
                 result = flight
                     .completed
@@ -633,9 +669,19 @@ impl NativeDesktopRuntime {
                     Err("catalog analysis request was superseded".into())
                 } else {
                     #[cfg(test)]
-                    self.before_song_analysis(&key.song_id);
-                    let analyzed =
-                        self.analyze_song(path, &key.song_id, title, title, settings, policy);
+                    self.before_song_analysis(analysis_song_id);
+                    let analyzed = self.analyze_song(
+                        path,
+                        source_bytes,
+                        analysis_song_id,
+                        title,
+                        title,
+                        key.generation,
+                        settings,
+                        policy,
+                        conversion_mode,
+                        target_pitch,
+                    );
                     let analyzed = if cache_failures {
                         Ok(analyzed.unwrap_or_else(|_| {
                             CachedSongAnalysis::error(failure_format_label.to_owned())
@@ -649,7 +695,13 @@ impl NativeDesktopRuntime {
                     {
                         cache.insert(key.clone(), analysis.clone());
                     }
-                    analyzed
+                    if let (Some(expected), Ok(analysis)) = (&expected_source_hash, &analyzed)
+                        && analysis.source_hash.as_deref() != Some(expected.as_str())
+                    {
+                        Err("selected sheet source changed during analysis".into())
+                    } else {
+                        analyzed
+                    }
                 }
             }
             Err(error) => Err(error),
@@ -769,11 +821,12 @@ impl NativeDesktopRuntime {
         {
             return false;
         }
+        let song_id = key.song_id.split('\0').next().unwrap_or(&key.song_id);
         self.catalog.lock().is_ok_and(|catalog| {
             catalog.index.generation() == key.generation
                 && catalog
                     .index
-                    .canonical_path_for_song_id(&key.song_id, Some(key.generation))
+                    .canonical_path_for_song_id(song_id, Some(key.generation))
                     .is_ok()
         })
     }

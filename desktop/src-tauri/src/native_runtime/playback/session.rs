@@ -348,14 +348,46 @@ impl NativePlaybackService {
             generation,
             config,
             song,
+            sheet_analysis,
             schedule,
             risk,
             timing_policy,
             timing_margin_recommendation,
             settings_fingerprint,
+            publication_fingerprint,
+            source_path,
+            source_hash,
+            plan_identity,
+            plan_source,
             source_epoch,
         } = input;
-        let detail = song_detail(&song_id, &song, &schedule, &risk);
+        if sheet_analysis.as_ref().is_some_and(|analysis| {
+            analysis.readiness == crate::commands::SheetReadinessDto::RequiresConfirmation
+                && !analysis.confirmation_received
+        }) {
+            self.validate_prepare_source(
+                cancelled,
+                source_epoch,
+                generation,
+                &publication_fingerprint,
+            )?;
+            let detail = song_detail(&song_id, &song, &schedule, &risk, sheet_analysis.clone());
+            return Ok(PreparedPlaybackDto {
+                prepared_id: None,
+                song: detail,
+                config,
+                admission: PlaybackAdmission::ConfirmationRequired,
+                risk: risk_summary(&risk),
+                decisions: Vec::new(),
+                plan_fingerprint: None,
+                variants: Vec::new(),
+                error_code: Some("conversion_confirmation_required".into()),
+                error_message: Some(
+                    "Review the listed conversion losses and explicitly accept them before preparing playback.".into(),
+                ),
+            });
+        }
+        let detail = song_detail(&song_id, &song, &schedule, &risk, sheet_analysis.clone());
         if !config.dry_run && schedule.impossible_same_key_repeats > 0 {
             let message = format!(
                 "Detected {} infeasible same-key repeat(s): the authored interval is shorter than the configured hold.",
@@ -365,18 +397,22 @@ impl NativePlaybackService {
                 cancelled,
                 source_epoch,
                 generation,
-                &settings_fingerprint,
+                &publication_fingerprint,
             )?;
-            return Ok(blocked_playback_dto(
+            let mut blocked = blocked_playback_dto(
                 &song_id,
                 config,
                 "validation_failed",
                 message,
                 schedule.recommended_tempo_scale,
                 schedule.recommended_hold_frames,
-            ));
+            );
+            blocked.song = detail;
+            return Ok(blocked);
         }
-        let fingerprint = plan_fingerprint(&song_id, &config, &schedule, &timing_policy)?;
+        let fingerprint_song_id = format!("{song_id}\0{plan_identity}");
+        let fingerprint =
+            plan_fingerprint(&fingerprint_song_id, &config, &schedule, &timing_policy)?;
         let timing_advisory = self.analyze_timing_variant(
             &schedule,
             &config,
@@ -421,8 +457,12 @@ impl NativePlaybackService {
                     hold_frames,
                     config.timing_margin_us,
                 )
-                && let Ok(recommended_schedule) =
-                    build_schedule_with_policy(&song, tempo_scale, &recommended_policy)
+                && let Ok(recommended_schedule) = recommended_schedule(
+                    &song,
+                    plan_source.as_ref(),
+                    tempo_scale,
+                    &recommended_policy,
+                )
                 && (config.dry_run || recommended_schedule.impossible_same_key_repeats == 0)
             {
                 let recommended_config = PlaybackConfigDto {
@@ -433,7 +473,7 @@ impl NativePlaybackService {
                     dry_run: config.dry_run,
                 };
                 let recommended_fingerprint = plan_fingerprint(
-                    &song_id,
+                    &fingerprint_song_id,
                     &recommended_config,
                     &recommended_schedule,
                     &recommended_policy,
@@ -474,8 +514,12 @@ impl NativePlaybackService {
                     dry_run: true,
                     ..config.clone()
                 };
-                let dry_run_fingerprint =
-                    plan_fingerprint(&song_id, &dry_run_config, &schedule, &timing_policy)?;
+                let dry_run_fingerprint = plan_fingerprint(
+                    &fingerprint_song_id,
+                    &dry_run_config,
+                    &schedule,
+                    &timing_policy,
+                )?;
                 let dry_run_timing_advisory = self.analyze_timing_variant(
                     &schedule,
                     &dry_run_config,
@@ -539,7 +583,7 @@ impl NativePlaybackService {
             cancelled,
             source_epoch,
             generation,
-            &settings_fingerprint,
+            &publication_fingerprint,
         )?;
         let mut prepared = self
             .prepared
@@ -552,12 +596,58 @@ impl NativePlaybackService {
                 generation,
                 settings_fingerprint,
                 song,
+                source_path,
+                source_hash,
                 dto: dto.clone(),
                 variants,
             },
         ));
         retain_prepared_capacity(&mut prepared);
         Ok(dto)
+    }
+
+    pub(in crate::native_runtime) fn invalidate_prepared_for_selection(
+        &self,
+    ) -> Result<(), String> {
+        let mut publication = self
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
+        publication.source_epoch = publication.source_epoch.saturating_add(1);
+        if let Some(active) = publication.active_request.take() {
+            active.store(true, Ordering::Release);
+        }
+        self.prepared
+            .lock()
+            .map_err(|_| "native prepared-plan lock poisoned".to_string())?
+            .clear();
+        Ok(())
+    }
+
+    pub(in crate::native_runtime) fn prepared_source_identity(
+        &self,
+        prepared_id: &str,
+    ) -> Result<Option<(PathBuf, String)>, String> {
+        let prepared = self
+            .prepared
+            .lock()
+            .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
+        Ok(prepared
+            .iter()
+            .find(|(id, _)| id == prepared_id)
+            .map(|(_, record)| (record.source_path.clone(), record.source_hash.clone())))
+    }
+
+    pub(in crate::native_runtime) fn invalidate_prepared_source(
+        &self,
+        prepared_id: &str,
+    ) -> Result<(), String> {
+        let mut prepared = self
+            .prepared
+            .lock()
+            .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
+        prepared.retain(|(id, _)| id != prepared_id);
+        Ok(())
     }
 
     fn validate_prepare_source(
@@ -2261,6 +2351,7 @@ pub(in crate::native_runtime) fn blocked_playback_dto(
             format_label: "UNKNOWN".into(),
             risk: risk.clone(),
             recommendation: None,
+            sheet_analysis: None,
         },
         config,
         admission: PlaybackAdmission::Blocked,
@@ -2278,6 +2369,7 @@ pub(in crate::native_runtime) fn song_detail(
     song: &Song,
     schedule: &ScheduleMetadata,
     risk: &RiskReport,
+    sheet_analysis: Option<crate::commands::SheetAnalysisDto>,
 ) -> SongDetailDto {
     let recommendation = crate::commands::PlaybackRecommendationDto {
         recommended_hold_frames: risk.suggested_hold_frames,
@@ -2292,10 +2384,35 @@ pub(in crate::native_runtime) fn song_detail(
         song_id: song_id.to_owned(),
         title: song.name.clone(),
         duration_us: schedule.source_duration_us,
-        note_count: song.notes.len() as u64,
+        note_count: sheet_analysis
+            .as_ref()
+            .and_then(|analysis| analysis.source_note_count)
+            .unwrap_or(song.notes.len() as u64),
         format_label: "SHEET".into(),
         risk: risk_summary(risk),
         recommendation: Some(recommendation),
+        sheet_analysis,
+    }
+}
+
+fn recommended_schedule(
+    song: &Song,
+    plan_source: Option<&super::NativeSheetSource>,
+    tempo_scale: f64,
+    policy: &MaterializedTimingPolicy,
+) -> Result<ScheduleMetadata, String> {
+    let Some(source) = plan_source else {
+        return build_schedule_with_policy(song, tempo_scale, policy)
+            .map_err(|error| error.to_string());
+    };
+    let options = super::planner_options(source.conversion_mode, source.target_pitch, tempo_scale);
+    match build_song_plan(&source.bytes, &source.fallback_name, &options, policy)
+        .map_err(|error| error.to_string())?
+    {
+        SongPlan::PianoConversion(plan) => plan
+            .schedule
+            .ok_or_else(|| "recommended converted schedule contains no playable notes".into()),
+        SongPlan::LegacyCompatibility(plan) => Ok(plan.schedule),
     }
 }
 
@@ -2329,12 +2446,13 @@ pub(super) fn compile_dispatch_schedule(
 mod preparation_cancellation_tests {
     use super::super::{
         NativePreparedInput, analyze_schedule_with_context, build_schedule_with_policy,
-        parse_song_json,
     };
     use super::NativePlaybackService;
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
+    use sky_app_core::song::parse_song_json;
     use sky_app_core::timing::MaterializedTimingPolicy;
+    use std::path::PathBuf;
     use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
 
@@ -2370,6 +2488,7 @@ mod preparation_cancellation_tests {
             generation,
             config,
             song,
+            sheet_analysis: None,
             schedule,
             risk,
             timing_policy,
@@ -2379,6 +2498,11 @@ mod preparation_cancellation_tests {
                 source: "default_fallback".into(),
             },
             settings_fingerprint: settings_fingerprint.into(),
+            publication_fingerprint: settings_fingerprint.into(),
+            source_path: PathBuf::new(),
+            source_hash: String::new(),
+            plan_identity: "test-plan".into(),
+            plan_source: None,
             source_epoch: 0,
         }
     }

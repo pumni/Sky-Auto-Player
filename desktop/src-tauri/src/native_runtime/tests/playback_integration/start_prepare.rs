@@ -323,6 +323,8 @@ fn native_detail_matches_python_tempo_oracle_corpus() {
             .detail(crate::commands::CatalogDetailRequest {
                 song_id: search.items[0].song_id.clone(),
                 generation: Some(search.generation),
+                conversion_mode: None,
+                target_pitch: None,
             })
             .expect("detail");
         let actual = serde_json::to_value(&detail).expect("detail JSON");
@@ -403,6 +405,269 @@ fn native_prepare_preserves_python_validation_failed_contract() {
 }
 
 #[test]
+fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_source_guard() {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sky-sheet-prepare-{suffix}"));
+    fs::create_dir_all(root.join("songs")).expect("songs root");
+    fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+    fs::write(
+        root.join("songs/legacy.json"),
+        r#"{"name":"Legacy","songNotes":[{"time":0,"key":"Key0"}]}"#,
+    )
+    .expect("legacy sheet");
+    let composed = r#"{
+        "type":"composed","version":5,"bpm":120,"pitch":"C",
+        "data":{"appName":"Sky"},"columnTempos":[0,0],
+        "tracks":[
+            {"instrument":{"name":"Piano"},"notes":[[0,72,1]]},
+            {"instrument":{"name":"Piano"},"notes":[[1,74,1]]}
+        ]
+    }"#;
+    fs::write(root.join("songs/composed.json"), composed).expect("composed sheet");
+    fs::write(
+        root.join("songs/recorded.json"),
+        r#"{"type":"recorded","version":4,"data":{"appName":"Sky"},"tracks":[{"instrument":{"name":"Piano"},"notes":[[74,0,250]]}]}"#,
+    )
+    .expect("recorded sheet");
+    fs::write(
+        root.join("songs/risk.json"),
+        r#"{"type":"composed","version":5,"bpm":120,"pitch":"C","data":{"appName":"Sky"},"columnTempos":[0],"tracks":[{"instrument":{"name":"Piano"},"notes":[[0,60,1],[0,62,1],[0,64,1],[0,65,1],[0,67,1],[0,69,1],[0,71,1],[0,72,1],[0,74,1],[0,86,1]]}]}"#,
+    )
+    .expect("risk and conversion-loss sheet");
+    fs::write(
+        root.join("songs/unsupported.json"),
+        r#"{"type":"composed","version":99,"data":{"appName":"Sky"},"songNotes":[{"time":0,"key":"Key0"}],"columns":[],"instruments":[]}"#,
+    )
+    .expect("unsupported sheet with legacy projection");
+
+    let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+    let generation = catalog_generation(&runtime);
+    let find_song = |query: &str| {
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query": query,
+                    "offset": 0,
+                    "limit": 10,
+                    "generation": generation
+                }),
+            )
+            .expect("catalog search");
+        search["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID")
+            .to_owned()
+    };
+    let config = serde_json::json!({
+        "hold_frames":1.0,
+        "timing_margin_us":800,
+        "tempo_scale":1.0,
+        "fps":60,
+        "dry_run":true
+    });
+
+    let legacy_id = find_song("legacy");
+    let legacy_detail = runtime
+        .dispatch(
+            "catalog.detail",
+            serde_json::json!({"songId":legacy_id,"generation":generation}),
+        )
+        .expect("legacy detail");
+    let legacy_prepare = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({"songId":legacy_id,"generation":generation,"config":config}),
+        )
+        .expect("legacy prepare");
+    assert_eq!(
+        legacy_detail["sheet_analysis"]["format_label"],
+        "Legacy flat"
+    );
+    assert_eq!(
+        legacy_prepare["song"]["sheet_analysis"],
+        legacy_detail["sheet_analysis"]
+    );
+    assert!(legacy_prepare["prepared_id"].as_str().is_some());
+
+    let composed_id = find_song("composed");
+    let composed_detail = runtime
+        .dispatch(
+            "catalog.detail",
+            serde_json::json!({"songId":composed_id,"generation":generation}),
+        )
+        .expect("composed detail");
+    let composed_prepare = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({"songId":composed_id,"generation":generation,"config":config}),
+        )
+        .expect("composed prepare");
+    assert_eq!(
+        composed_detail["sheet_analysis"]["format_label"],
+        "Composed v5"
+    );
+    assert_eq!(composed_detail["sheet_analysis"]["source_track_count"], 2);
+    let mut detail_analysis = composed_detail["sheet_analysis"].clone();
+    let mut prepared_analysis = composed_prepare["song"]["sheet_analysis"].clone();
+    detail_analysis["confirmation_fingerprint"] = Value::Null;
+    prepared_analysis["confirmation_fingerprint"] = Value::Null;
+    assert_eq!(prepared_analysis, detail_analysis);
+    assert_eq!(composed_prepare["admission"], "ready");
+    assert!(composed_prepare["prepared_id"].as_str().is_some());
+
+    let recorded_id = find_song("recorded");
+    let conversion_mode = serde_json::json!({"kind":"single_track","track_id":0});
+    let selected_detail = runtime
+        .dispatch(
+            "catalog.detail",
+            serde_json::json!({
+                "songId":recorded_id,
+                "generation":generation,
+                "conversionMode":conversion_mode,
+                "targetPitch":"D"
+            }),
+        )
+        .expect("selected recorded detail");
+    assert_eq!(
+        selected_detail["sheet_analysis"]["format_label"],
+        "Recorded v4"
+    );
+    assert_eq!(selected_detail["sheet_analysis"]["target_pitch"], "D");
+    assert_eq!(
+        selected_detail["sheet_analysis"]["readiness"],
+        "requires_confirmation"
+    );
+    assert!(
+        selected_detail["sheet_analysis"]["authored_sustain_lost_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let _detail_confirmation = selected_detail["sheet_analysis"]["confirmation_fingerprint"]
+        .as_str()
+        .expect("catalog detail confirmation token")
+        .to_owned();
+    let prepare_request = |fingerprint: Option<String>| {
+        let mut request = serde_json::json!({
+            "songId":recorded_id,
+            "generation":generation,
+            "config":config,
+            "conversionMode":conversion_mode,
+            "targetPitch":"D"
+        });
+        if let Some(fingerprint) = fingerprint {
+            request["conversionConfirmationFingerprint"] = fingerprint.into();
+        }
+        request
+    };
+    let proposal = runtime
+        .dispatch("playback.prepare", prepare_request(None))
+        .expect("loss proposal");
+    assert_eq!(proposal["error_code"], "conversion_confirmation_required");
+    assert!(proposal["prepared_id"].is_null());
+    let confirmation = proposal["song"]["sheet_analysis"]["confirmation_fingerprint"]
+        .as_str()
+        .expect("exact playback config consent token")
+        .to_owned();
+    let wrong = runtime
+        .dispatch(
+            "playback.prepare",
+            prepare_request(Some("stale-token".into())),
+        )
+        .expect("stale consent proposal");
+    assert_eq!(wrong["error_code"], "conversion_confirmation_required");
+    assert!(wrong["prepared_id"].is_null());
+    let accepted = runtime
+        .dispatch("playback.prepare", prepare_request(Some(confirmation)))
+        .expect("explicit loss consent");
+    assert_eq!(
+        accepted["song"]["sheet_analysis"]["confirmation_received"],
+        true
+    );
+    let prepared_id = accepted["prepared_id"]
+        .as_str()
+        .expect("prepared after consent")
+        .to_owned();
+    fs::write(root.join("songs/recorded.json"), composed).expect("rewrite source after prepare");
+    let stale_start = runtime.dispatch(
+        "playback.start",
+        serde_json::json!({"preparedId":prepared_id,"decisions":[]}),
+    );
+    assert!(stale_start.unwrap_err().contains("source sheet changed"));
+
+    let risk_id = find_song("risk");
+    let risk_detail = runtime
+        .dispatch(
+            "catalog.detail",
+            serde_json::json!({"songId":risk_id,"generation":generation}),
+        )
+        .expect("risk detail");
+    assert_eq!(
+        risk_detail["sheet_analysis"]["readiness"],
+        "requires_confirmation"
+    );
+    assert_eq!(risk_detail["risk"]["level"], "medium");
+    let _risk_detail_token = risk_detail["sheet_analysis"]["confirmation_fingerprint"]
+        .as_str()
+        .expect("risk sheet detail token")
+        .to_owned();
+    let risk_proposal = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({"songId":risk_id,"generation":generation,"config":config}),
+        )
+        .expect("risk sheet loss proposal");
+    assert!(risk_proposal["prepared_id"].is_null());
+    let risk_token = risk_proposal["song"]["sheet_analysis"]["confirmation_fingerprint"]
+        .as_str()
+        .expect("risk playback config consent token")
+        .to_owned();
+    let risk_accepted = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({
+                "songId":risk_id,
+                "generation":generation,
+                "config":config,
+                "conversionConfirmationFingerprint":risk_token
+            }),
+        )
+        .expect("loss consent leaves physical risk admission active");
+    assert_eq!(risk_accepted["admission"], "confirmation_required");
+    assert_eq!(risk_accepted["risk"]["level"], "medium");
+    assert!(!risk_accepted["decisions"].as_array().unwrap().is_empty());
+    assert!(risk_accepted["prepared_id"].as_str().is_some());
+
+    let unsupported_id = find_song("unsupported");
+    let unsupported_detail = runtime
+        .dispatch(
+            "catalog.detail",
+            serde_json::json!({"songId":unsupported_id,"generation":generation}),
+        )
+        .expect("unsupported detail");
+    assert_eq!(
+        unsupported_detail["sheet_analysis"]["readiness"],
+        "unsupported"
+    );
+    let unsupported_prepare = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({"songId":unsupported_id,"generation":generation,"config":config}),
+        )
+        .expect("unsupported prepare is a typed blocked result");
+    assert_eq!(unsupported_prepare["error_code"], "unsupported_sheet");
+    assert!(unsupported_prepare["prepared_id"].is_null());
+    assert_eq!(unsupported_prepare["song"]["note_count"], 0);
+
+    runtime.shutdown();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_pressure() {
     fn input(
         song_id: &str,
@@ -436,6 +701,7 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
             generation: 1,
             config,
             song: song.clone(),
+            sheet_analysis: None,
             schedule,
             risk,
             timing_policy,
@@ -445,6 +711,11 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
                 source: "default_fallback".into(),
             },
             settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            publication_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            source_path: std::path::PathBuf::new(),
+            source_hash: String::new(),
+            plan_identity: "test-plan".into(),
+            plan_source: None,
             source_epoch: 0,
         }
     }
@@ -610,6 +881,9 @@ fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_anal
             fps: 60,
             dry_run: true,
         },
+        conversion_mode: None,
+        target_pitch: None,
+        conversion_confirmation_fingerprint: None,
     };
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
@@ -700,6 +974,9 @@ fn appearance_and_palette_only_patch_preserves_inflight_prepare_and_native_start
             fps: 60,
             dry_run: true,
         },
+        conversion_mode: None,
+        target_pitch: None,
+        conversion_confirmation_fingerprint: None,
     };
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));

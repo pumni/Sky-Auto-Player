@@ -55,6 +55,14 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             settings,
             settingsState: 'ready',
             settingsError: null,
+            ...(patch.playbackDefaults === undefined
+              ? {}
+              : {
+                  library: {
+                    ...get().library,
+                    conversionConsentFingerprint: null,
+                  },
+                }),
             playback: {
               ...playback,
               prepared: preparationSafePatch ? playback.prepared : null,

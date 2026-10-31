@@ -37,6 +37,8 @@ export type LibrarySliceActions = Pick<
   DesktopStore,
   | 'search'
   | 'selectSong'
+  | 'setSheetConversionMode'
+  | 'setSheetTargetPitch'
   | 'setViewport'
   | 'navigateBuiltinPage'
   | 'retryBuiltinPage'
@@ -796,6 +798,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           selectedSongId: clearBrowserSelection ? null : current.selectedSongId,
           selectedSongSummary: clearBrowserSelection ? null : current.selectedSongSummary,
           selectedSongIndex: clearBrowserSelection ? null : current.selectedSongIndex,
+          ...(clearBrowserSelection
+            ? {
+                conversionMode: { kind: 'merge_playable' } as const,
+                targetPitch: null,
+                conversionConsentFingerprint: null,
+              }
+            : {}),
           visibleRange: clearBrowserSelection ? { first: 0, last: 0 } : current.visibleRange,
           pages: new Map(),
           indexById: new Map(),
@@ -843,6 +852,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             selectedSongId: generationChanged ? null : latest.selectedSongId,
             selectedSongSummary: generationChanged ? null : latest.selectedSongSummary,
             selectedSongIndex: generationChanged ? null : latest.selectedSongIndex,
+            ...(generationChanged
+              ? {
+                  conversionMode: { kind: 'merge_playable' } as const,
+                  targetPitch: null,
+                  conversionConsentFingerprint: null,
+                }
+              : {}),
             visibleRange: generationChanged ? { first: 0, last: 0 } : latest.visibleRange,
             loading: false,
             error: null,
