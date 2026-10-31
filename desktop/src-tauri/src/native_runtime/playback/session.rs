@@ -834,9 +834,8 @@ impl NativePlaybackService {
         let (player, target_hwnd) = match physical_creation {
             Ok(value) => value,
             Err(error) => {
-                // Match the Python supervisor's observable failure path:
-                // a start that cannot pass focus/target admission still
-                // has an ordered starting -> failed -> failed-event trace.
+                // A start that cannot pass focus/target admission still has
+                // an ordered starting -> failed -> failed-event trace.
                 let (code, message) = physical_startup_failure(&error);
                 let failed_active = Arc::new(NativeActivePlayback {
                     activity: self.activity.clone(),
@@ -2273,9 +2272,8 @@ pub(in crate::native_runtime) fn plan_fingerprint(
         })
         .collect::<Vec<_>>();
     // Construct every nested object with json! rather than serializing the
-    // Rust DTO directly.  The Python oracle uses
-    // json.dumps(..., sort_keys=True, separators=(",", ":")); DTO struct
-    // declaration order is not the canonical fingerprint order.
+    // Rust DTO directly. This keeps the fingerprint field order independent
+    // from the DTO declaration order.
     let payload = serde_json::json!({
         "song_id": song_id,
         "config": {
@@ -2369,9 +2367,8 @@ pub(in crate::native_runtime) fn blocked_playback_dto(
     recommended_tempo_scale: Option<f64>,
     recommended_hold_frames: Option<f64>,
 ) -> PreparedPlaybackDto {
-    // Keep blocked preparation responses aligned with the Python
-    // DesktopPlaybackService: the failure is represented as a typed blocked
-    // DTO, not as a new transport error or an implementation-specific code.
+    // Represent blocked preparation as a typed DTO with a stable error code,
+    // rather than as a transport error or implementation-specific response.
     let recommendations = [
         recommended_tempo_scale.map(|tempo| format!("Try tempo {tempo:.2}×")),
         recommended_hold_frames.map(|hold| format!("Try hold {hold:.2} frames")),

@@ -3,7 +3,7 @@
 //! Directory enumeration and canonicalization are outer-adapter concerns. The
 //! core receives canonical path strings, owns opaque IDs, stable ordering,
 //! generation checks, and bounded path-free rows. Fuzzy ranking is an explicit
-//! port because the accepted Python oracle defines a WRatio contract; the
+//! port because the checked-in search fixtures define its WRatio contract; the
 //! core must not silently substitute a different algorithm.
 
 use serde::{Deserialize, Serialize};
@@ -588,10 +588,10 @@ pub fn song_id_for_canonical_path(path: &str) -> String {
         .collect()
 }
 
-/// Match Python's `normcase(normpath(resolve(...)))` for the canonical path
-/// supplied by the outer filesystem adapter. The adapter performs strict
-/// filesystem canonicalization; this function only performs deterministic
-/// separator/case normalization before hashing and collision checks.
+/// Normalize the canonical path supplied by the outer filesystem adapter.
+/// The adapter performs strict filesystem canonicalization; this function
+/// only applies deterministic separator/case normalization before hashing
+/// and collision checks.
 pub fn normalized_canonical_path(path: &str) -> String {
     #[cfg(windows)]
     {

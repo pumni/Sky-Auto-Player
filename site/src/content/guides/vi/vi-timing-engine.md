@@ -95,7 +95,7 @@ sender đo được, không phải đảm bảo timing tuyệt đối.
 Một Rust worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân
 giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp, và telemetry native. Tauri/React
 render desktop GUI chính thức; native Rust services sở hữu application policy. Production path
-không có dependency vào Python Core hoặc Textual.
+đi qua native Rust services và Tauri shell.
 
 ## Giới hạn đã biết
 

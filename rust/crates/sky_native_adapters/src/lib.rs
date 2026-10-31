@@ -1,7 +1,7 @@
 //! Outer adapters for application services.
 //!
 //! This crate owns filesystem enumeration and persisted config compatibility.
-//! It does not contain Tauri delivery policy, Python transport, realtime
+//! It does not contain Tauri delivery policy, realtime
 //! playback, or updater transaction logic.
 
 use serde_json::{Map, Value};
@@ -61,7 +61,7 @@ pub struct CalibrationResolution {
 }
 
 /// Read the publishable sender-calibration result using the same fail-closed
-/// categories as the Python loader.  The cache is evidence, not a source of
+/// categories as the native settings loader. The cache is evidence, not a source of
 /// arbitrary timing values: only the current schema/formula/constants and a
 /// valid applied margin are accepted.
 pub fn load_calibration_resolution(path: impl AsRef<Path>) -> CalibrationResolution {
@@ -1156,7 +1156,7 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     let palette = raw
         .get("palette")
         .or_else(|| raw.get("theme"))
-        .map(python_string)
+        .map(format_legacy_config_value)
         .unwrap_or_else(|| settings.palette.clone());
     settings.palette = normalized_palette(&palette);
     settings.ui_background_mode =
@@ -1231,7 +1231,7 @@ fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<Stri
     let palette = raw
         .get("palette")
         .or_else(|| raw.get("theme"))
-        .map(python_string)
+        .map(format_legacy_config_value)
         .unwrap_or_else(|| {
             if is_new_settings_file {
                 ApplicationSettings::default().palette
@@ -1241,12 +1241,12 @@ fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<Stri
         });
     let fps = resolve_fps(
         raw.get("game_fps")
-            .and_then(python_int)
+            .and_then(parse_legacy_integer_setting)
             .unwrap_or(i64::from(DEFAULT_GAME_FPS)),
     );
     let profile = raw
         .get("default_timing_profile")
-        .map(python_string)
+        .map(format_legacy_config_value)
         .unwrap_or_else(|| "balanced".into())
         .to_lowercase()
         .replace('-', "_");
@@ -1258,7 +1258,7 @@ fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<Stri
             .find_map(|key| {
                 profile
                     .get(key)
-                    .and_then(legacy_float)
+                    .and_then(parse_legacy_profile_number)
                     .and_then(nearest_hold_frames)
             })
     });
@@ -1268,7 +1268,7 @@ fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<Stri
             ["min_hold_us", "hold_us"].into_iter().find_map(|key| {
                 profile
                     .get(key)
-                    .and_then(legacy_float)
+                    .and_then(parse_legacy_profile_number)
                     .and_then(|value| nearest_hold_frames(value / frame_us as f64))
             })
         });
@@ -1364,8 +1364,8 @@ fn selected_timing_profile<'a>(
                 return Some(object);
             }
         } else if !json_is_falsy(selected) {
-            // Python keeps a truthy non-dict exact match and then discards it;
-            // it does not continue looking for an alias in that case.
+            // A truthy non-object exact match is discarded without continuing
+            // to an alias, matching the legacy profile lookup order.
             return None;
         }
     }
@@ -1388,7 +1388,7 @@ fn json_is_falsy(value: &Value) -> bool {
 
 fn raw_string(raw: &Map<String, Value>, key: &str, default: &str) -> String {
     raw.get(key)
-        .map(python_string)
+        .map(format_legacy_config_value)
         .unwrap_or_else(|| default.into())
 }
 
@@ -1407,7 +1407,7 @@ fn raw_bool(raw: &Map<String, Value>, key: &str, default: bool) -> bool {
 
 fn raw_f64(raw: &Map<String, Value>, key: &str, default: f64) -> f64 {
     raw.get(key)
-        .and_then(python_float)
+        .and_then(parse_json_number_or_decimal_string)
         .filter(|value| value.is_finite())
         .unwrap_or(default)
 }
@@ -1419,7 +1419,7 @@ fn raw_u64(raw: &Map<String, Value>, key: &str, default: u64) -> u64 {
 fn raw_fps(raw: &Map<String, Value>, key: &str, default: u16) -> u16 {
     resolve_fps(
         raw.get(key)
-            .and_then(python_int)
+            .and_then(parse_legacy_integer_setting)
             .unwrap_or(i64::from(default)),
     )
 }
@@ -1427,13 +1427,13 @@ fn raw_fps(raw: &Map<String, Value>, key: &str, default: u16) -> u16 {
 fn raw_string_list(value: Option<&Value>) -> Option<Vec<String>> {
     value?
         .as_array()
-        .map(|items| items.iter().map(python_string).collect())
+        .map(|items| items.iter().map(format_legacy_config_value).collect())
 }
 
 fn object_string(object: &Map<String, Value>, key: &str, default: &str) -> String {
     object
         .get(key)
-        .map(python_string)
+        .map(format_legacy_config_value)
         .unwrap_or_else(|| default.into())
 }
 
@@ -1453,7 +1453,7 @@ fn object_i64(object: &Map<String, Value>, key: &str, default: i64) -> i64 {
     object.get(key).and_then(Value::as_i64).unwrap_or(default)
 }
 
-fn python_string(value: &Value) -> String {
+fn format_legacy_config_value(value: &Value) -> String {
     match value {
         Value::Null => "None".into(),
         Value::Bool(value) => {
@@ -1469,7 +1469,7 @@ fn python_string(value: &Value) -> String {
             "[{}]",
             values
                 .iter()
-                .map(python_repr)
+                .map(format_legacy_config_repr)
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -1477,25 +1477,31 @@ fn python_string(value: &Value) -> String {
             "{{{}}}",
             values
                 .iter()
-                .map(|(key, value)| format!("{}: {}", python_repr_string(key), python_repr(value)))
+                .map(|(key, value)| {
+                    format!(
+                        "{}: {}",
+                        quote_legacy_config_string(key),
+                        format_legacy_config_repr(value)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
     }
 }
 
-fn python_repr(value: &Value) -> String {
+fn format_legacy_config_repr(value: &Value) -> String {
     match value {
-        Value::String(value) => python_repr_string(value),
-        _ => python_string(value),
+        Value::String(value) => quote_legacy_config_string(value),
+        _ => format_legacy_config_value(value),
     }
 }
 
-fn python_repr_string(value: &str) -> String {
+fn quote_legacy_config_string(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-fn python_float(value: &Value) -> Option<f64> {
+fn parse_json_number_or_decimal_string(value: &Value) -> Option<f64> {
     match value {
         Value::Bool(_) | Value::Null => None,
         Value::Number(value) => value.as_f64(),
@@ -1504,10 +1510,10 @@ fn python_float(value: &Value) -> Option<f64> {
     }
 }
 
-fn legacy_float(value: &Value) -> Option<f64> {
+fn parse_legacy_profile_number(value: &Value) -> Option<f64> {
     match value {
         Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
-        _ => python_float(value),
+        _ => parse_json_number_or_decimal_string(value),
     }
 }
 
@@ -1520,7 +1526,7 @@ fn numeric_float(value: &Value) -> Option<f64> {
     }
 }
 
-fn python_int(value: &Value) -> Option<i64> {
+fn parse_legacy_integer_setting(value: &Value) -> Option<i64> {
     match value {
         Value::Bool(_) | Value::Null => None,
         Value::Number(value) => value
@@ -2645,6 +2651,26 @@ mod tests {
             }
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn persisted_config_coercions_keep_distinct_integer_and_text_rules() {
+        let boolean = Value::Bool(true);
+        assert_eq!(parse_legacy_integer_setting(&boolean), None);
+        assert_eq!(parse_legacy_profile_number(&boolean), Some(1.0));
+        assert_eq!(parse_legacy_integer_setting(&Value::from(2.9)), Some(2));
+        assert_eq!(parse_legacy_integer_setting(&Value::from(" 60 ")), Some(60));
+        assert_eq!(
+            parse_json_number_or_decimal_string(&Value::from(" 1.25 ")),
+            Some(1.25)
+        );
+
+        assert_eq!(format_legacy_config_value(&Value::Null), "None");
+        assert_eq!(format_legacy_config_value(&boolean), "True");
+        assert_eq!(
+            format_legacy_config_value(&serde_json::json!(["a'b", true, null])),
+            r#"['a\'b', True, None]"#
+        );
     }
 
     fn sha256_bytes(bytes: &[u8]) -> String {

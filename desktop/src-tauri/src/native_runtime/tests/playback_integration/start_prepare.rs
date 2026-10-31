@@ -281,9 +281,9 @@ fn settings_fingerprint_excludes_appearance_and_auto_play() {
 }
 
 #[test]
-fn native_detail_matches_python_tempo_oracle_corpus() {
+fn native_detail_matches_tempo_recommendation_contract_cases() {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../../../tests/fixtures/song_planning/oracle_cases.json"
+        "../../../../../../tests/fixtures/song_planning/schedule_contract_cases.json"
     ))
     .expect("tempo fixture");
     let cases = fixture["detail_tempo_cases"]
@@ -350,7 +350,7 @@ fn native_detail_matches_python_tempo_oracle_corpus() {
 }
 
 #[test]
-fn native_prepare_preserves_python_validation_failed_contract() {
+fn native_prepare_keeps_typed_validation_failure_contract() {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")

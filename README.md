@@ -41,7 +41,7 @@ Sky Auto Player keeps authored schedule offsets fixed and records sender-side ti
 - **Frame-based hold policy** — A musical Up waits for successful Down completion plus the materialized hold floor. If a Down is late, its full authored duration is not guaranteed; later packets can also be delayed while authored offsets remain unchanged.
 - **Explicit hold-frame timing** — Select exact game frame holds (`1.0`, `1.25`, or `1.5` frames) tailored to the in-game FPS configuration.
 - **Explicit timing margin** — The persisted margin contributes once to authored hold and release-gap policy; startup wait calibration is a heuristic, not a percentile or service-level guarantee.
-- **Zero runtime Python dependency** — the packaged desktop runs without a Python interpreter or extension module.
+- **Native standalone runtime** — the packaged desktop runs without a separate scripting runtime or extension module.
 
 > [!WARNING]
 > Automated music playback may violate Thatgamecompany's Terms of Service. Use this tool responsibly and at your own risk.
@@ -50,7 +50,7 @@ Sky Auto Player keeps authored schedule offsets fixed and records sender-side ti
 
 ## Quick Start
 
-**Requirements:** Windows 11 (64-bit). The production real-time worker requires the high-resolution waitable-timer API. The canonical build is a per-user Tauri NSIS installer; it does not require administrator rights for installation. No system Python or Rust toolchain is required at runtime.
+**Requirements:** Windows 11 (64-bit). The production real-time worker requires the high-resolution waitable-timer API. The canonical build is a per-user Tauri NSIS installer; it does not require administrator rights for installation. No development toolchain or separate scripting runtime is required at runtime.
 
 1. Download the canonical Tauri NSIS installer from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
 2. Run the installer and keep the default current-user install location.

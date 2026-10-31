@@ -115,6 +115,7 @@ fn run_with_session(
         "static" => {
             audits::docs_integrity::run(&root)?;
             audits::durable_names::run(&root)?;
+            audits::legacy_compatibility_names::run(&root)?;
             audits::architecture::run(&root)?;
             audits::security::run(&root)?;
             tauri_metadata::tauri_feature_contract(&root)?;

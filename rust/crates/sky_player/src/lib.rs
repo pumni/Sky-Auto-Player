@@ -2,7 +2,7 @@
 //!
 //! This crate contains the authoritative scheduler/session implementation.
 //! Native delivery uses this crate directly; the engine itself remains
-//! independent of Python and UI stacks.
+//! independent of application UI stacks.
 
 /// Narrow, typed native surface for delivery adapters.
 ///

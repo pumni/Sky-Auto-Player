@@ -1,9 +1,7 @@
 //! Native desktop application runtime.
 //!
-//! This is the composition root for commands that have crossed the strangler
-//! boundary.  It owns live application state and calls pure app-core services
-//! plus outer adapters.  It never delegates a native-owned command to the
-//! Python Core.
+//! This is the composition root for native desktop commands. It owns live
+//! application state and calls pure app-core services plus outer adapters.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, PhysicalActivityLease};
 use crate::commands::{
@@ -1928,9 +1926,7 @@ fn count_buffered_snapshots(buffered: &VecDeque<UiEvent>) -> u64 {
         .count() as u64
 }
 
-/// Match the Python diagnostics percentile contract.  Python's ``round``
-/// uses ties-to-even, so using `f64::round()` here would diverge for small
-/// sample sets at an exact half index.
+/// Select a percentile with nearest-even index rounding for half-index cases.
 fn percentile_ms(values: &[i64], fraction: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -1938,15 +1934,7 @@ fn percentile_ms(values: &[i64], fraction: f64) -> f64 {
     let mut ordered = values.to_vec();
     ordered.sort_unstable();
     let position = fraction * (ordered.len() - 1) as f64;
-    let lower = position.floor();
-    let fractional = position - lower;
-    let index = if fractional < 0.5 {
-        lower as usize
-    } else if fractional > 0.5 || (lower as usize) % 2 == 1 {
-        (lower as usize + 1).min(ordered.len() - 1)
-    } else {
-        lower as usize
-    };
+    let index = (position.round_ties_even() as usize).min(ordered.len() - 1);
     ordered[index] as f64 / 1000.0
 }
 

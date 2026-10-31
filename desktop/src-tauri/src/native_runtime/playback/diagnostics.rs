@@ -23,8 +23,8 @@ impl DiagnosticsPublicationGate {
             .map_err(|_| "diagnostics publication gate poisoned".to_string())?;
         state.enabled = enabled;
         state.epoch = state.epoch.wrapping_add(1);
-        // This is intentionally the Python contract: re-enable starts a
-        // fresh sampling window while sequence IDs remain monotonic.
+        // Re-enabling starts a fresh sampling window while sequence IDs remain
+        // monotonic.
         state.last_emit_at = None;
         Ok(state.enabled)
     }

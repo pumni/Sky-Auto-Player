@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_current_python_normalized_defaults() {
+    fn defaults_match_normalized_settings_contract() {
         let settings = normalize_settings(ApplicationSettings::default());
         assert_eq!(settings.appearance_mode, AppearanceMode::System);
         assert_eq!(settings.palette, "graphite");

@@ -9,6 +9,7 @@ use super::{
     RiskReport, SKY_SCAN_CODES, ScheduleMetadata, Song, SongDecodeError, SongError, SourcePosition,
     SourceTrack, analyze_schedule, analyze_schedule_with_notes, build_schedule_from_scaled_onsets,
     build_schedule_with_policy, decode_song_json, detect_song_format, parse_song_json,
+    round_scaled_onset_checked,
 };
 use crate::timing::MaterializedTimingPolicy;
 use serde::{Deserialize, Serialize};
@@ -465,7 +466,7 @@ pub fn plan_canonical_song(
                 source_event: Some(provenance.clone()),
             });
         }
-        let scheduled_onset_us = checked_scale_source_onset_us(event.onset_us, options.tempo_scale)
+        let scheduled_onset_us = round_scaled_onset_checked(event.onset_us, options.tempo_scale)
             .ok_or(PlannerError::ScaledOnsetOutOfRange {
                 source_index: event.source_index,
                 track_id: event.track_index,
@@ -547,32 +548,6 @@ pub fn plan_canonical_song(
         schedule,
         physical_risk,
     })
-}
-
-fn checked_scale_source_onset_us(source_at_us: u64, tempo_scale: f64) -> Option<u64> {
-    if tempo_scale == 1.0 {
-        return Some(source_at_us);
-    }
-
-    let scaled = source_at_us as f64 / tempo_scale;
-    if !scaled.is_finite() || scaled < 0.0 || scaled >= u64::MAX as f64 {
-        return None;
-    }
-
-    let lower = scaled.floor();
-    let fraction = scaled - lower;
-    let lower_integer = lower as u64;
-    let rounded = if fraction < 0.5 {
-        lower
-    } else if fraction > 0.5 || lower_integer % 2 == 1 {
-        lower + 1.0
-    } else {
-        lower
-    };
-    if !rounded.is_finite() || !(0.0..u64::MAX as f64).contains(&rounded) {
-        return None;
-    }
-    Some(rounded as u64)
 }
 
 fn source_provenance(event: &CanonicalEvent, track: &SourceTrack) -> SourceEventProvenance {

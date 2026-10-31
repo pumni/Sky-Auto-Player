@@ -1,7 +1,7 @@
 //! Pure song decoding, deterministic Piano planning, scheduling, and bounded risk analysis.
 //!
-//! This module deliberately owns no filesystem, delivery, Win32, Python, or
-//! realtime-player concerns.  A caller supplies bytes and receives an
+//! This module deliberately owns no filesystem, delivery, Win32, or
+//! realtime-player concerns. A caller supplies bytes and receives an
 //! immutable plan that an outer native adapter may hand to the qualified
 //! realtime engine.
 
@@ -13,6 +13,9 @@ pub mod decode;
 pub use decode::*;
 mod planner;
 pub use planner::*;
+mod numeric;
+pub(crate) use numeric::round_scaled_onset_checked;
+use numeric::{bounded_tempo_scale_recommendation, checked_note_gap_us, truncated_f64_to_i64};
 
 pub const SKY_SCAN_CODES: [u16; 15] = [
     0x15, 0x16, 0x17, 0x18, 0x19, 0x23, 0x24, 0x25, 0x26, 0x27, 0x31, 0x32, 0x33, 0x34, 0x35,
@@ -96,7 +99,8 @@ pub fn parse_song_json(bytes: &[u8], fallback_name: &str) -> Result<Song, SongEr
     for (index, raw) in notes.iter().enumerate() {
         let note = raw.as_object().ok_or(SongError::InvalidNote { index })?;
         let raw_time = note.get("time").ok_or(SongError::MissingTime { index })?;
-        let time_ms = python_int(raw_time).ok_or(SongError::InvalidTime { index })?;
+        let time_ms =
+            parse_legacy_timestamp_ms(raw_time).ok_or(SongError::InvalidTime { index })?;
         if time_ms < 0 {
             return Err(SongError::NegativeTime { index });
         }
@@ -106,7 +110,7 @@ pub fn parse_song_json(bytes: &[u8], fallback_name: &str) -> Result<Song, SongEr
             .map(str::to_owned)
             .ok_or_else(|| SongError::UnmappedKey {
                 index,
-                key: python_string(raw_key),
+                key: format_legacy_song_value(raw_key),
             })?;
         if scan_code_for_key(&key).is_none() {
             return Err(SongError::UnmappedKey { index, key });
@@ -124,25 +128,19 @@ pub fn parse_song_json(bytes: &[u8], fallback_name: &str) -> Result<Song, SongEr
     })
 }
 
-fn python_int(value: &Value) -> Option<i64> {
+fn parse_legacy_timestamp_ms(value: &Value) -> Option<i64> {
     match value {
         Value::Bool(value) => Some(i64::from(*value)),
         Value::Number(number) => number
             .as_i64()
             .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok()))
-            .or_else(|| {
-                number
-                    .as_f64()
-                    .map(f64::trunc)
-                    .filter(|value| value.is_finite())
-                    .and_then(|value| i64::try_from(value as i128).ok())
-            }),
+            .or_else(|| number.as_f64().and_then(truncated_f64_to_i64)),
         Value::String(value) => value.trim().parse::<i64>().ok(),
         _ => None,
     }
 }
 
-fn python_string(value: &Value) -> String {
+fn format_legacy_song_value(value: &Value) -> String {
     match value {
         Value::Null => "None".into(),
         Value::Bool(value) => value.to_string().to_ascii_lowercase(),
@@ -152,7 +150,7 @@ fn python_string(value: &Value) -> String {
             "[{}]",
             values
                 .iter()
-                .map(python_string)
+                .map(format_legacy_song_value)
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -269,8 +267,14 @@ pub fn build_schedule_with_policy(
             index: note.source_index,
             key: note.key.clone(),
         })?;
-        let source_at_us = (note.time_ms as f64) * 1_000.0;
-        let at_us = python_round_nonnegative(source_at_us / tempo_scale);
+        let source_at_us = u64::try_from(note.time_ms)
+            .map_err(|_| SongError::NegativeTime {
+                index: note.source_index,
+            })?
+            .checked_mul(1_000)
+            .ok_or(SongError::TimingOverflow)?;
+        let at_us = round_scaled_onset_checked(source_at_us, tempo_scale)
+            .ok_or(SongError::TimingOverflow)?;
         drafts.push((at_us, scan_code, note.source_index));
     }
     build_schedule_from_scaled_onsets(drafts, tempo_scale, policy)
@@ -286,11 +290,8 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
-    // The current materialized policy intentionally uses the same effective
-    // value for target and minimum hold. Keep both names here because the
-    // Python contract distinguishes them when a policy supplies a compressed
-    // hold, and doing so prevents this loop from silently regressing to an
-    // always-uncompressed implementation.
+    // Keep target and minimum hold separate in the scheduler so a future
+    // policy can compress a target hold while preserving the physical floor.
     let target_hold_us = policy.min_hold_us;
     let min_hold_us = policy.min_hold_us;
     let release_gap = policy.min_release_gap_us;
@@ -321,11 +322,9 @@ pub(crate) fn build_schedule_from_scaled_onsets(
                 impossible += 1;
                 min_hold_us
             } else if max_hold < target_hold_us {
-                // Keep this branch explicit: if a future policy materializes
-                // a target hold distinct from its minimum hold, Python's
-                // scheduler compresses the hold while preserving the full
-                // release gap.  The current policy normally makes these
-                // values equal, but the behavior is part of the contract.
+                // Keep this branch explicit: a policy may materialize a target
+                // hold distinct from its minimum while preserving the release
+                // gap.
                 risky += 1;
                 compressed += 1;
                 max_hold
@@ -339,6 +338,9 @@ pub(crate) fn build_schedule_from_scaled_onsets(
             let gap = next_at.saturating_sub(*at).saturating_sub(actual_hold);
             min_up_gap = Some(min_up_gap.map_or(gap, |current: u64| current.min(gap)));
         }
+        let release_at_us = at
+            .checked_add(actual_hold)
+            .ok_or(SongError::TimingOverflow)?;
         actions.push(KeyAction {
             at_us: *at,
             scan_codes: vec![*scan],
@@ -346,7 +348,7 @@ pub(crate) fn build_schedule_from_scaled_onsets(
             reason: "onset".into(),
         });
         actions.push(KeyAction {
-            at_us: at.saturating_add(actual_hold),
+            at_us: release_at_us,
             scan_codes: vec![*scan],
             kind: ActionKind::Up,
             reason: if next_at.is_some() {
@@ -389,29 +391,42 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         .last()
         .map(|action| action.at_us)
         .unwrap_or_default();
+    let mut warnings = Vec::new();
     let (recommended_hold_frames, recommended_tempo_scale) = if impossible > 0 {
         if let Some(shortest) = shortest {
-            let min_cycle = min_hold_us.saturating_add(release_gap);
-            let suggested = if min_cycle == 0 {
-                tempo_scale
-            } else {
-                tempo_scale * shortest as f64 / min_cycle as f64
-            };
-            (Some(1.0), Some(python_round_two(suggested).clamp(0.1, 1.0)))
+            let suggestion = min_hold_us
+                .checked_add(release_gap)
+                .map(|min_cycle| {
+                    if min_cycle == 0 {
+                        tempo_scale
+                    } else {
+                        tempo_scale * shortest as f64 / min_cycle as f64
+                    }
+                })
+                .and_then(bounded_tempo_scale_recommendation);
+            if suggestion.is_none() {
+                warnings.push(
+                    "Tempo recommendation omitted because its value was not finite and representable."
+                        .into(),
+                );
+            }
+            (Some(1.0), suggestion)
         } else {
             (Some(1.0), None)
         }
     } else {
         (None, None)
     };
+    let source_duration_us = drafts
+        .iter()
+        .map(|(at, _, _)| *at)
+        .max()
+        .unwrap_or_default()
+        .checked_add(target_hold_us)
+        .ok_or(SongError::TimingOverflow)?;
     Ok(ScheduleMetadata {
         actions: final_actions,
-        source_duration_us: drafts
-            .iter()
-            .map(|(at, _, _)| *at)
-            .max()
-            .unwrap_or_default()
-            .saturating_add(target_hold_us),
+        source_duration_us,
         playback_duration_us: duration,
         duration_us: duration,
         note_count: raw_count,
@@ -425,44 +440,8 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         min_same_key_up_gap_us: min_up_gap,
         recommended_hold_frames,
         recommended_tempo_scale,
-        warnings: Vec::new(),
+        warnings,
     })
-}
-
-/// Python's `round(float)` uses bankers rounding.  Schedule timestamps are
-/// non-negative, so this small helper mirrors that observable rule without
-/// pulling floating-point tie behavior from Rust's `round()`.
-fn python_round_nonnegative(value: f64) -> u64 {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    let lower = value.floor();
-    let fraction = value - lower;
-    let rounded = if fraction < 0.5 {
-        lower
-    } else if fraction > 0.5 || (lower as u64) % 2 == 1 {
-        lower + 1.0
-    } else {
-        lower
-    };
-    rounded as u64
-}
-
-fn python_round_two(value: f64) -> f64 {
-    if !value.is_finite() {
-        return 0.0;
-    }
-    let scaled = value * 100.0;
-    let lower = scaled.floor();
-    let fraction = scaled - lower;
-    let rounded = if fraction < 0.5 {
-        lower
-    } else if fraction > 0.5 || (lower as i64) % 2 != 0 {
-        lower + 1.0
-    } else {
-        lower
-    };
-    rounded / 100.0
 }
 
 fn max_polyphony(actions: &[KeyAction]) -> usize {
@@ -488,10 +467,9 @@ pub fn analyze_schedule(schedule: &ScheduleMetadata) -> RiskReport {
     analyze_schedule_with_context(schedule, None, 1.0, 1.0)
 }
 
-/// Analyze executable schedule metrics while retaining the raw authored notes
-/// for the two Python-visible gap metrics.  The scheduler deliberately
-/// deduplicates executable slots, but the Python analyzer computes minimum
-/// onset gaps from the raw note stream when it is available.
+/// Analyze executable schedule metrics while retaining raw authored notes for
+/// onset-gap metrics. The scheduler deduplicates executable slots, while raw
+/// notes preserve gaps between authored events when available.
 pub fn analyze_schedule_with_notes(schedule: &ScheduleMetadata, raw_notes: &[Note]) -> RiskReport {
     analyze_schedule_with_context(schedule, Some(raw_notes), 1.0, 1.0)
 }
@@ -613,6 +591,22 @@ pub fn analyze_schedule_with_context(
     } else {
         (Some(current_hold_frames), Some(current_tempo_scale))
     };
+    let suggested_hold_frames = suggested_hold_frames.filter(|value| value.is_finite());
+    let suggested_tempo_scale = if current_tempo_scale.is_finite() {
+        suggested_tempo_scale.filter(|value| value.is_finite())
+    } else {
+        None
+    };
+    if suggested_hold_frames.is_none() && !current_hold_frames.is_finite() {
+        recommendations.push(
+            "Hold recommendation omitted because the current hold value was not finite.".into(),
+        );
+    }
+    if suggested_tempo_scale.is_none() && !current_tempo_scale.is_finite() {
+        recommendations.push(
+            "Tempo recommendation omitted because the current tempo scale was not finite.".into(),
+        );
+    }
     if schedule.impossible_same_key_repeats > 0 {
         recommendations.push(
             "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
@@ -636,14 +630,15 @@ pub fn analyze_schedule_with_context(
         onsets.dedup();
         min_any = onsets
             .windows(2)
-            .map(|pair| pair[1].saturating_sub(pair[0]) as u64 * 1_000)
+            .filter_map(|pair| checked_note_gap_us(pair[0], pair[1]))
             .min()
             .or(min_any);
 
         let mut last_by_key = HashMap::<&str, i64>::new();
         for note in raw_notes {
-            if let Some(previous) = last_by_key.insert(note.key.as_str(), note.time_ms) {
-                let gap = note.time_ms.saturating_sub(previous) as u64 * 1_000;
+            if let Some(previous) = last_by_key.insert(note.key.as_str(), note.time_ms)
+                && let Some(gap) = checked_note_gap_us(previous, note.time_ms)
+            {
                 min_same = Some(min_same.map_or(gap, |current| current.min(gap)));
             }
         }
@@ -796,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_song_matches_python_empty_schedule_behavior() {
+    fn empty_song_has_the_materialized_hold_duration() {
         let schedule = build_schedule(
             &Song {
                 name: "Empty".into(),
@@ -825,5 +820,30 @@ mod tests {
         };
         let report = analyze_schedule(&build_schedule(&song, 1.0, 1.0, 60).unwrap());
         assert_eq!(report.dense_clusters.len(), 1);
+    }
+
+    #[test]
+    fn legacy_timestamp_coercion_preserves_documented_json_values() {
+        let song = parse_song_json(
+            br#"{"songNotes":[{"time":true,"key":"Key0"},{"time":2.9,"key":"Key1"},{"time":" 3 ","key":"Key2"}]}"#,
+            "fallback",
+        )
+        .expect("legacy timestamp forms remain accepted");
+        assert_eq!(
+            song.notes
+                .iter()
+                .map(|note| note.time_ms)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+
+        let invalid_time = parse_song_json(
+            br#"{"songNotes":[{"time":9223372036854775808,"key":"Key0"}]}"#,
+            "fallback",
+        );
+        assert!(matches!(
+            invalid_time,
+            Err(SongError::InvalidTime { index: 0 })
+        ));
     }
 }
