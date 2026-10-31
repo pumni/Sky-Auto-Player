@@ -17,6 +17,7 @@ invariants that must not be discarded because an implementation differs.
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Security:** [SECURITY.md](../SECURITY.md).
 - **Song source schemas and canonical decoding:** [song source decoding](song-source-decoding.md).
+- **Canonical events to Sky Piano plans:** [song planning](song-planning.md).
 - **Packaging and updater:** [distribution](distribution-and-update.md),
   [Tauri packaging](v4-tauri-packaging.md).
 - **Release operations:** [release authority](v4-release-authority.md),

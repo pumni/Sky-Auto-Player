@@ -57,7 +57,8 @@ Flat legacy pitches are `SkyKeyIndex` values. Versioned source notes are
 `NoteNumber` values with a source pitchability state (`pitched`, `unpitched`, or
 `unresolved`). V4 nominal IDs are converted through the frozen source-game and
 instrument tables. V5/v4 absolute note numbers remain unchanged. This decoder
-does not choose or emit a target Sky key; target planning is a separate step.
+does not choose or emit a target Sky key; [song planning](song-planning.md) is
+the separate conversion step.
 
 Composed column durations use `60,000 / bpm` milliseconds multiplied by the
 column tempo changer (1, 1/2, 1/4, or 1/8). The first composed onset is 100 ms.

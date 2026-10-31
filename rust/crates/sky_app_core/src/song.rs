@@ -1,4 +1,4 @@
-//! Pure song parsing, deterministic scheduling, and bounded risk analysis.
+//! Pure song decoding, deterministic Piano planning, scheduling, and bounded risk analysis.
 //!
 //! This module deliberately owns no filesystem, delivery, Win32, Python, or
 //! realtime-player concerns.  A caller supplies bytes and receives an
@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub mod decode;
 pub use decode::*;
+mod planner;
+pub use planner::*;
 
 pub const SKY_SCAN_CODES: [u16; 15] = [
     0x15, 0x16, 0x17, 0x18, 0x19, 0x23, 0x24, 0x25, 0x26, 0x27, 0x31, 0x32, 0x33, 0x34, 0x35,
@@ -261,6 +263,29 @@ pub fn build_schedule_with_policy(
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
+    let mut drafts = Vec::with_capacity(song.notes.len());
+    for note in &song.notes {
+        let scan_code = scan_code_for_key(&note.key).ok_or_else(|| SongError::UnmappedKey {
+            index: note.source_index,
+            key: note.key.clone(),
+        })?;
+        let source_at_us = (note.time_ms as f64) * 1_000.0;
+        let at_us = python_round_nonnegative(source_at_us / tempo_scale);
+        drafts.push((at_us, scan_code, note.source_index));
+    }
+    build_schedule_from_scaled_onsets(drafts, tempo_scale, policy)
+}
+
+/// Reuses the established scheduler for already-scaled planner onsets.
+/// `source_index` must be unique per onset.
+pub(crate) fn build_schedule_from_scaled_onsets(
+    mut drafts: Vec<(u64, u16, usize)>,
+    tempo_scale: f64,
+    policy: &crate::timing::MaterializedTimingPolicy,
+) -> Result<ScheduleMetadata, SongError> {
+    if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
+        return Err(SongError::InvalidTempo);
+    }
     // The current materialized policy intentionally uses the same effective
     // value for target and minimum hold. Keep both names here because the
     // Python contract distinguishes them when a policy supplies a compressed
@@ -269,16 +294,6 @@ pub fn build_schedule_with_policy(
     let target_hold_us = policy.min_hold_us;
     let min_hold_us = policy.min_hold_us;
     let release_gap = policy.min_release_gap_us;
-
-    let mut drafts = Vec::with_capacity(song.notes.len());
-    for note in &song.notes {
-        let scan_code = scan_code_for_key(&note.key).ok_or_else(|| SongError::UnmappedKey {
-            index: note.source_index,
-            key: note.key.clone(),
-        })?;
-        let at_us = python_round_nonnegative((note.time_ms as f64) * 1_000.0 / tempo_scale);
-        drafts.push((at_us, scan_code, note.source_index));
-    }
     let raw_count = drafts.len();
     let mut seen = BTreeSet::new();
     drafts.retain(|(at, scan, _)| seen.insert((*at, *scan)));
@@ -399,7 +414,7 @@ pub fn build_schedule_with_policy(
             .saturating_add(target_hold_us),
         playback_duration_us: duration,
         duration_us: duration,
-        note_count: song.notes.len(),
+        note_count: raw_count,
         deduplicated_note_count: drafts.len(),
         duplicate_note_count: raw_count.saturating_sub(drafts.len()),
         compressed_holds: compressed,
@@ -412,6 +427,14 @@ pub fn build_schedule_with_policy(
         recommended_tempo_scale,
         warnings: Vec::new(),
     })
+}
+
+pub(crate) fn scale_source_onset_us(source_at_us: u64, tempo_scale: f64) -> u64 {
+    if tempo_scale == 1.0 {
+        source_at_us
+    } else {
+        python_round_nonnegative(source_at_us as f64 / tempo_scale)
+    }
 }
 
 /// Python's `round(float)` uses bankers rounding.  Schedule timestamps are

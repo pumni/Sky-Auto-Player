@@ -21,6 +21,10 @@ const PITCH_NAMES: [&str; 12] = [
     "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B",
 ];
 
+pub(crate) fn sky_piano_note_number(key_index: usize, pitch_offset: i32) -> Option<i32> {
+    tables::sky_piano_note_number(key_index, pitch_offset)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceGame {

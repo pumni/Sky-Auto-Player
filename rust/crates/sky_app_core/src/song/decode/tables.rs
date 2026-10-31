@@ -259,6 +259,12 @@ pub(crate) fn default_instrument(game: SourceGame) -> &'static str {
     }
 }
 
+pub(crate) fn sky_piano_note_number(key_index: usize, pitch_offset: i32) -> Option<i32> {
+    SKY_STANDARD
+        .get(key_index)
+        .and_then(|entry| entry.sounding.checked_add(pitch_offset))
+}
+
 pub(crate) fn nominal_to_absolute(
     game: SourceGame,
     instrument: &str,
