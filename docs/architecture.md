@@ -127,8 +127,9 @@ not create separate stores or synchronize state through effects.
 - Native settings own `appearance_mode` and its legacy migration alongside the
   dark palette. `App.tsx` resolves System from one platform source at a time
   (Tauri window theme/events when packaged, browser media query otherwise) and
-  applies it before startup window reveal; the effective mode is not stored in
-  browser storage.
+  applies it before the normal startup reveal; the bounded 2.5-second fail-open
+  can reveal the OS-media startup screen before native settings arrive when
+  bootstrap is delayed. The effective mode is not stored in browser storage.
 - `librarySlice.ts` owns Library query intent, bounded page caching,
   virtualization hydration, and paging. `librarySelectionActions.ts` owns
   selected-song/detail requests and browser navigation.

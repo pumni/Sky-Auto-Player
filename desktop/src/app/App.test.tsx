@@ -55,6 +55,9 @@ vi.mock('../platform/runtime', () => ({ isTauriRuntime: isTauriRuntimeMock }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: acknowledgeStartupReveal }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => nativeWindow }));
 
+let matchMediaDescriptor: PropertyDescriptor | undefined;
+let matchMediaOverridden = false;
+
 function PackagedSmokeHarness({
   bridge,
   useStore,
@@ -181,6 +184,15 @@ describe('desktop application shell', () => {
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    if (matchMediaOverridden) {
+      if (matchMediaDescriptor) {
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'matchMedia');
+      }
+      matchMediaDescriptor = undefined;
+      matchMediaOverridden = false;
+    }
     isTauriRuntimeMock.mockReturnValue(false);
     nativeWindow.show.mockReset().mockResolvedValue(undefined);
     acknowledgeStartupReveal.mockReset().mockResolvedValue(undefined);
@@ -433,6 +445,68 @@ describe('desktop application shell', () => {
       pendingBootstrap.resolve(completedBootstrap);
       await pendingBootstrap.promise;
     });
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the 2.5-second fail-open reveal while bootstrap and the native theme getter are pending', async () => {
+    vi.useFakeTimers();
+    isTauriRuntimeMock.mockReturnValue(true);
+    matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    matchMediaOverridden = true;
+    const lightSystemQuery = {
+      matches: false,
+      media: '(prefers-color-scheme: dark)',
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => lightSystemQuery),
+    });
+
+    const pendingBootstrap = deferred<Awaited<ReturnType<DesktopBridge['bootstrap']>>>();
+    const pendingTheme = deferred<'light' | 'dark'>();
+    const bridge = createMockBridge();
+    bridge.bootstrap = vi.fn(() => pendingBootstrap.promise);
+    nativeWindow.theme.mockReturnValue(pendingTheme.promise);
+    const appearanceWhenShown: string[] = [];
+    nativeWindow.show.mockImplementation(async () => {
+      appearanceWhenShown.push(document.documentElement.dataset.colorMode ?? '');
+    });
+
+    render(<App bridge={bridge} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(bridge.bootstrap).toHaveBeenCalledTimes(1);
+    expect(nativeWindow.show).not.toHaveBeenCalled();
+    expect(document.documentElement.dataset.colorMode).toBe('light');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STARTUP_WINDOW_REVEAL_FALLBACK_MS);
+      await Promise.resolve();
+    });
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+    expect(appearanceWhenShown).toEqual(['light']);
+
+    const legacyBootstrap = await createMockBridge().bootstrap();
+    const darkLegacyBootstrap = {
+      ...legacyBootstrap,
+      settings: { ...legacyBootstrap.settings, appearance_mode: 'dark' as const },
+    };
+    await act(async () => {
+      pendingBootstrap.resolve(darkLegacyBootstrap);
+      await pendingBootstrap.promise;
+    });
+    expect(document.documentElement.dataset.colorMode).toBe('dark');
+
+    await act(async () => {
+      pendingTheme.resolve('light');
+      await pendingTheme.promise;
+    });
+    expect(document.documentElement.dataset.colorMode).toBe('dark');
     expect(nativeWindow.show).toHaveBeenCalledTimes(1);
   });
 

@@ -99,10 +99,12 @@ do not invalidate prepared playback.
 In System mode, `App.tsx` resolves the effective mode from the native Tauri window theme and live
 theme events. Browser and mock runs use `prefers-color-scheme`. The effective value is applied to
 `html[data-color-mode]` and `color-scheme`; the selected dark palette stays persisted while Light is
-active. The stylesheet-driven startup screen follows the media preference before React loads, and
-a packaged window is revealed only after bootstrap settings and the initial native theme are
-applied. The native Tauri window background remains fixed at RGB `(18, 19, 20)` and may briefly
-show through before WebView content paints.
+active. The stylesheet-driven startup screen follows the media preference before React loads. On
+the normal startup path, a packaged window is revealed after bootstrap settings and the initial
+native theme are applied. A bounded 2.5-second fail-open can reveal the startup screen earlier if
+bootstrap or the native theme getter remains pending; a legacy Dark profile can briefly show the
+pre-bootstrap Windows app color preference until its settings arrive. The native Tauri window
+background remains fixed at RGB `(18, 19, 20)` and may show through before WebView content paints.
 
 Graphite remains the default dark palette with persisted ID `graphite`; Settings calls it
 **Graphite (Default)**. The five other persisted palette IDs remain selectable and their
@@ -121,6 +123,10 @@ component-specific workbench aliases are overridden in the theme layer so they c
 surfaces behind in Light mode. Component styles consume semantic variables; the six dark palette
 IDs and their rendered role values remain unchanged. Package B's browser captures and computed
 contrast report are recorded in [`issue-565-package-b evidence`](evidence/issue-565-package-b/README.md).
+Package C's Windows/WebView2, startup, focus and contrast qualification is recorded in
+[`issue-565-package-c evidence`](evidence/issue-565-package-c/README.md). It distinguishes the
+release-profile Windows WebView run from browser media emulation and lists the packaged startup
+cases that could not be forced in this environment.
 
 Soft Graphite B is a review preview only. Its override exists in the opt-in
 `desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and

@@ -69,6 +69,28 @@ describe('system appearance subscription', () => {
     subscription.unsubscribe();
   });
 
+  it('cleans up a native theme listener that resolves after unsubscription', async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    const registration = deferred<() => boolean>();
+    nativeWindow.onThemeChanged.mockReturnValueOnce(registration.promise);
+    const modes: string[] = [];
+
+    const subscription = subscribeSystemAppearance((mode) => modes.push(mode));
+    await vi.waitFor(() => expect(nativeWindow.onThemeChanged).toHaveBeenCalledTimes(1));
+    const modeCountBeforeCleanup = modes.length;
+    const listener = nativeWindow.onThemeChanged.mock.calls[0]?.[0];
+    const unlisten = vi.fn(() => true);
+
+    subscription.unsubscribe();
+    listener?.({ payload: 'light' });
+    registration.resolve(unlisten);
+    await subscription.ready;
+
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    expect(nativeWindow.theme).not.toHaveBeenCalled();
+    expect(modes).toHaveLength(modeCountBeforeCleanup);
+  });
+
   it('tracks browser media changes and removes its listener on cleanup', async () => {
     const listeners: Array<(event: MediaQueryListEvent) => void> = [];
     let mediaMatches = false;
