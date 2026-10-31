@@ -155,7 +155,10 @@ jobs:
       - name: Set up Bun for updater bridge
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on updater bridge dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
@@ -234,7 +237,10 @@ jobs:
       - name: Set up Bun for updater contract
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on updater contract dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx
@@ -353,7 +359,10 @@ jobs:
       - name: Set up Bun for release contract tests
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Verify release contract test tools
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,signtool.exe
@@ -725,7 +734,10 @@ jobs:
       - name: Set up Bun for desktop web validation
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Install pinned desktop web dependencies
         working-directory: desktop
@@ -830,7 +842,10 @@ jobs:
       - name: Set up Bun for current candidate
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on current-candidate dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
@@ -966,7 +981,10 @@ jobs:
       - name: Set up Bun for updater fixture frontend
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on updater fixture dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe

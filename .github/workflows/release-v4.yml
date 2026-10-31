@@ -139,7 +139,10 @@ jobs:
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Build and export the unsigned handoff once
         run: cargo xtask release-v4 build-unsigned --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
@@ -204,7 +207,10 @@ jobs:
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Install locked signer dependencies without building the installer
         working-directory: desktop
