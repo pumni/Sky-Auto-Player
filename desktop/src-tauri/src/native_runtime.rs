@@ -773,12 +773,15 @@ impl NativeDesktopRuntime {
                 "channel_unavailable: beta update channel is not supported in production".into(),
             );
         }
-        let preparation_safe_patch = (patch.palette.is_some() || patch.auto_play.is_some())
+        let preparation_safe_patch = (patch.appearance_mode.is_some()
+            || patch.palette.is_some()
+            || patch.auto_play.is_some())
             && patch.telemetry_enabled.is_none()
             && patch.verbose_hud.is_none()
             && patch.playback_defaults.is_none()
             && patch.update_preferences.is_none();
         let core_patch = sky_app_core::settings::SettingsPatch {
+            appearance_mode: patch.appearance_mode.map(|mode| mode.as_str().to_owned()),
             palette: patch.palette,
             telemetry_enabled: patch.telemetry_enabled,
             verbose_hud: patch.verbose_hud,
@@ -1170,6 +1173,13 @@ fn settings_dto(
     timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
 ) -> SettingsDto {
     SettingsDto {
+        appearance_mode: match settings.appearance_mode {
+            sky_app_core::settings::AppearanceMode::System => {
+                crate::commands::AppearanceMode::System
+            }
+            sky_app_core::settings::AppearanceMode::Light => crate::commands::AppearanceMode::Light,
+            sky_app_core::settings::AppearanceMode::Dark => crate::commands::AppearanceMode::Dark,
+        },
         palette: settings.palette.clone(),
         ui_background_mode: settings.ui_background_mode.clone(),
         playback_defaults: playback_defaults(settings),
@@ -1231,6 +1241,7 @@ struct NativeUpdatePreferencesPatch {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativeSettingsPatch {
+    appearance_mode: Option<crate::commands::AppearanceMode>,
     #[serde(alias = "theme")]
     palette: Option<String>,
     telemetry_enabled: Option<bool>,
@@ -1253,6 +1264,7 @@ impl NativeUpdatePreferencesPatch {
 impl NativeSettingsPatch {
     fn into_public(self) -> SettingsPatch {
         SettingsPatch {
+            appearance_mode: self.appearance_mode,
             palette: self.palette,
             telemetry_enabled: self.telemetry_enabled,
             verbose_hud: self.verbose_hud,

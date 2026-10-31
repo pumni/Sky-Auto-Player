@@ -8,7 +8,7 @@ use crate::library::{LibraryError, LikedSongs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 pub const DEFAULT_GAME_FPS: u16 = 60;
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const DEFAULT_HOLD_FRAMES: f64 = 1.0;
@@ -31,6 +31,7 @@ pub const PALETTE_IDS: [&str; 6] = [
     "classic",
 ];
 pub const BACKGROUND_MODES: [&str; 2] = ["transparent", "painted"];
+pub const APPEARANCE_MODES: [&str; 3] = ["system", "light", "dark"];
 pub const DEFAULT_PROCESS_NAMES: [&str; 2] = ["Sky.exe", "Sky Children of the Light.exe"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +76,34 @@ pub enum UpdateChannel {
     #[default]
     Stable,
     Beta,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AppearanceMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl AppearanceMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "system" => Some(Self::System),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
 }
 
 impl UpdateChannel {
@@ -156,6 +185,8 @@ impl Default for PlaybackDefaults {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationSettings {
+    #[serde(default)]
+    pub appearance_mode: AppearanceMode,
     pub palette: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaults,
@@ -179,6 +210,7 @@ pub struct ApplicationSettings {
 impl Default for ApplicationSettings {
     fn default() -> Self {
         Self {
+            appearance_mode: AppearanceMode::System,
             palette: "graphite".into(),
             ui_background_mode: "transparent".into(),
             playback_defaults: PlaybackDefaults::default(),
@@ -216,6 +248,7 @@ pub struct UpdatePreferencesPatch {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsPatch {
+    pub appearance_mode: Option<String>,
     pub palette: Option<String>,
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
@@ -334,6 +367,9 @@ pub fn apply_patch(
 
     if let Some(palette) = &patch.palette {
         next.palette = validate_palette(palette)?;
+    }
+    if let Some(appearance_mode) = &patch.appearance_mode {
+        next.appearance_mode = validate_appearance_mode(appearance_mode)?;
     }
     if let Some(value) = patch.telemetry_enabled {
         next.telemetry_enabled = value;
@@ -456,6 +492,13 @@ fn validate_palette(value: &str) -> Result<String, SettingsError> {
     }
 }
 
+fn validate_appearance_mode(value: &str) -> Result<AppearanceMode, SettingsError> {
+    AppearanceMode::parse(value).ok_or_else(|| SettingsError::InvalidField {
+        field: "appearance_mode".into(),
+        message: "must be system, light, or dark".into(),
+    })
+}
+
 fn validate_hold_frames(value: f64) -> Result<f64, SettingsError> {
     if value.is_finite() && HOLD_FRAME_OPTIONS.contains(&value) {
         Ok(value)
@@ -516,6 +559,7 @@ fn validate_skip_version(value: &str) -> Result<String, SettingsError> {
 pub fn patchable_field_names() -> BTreeSet<&'static str> {
     [
         "palette",
+        "appearance_mode",
         "telemetry_enabled",
         "verbose_hud",
         "playback_defaults",
@@ -563,6 +607,7 @@ mod tests {
     #[test]
     fn defaults_match_current_python_normalized_defaults() {
         let settings = normalize_settings(ApplicationSettings::default());
+        assert_eq!(settings.appearance_mode, AppearanceMode::System);
         assert_eq!(settings.palette, "graphite");
         assert_eq!(settings.playback_defaults.fps, 60);
         assert_eq!(
@@ -585,6 +630,36 @@ mod tests {
                 .timing_margin_us,
             DEFAULT_TIMING_MARGIN_US
         );
+    }
+
+    #[test]
+    fn appearance_mode_patch_is_validated_atomically_and_leaves_other_preferences_unchanged() {
+        let mut service = SettingsService::load(MemoryStore::default()).expect("load");
+        let before = service.snapshot().clone();
+        let error = service
+            .patch(&SettingsPatch {
+                appearance_mode: Some("sepia".into()),
+                telemetry_enabled: Some(true),
+                ..Default::default()
+            })
+            .expect_err("invalid appearance mode");
+        assert!(
+            matches!(error, SettingsError::InvalidField { field, .. } if field == "appearance_mode")
+        );
+        assert_eq!(*service.snapshot(), before);
+
+        for value in APPEARANCE_MODES {
+            let updated = service
+                .patch(&SettingsPatch {
+                    appearance_mode: Some(value.into()),
+                    ..Default::default()
+                })
+                .expect("valid appearance mode");
+            assert_eq!(updated.appearance_mode.as_str(), value);
+            assert_eq!(updated.palette, before.palette);
+            assert_eq!(updated.playback_defaults, before.playback_defaults);
+            assert_eq!(updated.update, before.update);
+        }
     }
 
     #[test]

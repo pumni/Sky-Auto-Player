@@ -2132,6 +2132,11 @@ describe('desktop store', () => {
     const context = store.getState().playback.preparedContext;
     expect(prepared).not.toBeNull();
 
+    await act(async () => store.getState().patchSettings({ appearanceMode: 'light' }));
+    expect(store.getState().playback.prepared).toBe(prepared);
+    expect(store.getState().playback.preparedIdentity).toBe(identity);
+    expect(store.getState().playback.preparedContext).toBe(context);
+
     await act(async () => store.getState().patchSettings({ palette: 'slate' }));
     expect(store.getState().playback.prepared).toBe(prepared);
     expect(store.getState().playback.preparedIdentity).toBe(identity);
@@ -2208,7 +2213,9 @@ describe('desktop store', () => {
     const preparation = store.getState().prepareSelectedPlayback();
     await entered.promise;
     expect(store.getState().playback.transportOperation).toBe('preparing');
-    await act(async () => store.getState().patchSettings({ palette: 'slate' }));
+    await act(async () =>
+      store.getState().patchSettings({ appearanceMode: 'light', palette: 'slate' }),
+    );
     expect(store.getState().playback.transportOperation).toBe('preparing');
     expect(store.getState().playback.prepared).toBeNull();
 

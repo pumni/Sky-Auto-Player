@@ -212,7 +212,7 @@ fn settings_fingerprint_excludes_appearance_and_auto_play() {
     settings.telemetry_enabled = true;
     let default_settings_fingerprint =
         settings_fingerprint(&settings).expect("settings fingerprint");
-    // Palette and Auto Play do not affect a prepared schedule's identity.
+    // Appearance mode, palette, and Auto Play do not affect a prepared schedule's identity.
     assert_eq!(
         default_settings_fingerprint,
         "dba3b575ae5967affc8a3d71f6aa4cadf9cec6104eff40ccdc83d5dfd6a8b46d"
@@ -222,6 +222,12 @@ fn settings_fingerprint_excludes_appearance_and_auto_play() {
     assert_eq!(
         default_settings_fingerprint,
         settings_fingerprint(&palette_changed).expect("palette is not timing identity")
+    );
+    let mut appearance_changed = settings.clone();
+    appearance_changed.appearance_mode = sky_app_core::settings::AppearanceMode::Light;
+    assert_eq!(
+        default_settings_fingerprint,
+        settings_fingerprint(&appearance_changed).expect("appearance is not timing identity")
     );
     let mut auto_play_changed = settings.clone();
     auto_play_changed.playback_behavior.auto_play = false;
@@ -623,6 +629,7 @@ fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_anal
     entered.wait();
     runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: None,
             palette: Some("slate".into()),
             telemetry_enabled: None,
             verbose_hud: None,
@@ -658,7 +665,7 @@ fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_anal
 }
 
 #[test]
-fn palette_only_patch_preserves_inflight_prepare_and_native_start_token() {
+fn appearance_and_palette_only_patch_preserves_inflight_prepare_and_native_start_token() {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
@@ -712,6 +719,7 @@ fn palette_only_patch_preserves_inflight_prepare_and_native_start_token() {
     entered.wait();
     runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: Some(crate::commands::AppearanceMode::Light),
             palette: Some("slate".into()),
             telemetry_enabled: None,
             verbose_hud: None,
@@ -726,6 +734,13 @@ fn palette_only_patch_preserves_inflight_prepare_and_native_start_token() {
             .expect("settings snapshot")
             .palette,
         "slate"
+    );
+    assert_eq!(
+        runtime
+            .reload_settings_snapshot()
+            .expect("settings snapshot")
+            .appearance_mode,
+        sky_app_core::settings::AppearanceMode::Light
     );
     release.wait();
 
@@ -786,6 +801,7 @@ fn auto_play_patch_keeps_prepared_native_playback_valid() {
     let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
     let palette_updated = runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: None,
             palette: Some("slate".into()),
             telemetry_enabled: None,
             verbose_hud: None,
@@ -797,6 +813,7 @@ fn auto_play_patch_keeps_prepared_native_playback_valid() {
     assert_eq!(palette_updated.palette, "slate");
     let updated = runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: None,
             palette: None,
             telemetry_enabled: None,
             verbose_hud: None,
@@ -867,6 +884,7 @@ fn mixed_palette_and_timing_patch_rejects_stale_native_prepared_token() {
 
     runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: None,
             palette: Some("slate".into()),
             telemetry_enabled: None,
             verbose_hud: None,

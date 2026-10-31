@@ -51,6 +51,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
     let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
     let patched = service
         .patch(&SettingsPatch {
+            appearance_mode: None,
             palette: Some(valid["palette"].as_str().unwrap().into()),
             telemetry_enabled: Some(valid["telemetry_enabled"].as_bool().unwrap()),
             verbose_hud: Some(valid["verbose_hud"].as_bool().unwrap()),

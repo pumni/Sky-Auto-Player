@@ -61,7 +61,7 @@ describe('SettingsCategoryContent', () => {
       />,
     );
 
-    const palette = screen.getByLabelText('Color palette');
+    const palette = screen.getByLabelText('Dark palette');
     expect(
       Array.from((palette as HTMLSelectElement).options).map((option) => [
         option.value,
@@ -81,5 +81,45 @@ describe('SettingsCategoryContent', () => {
       palette.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
+    expect(store.getState().settings?.appearance_mode).toBe('system');
+  });
+
+  it('keeps theme choice independent from the saved dark palette', async () => {
+    const { store, bootstrap, settings } = await initializedStore();
+    render(
+      <SettingsCategoryContent
+        category="appearance"
+        bootstrap={bootstrap}
+        settings={settings}
+        useStore={store}
+      />,
+    );
+
+    const theme = screen.getByLabelText('Theme');
+    expect(
+      Array.from((theme as HTMLSelectElement).options).map((option) => [
+        option.value,
+        option.textContent,
+      ]),
+    ).toEqual([
+      ['system', 'Follow Windows (recommended)'],
+      ['light', 'Light'],
+      ['dark', 'Dark'],
+    ]);
+
+    await act(async () => {
+      (theme as HTMLSelectElement).value = 'light';
+      theme.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await waitFor(() => expect(store.getState().settings?.appearance_mode).toBe('light'));
+    expect(store.getState().settings?.palette).toBe('graphite');
+
+    const palette = screen.getByLabelText('Dark palette');
+    await act(async () => {
+      (palette as HTMLSelectElement).value = 'slate';
+      palette.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
+    expect(store.getState().settings?.appearance_mode).toBe('light');
   });
 });

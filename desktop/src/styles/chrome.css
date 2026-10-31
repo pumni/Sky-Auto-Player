@@ -71,6 +71,12 @@
   box-shadow: none;
 }
 
+html[data-color-mode='light'] .global-search:has(input:focus-visible) {
+  border-color: var(--workbench-search-focus);
+  outline: 2px solid var(--workbench-search-focus);
+  outline-offset: 2px;
+}
+
 .global-search input {
   flex: 1;
   min-width: 0;

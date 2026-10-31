@@ -64,7 +64,7 @@ describe('SettingsPanel playback timing', () => {
 
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-    const palette = screen.getByLabelText('Color palette');
+    const palette = screen.getByLabelText('Dark palette');
 
     await act(async () => {
       fireEvent.change(palette, { target: { value: 'slate' } });

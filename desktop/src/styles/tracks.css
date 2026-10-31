@@ -87,7 +87,7 @@
 }
 
 .track-row.is-playing:not(.is-selected) {
-  border-left-color: var(--workbench-divider);
+  border-left-color: var(--workbench-playing-indicator);
   color: var(--text-secondary);
   background: var(--workbench-navigation);
 }

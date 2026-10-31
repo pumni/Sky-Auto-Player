@@ -932,6 +932,7 @@ fn settings_and_catalog_changes_invalidate_prepared_native_playback() {
         .to_owned();
     runtime
         .patch_settings(crate::commands::SettingsPatch {
+            appearance_mode: None,
             palette: None,
             telemetry_enabled: None,
             verbose_hud: None,

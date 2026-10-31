@@ -90,15 +90,47 @@ the Player Dock, which keeps its own independent geometry and controls.
 
 ## Palette and semantic color roles
 
-Graphite remains the default palette with persisted ID `graphite`; `data-color-mode="dark"` remains
-unchanged. Settings calls it **Graphite (Default)**. The five other persisted palette IDs remain
-selectable and their palette-specific colors stay in `desktop/src/styles/themes.css`.
+Native settings schema 10 owns `appearance_mode` (`system`, `light`, or `dark`) independently from
+the persisted dark `palette` ID. A missing config file starts as System with Graphite; a legacy
+config without the mode migrates to Dark and preserves its normalized palette. Invalid persisted
+modes normalize to Dark, and invalid patch values are rejected atomically. Appearance-only patches
+do not invalidate prepared playback.
+
+In System mode, `App.tsx` resolves the effective mode from the native Tauri window theme and live
+theme events. Browser and mock runs use `prefers-color-scheme`. The effective value is applied to
+`html[data-color-mode]` and `color-scheme`; the selected dark palette stays persisted while Light is
+active. The stylesheet-driven startup screen follows the media preference before React loads. On
+the normal startup path, a packaged window is revealed after bootstrap settings and the initial
+native theme are applied. A bounded 2.5-second fail-open can reveal the startup screen earlier if
+bootstrap or the native theme getter remains pending; a legacy Dark profile can briefly show the
+pre-bootstrap Windows app color preference until its settings arrive. The native Tauri window
+background remains fixed at RGB `(18, 19, 20)` and may show through before WebView content paints.
+
+Graphite remains the default dark palette with persisted ID `graphite`; Settings calls it
+**Graphite (Default)**. The five other persisted palette IDs remain selectable and their
+palette-specific dark colors stay in `desktop/src/styles/themes.css`. Light uses a separate
+semantic token override and does not introduce a palette ID.
 
 Production Graphite is the existing A palette: accent ink and focus `#B2A5E9`, primary fill
 `#705EAE`, hover `#7564B4`, pressed `#6553A0`, selected surface `#25242C`, search focus `#9688C6`,
 and active toggle ink `#B68CFF`. Semantic roles remain separate: accent text/ink, primary action
 fill and on-fill text, focus indication, search focus, selected surfaces/indicators, toggle state,
 and danger/warning/success. Compatibility `--workbench-*` aliases resolve through those roles.
+
+Light uses a separate Clean Windows Light token set: white content, a near-white shell and
+Navigator, charcoal text, hairline neutral separators, and restrained Windows blue. Graphite's
+component-specific workbench aliases are overridden in the theme layer so they cannot leave dark
+surfaces behind in Light mode. Component styles consume semantic variables; the six dark palette
+IDs and their rendered role values remain unchanged. Package B's browser captures and computed
+contrast report are recorded in [`issue-565-package-b evidence`](evidence/issue-565-package-b/README.md).
+Package C's Windows/WebView2, startup, focus and contrast qualification is recorded in
+[`issue-565-package-c evidence`](evidence/issue-565-package-c/README.md). It distinguishes the
+release-profile Windows WebView run from browser media emulation and lists the packaged startup
+cases that could not be forced in this environment.
+Package D's final A–C integration audit and PASS/FAILED/SKIPPED/UNVERIFIED matrix is recorded in
+[`issue-565-package-d evidence`](evidence/issue-565-package-d/README.md). The Package B compact
+utility-overlay PNGs are explicitly loading-state captures: Diagnostics Runtime still displayed
+`Loading diagnostics…`; they are not described as settled runtime evidence.
 
 Soft Graphite B is a review preview only. Its override exists in the opt-in
 `desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and
@@ -126,10 +158,11 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
   resize, focus/ARIA state, responsive topology, and preference v5 persistence.
 - `desktop/tests/e2e/settings-diagnostics.spec.ts`,
   `desktop/tests/e2e/palette-appearance.spec.ts`,
+  `desktop/tests/e2e/light-appearance.spec.ts`,
   `desktop/tests/e2e/graphite-final-ui-polish.spec.ts`, and
   `desktop/tests/e2e/graphite-package-c.spec.ts` cover modal/accessibility, Diagnostics
-  truthfulness, all six palettes, focus and semantic color roles, forced-colors, and reduced-motion
-  behavior.
+  truthfulness, all six palettes, Light and Graphite Dark rendering, focus and semantic color roles,
+  forced-colors, and reduced-motion behavior.
 
 Browser tests use the mock bridge. The 640×448 overlay cases are responsive browser fallbacks,
 not supported native sizes. Packaged WebView2 resize/startup measurements and their baseline

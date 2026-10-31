@@ -1,4 +1,5 @@
 export type { BootstrapDto } from './BootstrapDto';
+export type { AppearanceMode } from './AppearanceMode';
 export type { CalibrationCancelAckDto } from './CalibrationCancelAckDto';
 export type { CalibrationCancelRequest } from './CalibrationCancelRequest';
 export type { CalibrationFinishedPayload } from './CalibrationFinishedPayload';

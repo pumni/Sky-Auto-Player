@@ -249,7 +249,7 @@ export async function selectPalette(page: Page, palette: PaletteId) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await dialog.getByLabel('Color palette').selectOption(palette);
+  await dialog.getByLabel('Dark palette').selectOption(palette);
   await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
   await dialog.getByRole('button', { name: 'Close settings' }).click();
