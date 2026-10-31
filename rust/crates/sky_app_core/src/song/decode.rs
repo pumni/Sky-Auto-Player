@@ -279,47 +279,177 @@ fn one_song_root(value: &Value) -> Result<&Value, SongDecodeError> {
 }
 
 fn detect_format(object: &Map<String, Value>) -> Result<SongFormat, SongDecodeError> {
-    match (object.get("type"), object.get("version")) {
-        (None, None) if object.contains_key("songNotes") => Ok(SongFormat::LegacyFlat),
-        (None, None) => Err(SongDecodeError::UnsupportedFormat {
-            reason: "expected versioned `type`/`version` fields or legacy `songNotes`".into(),
-        }),
-        (None, Some(_)) => Err(SongDecodeError::MissingField {
-            path: "type".into(),
-        }),
-        (Some(_), None) => Err(SongDecodeError::MissingField {
-            path: "version".into(),
-        }),
-        (Some(kind), Some(version)) => {
-            let kind = kind
-                .as_str()
-                .ok_or_else(|| invalid("type", "must be a string"))?;
-            let version = version
-                .as_u64()
-                .ok_or_else(|| invalid("version", "must be a non-negative integer"))?;
-            let (minimum, maximum) = match kind {
-                "composed" => (1, 5),
-                "recorded" => (1, 4),
-                _ => {
-                    return Err(SongDecodeError::UnsupportedFormat {
-                        reason: format!("unknown song type `{kind}`"),
-                    });
-                }
-            };
-            if !(minimum..=maximum).contains(&version) {
-                return Err(SongDecodeError::UnsupportedVersion {
-                    kind: kind.into(),
-                    version,
+    let family_from_type = match object.get("type") {
+        None => None,
+        Some(value) => match value.as_str() {
+            Some("composed") => Some(FormatFamily::Composed),
+            Some("recorded") => Some(FormatFamily::Recorded),
+            Some(kind) => {
+                return Err(SongDecodeError::UnsupportedFormat {
+                    reason: format!("unknown song type `{kind}`"),
                 });
             }
-            let version = version as u8;
-            match kind {
-                "composed" => Ok(SongFormat::Composed { version }),
-                "recorded" => Ok(SongFormat::Recorded { version }),
-                _ => unreachable!("kind was validated above"),
-            }
+            None => return Err(invalid("type", "must be a string")),
+        },
+    };
+    let family_from_flag = historical_composed_flag(object)?.map(|composed| {
+        if composed {
+            FormatFamily::Composed
+        } else {
+            FormatFamily::Recorded
+        }
+    });
+    if family_from_type.is_some()
+        && family_from_flag.is_some()
+        && family_from_type != family_from_flag
+    {
+        return Err(SongDecodeError::UnsupportedFormat {
+            reason: "`type` contradicts `data.isComposedVersion`".into(),
+        });
+    }
+
+    let Some(family) = family_from_type.or(family_from_flag) else {
+        if object.contains_key("version") {
+            return Err(SongDecodeError::MissingField {
+                path: "type".into(),
+            });
+        }
+        if has_versioned_event_container(object) {
+            return Err(SongDecodeError::UnsupportedFormat {
+                reason: "versioned event data requires an explicit type or historical family flag"
+                    .into(),
+            });
+        }
+        if object.contains_key("songNotes") {
+            return Ok(SongFormat::LegacyFlat);
+        }
+        return Err(SongDecodeError::UnsupportedFormat {
+            reason:
+                "expected a versioned schema, historical Sky Music header, or legacy `songNotes`"
+                    .into(),
+        });
+    };
+
+    if family_from_type.is_none() {
+        require_supported_historical_game(object)?;
+    }
+    let version = match object.get("version") {
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| invalid("version", "must be a non-negative integer"))?,
+        None if is_unambiguous_historical_v1_container(object, family) => 1,
+        None => {
+            return Err(SongDecodeError::MissingField {
+                path: "version".into(),
+            });
+        }
+    };
+    let (kind, maximum) = match family {
+        FormatFamily::Composed => ("composed", 5),
+        FormatFamily::Recorded => ("recorded", 4),
+    };
+    if !(1..=maximum).contains(&version) {
+        return Err(SongDecodeError::UnsupportedVersion {
+            kind: kind.into(),
+            version,
+        });
+    }
+    let version = version as u8;
+    validate_version_container(object, family, version)?;
+    Ok(match family {
+        FormatFamily::Composed => SongFormat::Composed { version },
+        FormatFamily::Recorded => SongFormat::Recorded { version },
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormatFamily {
+    Composed,
+    Recorded,
+}
+
+fn historical_composed_flag(object: &Map<String, Value>) -> Result<Option<bool>, SongDecodeError> {
+    let Some(data) = object.get("data") else {
+        return Ok(None);
+    };
+    let Some(data) = data.as_object() else {
+        // The source-game decoder reports malformed `data` for explicit headers.
+        return Ok(None);
+    };
+    match data.get("isComposedVersion") {
+        None => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(invalid("data.isComposedVersion", "must be a boolean")),
+    }
+}
+
+fn require_supported_historical_game(object: &Map<String, Value>) -> Result<(), SongDecodeError> {
+    let app_name = object
+        .get("data")
+        .and_then(Value::as_object)
+        .and_then(|data| data.get("appName"));
+    match app_name {
+        Some(Value::String(value)) if SourceGame::parse(value).is_some() => Ok(()),
+        Some(Value::String(value)) => Err(SongDecodeError::UnsupportedSourceGame {
+            value: value.clone(),
+        }),
+        Some(_) => Err(invalid("data.appName", "must be a string")),
+        None => Err(SongDecodeError::AmbiguousSourceGame),
+    }
+}
+
+fn has_versioned_event_container(object: &Map<String, Value>) -> bool {
+    ["columns", "columnTempos", "notes", "tracks"]
+        .iter()
+        .any(|field| object.contains_key(*field))
+}
+
+fn is_unambiguous_historical_v1_container(
+    object: &Map<String, Value>,
+    family: FormatFamily,
+) -> bool {
+    match family {
+        FormatFamily::Composed => {
+            object.contains_key("columns")
+                && !object.contains_key("columnTempos")
+                && !object.contains_key("tracks")
+                && !object.contains_key("notes")
+        }
+        FormatFamily::Recorded => {
+            object.contains_key("notes")
+                && !object.contains_key("columns")
+                && !object.contains_key("columnTempos")
+                && !object.contains_key("tracks")
         }
     }
+}
+
+fn validate_version_container(
+    object: &Map<String, Value>,
+    family: FormatFamily,
+    version: u8,
+) -> Result<(), SongDecodeError> {
+    let (authoritative, incompatible) = match (family, version) {
+        (FormatFamily::Composed, 1..=3) => ("columns", &["columnTempos", "tracks", "notes"][..]),
+        (FormatFamily::Composed, 4..=5) => ("tracks", &["columns", "notes"][..]),
+        (FormatFamily::Recorded, 1..=2) => ("notes", &["columns", "columnTempos", "tracks"][..]),
+        (FormatFamily::Recorded, 3..=4) => ("tracks", &["columns", "columnTempos", "notes"][..]),
+        _ => unreachable!("version bounds are checked before validating containers"),
+    };
+    if let Some(field) = incompatible
+        .iter()
+        .find(|field| object.contains_key(**field))
+    {
+        return Err(SongDecodeError::UnsupportedFormat {
+            reason: format!("`{field}` conflicts with {family:?} version {version}"),
+        });
+    }
+    if !object.contains_key(authoritative) {
+        return Err(SongDecodeError::MissingField {
+            path: authoritative.into(),
+        });
+    }
+    Ok(())
 }
 
 fn reject_encrypted(object: &Map<String, Value>) -> Result<(), SongDecodeError> {
@@ -481,22 +611,28 @@ fn track_pitch_offset(track: &SourceTrack, song_pitch: &str) -> i32 {
 
 fn composed_boundaries(tempo_ids: &[u8], bpm: f64) -> Result<Vec<u64>, SongDecodeError> {
     let mut boundaries = Vec::with_capacity(tempo_ids.len() + 1);
-    boundaries.push(0);
-    let mut exact_us = 0.0f64;
+    boundaries.push(100_000);
+    let mut exact_ms = 100.0f64;
     for (index, tempo_id) in tempo_ids.iter().copied().enumerate() {
         let changer = TEMPO_CHANGERS[tempo_id as usize];
-        let step_us = (60_000_000.0 / bpm) * changer;
-        exact_us += step_us;
-        if !step_us.is_finite()
-            || !exact_us.is_finite()
-            || exact_us < 0.0
-            || exact_us >= u64::MAX as f64
+        let step_ms = (60_000.0 / bpm) * changer;
+        exact_ms += step_ms;
+        let rounded_ms = exact_ms.round();
+        if !step_ms.is_finite()
+            || !exact_ms.is_finite()
+            || exact_ms < 0.0
+            || rounded_ms > (u64::MAX / 1_000) as f64
         {
             return Err(SongDecodeError::TimeOverflow {
                 path: format!("columns[{index}]"),
             });
         }
-        boundaries.push(exact_us.round() as u64);
+        let boundary_us = (rounded_ms as u64).checked_mul(1_000).ok_or_else(|| {
+            SongDecodeError::TimeOverflow {
+                path: format!("columns[{index}]"),
+            }
+        })?;
+        boundaries.push(boundary_us);
     }
     Ok(boundaries)
 }

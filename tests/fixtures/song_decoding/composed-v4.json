@@ -9,7 +9,7 @@
   "tracks": [
     {
       "instrument": { "name": "Cello", "pitch": "D" },
-      "notes": [[0, 72, 2], [2, 74]]
+      "notes": [[0, 72, 2], [1, 72, 1], [2, 74]]
     }
   ],
   "songNotes": [{ "key": "NotAKey", "time": -99 }]

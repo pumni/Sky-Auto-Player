@@ -49,6 +49,34 @@ fn flat_keys_preserve_layer_identity_and_stable_timing() {
 }
 
 #[test]
+fn official_historical_sky_headers_select_authoritative_v1_sources() {
+    let composed_bytes = fixture("historical-composed-v1.json");
+    assert_eq!(
+        detect_song_format(&composed_bytes).unwrap(),
+        SongFormat::Composed { version: 1 }
+    );
+    let composed = decode_song_json(&composed_bytes, "historical composed").unwrap();
+    assert_eq!(composed.source_game, SourceGame::Sky);
+    assert_eq!(composed.tracks.len(), 4);
+    assert_eq!(composed.events.len(), 1);
+    assert_eq!(composed.events[0].track_index, 0);
+    assert_eq!(composed.events[0].onset_us, 100_000);
+
+    let recorded_bytes = fixture("historical-recorded-v1.json");
+    assert_eq!(
+        detect_song_format(&recorded_bytes).unwrap(),
+        SongFormat::Recorded { version: 1 }
+    );
+    let recorded = decode_song_json(&recorded_bytes, "historical recorded").unwrap();
+    assert_eq!(recorded.source_game, SourceGame::Sky);
+    assert_eq!(recorded.tracks.len(), 1);
+    assert_eq!(recorded.tracks[0].instrument.as_deref(), Some("Piano"));
+    assert_eq!(recorded.events.len(), 1);
+    assert_eq!(recorded.events[0].track_index, 0);
+    assert_eq!(recorded.events[0].onset_us, 909_000);
+}
+
+#[test]
 fn composed_v1_through_v3_decode_their_authoritative_layer_encodings() {
     let v1 = decode_fixture("composed-v1.json");
     assert_eq!(v1.format, SongFormat::Composed { version: 1 });
@@ -56,7 +84,8 @@ fn composed_v1_through_v3_decode_their_authoritative_layer_encodings() {
     assert_eq!(v1.events[0].track_index, 1);
     assert_eq!(note_number(&v1.events[0]).0, 48);
     assert_eq!(v1.events[0].layer_mask, Some(2));
-    assert_eq!(v1.events[1].onset_us, 500_000);
+    assert_eq!(v1.events[0].onset_us, 100_000);
+    assert_eq!(v1.events[1].onset_us, 600_000);
     assert_eq!(note_number(&v1.events[1]).0, 62);
     assert_eq!(note_number(&v1.events[2]).0, 50);
 
@@ -65,29 +94,34 @@ fn composed_v1_through_v3_decode_their_authoritative_layer_encodings() {
     assert_eq!(v2.events.len(), 3);
     assert_eq!(v2.events[0].track_index, 1);
     assert_eq!(note_number(&v2.events[0]).0, 36);
-    assert_eq!(v2.events[1].onset_us, 500_000);
+    assert_eq!(v2.events[0].onset_us, 100_000);
+    assert_eq!(v2.events[1].onset_us, 600_000);
     assert_eq!(v2.events[1].layer_mask, Some(3));
 
     let v3 = decode_fixture("composed-v3.json");
     assert_eq!(v3.format, SongFormat::Composed { version: 3 });
     assert_eq!(v3.tracks[1].effective_pitch.as_deref(), Some("D"));
     assert_eq!(v3.events.len(), 1);
+    assert_eq!(v3.events[0].onset_us, 100_000);
     assert_eq!(note_number(&v3.events[0]).0, 52);
 }
 
 #[test]
-fn composed_v4_converts_nominal_pitch_and_preserves_spans_while_v5_is_absolute() {
+fn composed_v4_converts_nominal_pitch_and_only_spans_longer_than_one_column_sustain() {
     let v4 = decode_fixture("composed-v4.json");
     assert_eq!(v4.format, SongFormat::Composed { version: 4 });
-    assert_eq!(v4.events.len(), 2);
+    assert_eq!(v4.events.len(), 3);
     assert_eq!(v4.events[0].raw_identity, RawNoteIdentity::NominalId(72));
     assert_eq!(note_number(&v4.events[0]), (50, Pitchability::Pitched));
-    assert_eq!(v4.events[0].onset_us, 0);
+    assert_eq!(v4.events[0].onset_us, 100_000);
     assert_eq!(v4.events[0].duration_us, 750_000);
     assert_eq!(v4.events[0].span_columns, Some(2));
-    assert_eq!(v4.events[1].onset_us, 750_000);
-    assert_eq!(v4.events[1].duration_us, 500_000);
-    assert_eq!(v4.diagnostics.authored_sustain_count, 2);
+    assert_eq!(v4.events[1].onset_us, 600_000);
+    assert_eq!(v4.events[1].duration_us, 0);
+    assert_eq!(v4.events[1].span_columns, Some(1));
+    assert_eq!(v4.events[2].onset_us, 850_000);
+    assert_eq!(v4.events[2].duration_us, 0);
+    assert_eq!(v4.diagnostics.authored_sustain_count, 1);
 
     let v5 = decode_fixture("composed-v5.json");
     assert_eq!(v5.format, SongFormat::Composed { version: 5 });
@@ -96,8 +130,11 @@ fn composed_v4_converts_nominal_pitch_and_preserves_spans_while_v5_is_absolute()
         RawNoteIdentity::AbsoluteNoteNumber(50)
     );
     assert_eq!(note_number(&v5.events[0]), (50, Pitchability::Pitched));
-    assert_eq!(v5.events[0].duration_us, 500_000);
+    assert_eq!(v5.events[0].onset_us, 100_000);
+    assert_eq!(v5.events[0].duration_us, 0);
     assert_eq!(v5.events[0].span_columns, Some(1));
+    assert_eq!(v5.events[1].onset_us, 600_000);
+    assert_eq!(v5.events[1].duration_us, 0);
 }
 
 #[test]
@@ -198,6 +235,35 @@ fn versioned_authority_and_container_validation_fail_closed() {
         Ok(song) if song.format == SongFormat::LegacyFlat
     ));
 
+    let contradictory_flag = br#"{"type":"composed","version":1,"data":{"appName":"Sky","isComposedVersion":false},"instruments":[],"columns":[]}"#;
+    assert!(matches!(
+        detect_song_format(contradictory_flag),
+        Err(SongDecodeError::UnsupportedFormat { .. })
+    ));
+    let historical_wrong_container =
+        br#"{"data":{"appName":"Sky","isComposedVersion":true},"notes":[]}"#;
+    assert!(matches!(
+        detect_song_format(historical_wrong_container),
+        Err(SongDecodeError::MissingField { path }) if path == "version"
+    ));
+    let versionless_modern =
+        br#"{"data":{"appName":"Sky","isComposedVersion":true},"columnTempos":[],"tracks":[]}"#;
+    assert!(matches!(
+        detect_song_format(versionless_modern),
+        Err(SongDecodeError::MissingField { path }) if path == "version"
+    ));
+    let missing_type = br#"{"version":1,"data":{"appName":"Sky","isComposedVersion":true},"columns":[],"instruments":[]}"#;
+    assert_eq!(
+        detect_song_format(missing_type).unwrap(),
+        SongFormat::Composed { version: 1 }
+    );
+    let type_shape_conflict =
+        br#"{"type":"recorded","version":1,"data":{"appName":"Sky"},"columns":[]}"#;
+    assert!(matches!(
+        detect_song_format(type_shape_conflict),
+        Err(SongDecodeError::UnsupportedFormat { .. })
+    ));
+
     let unknown_instrument = json!({
         "type": "recorded", "version": 4, "data": {"appName": "Sky"},
         "tracks": [{"instrument": {"name": "FutureInstrument"}, "notes": []}]
@@ -225,7 +291,7 @@ fn versioned_authority_and_container_validation_fail_closed() {
 }
 
 #[test]
-fn legacy_layer_masks_cannot_infer_or_select_undeclared_tracks() {
+fn legacy_layer_masks_reject_tracks_outside_declared_rosters() {
     let invalid_sheets = [
         json!({
             "type": "composed", "version": 1, "bpm": 120,
@@ -256,10 +322,6 @@ fn legacy_layer_masks_cannot_infer_or_select_undeclared_tracks() {
             "data": {"appName": "Sky"}, "instruments": [{"name": "Piano"}],
             "notes": [[0, 0, "2"]]
         }),
-        json!({
-            "type": "recorded", "version": 2,
-            "data": {"appName": "Sky"}, "notes": [[0, 0, "1"]]
-        }),
     ];
 
     for (index, value) in invalid_sheets.into_iter().enumerate() {
@@ -275,16 +337,66 @@ fn legacy_layer_masks_cannot_infer_or_select_undeclared_tracks() {
 }
 
 #[test]
-fn composed_column_timing_accumulates_fractional_microseconds_without_per_step_rounding() {
+fn recorded_v1_v2_absent_rosters_allow_only_the_single_default_track() {
+    let recorded_v2 = json!({
+        "type": "recorded", "version": 2,
+        "data": {"appName": "Sky"}, "notes": [[9, 909, "1"]]
+    });
+    let song = decode_song_json(&serde_json::to_vec(&recorded_v2).unwrap(), "implicit v2").unwrap();
+    assert_eq!(song.tracks.len(), 1);
+    assert_eq!(song.tracks[0].instrument.as_deref(), Some("Piano"));
+    assert_eq!(song.events.len(), 1);
+    assert_eq!(song.events[0].track_index, 0);
+
+    for (version, mask) in [(1, json!(2)), (2, json!("2"))] {
+        let out_of_roster = json!({
+            "type": "recorded", "version": version,
+            "data": {"appName": "Sky"}, "notes": [[9, 909, mask]]
+        });
+        assert!(matches!(
+            decode_song_json(
+                &serde_json::to_vec(&out_of_roster).unwrap(),
+                "implicit out of roster"
+            ),
+            Err(SongDecodeError::InvalidField { .. })
+        ));
+    }
+
+    let explicit_empty = json!({
+        "type": "recorded", "version": 1,
+        "data": {"appName": "Sky"}, "instruments": [], "notes": [[9, 909, 1]]
+    });
+    assert!(matches!(
+        decode_song_json(
+            &serde_json::to_vec(&explicit_empty).unwrap(),
+            "empty roster"
+        ),
+        Err(SongDecodeError::InvalidField { .. })
+    ));
+
+    let explicit_underspecified = json!({
+        "type": "recorded", "version": 1,
+        "data": {"appName": "Sky"}, "instruments": [{}], "notes": [[9, 909, 1]]
+    });
+    assert!(matches!(
+        decode_song_json(&serde_json::to_vec(&explicit_underspecified).unwrap(), "underspecified roster"),
+        Err(SongDecodeError::MissingField { path }) if path == "instruments[0].name"
+    ));
+}
+
+#[test]
+fn composed_timing_rounds_millisecond_boundaries_with_long_compositions() {
     let columns = vec![json!(0); 10_000];
     let value: Value = json!({
         "type": "composed", "version": 4, "bpm": 137,
         "data": {"appName": "Sky"}, "columnTempos": columns,
-        "tracks": [{"instrument": {"name": "Piano"}, "notes": [[0, 60, 10_000]]}]
+        "tracks": [{"instrument": {"name": "Piano"}, "notes": [[0, 60, 10_000], [9_999, 62]]}]
     });
     let song = decode_song_json(&serde_json::to_vec(&value).unwrap(), "timing").unwrap();
-    assert_eq!(song.events[0].onset_us, 0);
-    assert_eq!(song.events[0].duration_us, 4_379_562_044);
+    assert_eq!(song.events[0].onset_us, 100_000);
+    assert_eq!(song.events[0].duration_us, 4_379_562_000);
+    assert_eq!(song.events[1].onset_us, 4_379_224_000);
+    assert_eq!(song.events[1].duration_us, 0);
 }
 
 #[test]

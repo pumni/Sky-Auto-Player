@@ -302,38 +302,41 @@ pub(super) fn decode_recorded_legacy(
     let song_pitch_offset =
         pitch_index(&source_pitch).expect("decoded source pitch is valid") as i32;
     let bpm = decode_bpm(object, false)?;
-    let raw_tracks: &[Value] = match object.get("instruments") {
-        Some(value) => value
-            .as_array()
-            .ok_or_else(|| invalid("instruments", "must be an array"))?
-            .as_slice(),
-        None => &[],
+    let tracks = match object.get("instruments") {
+        None => vec![source_track(
+            source_game,
+            tables::default_instrument(source_game),
+            Some(source_pitch.clone()),
+            song_pitch_offset,
+            0,
+        )?],
+        Some(value) => {
+            let raw_tracks = value
+                .as_array()
+                .ok_or_else(|| invalid("instruments", "must be an array"))?;
+            check_limit("source tracks", raw_tracks.len(), MAX_SOURCE_TRACKS)?;
+            raw_tracks
+                .iter()
+                .enumerate()
+                .map(|(index, raw)| {
+                    let path = format!("instruments[{index}]");
+                    let metadata = raw
+                        .as_object()
+                        .ok_or_else(|| invalid(&path, "must be an instrument object"))?;
+                    let instrument = required_string(metadata, "name", &path)?;
+                    let track_pitch =
+                        optional_pitch(metadata.get("pitch"), song_pitch_offset, &path)?;
+                    source_track(
+                        source_game,
+                        instrument,
+                        Some(track_pitch.0),
+                        track_pitch.1,
+                        index,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
     };
-    check_limit("source tracks", raw_tracks.len(), MAX_SOURCE_TRACKS)?;
-    let tracks = raw_tracks
-        .iter()
-        .enumerate()
-        .map(|(index, raw)| {
-            let path = format!("instruments[{index}]");
-            let metadata = raw
-                .as_object()
-                .ok_or_else(|| invalid(&path, "must be an instrument object"))?;
-            let instrument = match metadata.get("name") {
-                Some(value) => value
-                    .as_str()
-                    .ok_or_else(|| invalid(format!("{path}.name"), "must be a string"))?,
-                None => tables::default_instrument(source_game),
-            };
-            let track_pitch = optional_pitch(metadata.get("pitch"), song_pitch_offset, &path)?;
-            source_track(
-                source_game,
-                instrument,
-                Some(track_pitch.0),
-                track_pitch.1,
-                index,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let notes = required_array(object, "notes", "notes")?;
     check_limit("source notes", notes.len(), MAX_SOURCE_NOTES)?;
     let mut events = Vec::with_capacity(notes.len());

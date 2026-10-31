@@ -9,14 +9,21 @@ compatibility path.
 ## Format selection
 
 The decoder accepts a JSON object or an array containing exactly one object.
-An empty array and an array with multiple songs are errors. If either `type` or
-`version` is present, both are required and the versioned schema is authoritative
-even when the object also contains `songNotes`. Invalid or unsupported versioned
-data is never retried as the legacy projection.
+An empty array and an array with multiple songs are errors. A present `type`
+must agree with `data.isComposedVersion`, when that historical family flag is
+present. With no `type`, the supported `data.appName` and boolean
+`data.isComposedVersion` can identify a historical family when its authoritative
+event container is present. A missing version defaults to v1 only for the
+unambiguous old container (`columns` for composed or `notes` for recorded),
+without incompatible modern fields. A modern `tracks` shape without a version
+is rejected; the decoder never guesses between v4 and v5. Contradictory or
+malformed versioned data is never retried as the legacy projection, even when
+`songNotes` is also present.
 
-An object with neither `type` nor `version` is the flat legacy format when it
-contains `songNotes`. The `.txt` song extension still carries JSON here; this
-decoder does not treat it as ABC notation or another text format.
+An object with neither a versioned event container nor a historical family
+flag is the flat legacy format when it contains `songNotes`. The `.txt` song
+extension still carries JSON here; this decoder does not treat it as ABC
+notation or another text format.
 
 | Source format | Authoritative event data | Source identity interpretation |
 | --- | --- | --- |
@@ -26,8 +33,8 @@ decoder does not treat it as ABC notation or another text format.
 | Composed v3 | `columns`, `instruments`, `bpm` | Same note and mask encoding as v2; instrument objects may override the song pitch. |
 | Composed v4 | `columnTempos`, `tracks`, `bpm` | Track note tuples contain a column index, nominal source note ID, and optional column span. |
 | Composed v5 | `columnTempos`, `tracks`, `bpm` | Same track and span structure as v4, with absolute note numbers. |
-| Recorded v1 | `notes`, optional `instruments` | Legacy note index and timestamp in milliseconds. Its optional numeric layer field retains the source format's decimal-as-hex interpretation; absent or zero means layer one. |
-| Recorded v2 | `notes`, `instruments` | Legacy note index, timestamp in milliseconds, and hexadecimal layer mask. |
+| Recorded v1 | `notes`, optional `instruments` | Legacy note index and timestamp in milliseconds. Its optional numeric layer field retains the source format's decimal-as-hex interpretation; absent or zero means layer one. If the roster is absent, one default source instrument is allowed only for masks confined to bit 0. |
+| Recorded v2 | `notes`, optional `instruments` | Legacy note index, timestamp in milliseconds, and hexadecimal layer mask. An absent roster permits one default source instrument only for masks confined to bit 0. |
 | Recorded v3 | `tracks[].notes` | Nominal source note ID, timestamp in milliseconds, and optional duration in milliseconds. |
 | Recorded v4 | `tracks[].notes` | Absolute note number, timestamp in milliseconds, and optional duration in milliseconds. |
 
@@ -52,13 +59,15 @@ Flat legacy pitches are `SkyKeyIndex` values. Versioned source notes are
 instrument tables. V5/v4 absolute note numbers remain unchanged. This decoder
 does not choose or emit a target Sky key; target planning is a separate step.
 
-Composed column durations use `60,000,000 / bpm` microseconds multiplied by
-the column tempo changer (1, 1/2, 1/4, or 1/8). The decoder accumulates exact
-floating-point boundaries and rounds each cumulative boundary once to the
-nearest microsecond. A span duration is the difference between its start and
-end boundaries. Recorded and flat timestamps are stored in milliseconds and
-are converted directly to microseconds; recorded songs do not get an additional
-BPM conversion.
+Composed column durations use `60,000 / bpm` milliseconds multiplied by the
+column tempo changer (1, 1/2, 1/4, or 1/8). The first composed onset is 100 ms.
+The decoder accumulates exact floating-point millisecond boundaries, rounds
+each emitted boundary to the nearest millisecond, then converts it to
+microseconds. A `span` of 1 is a one-shot with zero duration; spans greater than
+1 use the difference between rounded start and end boundaries. These rules
+apply to composed v1 through v5. Recorded and flat timestamps are stored in
+milliseconds and are converted directly to microseconds; recorded songs do not
+get an additional BPM conversion.
 
 `DecodeDiagnostics` reports authored source notes, expanded canonical events,
 tracks, columns, sustain, skipped empty masks, and potential same-key collisions
@@ -76,11 +85,13 @@ resource caps before event expansion:
 - 200,000 source notes and 200,000 composed columns
 - 16 source tracks and 200,000 expanded events
 
-Legacy layer masks must select only tracks present in the declared instrument
-roster. A mask that reaches beyond that roster is rejected; the decoder does
-not invent a default instrument to fill a missing track.
+Composed v1–v3 layer masks and recorded v1–v2 masks with an explicit roster
+must select only declared tracks. Recorded v1–v2 may omit `instruments`; in
+that case the decoder creates one source-game default track and accepts masks
+confined to bit 0. Any mask selecting a higher track is rejected. An explicitly
+empty roster or an entry without a required instrument name remains invalid.
 
-Source tables are frozen from [Specy's Sky Music Nightly reference data](https://github.com/Specy/Sky-Music-Nightly/tree/d41f8a703955ba4ed1e1c4450407080bb3ae364f)
+Source tables are frozen from [Specy's `genshin-music` reference data](https://github.com/Specy/genshin-music/tree/d41f8a703955ba4ed1e1c4450407080bb3ae364f)
 at commit `d41f8a703955ba4ed1e1c4450407080bb3ae364f`. The decoder keeps only the
 numeric pitch and instrument mapping facts required for source identity; it
 does not copy that project's implementation code. Unrecognized source
@@ -89,10 +100,12 @@ instrument.
 
 ## Regression evidence
 
-`tests/song_source_decoding.rs` uses small, inspectable fixtures for flat legacy
-and composed/recorded versions 1 through 5/4, including layer expansion,
-source-game conversion, nominal versus absolute notes, sustain, timing, and
-fail-closed cases.
+`rust/crates/sky_app_core/tests/song_source_decoding.rs` uses small, inspectable
+fixtures for flat legacy and composed/recorded versions 1 through 5/4. The two
+historical-header fixtures are synthetic and preserve the official historical
+field shapes without importing full third-party song assets. Coverage includes
+layer expansion, absent-roster defaults, source-game conversion, nominal versus
+absolute notes, one-shot spans, composed timing, and fail-closed cases.
 
 `rust/crates/sky_app_core/tests/legacy_song_corpus.rs` pins all 106 checked-in
 song assets by input SHA-256 and freezes the existing `parse_song_json` plus

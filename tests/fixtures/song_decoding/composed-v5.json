@@ -9,7 +9,7 @@
   "tracks": [
     {
       "instrument": { "name": "Cello", "pitch": "D" },
-      "notes": [[0, 50], [1, 52]]
+      "notes": [[0, 50, 1], [1, 52]]
     }
   ]
 }

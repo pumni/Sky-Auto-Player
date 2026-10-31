@@ -110,9 +110,13 @@ pub(super) fn decode_composed_tracks(
                 ));
             }
             let onset_us = boundaries[column_index];
-            let duration_us = boundaries[end_column]
-                .checked_sub(onset_us)
-                .ok_or_else(|| SongDecodeError::TimeOverflow { path: path.clone() })?;
+            let duration_us = if span == 1 {
+                0
+            } else {
+                boundaries[end_column]
+                    .checked_sub(onset_us)
+                    .ok_or_else(|| SongDecodeError::TimeOverflow { path: path.clone() })?
+            };
             let (number, source_pitchability, identity) = if version == 4 {
                 let (number, pitchability) = tables::nominal_to_absolute(
                     source_game,
