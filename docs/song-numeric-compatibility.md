@@ -63,20 +63,30 @@ The baseline commit was `6878b3816e7fed0b2e12c77b5d3056646271c40d`.
 | Settings persistence and catalog IDs | Compatibility fixtures and catalog search tests passed | Same persisted layouts, values, search behavior, and IDs pass their fixtures |
 | Physical risk and input/security boundary | Existing native prepare/risk tests passed; `SECURITY.md` defined `SendInput`-only gameplay input | Native prepare/risk tests pass with physical severity retained for invalid advisory values; security enforcement and `SECURITY.md` are unchanged |
 
-The final repository gate, `cargo xtask check all`, exited 0. It covered the
-static and security audits, supply-chain policy, catalog verification, Rust
-formatting and Clippy, the locked all-features Rust workspace tests, desktop
-checks, and native desktop tests. The maintained-name audit is also part of the
-static gate. `bun run check` and `bun run lint` passed in `site`; Prettier passed
-for all eight changed site Markdown files. The repository-wide `bun run
-format:check` exited 1 on 20 pre-existing, unmodified Astro files. This table
-does not claim a performance improvement.
+The numeric WP-D HEAD `498fd2c030b2a47dbca21eafac1bdfa01fb595fa` passed
+`cargo xtask check all`. For the subsequent audit-only L-006 correction, the
+focused audit, core, settings-adapter, and desktop native suites passed, as did
+the static/security/supply-chain gate, xtask Clippy, and Rust format check.
+`cargo xtask check all` was not rerun for that correction; desktop browser E2E
+and the full all-features workspace gate were therefore skipped. `bun run
+check` and `bun run lint` passed in `site`; Prettier passed for all eight
+changed site Markdown files. The repository-wide `bun run format:check` exited
+1 on 20 pre-existing, unmodified Astro files. This table does not claim a
+performance improvement.
 
 ## Historical and security exceptions
 
 The maintained-content audit scans Rust and desktop source, tests, active docs,
-and the full website source tree. Its historical path exceptions are
-deliberately limited to:
+and the full website source tree. At the repository root it also discovers
+environment, configuration, and settings examples by their filename markers,
+including future `.env.example` variants. A bare local `.env` file is outside
+its selection. The audit checks specific retired operational patterns without
+banning every historical-language reference. Optional named root documents may
+be absent; any traversal, read, or UTF-8 error for a selected file fails the
+audit with path and cause. Isolated tests cover those failures, root examples,
+historical exemptions, and allowed security prohibitions.
+
+Historical path exceptions are deliberately limited to:
 
 - `CHANGELOG.md`, which records behavior at earlier releases;
 - `docs/adr/`, `docs/releases/`, and `docs/evidence/`, which retain revision-
