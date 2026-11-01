@@ -48,16 +48,16 @@ fn hosted_disposable_tauri_private_key_roundtrip_through_adapter() {
         Duration::from_secs(120),
     )
     .expect("execute disposable Tauri key generation");
-    assert!(generation.status.success(), "disposable Tauri key generation failed");
+    assert!(
+        generation.status.success(),
+        "disposable Tauri key generation failed"
+    );
 
     let original = Zeroizing::new(
         fs::read_to_string(&test_key_path).expect("read Tauri-generated disposable key file"),
     );
-    let secrets = SigningSecrets::from_values(
-        original.to_string(),
-        TEST_PASSWORD.to_owned(),
-    )
-    .expect("production adapter accepts generated Tauri secret envelope");
+    let secrets = SigningSecrets::from_values(original.to_string(), TEST_PASSWORD.to_owned())
+        .expect("production adapter accepts generated Tauri secret envelope");
     assert!(
         original.trim_end_matches(['\r', '\n']) == secrets.private_key.as_str(),
         "adapter must preserve Tauri's canonical encoded key file"
@@ -73,9 +73,8 @@ fn hosted_disposable_tauri_private_key_roundtrip_through_adapter() {
         inner.lines().next() == Some(TAURI_RSIGN_HEADER),
         "pinned Tauri private key must have rsign encrypted header"
     );
-    let from_raw =
-        SigningSecrets::from_values(inner.to_owned(), TEST_PASSWORD.to_owned())
-            .expect("inner raw text is normalized into the canonical Tauri envelope");
+    let from_raw = SigningSecrets::from_values(inner.to_owned(), TEST_PASSWORD.to_owned())
+        .expect("inner raw text is normalized into the canonical Tauri envelope");
     assert!(
         from_raw.private_key == secrets.private_key,
         "both transports must materialize identical encoded bytes"
@@ -84,15 +83,19 @@ fn hosted_disposable_tauri_private_key_roundtrip_through_adapter() {
     let temporary_key =
         materialize_key(&secrets, "9876543210", 1).expect("materialize under runner temp");
     assert!(
-        fs::read_to_string(&temporary_key.path)
-            .expect("read isolated materialized test key")
+        fs::read_to_string(&temporary_key.path).expect("read isolated materialized test key")
             == secrets.private_key.as_str(),
         "temporary key file must contain outer Base64 for the Tauri CLI"
     );
 
-    let installer = directory.join(crate::release_metadata::canonical_installer_name(TEST_VERSION));
-    fs::write(&installer, b"MZ disposable Tauri signing adapter proof fixture")
-        .expect("create disposable signing fixture");
+    let installer = directory.join(crate::release_metadata::canonical_installer_name(
+        TEST_VERSION,
+    ));
+    fs::write(
+        &installer,
+        b"MZ disposable Tauri signing adapter proof fixture",
+    )
+    .expect("create disposable signing fixture");
     let signed = process::capture_owned_timeout_runtime_only(
         OsStr::new("bun"),
         &[
@@ -120,7 +123,10 @@ fn hosted_disposable_tauri_private_key_roundtrip_through_adapter() {
         Duration::from_secs(120),
     )
     .expect("execute disposable standalone Tauri signer");
-    assert!(signed.status.success(), "real Tauri signing rejected normalized test key");
+    assert!(
+        signed.status.success(),
+        "real Tauri signing rejected normalized test key"
+    );
 
     let signature = PathBuf::from(format!("{}.sig", installer.display()));
     let public_key = PathBuf::from(format!("{}.pub", test_key_path.display()));
@@ -136,4 +142,3 @@ fn hosted_disposable_tauri_private_key_roundtrip_through_adapter() {
     )
     .expect("verify disposable signature and version with independent disposable root");
 }
-
