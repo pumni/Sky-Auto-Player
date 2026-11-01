@@ -490,8 +490,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            symlink(directory.join("missing-target"), &signature)
-                .expect("create dangling symlink");
+            symlink(directory.join("missing-target"), &signature).expect("create dangling symlink");
             assert!(
                 RemoveOnFailure::for_new_output(signature.clone()).is_err(),
                 "dangling symlinks are occupied paths, not new output"
