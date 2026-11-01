@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::{Result, ci_artifacts, hash, process, updater_trust};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -12,6 +13,10 @@ const PRIVATE_KEY_SECRET: &str = "V4_TAURI_UPDATER_PRIVATE_KEY";
 const PASSPHRASE_SECRET: &str = "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD";
 const MAX_PRIVATE_KEY_BYTES: usize = 32 * 1024;
 const MAX_PASSPHRASE_BYTES: usize = 4096;
+const MIN_MINISIGN_PAYLOAD_BYTES: usize = 64;
+const MAX_MINISIGN_PAYLOAD_BYTES: usize = 1024;
+const ENCRYPTED_MINISIGN_HEADER: &str = "untrusted comment: minisign encrypted secret key";
+const KEY_FORMAT_ERROR: &str = "protected updater key must be encrypted Minisign private-key text or exactly one Base64 envelope of that text";
 const SIGN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const TAURI_CLI_VERSION: &str = "tauri-cli 2.12.3";
 struct SigningSecrets {
@@ -29,6 +34,9 @@ impl SigningSecrets {
     }
 
     fn from_values(private_key: String, passphrase: String) -> Result<Self> {
+        // Own sensitive values immediately, even if the shape check rejects them.
+        let private_key = Zeroizing::new(private_key);
+        let passphrase = Zeroizing::new(passphrase);
         if private_key.trim().is_empty()
             || private_key.len() > MAX_PRIVATE_KEY_BYTES
             || private_key.contains('\0')
@@ -41,19 +49,52 @@ impl SigningSecrets {
                     .into(),
             );
         }
-        if !private_key.lines().next().is_some_and(|line| {
-            line.to_ascii_lowercase()
-                .contains("minisign encrypted secret key")
-        }) {
-            return Err(
-                "protected updater key must be encrypted Minisign private-key material".into(),
-            );
-        }
         Ok(Self {
-            private_key: Zeroizing::new(private_key),
-            passphrase: Zeroizing::new(passphrase),
+            private_key: normalize_encrypted_private_key(private_key)?,
+            passphrase,
         })
     }
+}
+
+/// Accept either the original encrypted Minisign text or ONE standard Base64
+/// transport envelope around the complete file, not a naked base64 key payload.
+/// Both transports still undergo the pinned production-root signature challenge.
+fn normalize_encrypted_private_key(value: Zeroizing<String>) -> Result<Zeroizing<String>> {
+    if is_encrypted_minisign_private_key(&value) {
+        return Ok(value);
+    }
+
+    // Only optional final line endings are allowed outside the Base64 envelope.
+    let envelope = value.trim_end_matches(['\r', '\n']);
+    if envelope.is_empty() || envelope.contains(['\r', '\n']) {
+        return Err(KEY_FORMAT_ERROR.into());
+    }
+    let decoded = Zeroizing::new(STANDARD.decode(envelope).map_err(|_| KEY_FORMAT_ERROR)?);
+    if decoded.len() > MAX_PRIVATE_KEY_BYTES {
+        return Err(KEY_FORMAT_ERROR.into());
+    }
+    let text = std::str::from_utf8(&decoded).map_err(|_| KEY_FORMAT_ERROR)?;
+    if !is_encrypted_minisign_private_key(text) {
+        return Err(KEY_FORMAT_ERROR.into());
+    }
+    Ok(Zeroizing::new(text.to_owned()))
+}
+
+/// Verify the exact encrypted private-key file shape without trusting its
+/// contents. Cryptographic validity is checked separately before signing.
+fn is_encrypted_minisign_private_key(value: &str) -> bool {
+    let mut lines = value.lines();
+    let (Some(header), Some(payload)) = (lines.next(), lines.next()) else {
+        return false;
+    };
+    if header != ENCRYPTED_MINISIGN_HEADER || lines.next().is_some() {
+        return false;
+    }
+    let decoded_payload = match STANDARD.decode(payload) {
+        Ok(bytes) => Zeroizing::new(bytes),
+        Err(_) => return false,
+    };
+    (MIN_MINISIGN_PAYLOAD_BYTES..=MAX_MINISIGN_PAYLOAD_BYTES).contains(&decoded_payload.len())
 }
 
 struct TemporarySigningKey {
@@ -316,31 +357,89 @@ mod tests {
 
     const PRIVATE_KEY: &str = "untrusted comment: minisign encrypted secret key\nRWQAAAA=";
 
-    #[test]
-    fn signing_secret_adapter_accepts_bounded_encrypted_key_pair() {
-        let secrets = SigningSecrets::from_values(PRIVATE_KEY.to_owned(), "passphrase".to_owned())
-            .expect("bounded encrypted key pair");
-        assert_eq!(secrets.private_key.len(), PRIVATE_KEY.len());
-        assert_eq!(secrets.passphrase.as_str(), "passphrase");
+    // Syntax-only synthetic encrypted key text, NEVER a signing credential.
+    fn encrypted_key_fixture() -> String {
+        format!(
+            "{ENCRYPTED_MINISIGN_HEADER}\n{}\n",
+            STANDARD.encode([0u8; 158])
+        )
     }
 
     #[test]
-    fn signing_secret_adapter_rejects_unencrypted_empty_and_oversized_values() {
-        assert!(SigningSecrets::from_values(String::new(), "passphrase".to_owned()).is_err());
-        assert!(
-            SigningSecrets::from_values("plain text".to_owned(), "passphrase".to_owned()).is_err()
+    fn signing_secret_adapter_accepts_raw_and_one_base64_envelope() {
+        let raw = encrypted_key_fixture();
+        let secrets = SigningSecrets::from_values(raw.clone(), "passphrase".to_owned())
+            .expect("raw encrypted Minisign text");
+        assert_eq!(secrets.private_key.as_str(), raw);
+        assert_eq!(secrets.passphrase.as_str(), "passphrase");
+
+        let wrapped = STANDARD.encode(raw.as_bytes());
+        let secrets = SigningSecrets::from_values(wrapped, "passphrase".to_owned())
+            .expect("single Base64 envelope of the full Minisign file");
+        assert_eq!(secrets.private_key.as_str(), raw);
+
+        let crlf = raw.replace('\n', "\r\n");
+        let wrapped_crlf = STANDARD.encode(crlf.as_bytes());
+        let secrets = SigningSecrets::from_values(wrapped_crlf, "passphrase".to_owned())
+            .expect("CRLF private key file, encoded as Base64");
+        assert_eq!(secrets.private_key.as_str(), crlf);
+    }
+
+    #[test]
+    fn signing_secret_adapter_rejects_other_secret_representations() {
+        let raw = encrypted_key_fixture();
+        let wrapped = STANDARD.encode(raw.as_bytes());
+        let public = format!(
+            "untrusted comment: minisign public key: synthetic\n{}",
+            STANDARD.encode([0u8; 42])
         );
-        assert!(SigningSecrets::from_values(PRIVATE_KEY.to_owned(), "  ".to_owned()).is_err());
+        for invalid in [
+            "plain text".to_owned(),
+            "RWQAAAA=".to_owned(),
+            STANDARD.encode(public.as_bytes()),
+            STANDARD.encode(wrapped.as_bytes()), // double-wrapped key
+            format!("wrong header\n{}", STANDARD.encode([0u8; 158])),
+            format!("{ENCRYPTED_MINISIGN_HEADER}\nnot-base64"),
+            format!(
+                "{ENCRYPTED_MINISIGN_HEADER}\n{}",
+                STANDARD.encode([0u8; 12])
+            ),
+            format!(
+                "{ENCRYPTED_MINISIGN_HEADER}\n{}\nEXTRA",
+                STANDARD.encode([0u8; 158])
+            ),
+            format!(
+                "{ENCRYPTED_MINISIGN_HEADER}\n{}\n\n",
+                STANDARD.encode([0u8; 158])
+            ),
+            format!("\u{feff}{raw}"),
+            format!("\n{raw}"),
+            format!("{}{}\n", STANDARD.encode(raw.as_bytes()), "garbage"),
+        ] {
+            assert!(
+                SigningSecrets::from_values(invalid, "passphrase".to_owned()).is_err(),
+                "invalid private-key representation must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn signing_secret_adapter_enforces_secret_bounds_and_cleanliness() {
+        let raw = encrypted_key_fixture();
+        assert!(SigningSecrets::from_values(String::new(), "passphrase".to_owned()).is_err());
+        assert!(SigningSecrets::from_values(raw.clone(), "  ".to_owned()).is_err());
+        assert!(SigningSecrets::from_values(format!("{raw}\0"), "passphrase".to_owned()).is_err());
+        assert!(SigningSecrets::from_values(raw.clone(), "pass\0phrase".to_owned()).is_err());
         assert!(
             SigningSecrets::from_values(
-                format!("{}{}", PRIVATE_KEY, "x".repeat(MAX_PRIVATE_KEY_BYTES)),
+                format!("{raw}{}", "x".repeat(MAX_PRIVATE_KEY_BYTES)),
                 "passphrase".to_owned(),
             )
             .is_err()
         );
         assert!(
             SigningSecrets::from_values(
-                PRIVATE_KEY.to_owned(),
+                STANDARD.encode(raw.as_bytes()),
                 "p".repeat(MAX_PASSPHRASE_BYTES + 1),
             )
             .is_err()
