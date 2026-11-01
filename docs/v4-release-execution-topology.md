@@ -70,15 +70,18 @@ The current encrypted v4 updater private key and its passphrase are supplied onl
 Environment secrets named `V4_TAURI_UPDATER_PRIVATE_KEY` and
 `V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD`, in environment `v4-production-release`. They are not
 repository or organization secrets and are absent from pull-request, fork, and general CI workflows.
-The workflow references them only in the Rust `sign-candidate` step. The private-key
-secret may be the original encrypted two-line Minisign text or **exactly one**
-standard Base64 envelope of that whole file. Rust bounds and normalizes those
-inputs in zeroizing memory, checks the encrypted-private-key header and inner
-payload, and writes only the validated original encrypted text beneath a
-run-owned direct child of `RUNNER_TEMP`. It still cryptographically verifies
-that private key against Key ID `19AABD2E7838818C`, rejecting public keys,
-nested encoding, unrelated keys and malformed material, then removes the
-temporary material on success or in the unconditional cleanup step after
+The workflow references them only in the Rust `sign-candidate` step. Pinned
+Tauri v2.12.3 `signer generate` writes an encrypted private key as **one
+standard Base64 envelope of the entire two-line internal `rsign encrypted
+secret key` box**. Its `signer sign --private-key-path` requires that outer
+Base64 as the on-disk file content. The Rust adapter accepts precisely that
+encoded file or the internal text (including legacy `minisign encrypted
+secret key`), validates the inner encrypted-private-key header/payload, then
+**always materializes canonical Tauri Base64 text** under a run-owned direct
+child of `RUNNER_TEMP`. It rejects public keys, detached signatures, nested
+Base64 and malformed content, and still verifies the private key against
+Key ID `19AABD2E7838818C` with a nonce challenge before signing. Temporary
+material is removed on success or by unconditional run-owned cleanup after
 failure. The passphrase is delivered to the bounded Tauri signer process
 environment, never as a command-line argument or artifact. An encoded wrapper
 is a transport format, not proof of signing authority.

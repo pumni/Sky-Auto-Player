@@ -48,16 +48,23 @@ cargo xtask updater-trust inventory
      `V4_TAURI_UPDATER_PRIVATE_KEY` in `v4-production-release`. Its passphrase is the separate
      Environment secret `V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD`. GitHub stores Environment secret
      values encrypted at rest; the values must never appear in logs, code, release notes, or chat.
-   - **Supported private-key secret transports:** complete original encrypted Minisign
-     UTF-8 text (first line `untrusted comment: minisign encrypted secret key`, then
-     its Base64 payload), OR one standard Base64 envelope encoding that **entire**
-     original UTF-8 file. The latter is a transport wrapper, not a replacement key
-     format or proof of the key's identity. The Rust signer removes at most one
-     outer encoding, validates the two-line encrypted-private-key structure, and
-     cryptographically challenges the canonical production public root. Public
-     keys, unencrypted private keys, nested encodings, missing headers, oversized
-     content and extra lines are rejected. Preserve all original key bytes,
-     original line endings, and Base64 padding. Never print either representation.
+   - **Pinned Tauri v2.12.3 private-key wire contract:** the output of
+     `tauri signer generate -w <offline-private-key-file>` is already **one
+     standard Base64 encoding of the entire two-line encrypted secret-key box**.
+     Tauri-generated inner text starts with
+     `untrusted comment: rsign encrypted secret key`, followed by its own
+     Base64 payload. A legacy encrypted
+     `untrusted comment: minisign encrypted secret key` box is accepted only
+     subject to the same exact bounds and cryptographic production-root challenge.
+     The GitHub Environment secret should contain the entire original
+     Tauri-generated Base64 string unchanged, including padding. For backward
+     compatibility the Rust adapter also accepts inner two-line text, then
+     encodes it back into the canonical Tauri Base64 file representation.
+     **`tauri signer sign --private-key-path` requires this outer Base64 in
+     the file**, not the decoded inner box; the adapter always writes the
+     canonical encoded file after validation. Reject public keys, detached
+     signatures, payload-only strings, nested encodings, malformed and
+     unencrypted material. Do not print any private-key representation.
    - Keep the independent encrypted offline backup outside the repository and workspace. An HSM or
      paid key service is not required.
 
@@ -95,12 +102,13 @@ cargo xtask updater-trust inventory
      bounded Windows runtime allowlist. The child receives only that runtime context, the temporary
      key path, and the passphrase required by Tauri; raw workflow secret names and unrelated tokens
      are removed.
-   - The Rust `sign-candidate` adapter bounds both values, validates the original
-     encrypted Minisign private-key file or exactly one whole-file Base64 envelope,
-     materializes only validated original encrypted material beneath the run-owned
-     direct `RUNNER_TEMP` directory, and independently verifies that the private
-     key matches Key ID `19AABD2E7838818C` before signing. The Base64 transport
-     does not bypass the nonce challenge or change the trusted public key.
+   - The Rust `sign-candidate` adapter bounds both values, validates the
+     encrypted Tauri `rsign` (or approved legacy `minisign`) two-line box
+     inside one outer Base64 layer, and writes **only the canonical outer Base64
+     representation Tauri CLI expects** beneath run-owned `RUNNER_TEMP`.
+     It then independently verifies that the private key matches Key ID
+     `19AABD2E7838818C` before signing. Neither a plausible header nor
+     Base64 padding substitutes for the nonce challenge.
    - The passphrase is supplied only to the bounded Tauri signer child process environment. It is
      never passed as a command-line argument. The signing command exits before `qualify-candidate`
      starts; that later qualification step receives neither updater secret.
@@ -174,14 +182,15 @@ cargo xtask updater-trust inventory
 ### Release-operator secret transport preflight
 
 Before a protected production dispatch, the authorized key custodian should
-verify the original encrypted private-key file and its passphrase locally as
-described in Section 3. Then configure `v4-production-release` with either the
-complete two-line encrypted Minisign file or standard Base64 of the complete
-file. Do not use the Base64 **second line alone**, the app's published
-Base64-encoded public key, or Base64 of a path. The secret representation is
-private and cannot be independently confirmed from GitHub source review.
-A CI test-key signing proof is not evidence that protected production secret
-delivery, the original private key or its passphrase works.
+verify the **original encoded Tauri `.key` file** and its passphrase locally
+as described in Section 3, then configure `v4-production-release` with the
+file's complete Base64 text (not the public `.pub`, updater `.sig`,
+decoded inner box, its Base64 second line alone, a nested encoding, or a
+path). The signer also accepts raw inner text only by re-encoding it into the
+Tauri-compatible file internally. The secret value is write-only and cannot
+be confirmed by reviewers from GitHub source or logs. Hosted disposable-key
+proof validates the adapter and Tauri wire contract, but it does **not**
+establish the live protected secret's correct private key or passphrase.
 
 Any format or private/public-key mismatch must stop before release publication;
 do not change the pinned updater public root or skip verification to satisfy CI.
