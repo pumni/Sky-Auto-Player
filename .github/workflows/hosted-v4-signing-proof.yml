@@ -95,7 +95,7 @@ jobs:
           "SKY_PROOF_VERSION=$version" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Prove production Rust key adapter with a disposable Tauri private key
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_signing::tests::hosted_disposable_tauri_private_key_roundtrip_through_adapter -- --ignored --exact --test-threads=1
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_signing::hosted_proof::hosted_disposable_tauri_private_key_roundtrip_through_adapter -- --ignored --exact --test-threads=1
 
       - name: Run Tauri signature proof positive and negative tests
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_trust::tests::hosted_signature_proof -- --test-threads=1
