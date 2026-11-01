@@ -571,7 +571,7 @@ mod tests {
             "temporary key file must contain outer Base64 for the Tauri CLI"
         );
 
-        let installer = directory.join(release_metadata::canonical_installer_name(TEST_VERSION));
+        let installer = directory.join(crate::release_metadata::canonical_installer_name(TEST_VERSION));
         fs::write(&installer, b"MZ disposable Tauri signing adapter proof fixture")
             .expect("create disposable signing fixture");
         let signed = process::capture_owned_timeout_runtime_only(
