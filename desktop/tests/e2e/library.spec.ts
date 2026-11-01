@@ -3,22 +3,12 @@ import { expectNoSeriousAccessibilityViolations, startSelectedSong } from './tes
 
 async function jumpToBuiltinPage(page: Page, target: number) {
   const trigger = page.locator('.builtin-pager-jump-trigger');
-  if ((await trigger.count()) > 0) {
-    await trigger.click();
-    const input = page.getByRole('textbox', { name: /Page number, from/ });
-    await input.fill(String(target));
-    await input.press('Enter');
-    await expect(trigger).toBeFocused();
-  } else {
-    const currentGrid = page.getByRole('grid', { name: /Built-in Songs, page \d+/ });
-    const label = await currentGrid.getAttribute('aria-label');
-    const currentPage = Number(label?.match(/page (\d+)/i)?.[1] ?? 1);
-    const direction = target > currentPage ? 'Next page' : 'Previous page';
-    for (let pageNumber = currentPage; pageNumber !== target;) {
-      await page.getByRole('button', { name: direction }).click();
-      pageNumber += target > currentPage ? 1 : -1;
-    }
-  }
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  const input = page.getByRole('textbox', { name: /Page number, from/ });
+  await input.fill(String(target));
+  await input.press('Enter');
+  await expect(trigger).toBeFocused();
   await expect(page.getByRole('grid', { name: `Built-in Songs, page ${target}` })).toBeVisible();
 }
 

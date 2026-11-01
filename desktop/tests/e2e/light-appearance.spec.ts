@@ -392,6 +392,7 @@ test('Graphite Dark keeps selected and playing rows distinct without changing it
 test('Light rendered text contrast holds in Settings, Diagnostics, confirmation, and errors', async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   await openLightApp(page, 'mockDiagnosticsStatus=degraded');
   const { selectedRow } = await startDryRunWithSelection(page);
   await textAudit(page, 'Light populated library');

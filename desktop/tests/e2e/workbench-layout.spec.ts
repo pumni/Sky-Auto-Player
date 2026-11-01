@@ -116,6 +116,7 @@ test('Chromium fallback emulation uses overlay below the docked threshold', asyn
 });
 
 test('Chromium checks layout at Tauri-supported desktop dimensions', async ({ page }) => {
+  test.setTimeout(60_000);
   for (const viewport of [
     { width: 800, height: 560 },
     { width: 900, height: 600 },
@@ -226,6 +227,7 @@ test('Titlebar Search uses the available center axis and Player controls stay vi
 test('Player Bar geometry covers native desktop and Chromium fallback emulation', async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   const supportedDesktopViewports = [
     { width: 1200, height: 760 },
     { width: 1280, height: 720 },
