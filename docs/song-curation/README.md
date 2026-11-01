@@ -24,15 +24,28 @@ To write the three files elsewhere, use
 
 ## Metric definitions
 
-- **Raw note count** counts entries in the source's serialized note array.
-- **Authored source events** count events emitted by the authoritative source
-  decoder, before physical-key deduplication.
-- **Decoded events** count canonical decoded source events.
-- **Authored distinct onsets** count unique source-layer onset timestamps.
-- **Unique physical time/key events** deduplicate canonical events by scheduled
-  onset and physical Sky key. Distinct `1KeyN` / `2KeyN` source layers may map
-  to the same physical key; those extras are separately reported as
-  `source_layer_collision_extra_event_count`.
+Inventory and comparison documents use schema version 2 and distinguish these
+stages:
+
+- `source_note_count` counts source note records: legacy `songNotes` entries
+  or note entries across versioned source tracks.
+- `decoded_canonical_event_count` counts events emitted by the authoritative
+  source decoder. It can exceed source note records when one source record
+  expands into multiple canonical events, such as layered legacy keys.
+- `unique_physical_time_key_count` counts unique scheduled onset / physical
+  Sky key pairs after physical-key mapping and deduplication. Distinct
+  `1KeyN` / `2KeyN` source layers may map to one physical key; those removed
+  extras are reported as `source_layer_collision_extra_event_count`.
+- `output_physical_note_count` counts notes in the planner's output schedule.
+  It can differ from unique physical source events because planner output
+  preserves its own compatibility and scheduling semantics.
+- `output_action_count` counts scheduled key actions. These are separate from
+  source notes, canonical events, physical events, and scheduled notes.
+- `authored_distinct_onset_count` counts distinct source-event onset times.
+
+Schema version 2 removes the former `authored_source_event_count` field,
+which duplicated source note count while implying a different stage.
+
 - **Physical onsets, chords, polyphony and fast repeats** are computed on the
   deduplicated physical event stream. Planner output actions and diagnostics
   are reported separately; these counts are not interchangeable.
@@ -62,7 +75,7 @@ cargo xtask song-audit compare `
 
 Both files are strict-decoded and passed through the existing planner. The
 report includes input SHA-256 values, source schema/version/pitch/tracks,
-raw and decoded event counts, physical-key collisions, planner losses,
+source note and decoded canonical event counts, physical-key collisions, planner losses,
 normalized highest-key melody and interval sketches, normalized onset and
 inter-onset timing sketches, phrase-break proxies, quartile coverage,
 chord density, maximum chord, initial-offset time/key overlap, and pitch
@@ -74,6 +87,12 @@ proxy; normalized timing can hide absolute tempo differences; quartiles do not
 identify intro, verse, chorus, or outro; and note overlap or interval
 similarity is not an acoustic comparison. The report deliberately marks
 musical fidelity unassessed and does not select a candidate.
+
+Interval edit similarity and normalized timing overlap each have a
+deterministic budget of 4,000,000 pairwise operations. If a signal would exceed
+its budget, comparison returns an error naming that signal and its input sizes;
+no comparison report is written for that invocation. Inputs within budget keep
+the exact comparison calculation.
 
 ## Human listening and provenance
 

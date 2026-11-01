@@ -11,9 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const INVENTORY_SCHEMA_VERSION: u32 = 1;
+const AUDIT_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_OUTPUT_DIR: &str = "docs/song-curation";
 const FAST_REPEAT_THRESHOLD_US: u64 = 16_667;
+const MAX_PAIRWISE_COMPARISON_CELLS: u128 = 4_000_000;
 const C_KEY_SEMITONES: [i16; 15] = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24];
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,9 +30,8 @@ struct AuditMetrics {
     source_track_count: usize,
     source_instruments: Vec<String>,
     parsing_status: String,
-    raw_note_count: usize,
-    authored_source_event_count: usize,
-    decoded_event_count: usize,
+    source_note_count: usize,
+    decoded_canonical_event_count: usize,
     authored_distinct_onset_count: usize,
     unique_physical_time_key_count: usize,
     physical_collision_group_count: usize,
@@ -191,7 +191,7 @@ fn run_inventory(root: &Path, args: &[String]) -> Result<()> {
     songs.sort_by(|left, right| compare_catalog_paths(&left.path, &right.path));
 
     let document = InventoryDocument {
-        schema_version: INVENTORY_SCHEMA_VERSION,
+        schema_version: AUDIT_SCHEMA_VERSION,
         manifest_sha256: manifest_sha256.clone(),
         active_song_count: manifest.songs.len(),
         songs,
@@ -249,7 +249,7 @@ fn run_compare(args: &[String]) -> Result<()> {
         &candidate_path,
         &candidate_bytes,
         candidate,
-    );
+    )?;
     let bytes = json_with_newline(&document)?;
     match option_path(&options, "output") {
         Some(path) => {
@@ -443,9 +443,8 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
         source_track_count: source.diagnostics.source_track_count,
         source_instruments,
         parsing_status: "pass".into(),
-        raw_note_count: source.diagnostics.source_note_count,
-        authored_source_event_count: source.diagnostics.source_note_count,
-        decoded_event_count: source.diagnostics.decoded_event_count,
+        source_note_count: source.diagnostics.source_note_count,
+        decoded_canonical_event_count: source.diagnostics.decoded_event_count,
         authored_distinct_onset_count: authored_onsets.len(),
         unique_physical_time_key_count: physical_notes.len(),
         physical_collision_group_count,
@@ -658,10 +657,10 @@ fn comparison_document(
     candidate_path: &Path,
     candidate_bytes: &[u8],
     candidate: SheetAnalysis,
-) -> ComparisonDocument {
+) -> Result<ComparisonDocument> {
     let interval_sequence_similarity =
-        sequence_similarity(&current.interval_sketch, &candidate.interval_sketch);
-    let note_overlap = normalized_note_overlap(&current, &candidate);
+        sequence_similarity(&current.interval_sketch, &candidate.interval_sketch)?;
+    let note_overlap = normalized_note_overlap(&current, &candidate)?;
     let initial_offset_alignment = initial_offset_alignment(&current, &candidate);
     let duration_ratio = match (
         current.metrics.active_duration_us,
@@ -693,8 +692,8 @@ fn comparison_document(
         .iter()
         .filter(|covered| **covered)
         .count();
-    ComparisonDocument {
-        schema_version: INVENTORY_SCHEMA_VERSION,
+    Ok(ComparisonDocument {
+        schema_version: AUDIT_SCHEMA_VERSION,
         current: comparison_sheet(current_path, current_bytes, current),
         candidate: comparison_sheet(candidate_path, candidate_bytes, candidate),
         comparison: ComparisonSignals {
@@ -725,7 +724,7 @@ fn comparison_document(
             "Quarter coverage does not identify intro, verse, chorus or outro; a person must inspect the same named sections and timestamps.".into(),
             "No official commercial audio is downloaded, embedded or compared by this tool.".into(),
         ],
-    }
+    })
 }
 
 fn comparison_sheet(path: &Path, bytes: &[u8], analysis: SheetAnalysis) -> ComparisonSheet {
@@ -742,10 +741,18 @@ fn comparison_sheet(path: &Path, bytes: &[u8], analysis: SheetAnalysis) -> Compa
     }
 }
 
-fn normalized_note_overlap(current: &SheetAnalysis, candidate: &SheetAnalysis) -> Option<f64> {
+fn normalized_note_overlap(
+    current: &SheetAnalysis,
+    candidate: &SheetAnalysis,
+) -> Result<Option<f64>> {
     if current.physical_notes.is_empty() || candidate.physical_notes.is_empty() {
-        return None;
+        return Ok(None);
     }
+    ensure_pairwise_comparison_budget(
+        "normalized timing note overlap",
+        current.physical_notes.len(),
+        candidate.physical_notes.len(),
+    )?;
     let current_first = current
         .physical_notes
         .first()
@@ -805,11 +812,11 @@ fn normalized_note_overlap(current: &SheetAnalysis, candidate: &SheetAnalysis) -
     }
     let precision = hits as f64 / candidate_positions.len() as f64;
     let recall = hits as f64 / current_positions.len() as f64;
-    Some(if precision + recall == 0.0 {
+    Ok(Some(if precision + recall == 0.0 {
         0.0
     } else {
         2.0 * precision * recall / (precision + recall)
-    })
+    }))
 }
 
 fn relative_position(time: u64, first: u64, span: u64) -> u64 {
@@ -895,9 +902,10 @@ fn aligned_pitch_offset(
     offsets.all(|offset| offset == first).then_some(first)
 }
 
-fn sequence_similarity(left: &[i16], right: &[i16]) -> f64 {
+fn sequence_similarity(left: &[i16], right: &[i16]) -> Result<f64> {
+    ensure_pairwise_comparison_budget("interval sequence similarity", left.len(), right.len())?;
     if left.is_empty() && right.is_empty() {
-        return 1.0;
+        return Ok(1.0);
     }
     let mut row = (0..=right.len()).collect::<Vec<usize>>();
     for (left_index, left_value) in left.iter().enumerate() {
@@ -912,7 +920,22 @@ fn sequence_similarity(left: &[i16], right: &[i16]) -> f64 {
     }
     let distance = row[right.len()];
     let denominator = left.len().max(right.len()).max(1);
-    1.0 - distance as f64 / denominator as f64
+    Ok(1.0 - distance as f64 / denominator as f64)
+}
+
+fn ensure_pairwise_comparison_budget(
+    signal: &str,
+    left_len: usize,
+    right_len: usize,
+) -> Result<()> {
+    let cells = (left_len as u128) * (right_len as u128);
+    if cells > MAX_PAIRWISE_COMPARISON_CELLS {
+        return Err(format!(
+            "{signal} requires {cells} pairwise operations ({left_len}x{right_len}), over the deterministic per-signal budget of {MAX_PAIRWISE_COMPARISON_CELLS}; no score was produced"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn inventory_csv(songs: &[InventorySong]) -> String {
@@ -932,9 +955,8 @@ fn inventory_csv(songs: &[InventorySong]) -> String {
         "source_title_metadata",
         "source_author_metadata",
         "parsing_status",
-        "raw_note_count",
-        "authored_source_event_count",
-        "decoded_event_count",
+        "source_note_count",
+        "decoded_canonical_event_count",
         "authored_distinct_onset_count",
         "unique_physical_time_key_count",
         "physical_collision_group_count",
@@ -993,9 +1015,8 @@ fn inventory_csv(songs: &[InventorySong]) -> String {
             display_option(m.source_title_metadata.as_deref()),
             display_option(m.source_author_metadata.as_deref()),
             m.parsing_status.clone(),
-            m.raw_note_count.to_string(),
-            m.authored_source_event_count.to_string(),
-            m.decoded_event_count.to_string(),
+            m.source_note_count.to_string(),
+            m.decoded_canonical_event_count.to_string(),
             m.authored_distinct_onset_count.to_string(),
             m.unique_physical_time_key_count.to_string(),
             m.physical_collision_group_count.to_string(),
@@ -1296,10 +1317,12 @@ mod tests {
     fn layer_collisions_and_zero_duration_are_reported_without_dropping_source_events() {
         let bytes = br#"{"name":"Zero","author":"Arranger","songNotes":[{"time":0,"key":"Key0","l":3},{"time":0,"key":"Key0"}]}"#;
         let analysis = analyze_sheet(bytes, "zero").expect("valid flat sheet");
-        assert_eq!(analysis.metrics.raw_note_count, 2);
-        assert_eq!(analysis.metrics.decoded_event_count, 3);
+        assert_eq!(analysis.metrics.source_note_count, 2);
+        assert_eq!(analysis.metrics.decoded_canonical_event_count, 3);
         assert_eq!(analysis.metrics.authored_distinct_onset_count, 1);
         assert_eq!(analysis.metrics.unique_physical_time_key_count, 1);
+        assert_eq!(analysis.metrics.output_physical_note_count, Some(2));
+        assert_eq!(analysis.metrics.output_action_count, Some(2));
         assert_eq!(analysis.metrics.physical_collision_extra_event_count, 2);
         assert_eq!(analysis.metrics.source_layer_collision_extra_event_count, 1);
         assert_eq!(analysis.metrics.active_duration_us, Some(0));
@@ -1330,8 +1353,8 @@ mod tests {
         let bytes = serde_json::to_vec(&value).unwrap();
         let analysis = analyze_sheet(&bytes, "tracks").expect("valid multi-track sheet");
         assert_eq!(analysis.metrics.source_track_count, 2);
-        assert_eq!(analysis.metrics.raw_note_count, 4);
-        assert_eq!(analysis.metrics.decoded_event_count, 4);
+        assert_eq!(analysis.metrics.source_note_count, 4);
+        assert_eq!(analysis.metrics.decoded_canonical_event_count, 4);
         assert!(analysis.metrics.unique_physical_time_key_count <= 4);
         assert_eq!(
             analysis.metrics.multi_track_lossy_in_15_key_planner,
@@ -1348,8 +1371,8 @@ mod tests {
 
     #[test]
     fn sequence_metrics_and_serialized_comparisons_are_deterministic() {
-        assert_eq!(sequence_similarity(&[2, -2, 1], &[2, -2, 1]), 1.0);
-        assert!((sequence_similarity(&[2, -2, 1], &[5, -2, 1]) - 2.0 / 3.0).abs() < 1e-12);
+        assert_eq!(sequence_similarity(&[2, -2, 1], &[2, -2, 1]).unwrap(), 1.0);
+        assert!((sequence_similarity(&[2, -2, 1], &[5, -2, 1]).unwrap() - 2.0 / 3.0).abs() < 1e-12);
         let bytes = br#"{"name":"Stable","songNotes":[{"time":100,"key":"Key0"},{"time":200,"key":"Key1"}]}"#;
         let current = analyze_sheet(bytes, "stable").unwrap();
         let candidate = analyze_sheet(bytes, "stable").unwrap();
@@ -1360,7 +1383,8 @@ mod tests {
             Path::new("candidate.json"),
             bytes,
             candidate,
-        );
+        )
+        .unwrap();
         let current = analyze_sheet(bytes, "stable").unwrap();
         let candidate = analyze_sheet(bytes, "stable").unwrap();
         let second = comparison_document(
@@ -1370,7 +1394,8 @@ mod tests {
             Path::new("candidate.json"),
             bytes,
             candidate,
-        );
+        )
+        .unwrap();
         assert_eq!(
             json_with_newline(&first).unwrap(),
             json_with_newline(&second).unwrap()
@@ -1380,6 +1405,32 @@ mod tests {
                 .comparison
                 .current_events_subset_of_candidate_after_initial_offset
         );
+        assert_eq!(first.comparison.normalized_timing_note_overlap, Some(1.0));
+    }
+
+    #[test]
+    fn pairwise_comparison_budget_rejects_large_inputs_before_scoring() {
+        let large_sequence = vec![0; 2_001];
+        let interval_error = sequence_similarity(&large_sequence, &large_sequence)
+            .unwrap_err()
+            .to_string();
+        assert!(interval_error.contains("interval sequence similarity"));
+        assert!(interval_error.contains("4004001"));
+        assert!(interval_error.contains("4000000"));
+
+        let notes = (0..2_001)
+            .map(|index| serde_json::json!({"time": index * 100, "key": "Key0"}))
+            .collect::<Vec<_>>();
+        let bytes = serde_json::to_vec(&serde_json::json!({"songNotes": notes})).unwrap();
+        let analysis = analyze_sheet(&bytes, "large").expect("synthetic large flat sheet");
+        assert_eq!(analysis.metrics.source_note_count, 2_001);
+        assert_eq!(analysis.metrics.unique_physical_time_key_count, 2_001);
+        let timing_error = normalized_note_overlap(&analysis, &analysis)
+            .unwrap_err()
+            .to_string();
+        assert!(timing_error.contains("normalized timing note overlap"));
+        assert!(timing_error.contains("4004001"));
+        assert!(timing_error.contains("4000000"));
     }
 
     #[test]

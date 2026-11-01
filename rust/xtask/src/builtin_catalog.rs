@@ -5,7 +5,7 @@ use sky_app_core::catalog::{
     BuiltinCatalogManifest, BuiltinSongManifestEntry, RetiredBuiltinSong, SUPPORTED_EXTENSIONS,
     StableSongId,
 };
-use sky_app_core::song::parse_song_json;
+use sky_app_core::song::{decode_song_json, parse_song_json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,6 +103,12 @@ pub(super) fn verified_sources(
             .unwrap_or(&song.title);
         parse_song_json(&bytes, fallback)
             .map_err(|error| format!("built-in song is not parseable ({}): {error}", song.path))?;
+        decode_song_json(&bytes, fallback).map_err(|error| {
+            format!(
+                "built-in song source fails strict decode ({}): {error}",
+                song.path
+            )
+        })?;
         sources.push(VerifiedCatalogSource {
             id: song.id.clone(),
             path: song.path.clone(),
@@ -579,6 +585,30 @@ mod tests {
         assert!(
             verify(&root).is_err(),
             "invalid source events must fail parseability"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_verifier_rejects_invalid_authoritative_versioned_events_with_valid_legacy_projection()
+     {
+        let root = temp_root("authoritative-versioned-source");
+        let hybrid = br#"{
+            "type":"composed","version":5,"bpm":120,
+            "data":{"appName":"Sky"},"pitch":"C","columnTempos":[0],
+            "tracks":[{"instrument":{"name":"Piano"},"notes":[[0,60,0]]}],
+            "songNotes":[{"time":0,"key":"Key0"}]
+        }"#;
+        assert!(parse_song_json(hybrid, "hybrid").is_ok());
+        assert!(decode_song_json(hybrid, "hybrid").is_err());
+        test_catalog(
+            &root,
+            &[("0123456789abcdef0123456789abcdef", "hybrid.json", hybrid)],
+        );
+
+        assert!(
+            verify(&root).is_err(),
+            "matching legacy projection and manifest hash must not mask invalid versioned tracks"
         );
         let _ = fs::remove_dir_all(root);
     }
