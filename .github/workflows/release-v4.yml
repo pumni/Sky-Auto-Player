@@ -299,7 +299,7 @@ jobs:
         run: cargo xtask release-v4 cleanup --state-root $env:V4_RELEASE_STATE_ROOT
 
   attest:
-    name: Verify signed handoff, scan exact bytes on hosted Linux, and publish OIDC attestations
+    name: Verify qualified handoff and publish OIDC attestations
     needs: [prepare, sign_qualify]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
