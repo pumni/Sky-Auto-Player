@@ -1507,8 +1507,17 @@ mod tests {
         let scanner = "require_eicar_detection(sample)\nrequire_eicar_detection(archive)\n\"--scan-archive=yes\"";
         assert!(hosted_nsis_scan_contract(workflow, scanner).is_ok());
         assert!(hosted_nsis_scan_contract(&workflow.replace(" nsis", ""), scanner).is_err());
-        assert!(hosted_nsis_scan_contract(workflow, &scanner.replace("require_eicar_detection(archive)", "")).is_err());
-        assert!(hosted_nsis_scan_contract(workflow, &scanner.replace("\"--scan-archive=yes\"", "")).is_err());
+        assert!(
+            hosted_nsis_scan_contract(
+                workflow,
+                &scanner.replace("require_eicar_detection(archive)", "")
+            )
+            .is_err()
+        );
+        assert!(
+            hosted_nsis_scan_contract(workflow, &scanner.replace("\"--scan-archive=yes\"", ""))
+                .is_err()
+        );
     }
 
     #[test]
