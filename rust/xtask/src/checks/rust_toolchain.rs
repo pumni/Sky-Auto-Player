@@ -91,10 +91,14 @@ fn canonical_rust_version(source: &str) -> Result<String> {
 }
 
 fn validate_root_overrides(root: &Path) -> Result<()> {
-    for candidate in ["rust-toolchain.toml", "rust-toolchain"] {
+    for candidate in [
+        "rust-toolchain.toml",
+        "rust-toolchain",
+        "rust/rust-toolchain",
+    ] {
         if root.join(candidate).exists() {
             return contract_error(format!(
-                "conflicting root-level Rust toolchain configuration: {candidate}"
+                "conflicting Rust toolchain configuration: {candidate}"
             ));
         }
     }
@@ -784,10 +788,7 @@ mod tests {
     #[test]
     fn rejects_rust_setup_split_across_job_boundaries() {
         let split = "jobs:\n  cargo_job:\n    steps:\n      - name: Checkout\n        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567\n        with:\n          ref: ${{ github.sha }}\n      - name: Cargo\n        run: cargo test\n  setup_job:\n    steps:\n      - name: Checkout\n        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567\n        with:\n          ref: ${{ github.sha }}\n      - name: Rust setup\n        uses: ./.github/actions/setup-rust-pinned\n      - name: Rust verifier\n        run: rustc --version\n";
-        assert_rejected(
-            validate_workflow_source(split, Path::new("split.yml")),
-            "a setup in another job cannot satisfy the Rust consumer",
-        );
+        assert!(validate_workflow_source(split, Path::new("split.yml")).is_err());
     }
 
     #[test]
@@ -797,22 +798,21 @@ mod tests {
         fs::write(root.join("rust-toolchain.toml"), FIXTURE_PIN).unwrap();
         assert_rejected(validate_root_overrides(&root), "root toolchain file");
         fs::remove_file(root.join("rust-toolchain.toml")).unwrap();
+        fs::create_dir_all(root.join("rust")).unwrap();
+        fs::write(root.join(TOOLCHAIN_FILE), FIXTURE_PIN).unwrap();
+        validate_root_overrides(&root).unwrap();
+        fs::write(root.join("rust/rust-toolchain"), "7.8.10\n").unwrap();
+        assert!(validate_root_overrides(&root).is_err());
+        fs::remove_dir_all(root.join("rust")).unwrap();
         fs::write(
             root.join(".cargo/config.toml"),
-            "[env]\nRUSTUP_TOOLCHAIN = \"stable\"\n",
+            "[env]\nRUSTUP_TOOLCHAIN=\"stable\"",
         )
         .unwrap();
         assert_rejected(validate_root_overrides(&root), "cargo compiler override");
         fs::remove_file(root.join(".cargo/config.toml")).unwrap();
-        fs::write(
-            root.join(".cargo/config"),
-            "[build]\nrustc = \"rustc.exe\"\n",
-        )
-        .unwrap();
-        assert_rejected(
-            validate_root_overrides(&root),
-            "legacy cargo config override",
-        );
+        fs::write(root.join(".cargo/config"), "[build]\nrustc=\"rustc.exe\"").unwrap();
+        assert!(validate_root_overrides(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

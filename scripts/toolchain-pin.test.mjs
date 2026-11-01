@@ -51,6 +51,17 @@ test('rejects malformed, duplicate, floating, and conflicting Rust pin sources',
   }
 });
 
+test('rejects a contradictory sibling legacy Rustup file beside the canonical TOML pin', () => {
+  const root = fixtureRoot();
+  try {
+    assert.equal(readPins(root, {}).rust.channel, '7.8.9');
+    writeFileSync(join(root, 'rust/rust-toolchain'), '7.8.10\n');
+    assert.throws(() => readPins(root, {}), /legacy Rust toolchain file can shadow/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('rejects root Cargo compiler overrides and malformed Bun pins', () => {
   const root = fixtureRoot();
   try {

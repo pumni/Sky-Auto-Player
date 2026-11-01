@@ -112,6 +112,12 @@ export function readPins(root = repositoryRoot, environment = process.env) {
   for (const path of ['rust-toolchain.toml', 'rust-toolchain']) {
     if (existsSync(resolve(root, path))) invalid(`Conflicting root Rust toolchain file: ${path}`);
   }
+  const legacyRustToolchainPath = 'rust/rust-toolchain';
+  if (existsSync(resolve(root, legacyRustToolchainPath))) {
+    invalid(
+      `Conflicting legacy Rust toolchain file can shadow ${rustToolchainPath}: ${legacyRustToolchainPath}`,
+    );
+  }
   for (const configName of ['.cargo/config.toml', '.cargo/config']) {
     const cargoConfig = resolve(root, configName);
     if (existsSync(cargoConfig)) {
