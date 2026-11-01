@@ -94,8 +94,7 @@ fn is_encrypted_minisign_private_key(value: &str) -> bool {
         Ok(bytes) => Zeroizing::new(bytes),
         Err(_) => return false,
     };
-    (MIN_MINISIGN_PAYLOAD_BYTES..=MAX_MINISIGN_PAYLOAD_BYTES)
-        .contains(&decoded_payload.len())
+    (MIN_MINISIGN_PAYLOAD_BYTES..=MAX_MINISIGN_PAYLOAD_BYTES).contains(&decoded_payload.len())
 }
 
 struct TemporarySigningKey {
@@ -360,7 +359,10 @@ mod tests {
 
     // Syntax-only synthetic encrypted key text, NEVER a signing credential.
     fn encrypted_key_fixture() -> String {
-        format!("{ENCRYPTED_MINISIGN_HEADER}\n{}\n", STANDARD.encode([0u8; 158]))
+        format!(
+            "{ENCRYPTED_MINISIGN_HEADER}\n{}\n",
+            STANDARD.encode([0u8; 158])
+        )
     }
 
     #[test]
@@ -398,9 +400,18 @@ mod tests {
             STANDARD.encode(wrapped.as_bytes()), // double-wrapped key
             format!("wrong header\n{}", STANDARD.encode([0u8; 158])),
             format!("{ENCRYPTED_MINISIGN_HEADER}\nnot-base64"),
-            format!("{ENCRYPTED_MINISIGN_HEADER}\n{}", STANDARD.encode([0u8; 12])),
-            format!("{ENCRYPTED_MINISIGN_HEADER}\n{}\nEXTRA", STANDARD.encode([0u8; 158])),
-            format!("{ENCRYPTED_MINISIGN_HEADER}\n{}\n\n", STANDARD.encode([0u8; 158])),
+            format!(
+                "{ENCRYPTED_MINISIGN_HEADER}\n{}",
+                STANDARD.encode([0u8; 12])
+            ),
+            format!(
+                "{ENCRYPTED_MINISIGN_HEADER}\n{}\nEXTRA",
+                STANDARD.encode([0u8; 158])
+            ),
+            format!(
+                "{ENCRYPTED_MINISIGN_HEADER}\n{}\n\n",
+                STANDARD.encode([0u8; 158])
+            ),
             format!("\u{feff}{raw}"),
             format!("\n{raw}"),
             format!("{}{}\n", STANDARD.encode(raw.as_bytes()), "garbage"),
@@ -419,14 +430,20 @@ mod tests {
         assert!(SigningSecrets::from_values(raw.clone(), "  ".to_owned()).is_err());
         assert!(SigningSecrets::from_values(format!("{raw}\0"), "passphrase".to_owned()).is_err());
         assert!(SigningSecrets::from_values(raw.clone(), "pass\0phrase".to_owned()).is_err());
-        assert!(SigningSecrets::from_values(
-            format!("{raw}{}", "x".repeat(MAX_PRIVATE_KEY_BYTES)),
-            "passphrase".to_owned(),
-        ).is_err());
-        assert!(SigningSecrets::from_values(
-            STANDARD.encode(raw.as_bytes()),
-            "p".repeat(MAX_PASSPHRASE_BYTES + 1),
-        ).is_err());
+        assert!(
+            SigningSecrets::from_values(
+                format!("{raw}{}", "x".repeat(MAX_PRIVATE_KEY_BYTES)),
+                "passphrase".to_owned(),
+            )
+            .is_err()
+        );
+        assert!(
+            SigningSecrets::from_values(
+                STANDARD.encode(raw.as_bytes()),
+                "p".repeat(MAX_PASSPHRASE_BYTES + 1),
+            )
+            .is_err()
+        );
     }
 
     #[test]
