@@ -10,8 +10,8 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
-mod recovery;
 mod malware;
+mod recovery;
 
 pub const REPOSITORY: &str = "pumni/Sky-Auto-Player";
 const RELEASE_WORKFLOW_REF: &str =
