@@ -70,11 +70,18 @@ The current encrypted v4 updater private key and its passphrase are supplied onl
 Environment secrets named `V4_TAURI_UPDATER_PRIVATE_KEY` and
 `V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD`, in environment `v4-production-release`. They are not
 repository or organization secrets and are absent from pull-request, fork, and general CI workflows.
-The workflow references them only in the Rust `sign-candidate` step. Rust validates bounds and the
-encrypted Minisign format, writes the encrypted key beneath a run-owned direct child of
-`RUNNER_TEMP`, verifies that key against Key ID `19AABD2E7838818C`, and removes the temporary
-material on success or in the unconditional cleanup step after failure. The passphrase is delivered
-to the bounded Tauri signer process environment, never as a command-line argument or artifact.
+The workflow references them only in the Rust `sign-candidate` step. The private-key
+secret may be the original encrypted two-line Minisign text or **exactly one**
+standard Base64 envelope of that whole file. Rust bounds and normalizes those
+inputs in zeroizing memory, checks the encrypted-private-key header and inner
+payload, and writes only the validated original encrypted text beneath a
+run-owned direct child of `RUNNER_TEMP`. It still cryptographically verifies
+that private key against Key ID `19AABD2E7838818C`, rejecting public keys,
+nested encoding, unrelated keys and malformed material, then removes the
+temporary material on success or in the unconditional cleanup step after
+failure. The passphrase is delivered to the bounded Tauri signer process
+environment, never as a command-line argument or artifact. An encoded wrapper
+is a transport format, not proof of signing authority.
 
 The `sign-candidate` command exits before qualification starts. Its later Rust and PowerShell helper
 processes are launched without the updater secret environment variables. The separate
