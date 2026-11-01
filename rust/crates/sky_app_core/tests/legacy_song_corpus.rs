@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-const EXPECTED_SONG_COUNT: usize = 106;
+const EXPECTED_HISTORICAL_SONG_COUNT: usize = 106;
 
 #[derive(Deserialize)]
 struct BaselineFingerprint {
@@ -24,47 +24,23 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn all_builtin_songs_match_the_pinned_legacy_schedule_baseline() {
+fn frozen_historical_songs_match_the_pinned_legacy_schedule_baseline() {
     let expected: BTreeMap<String, BaselineFingerprint> = serde_json::from_slice(include_bytes!(
         "../../../../tests/fixtures/song_planning/legacy_schedule_fingerprints.json"
     ))
     .expect("valid pinned legacy schedule fingerprints");
-    assert_eq!(expected.len(), EXPECTED_SONG_COUNT);
+    assert_eq!(expected.len(), EXPECTED_HISTORICAL_SONG_COUNT);
 
     let songs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../songs")
         .canonicalize()
         .expect("repository songs directory");
-    let mut paths = fs::read_dir(&songs_dir)
-        .expect("read songs directory")
-        .map(|entry| entry.expect("read song entry").path())
-        .filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    matches!(
-                        extension.to_ascii_lowercase().as_str(),
-                        "json" | "skysheet" | "txt"
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    assert_eq!(paths.len(), EXPECTED_SONG_COUNT);
-
     // Frozen representative settings: 60 FPS, one hold frame, zero user margin, no tempo scaling.
     let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
         .expect("valid frozen compatibility timing policy");
-    for path in paths {
+    for (relative, baseline) in &expected {
+        let path = songs_dir.join(relative);
         let bytes = fs::read(&path).expect("read built-in song");
-        let relative = path
-            .strip_prefix(&songs_dir)
-            .expect("song is directly inside songs")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let baseline = expected
-            .get(&relative)
-            .unwrap_or_else(|| panic!("missing baseline fingerprint for {relative}"));
         assert_eq!(
             sha256_hex(&bytes),
             baseline.input_sha256,

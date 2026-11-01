@@ -21,6 +21,7 @@ invariants that must not be discarded because an implementation differs.
 - **Song source schemas and canonical decoding:** [song source decoding](song-source-decoding.md).
 - **Song numeric compatibility and maintenance inventory:** [numeric compatibility](song-numeric-compatibility.md).
 - **Canonical events to Sky Piano plans:** [song planning](song-planning.md).
+- **Built-in song audit and candidate review:** [song curation audit](song-curation/README.md).
 - **Packaging and updater:** [distribution](distribution-and-update.md),
   [Tauri packaging](v4-tauri-packaging.md).
 - **Release operations:** [release authority](v4-release-authority.md),
