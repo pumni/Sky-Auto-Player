@@ -104,9 +104,7 @@ fn is_encrypted_private_key_text(value: &str) -> bool {
     let (Some(header), Some(payload)) = (lines.next(), lines.next()) else {
         return false;
     };
-    if !matches!(header, TAURI_RSIGN_HEADER | LEGACY_MINISIGN_HEADER)
-        || lines.next().is_some()
-    {
+    if !matches!(header, TAURI_RSIGN_HEADER | LEGACY_MINISIGN_HEADER) || lines.next().is_some() {
         return false;
     }
     let decoded_payload = match STANDARD.decode(payload) {
@@ -385,7 +383,10 @@ mod tests {
 
     // Syntax-only 158-byte encrypted boxes; these can never sign a real update.
     fn encrypted_key_fixture(header: &str) -> String {
-        format!("{header}\n{}\n", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES]))
+        format!(
+            "{header}\n{}\n",
+            STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])
+        )
     }
 
     #[test]
@@ -393,11 +394,9 @@ mod tests {
         for header in [TAURI_RSIGN_HEADER, LEGACY_MINISIGN_HEADER] {
             let raw = encrypted_key_fixture(header);
             let canonical_file_bytes = STANDARD.encode(raw.as_bytes());
-            let secrets = SigningSecrets::from_values(
-                canonical_file_bytes.clone(),
-                "passphrase".to_owned(),
-            )
-            .expect("outer Base64 from pinned Tauri signer");
+            let secrets =
+                SigningSecrets::from_values(canonical_file_bytes.clone(), "passphrase".to_owned())
+                    .expect("outer Base64 from pinned Tauri signer");
             assert!(
                 secrets.private_key.as_str() == canonical_file_bytes,
                 "outer Base64 must remain the signer-file representation"
@@ -442,11 +441,20 @@ mod tests {
             STANDARD.encode(public.as_bytes()),
             STANDARD.encode(tauri_signature.as_bytes()),
             STANDARD.encode(wrapped.as_bytes()), // nested Base64 is forbidden
-            format!("wrong header\n{}", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])),
+            format!(
+                "wrong header\n{}",
+                STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])
+            ),
             format!("{TAURI_RSIGN_HEADER}\nnot-base64"),
             format!("{TAURI_RSIGN_HEADER}\n{}", STANDARD.encode([0u8; 12])),
-            format!("{TAURI_RSIGN_HEADER}\n{}\nEXTRA", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])),
-            format!("{TAURI_RSIGN_HEADER}\n{}\n\n", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])),
+            format!(
+                "{TAURI_RSIGN_HEADER}\n{}\nEXTRA",
+                STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])
+            ),
+            format!(
+                "{TAURI_RSIGN_HEADER}\n{}\n\n",
+                STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])
+            ),
             format!("\u{feff}{raw}"),
             format!("\n{raw}"),
             format!("{}{}\n", STANDARD.encode(raw.as_bytes()), "garbage"),
