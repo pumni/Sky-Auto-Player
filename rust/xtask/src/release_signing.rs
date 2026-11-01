@@ -13,10 +13,13 @@ const PRIVATE_KEY_SECRET: &str = "V4_TAURI_UPDATER_PRIVATE_KEY";
 const PASSPHRASE_SECRET: &str = "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD";
 const MAX_PRIVATE_KEY_BYTES: usize = 32 * 1024;
 const MAX_PASSPHRASE_BYTES: usize = 4096;
-const MIN_MINISIGN_PAYLOAD_BYTES: usize = 64;
-const MAX_MINISIGN_PAYLOAD_BYTES: usize = 1024;
-const ENCRYPTED_MINISIGN_HEADER: &str = "untrusted comment: minisign encrypted secret key";
-const KEY_FORMAT_ERROR: &str = "protected updater key must be encrypted Minisign private-key text or exactly one Base64 envelope of that text";
+// Pinned Tauri v2.12.3 uses a fixed 158-byte encrypted Minisign secret-key box.
+// The CLI generates "rsign" text but legacy encrypted "minisign" boxes can
+// still be parsed, subject to the same production-root cryptographic challenge.
+const ENCRYPTED_KEY_BYTES: usize = 158;
+const TAURI_RSIGN_HEADER: &str = "untrusted comment: rsign encrypted secret key";
+const LEGACY_MINISIGN_HEADER: &str = "untrusted comment: minisign encrypted secret key";
+const KEY_FORMAT_ERROR: &str = "protected updater key must contain one Tauri-compatible Base64 envelope of an encrypted secret-key file, or the exact two-line inner text";
 const SIGN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const TAURI_CLI_VERSION: &str = "tauri-cli 2.12.3";
 struct SigningSecrets {
@@ -50,21 +53,26 @@ impl SigningSecrets {
             );
         }
         Ok(Self {
-            private_key: normalize_encrypted_private_key(private_key)?,
+            private_key: normalize_tauri_private_key(private_key)?,
             passphrase,
         })
     }
 }
 
-/// Accept either the original encrypted Minisign text or ONE standard Base64
-/// transport envelope around the complete file, not a naked base64 key payload.
-/// Both transports still undergo the pinned production-root signature challenge.
-fn normalize_encrypted_private_key(value: Zeroizing<String>) -> Result<Zeroizing<String>> {
-    if is_encrypted_minisign_private_key(&value) {
-        return Ok(value);
+/// Pinned Tauri v2.12.3 signer generation returns Base64 of the *entire*
+/// two-line encrypted private-key box, and `signer sign --private-key-path`
+/// reads a file containing that Base64 string (not the decoded inner text).
+/// Accept either canonical Tauri Base64 or the two-line inner text, but ALWAYS
+/// return the canonical outer Base64 for materialization. Never recursively
+/// decode or relax the production-root cryptographic challenge.
+fn normalize_tauri_private_key(value: Zeroizing<String>) -> Result<Zeroizing<String>> {
+    if is_encrypted_private_key_text(&value) {
+        return canonical_tauri_private_key_file(&value);
     }
 
-    // Only optional final line endings are allowed outside the Base64 envelope.
+    // A transported key is precisely one standard Base64 line, optionally
+    // followed by terminal newlines. Other whitespace and nested envelopes
+    // are rejected before any secret can reach the Tauri signer.
     let envelope = value.trim_end_matches(['\r', '\n']);
     if envelope.is_empty() || envelope.contains(['\r', '\n']) {
         return Err(KEY_FORMAT_ERROR.into());
@@ -73,28 +81,39 @@ fn normalize_encrypted_private_key(value: Zeroizing<String>) -> Result<Zeroizing
     if decoded.len() > MAX_PRIVATE_KEY_BYTES {
         return Err(KEY_FORMAT_ERROR.into());
     }
-    let text = std::str::from_utf8(&decoded).map_err(|_| KEY_FORMAT_ERROR)?;
-    if !is_encrypted_minisign_private_key(text) {
-        return Err(KEY_FORMAT_ERROR.into());
-    }
-    Ok(Zeroizing::new(text.to_owned()))
+    let inner = std::str::from_utf8(&decoded).map_err(|_| KEY_FORMAT_ERROR)?;
+    canonical_tauri_private_key_file(inner)
 }
 
-/// Verify the exact encrypted private-key file shape without trusting its
-/// contents. Cryptographic validity is checked separately before signing.
-fn is_encrypted_minisign_private_key(value: &str) -> bool {
+/// Canonicalize only the line separators, not the encrypted payload. Minisign
+/// box metadata is untrusted; the original private key must still prove it
+/// matches the compiled production public key before the installer is signed.
+fn canonical_tauri_private_key_file(inner: &str) -> Result<Zeroizing<String>> {
+    if !is_encrypted_private_key_text(inner) {
+        return Err(KEY_FORMAT_ERROR.into());
+    }
+    let mut lines = inner.lines();
+    let header = lines.next().ok_or(KEY_FORMAT_ERROR)?;
+    let payload = lines.next().ok_or(KEY_FORMAT_ERROR)?;
+    let canonical = Zeroizing::new(format!("{header}\n{payload}\n"));
+    Ok(Zeroizing::new(STANDARD.encode(canonical.as_bytes())))
+}
+
+fn is_encrypted_private_key_text(value: &str) -> bool {
     let mut lines = value.lines();
     let (Some(header), Some(payload)) = (lines.next(), lines.next()) else {
         return false;
     };
-    if header != ENCRYPTED_MINISIGN_HEADER || lines.next().is_some() {
+    if !matches!(header, TAURI_RSIGN_HEADER | LEGACY_MINISIGN_HEADER)
+        || lines.next().is_some()
+    {
         return false;
     }
     let decoded_payload = match STANDARD.decode(payload) {
         Ok(bytes) => Zeroizing::new(bytes),
         Err(_) => return false,
     };
-    (MIN_MINISIGN_PAYLOAD_BYTES..=MAX_MINISIGN_PAYLOAD_BYTES).contains(&decoded_payload.len())
+    decoded_payload.len() == ENCRYPTED_KEY_BYTES
 }
 
 struct TemporarySigningKey {
@@ -362,77 +381,86 @@ fn cleanup_run_material_at(runner_temp: &Path, run_id: &str, run_attempt: u32) -
 mod tests {
     use super::*;
 
-    const PRIVATE_KEY: &str = "untrusted comment: minisign encrypted secret key\nRWQAAAA=";
+    const PRIVATE_KEY: &str = "untrusted comment: rsign encrypted secret key\nRWQAAAA=";
 
-    // Syntax-only synthetic encrypted key text, NEVER a signing credential.
-    fn encrypted_key_fixture() -> String {
-        format!(
-            "{ENCRYPTED_MINISIGN_HEADER}\n{}\n",
-            STANDARD.encode([0u8; 158])
-        )
+    // Syntax-only 158-byte encrypted boxes; these can never sign a real update.
+    fn encrypted_key_fixture(header: &str) -> String {
+        format!("{header}\n{}\n", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES]))
     }
 
     #[test]
-    fn signing_secret_adapter_accepts_raw_and_one_base64_envelope() {
-        let raw = encrypted_key_fixture();
-        let secrets = SigningSecrets::from_values(raw.clone(), "passphrase".to_owned())
-            .expect("raw encrypted Minisign text");
-        assert_eq!(secrets.private_key.as_str(), raw);
-        assert_eq!(secrets.passphrase.as_str(), "passphrase");
+    fn signing_secret_adapter_matches_pinned_tauri_base64_file_contract() {
+        for header in [TAURI_RSIGN_HEADER, LEGACY_MINISIGN_HEADER] {
+            let raw = encrypted_key_fixture(header);
+            let canonical_file_bytes = STANDARD.encode(raw.as_bytes());
+            let secrets = SigningSecrets::from_values(
+                canonical_file_bytes.clone(),
+                "passphrase".to_owned(),
+            )
+            .expect("outer Base64 from pinned Tauri signer");
+            assert!(
+                secrets.private_key.as_str() == canonical_file_bytes,
+                "outer Base64 must remain the signer-file representation"
+            );
+            assert_eq!(secrets.passphrase.as_str(), "passphrase");
 
-        let wrapped = STANDARD.encode(raw.as_bytes());
-        let secrets = SigningSecrets::from_values(wrapped, "passphrase".to_owned())
-            .expect("single Base64 envelope of the full Minisign file");
-        assert_eq!(secrets.private_key.as_str(), raw);
+            let from_raw = SigningSecrets::from_values(raw.clone(), "passphrase".to_owned())
+                .expect("raw inner text can be canonicalized");
+            assert!(
+                from_raw.private_key.as_str() == canonical_file_bytes,
+                "raw key must be encoded for the Tauri CLI, not passed as raw text"
+            );
 
-        let crlf = raw.replace('\n', "\r\n");
-        let wrapped_crlf = STANDARD.encode(crlf.as_bytes());
-        let secrets = SigningSecrets::from_values(wrapped_crlf, "passphrase".to_owned())
-            .expect("CRLF private key file, encoded as Base64");
-        assert_eq!(secrets.private_key.as_str(), crlf);
+            let crlf = raw.replace('\n', "\r\n");
+            for input in [crlf.clone(), STANDARD.encode(crlf.as_bytes())] {
+                let normalized = SigningSecrets::from_values(input, "passphrase".to_owned())
+                    .expect("CRLF is normalized back to Tauri's canonical LF file");
+                assert!(
+                    normalized.private_key.as_str() == canonical_file_bytes,
+                    "line-ending changes may not change the encrypted key payload"
+                );
+            }
+        }
     }
 
     #[test]
-    fn signing_secret_adapter_rejects_other_secret_representations() {
-        let raw = encrypted_key_fixture();
+    fn signing_secret_adapter_rejects_foreign_public_and_malformed_formats() {
+        let raw = encrypted_key_fixture(TAURI_RSIGN_HEADER);
         let wrapped = STANDARD.encode(raw.as_bytes());
         let public = format!(
             "untrusted comment: minisign public key: synthetic\n{}",
             STANDARD.encode([0u8; 42])
         );
+        let tauri_signature = format!(
+            "untrusted comment: signature from tauri secret key\n{}\ntrusted comment: test\n{}",
+            STANDARD.encode([0u8; 74]),
+            STANDARD.encode([0u8; 64])
+        );
         for invalid in [
             "plain text".to_owned(),
             "RWQAAAA=".to_owned(),
             STANDARD.encode(public.as_bytes()),
-            STANDARD.encode(wrapped.as_bytes()), // double-wrapped key
-            format!("wrong header\n{}", STANDARD.encode([0u8; 158])),
-            format!("{ENCRYPTED_MINISIGN_HEADER}\nnot-base64"),
-            format!(
-                "{ENCRYPTED_MINISIGN_HEADER}\n{}",
-                STANDARD.encode([0u8; 12])
-            ),
-            format!(
-                "{ENCRYPTED_MINISIGN_HEADER}\n{}\nEXTRA",
-                STANDARD.encode([0u8; 158])
-            ),
-            format!(
-                "{ENCRYPTED_MINISIGN_HEADER}\n{}\n\n",
-                STANDARD.encode([0u8; 158])
-            ),
+            STANDARD.encode(tauri_signature.as_bytes()),
+            STANDARD.encode(wrapped.as_bytes()), // nested Base64 is forbidden
+            format!("wrong header\n{}", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])),
+            format!("{TAURI_RSIGN_HEADER}\nnot-base64"),
+            format!("{TAURI_RSIGN_HEADER}\n{}", STANDARD.encode([0u8; 12])),
+            format!("{TAURI_RSIGN_HEADER}\n{}\nEXTRA", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])),
+            format!("{TAURI_RSIGN_HEADER}\n{}\n\n", STANDARD.encode([0u8; ENCRYPTED_KEY_BYTES])),
             format!("\u{feff}{raw}"),
             format!("\n{raw}"),
             format!("{}{}\n", STANDARD.encode(raw.as_bytes()), "garbage"),
         ] {
             assert!(
                 SigningSecrets::from_values(invalid, "passphrase".to_owned()).is_err(),
-                "invalid private-key representation must fail closed"
+                "foreign or malformed key must fail closed"
             );
         }
     }
 
     #[test]
     fn signing_secret_adapter_enforces_secret_bounds_and_cleanliness() {
-        let raw = encrypted_key_fixture();
+        let raw = encrypted_key_fixture(TAURI_RSIGN_HEADER);
         assert!(SigningSecrets::from_values(String::new(), "passphrase".to_owned()).is_err());
         assert!(SigningSecrets::from_values(raw.clone(), "  ".to_owned()).is_err());
         assert!(SigningSecrets::from_values(format!("{raw}\0"), "passphrase".to_owned()).is_err());
