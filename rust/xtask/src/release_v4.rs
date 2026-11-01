@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod recovery;
+mod malware;
 
 pub const REPOSITORY: &str = "pumni/Sky-Auto-Player";
 const RELEASE_WORKFLOW_REF: &str =
@@ -27,7 +28,6 @@ const EVIDENCE_NAMES: [&str; 6] = [
 ];
 const RELEASE_BUILD_STEP_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 const RELEASE_DEPENDENCY_STEP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
-const RELEASE_DEFENDER_STEP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const ATTESTATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const RAW_METADATA_RETRY_BUDGET: Duration = Duration::from_secs(60);
 const RAW_METADATA_RETRY_INTERVAL: Duration = Duration::from_secs(5);
@@ -852,6 +852,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         "sign-candidate" => sign_candidate(root, &options),
         "qualify-candidate" => qualify_candidate(root, &options),
         "verify-candidate" | "probe-verify-candidate" => verify_candidate_handoff(root, &options),
+        "verify-malware-scan" => malware::verify_scan(root, &options).map(|_| ()),
         "verify-attestations" => verify_attestations(root, &options),
         "publish-release" => publish_release(root, &options, &mut transport),
         "promote-metadata" => promote_metadata(root, &options, &mut transport),
@@ -868,14 +869,14 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage:\n  cargo xtask release-v4 preflight --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 <build-unsigned|sign-candidate|qualify-candidate|verify-candidate|probe-verify-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify> --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 cleanup --state-root <dir>\n  cargo xtask release-v4 cleanup-signing-material\n  cargo xtask release-v4 doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]\n  cargo xtask release-v4 self-test\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan <path> --plan-run-id <id> --plan-sha256 <sha256> --confirm-metadata-only-recovery\nRecovery is operator-gated by .github/workflows/v4-metadata-recovery.yml; plan is read-only and apply writes stable channel metadata only."
+    "Usage:\n  cargo xtask release-v4 preflight --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 <build-unsigned|sign-candidate|qualify-candidate|verify-candidate|verify-malware-scan|probe-verify-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify> --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 cleanup --state-root <dir>\n  cargo xtask release-v4 cleanup-signing-material\n  cargo xtask release-v4 doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]\n  cargo xtask release-v4 self-test\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan <path> --plan-run-id <id> --plan-sha256 <sha256> --confirm-metadata-only-recovery\nRecovery is operator-gated by .github/workflows/v4-metadata-recovery.yml; plan is read-only and apply writes stable channel metadata only."
 }
 
 fn expected_job_for_command(command: &str) -> Option<&'static str> {
     match command {
         "build-unsigned" => Some("build_unsigned"),
         "sign-candidate" | "qualify-candidate" => Some("sign_qualify"),
-        "verify-candidate" => Some("attest"),
+        "verify-candidate" | "verify-malware-scan" => Some("attest"),
         "probe-verify-candidate" | "probe-metadata-token" => Some("metadata_probe"),
         "verify-attestations" | "publish-release" => Some("publish"),
         "promote-metadata" => Some("metadata_promote"),
@@ -1601,31 +1602,9 @@ fn qualify_candidate(root: &Path, options: &Options) -> Result<()> {
             "--allow-protected-release-runner",
         ],
     )?;
-    let defender_evidence = options.state_root.join("defender-evidence.json");
-    run_pwsh(
-        root,
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            root.join("scripts/scan_v4_defender_exact.ps1")
-                .to_str()
-                .ok_or("invalid Defender adapter path")?,
-            "-Artifact",
-            frozen_installer.to_str().ok_or("invalid installer path")?,
-            "-Evidence",
-            defender_evidence
-                .to_str()
-                .ok_or("invalid Defender evidence path")?,
-        ],
-    )?;
-    let defender: Value = read_json(&defender_evidence)?;
-    if defender["scan_performed"] != true || defender["detection_result"] != "none" {
-        return Err("Defender evidence does not bind a clean exact-candidate scan".into());
-    }
-
+    // Malware scanning is an independent, mandatory GitHub-hosted Ubuntu gate
+    // in the attestation job. The original self-hosted Windows Defender policy
+    // cannot run reliably on GitHub-hosted Windows; do not fabricate its evidence.
     let smoke = unique_temp(
         Path::new(&runner_temp),
         "sky-auto-player-v4-candidate-smoke",
@@ -1746,7 +1725,7 @@ fn qualify_candidate(root: &Path, options: &Options) -> Result<()> {
     };
     write_json_atomic(&options.state_root.join("release-state.json"), &state)?;
     println!(
-        "V4 Rust candidate qualification: PASS (frozen candidate, exact evidence, updater fixture, Defender, NSIS smoke)"
+        "V4 Rust candidate qualification: PASS (frozen candidate, signature, updater fixture and NSIS smoke; malware scan required before attestation)"
     );
     Ok(())
 }
@@ -1871,32 +1850,6 @@ fn run_xtask(root: &Path, args: &[&str]) -> Result<()> {
     if !output.status.success() {
         return Err(format!(
             "Rust candidate qualification step failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn run_pwsh(root: &Path, args: &[&str]) -> Result<()> {
-    let args = args
-        .iter()
-        .map(|argument| (*argument).to_owned())
-        .collect::<Vec<_>>();
-    let output = process::capture_owned_timeout_filtered(
-        std::ffi::OsStr::new("pwsh"),
-        &args,
-        root,
-        &[],
-        &[
-            "V4_TAURI_UPDATER_PRIVATE_KEY".to_owned(),
-            "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD".to_owned(),
-        ],
-        RELEASE_DEFENDER_STEP_TIMEOUT,
-    )?;
-    if !output.status.success() {
-        return Err(format!(
-            "Windows evidence adapter failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )
         .into());
@@ -2533,6 +2486,9 @@ fn verify_attestations(root: &Path, options: &Options) -> Result<()> {
         return Err("attestation verification requires a READY candidate".into());
     }
     let manifest = read_manifest(root, options, &context)?;
+    // Publication must never accept an unsigned/missing malware scan result.
+    // This is independently attested alongside installer, signature and SBOM.
+    let malware_evidence = malware::verify_scan(root, options)?;
     let installer_record = manifest
         .public_assets
         .iter()
@@ -2547,7 +2503,7 @@ fn verify_attestations(root: &Path, options: &Options) -> Result<()> {
     let signature = safe_state_asset_path(&options.state_root, signature_record)?;
     let signer = format!("{REPOSITORY}/.github/workflows/release-v4.yml");
     let repo_arg = REPOSITORY.to_owned();
-    for subject in [&installer, &signature] {
+    for subject in [&installer, &signature, &malware_evidence] {
         let args = vec![
             "attestation".to_owned(),
             "verify".to_owned(),
@@ -2612,7 +2568,7 @@ fn verify_attestations(root: &Path, options: &Options) -> Result<()> {
     state.attested = true;
     write_json_atomic(&options.state_root.join("release-state.json"), &state)?;
     println!(
-        "V4 Rust attestation verification: PASS (installer, updater signature, SBOM bound to exact source SHA)"
+        "V4 Rust attestation verification: PASS (installer, updater signature, malware-scan evidence and SBOM bound to exact source SHA)"
     );
     Ok(())
 }
