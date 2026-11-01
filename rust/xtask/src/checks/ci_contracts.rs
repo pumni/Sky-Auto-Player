@@ -626,6 +626,22 @@ fn validate_active_github_hosted_ubuntu_labels(relative: &str, source: &str) -> 
     Ok(())
 }
 
+/// Keep the hosted malware archive positive control on the actual release
+/// scanner, not only in a disposable PR proof. A standalone EICAR detection
+/// does not prove that the engine can unpack the signed NSIS payload.
+fn hosted_nsis_scan_contract(workflow: &str, scanner: &str) -> Result<()> {
+    if !workflow.contains("clamav clamav-freshclam nsis")
+        || !scanner.contains("require_eicar_detection(sample)")
+        || !scanner.contains("require_eicar_detection(archive)")
+        || !scanner.contains("\"--scan-archive=yes\"")
+    {
+        return Err(
+            "hosted release must demonstrate ClamAV archive inspection on the actual scanner runner".into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let workflows_root = root.join(".github/workflows");
     let mut observed = BTreeSet::new();
@@ -665,6 +681,11 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         validate_active_github_hosted_ubuntu_labels(relative, &source)
             .map_err(|error| format!("{relative}: {error}"))?;
     }
+
+    hosted_nsis_scan_contract(
+        &fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?,
+        &fs::read_to_string(root.join("scripts/scan_v4_malware_exact.py"))?,
+    )?;
 
     let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?.replace("\r\n", "\n");
     for output in [
@@ -1478,6 +1499,16 @@ mod tests {
         )
         .expect_err("numbered GitHub-hosted Ubuntu labels must be rejected");
         assert!(error.to_string().contains("ubuntu-latest"));
+    }
+
+    #[test]
+    fn hosted_release_requires_archive_detection_on_the_actual_scanner() {
+        let workflow = "attest:\n    runs-on: ubuntu-24.04\n    run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam nsis\n";
+        let scanner = "require_eicar_detection(sample)\nrequire_eicar_detection(archive)\n\"--scan-archive=yes\"";
+        assert!(hosted_nsis_scan_contract(workflow, scanner).is_ok());
+        assert!(hosted_nsis_scan_contract(&workflow.replace(" nsis", ""), scanner).is_err());
+        assert!(hosted_nsis_scan_contract(workflow, &scanner.replace("require_eicar_detection(archive)", "")).is_err());
+        assert!(hosted_nsis_scan_contract(workflow, &scanner.replace("\"--scan-archive=yes\"", "")).is_err());
     }
 
     #[test]
