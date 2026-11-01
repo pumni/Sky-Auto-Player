@@ -340,13 +340,13 @@ jobs:
       # GitHub-hosted Windows images intentionally disable Defender real-time
       # scanning and broadly exclude C:/D:. Never pretend those instances
       # produced clean Defender evidence. Independent hosted Linux scanning
-      # must prove fresh signatures and an EICAR positive control first.
+      # must prove fresh signatures, a plain EICAR control, and real NSIS unpacking first.
       - name: Install ClamAV and refresh official malware signatures
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam nsis
           sudo systemctl stop clamav-freshclam.service || true
           sudo freshclam
 
