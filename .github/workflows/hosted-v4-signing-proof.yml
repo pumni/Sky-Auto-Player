@@ -316,6 +316,7 @@ jobs:
           root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
           v = json.loads((root / "malware-evidence.json").read_text())
           assert v["positive_control_detected"] is True
+          assert v["nsis_archive_control_detected"] is True
           assert v["detection_result"] == "none"
           assert v["artifact_sha256"] == json.loads((root / "candidate-manifest.json").read_text())["public_assets"][0]["sha256"]
           print("Hosted real NSIS malware scan evidence exact-byte binding: PASS")
