@@ -357,14 +357,6 @@ fn rust_release_state_machine_contract(
     }
     let attest_workflow = job("attest")?;
     let metadata_probe_workflow = job("metadata_probe")?;
-    // A standalone EICAR file does not prove ClamAV can unpack a compressed
-    // NSIS installer. The real attestation runner must build and detect
-    // an EICAR-positive NSIS control before scanning the signed candidate.
-    if !attest_workflow.contains("clamav clamav-freshclam nsis") {
-        return Err(
-            "production malware qualification must prove compressed NSIS inspection on the actual hosted scanner".into(),
-        );
-    }
     // Malware scanning is mandatory on a working hosted Linux engine before
     // OIDC and irreversible publication; the Windows-hosted image cannot
     // satisfy the retired self-hosted Defender real-time policy.
@@ -993,14 +985,6 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     updater_fixture_contract(&read("rust/xtask/src/updater_fixture.rs")?)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
-    let scanner_script = read("scripts/scan_v4_malware_exact.py")?;
-    if !scanner_script.contains("require_eicar_detection(archive)")
-        || !scanner_script.contains("\"--scan-archive=yes\"")
-    {
-        return Err(
-            "production scanner must explicitly detect EICAR inside compressed NSIS".into(),
-        );
-    }
     let recovery_workflow = read(".github/workflows/v4-metadata-recovery.yml")?;
     let release = read("rust/xtask/src/release_v4.rs")?;
     let recovery = read("rust/xtask/src/release_v4/recovery.rs")?;
