@@ -186,3 +186,96 @@ jobs:
           if ((Test-Path -LiteralPath $ownerPath -PathType Leaf) -and (Get-Content -LiteralPath $ownerPath -Raw).Trim() -ceq $env:GITHUB_RUN_ID) {
             Remove-Item -LiteralPath $proofRoot -Recurse -Force
           }
+
+  malware-scan-proof:
+    name: Prove exact signed-artifact ClamAV scanner on GitHub-hosted Ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact disposable proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install ClamAV and refresh official signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam
+          sudo systemctl stop clamav-freshclam.service || true
+          sudo freshclam
+
+      - name: Build isolated synthetic manifest without any production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$root"
+          mkdir -p "$root/candidate-bundle"
+          echo "SKY_MALWARE_PROOF_ROOT=$root" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+          root = Path(os.environ["RUNNER_TEMP"]) / f"sky-v4-malware-proof-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          name = "Sky Auto Player_4.3.0_x64-setup.exe"
+          fixture = root / "candidate-bundle" / name
+          fixture.write_bytes(b"MZ GITHUB-HOSTED ONLY disposable malware scanner positive/negative qualification fixture")
+          record = {
+              "role": "installer", "source_name": name,
+              "state_path": "candidate-bundle/" + name, "size": fixture.stat().st_size,
+              "sha256": hashlib.sha256(fixture.read_bytes()).hexdigest()
+          }
+          signature = {"role": "updater-signature", "source_name": name + ".sig"}
+          context = {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "source_sha": os.environ["GITHUB_SHA"],
+              "workflow_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "version": "4.3.0",
+          }
+          (root / "release-context.json").write_text(json.dumps(context))
+          (root / "candidate-manifest.json").write_text(json.dumps({**context, "public_assets": [record, signature]}))
+          PY
+
+      - name: Prove exact synthetic artifact clean and EICAR is detected
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
+          v = json.loads((root / "malware-evidence.json").read_text())
+          assert v["positive_control_detected"] is True
+          assert v["detection_result"] == "none"
+          assert v["artifact_sha256"] == json.loads((root / "candidate-manifest.json").read_text())["public_assets"][0]["sha256"]
+          print("Hosted malware scan evidence exact-byte binding: PASS")
+          PY
+
+      - name: Verify a changed signed-installer SHA is rejected, not rescanned as clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "tamper" >> "$SKY_MALWARE_PROOF_ROOT/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
+          if python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"; then
+            echo "tampered exact candidate was accepted" >&2
+            exit 1
+          fi
+          echo "Tampered candidate rejected: PASS"
+
+      - name: Clean disposable proof workspace
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ -d "$root" ] && [ "$(dirname "$root")" = "$RUNNER_TEMP" ]; then
+            rm -rf -- "$root"
+          fi
