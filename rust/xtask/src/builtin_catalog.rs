@@ -5,7 +5,7 @@ use sky_app_core::catalog::{
     BuiltinCatalogManifest, BuiltinSongManifestEntry, RetiredBuiltinSong, SUPPORTED_EXTENSIONS,
     StableSongId,
 };
-use sky_app_core::song::parse_song_json;
+use sky_app_core::song::{decode_song_json, parse_song_json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,13 +58,24 @@ fn source_path(root: &Path, manifest_path: &str) -> Result<PathBuf> {
     Ok(root.join("songs").join(relative))
 }
 
-fn verify(root: &Path) -> Result<()> {
+pub(super) struct VerifiedCatalogSource {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+    pub sha256: String,
+    pub bytes: Vec<u8>,
+}
+
+pub(super) fn verified_sources(
+    root: &Path,
+) -> Result<(BuiltinCatalogManifest, Vec<VerifiedCatalogSource>)> {
     let manifest = load(root)?;
     manifest
         .validate()
         .map_err(|error| format!("{MANIFEST_RELATIVE_PATH}: {error}"))?;
 
     let mut declared = BTreeSet::new();
+    let mut sources = Vec::with_capacity(manifest.songs.len());
     for song in &manifest.songs {
         let path = source_path(root, &song.path)?;
         if !path.is_file() {
@@ -77,7 +88,8 @@ fn verify(root: &Path) -> Result<()> {
             )
             .into());
         }
-        let digest = sha256_file(&path)?;
+        let bytes = fs::read(&path)?;
+        let digest = sha256_hex(&bytes);
         if digest != song.sha256 {
             return Err(format!(
                 "built-in hash mismatch for {}: manifest {}, actual {}",
@@ -85,13 +97,25 @@ fn verify(root: &Path) -> Result<()> {
             )
             .into());
         }
-        let bytes = fs::read(&path)?;
         let fallback = path
             .file_stem()
             .and_then(|value| value.to_str())
             .unwrap_or(&song.title);
         parse_song_json(&bytes, fallback)
             .map_err(|error| format!("built-in song is not parseable ({}): {error}", song.path))?;
+        decode_song_json(&bytes, fallback).map_err(|error| {
+            format!(
+                "built-in song source fails strict decode ({}): {error}",
+                song.path
+            )
+        })?;
+        sources.push(VerifiedCatalogSource {
+            id: song.id.clone(),
+            path: song.path.clone(),
+            title: song.title.clone(),
+            sha256: digest,
+            bytes,
+        });
     }
 
     let mut discovered = BTreeSet::new();
@@ -118,12 +142,24 @@ fn verify(root: &Path) -> Result<()> {
         )
         .into());
     }
+    Ok((manifest, sources))
+}
+
+fn verify(root: &Path) -> Result<()> {
+    let (manifest, _) = verified_sources(root)?;
     println!(
         "Built-in catalog verification: PASS (schema=1, active={}, retired={})",
         manifest.songs.len(),
         manifest.retired_songs.len()
     );
     Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn verify_installed(root: &Path) -> Result<()> {
@@ -467,6 +503,114 @@ mod tests {
             .expect("clock")
             .as_nanos();
         std::env::temp_dir().join(format!("sky-builtin-catalog-{label}-{suffix}"))
+    }
+
+    fn test_catalog(root: &Path, songs: &[(&str, &str, &[u8])]) -> BuiltinCatalogManifest {
+        fs::create_dir_all(root.join("songs")).expect("songs directory");
+        fs::create_dir_all(root.join("builtin-songs")).expect("manifest directory");
+        let entries = songs
+            .iter()
+            .map(|(id, filename, bytes)| {
+                fs::write(root.join("songs").join(filename), bytes).expect("song source");
+                BuiltinSongManifestEntry {
+                    id: (*id).into(),
+                    path: format!("sheets/{filename}"),
+                    title: filename.trim_end_matches(".json").into(),
+                    sha256: sha256_hex(bytes),
+                }
+            })
+            .collect();
+        let manifest = BuiltinCatalogManifest {
+            schema_version: 1,
+            songs: entries,
+            retired_songs: Vec::new(),
+        };
+        write_manifest(root, &manifest).expect("write test manifest");
+        manifest
+    }
+
+    #[test]
+    fn committed_active_catalog_is_verified_from_the_live_manifest() {
+        let (manifest, sources) = verified_sources(&crate::repo::root())
+            .expect("all active catalog entries pass source validation");
+        assert_eq!(manifest.songs.len(), 112);
+        assert_eq!(sources.len(), manifest.songs.len());
+    }
+
+    #[test]
+    fn catalog_verifier_allows_manifest_growth_and_rejects_source_drift() {
+        let root = temp_root("inventory-growth");
+        let first_bytes = br#"{"name":"One","songNotes":[{"time":0,"key":"Key0"}]}"#;
+        let second_bytes = br#"{"name":"Two","songNotes":[{"time":10,"key":"Key1"}]}"#;
+        let mut manifest = test_catalog(
+            &root,
+            &[("0123456789abcdef0123456789abcdef", "one.json", first_bytes)],
+        );
+        verify(&root).expect("one-entry active catalog verifies");
+
+        fs::write(root.join("songs/two.json"), second_bytes).expect("second source");
+        manifest.songs.push(BuiltinSongManifestEntry {
+            id: "fedcba9876543210fedcba9876543210".into(),
+            path: "sheets/two.json".into(),
+            title: "Two".into(),
+            sha256: sha256_hex(second_bytes),
+        });
+        write_manifest(&root, &manifest).expect("grown manifest");
+        verify(&root).expect("catalog growth follows the committed manifest");
+
+        fs::remove_file(root.join("songs/two.json")).expect("remove declared source");
+        assert!(verify(&root).is_err(), "missing declared file must fail");
+        fs::write(root.join("songs/two.json"), second_bytes).expect("restore source");
+        fs::write(root.join("songs/extra.json"), first_bytes).expect("extra source");
+        assert!(verify(&root).is_err(), "extra undeclared file must fail");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_verifier_rejects_changed_hashes_and_invalid_events() {
+        let root = temp_root("integrity-failures");
+        let valid = br#"{"name":"Song","songNotes":[{"time":0,"key":"Key0"}]}"#;
+        let mut manifest = test_catalog(
+            &root,
+            &[("0123456789abcdef0123456789abcdef", "song.json", valid)],
+        );
+        manifest.songs[0].sha256 = "0".repeat(64);
+        write_manifest(&root, &manifest).expect("changed hash manifest");
+        assert!(verify(&root).is_err(), "changed file hash must fail");
+
+        let invalid = br#"{"name":"Song","songNotes":[{"time":-1,"key":"Key0"}]}"#;
+        fs::write(root.join("songs/song.json"), invalid).expect("invalid event payload");
+        manifest.songs[0].sha256 = sha256_hex(invalid);
+        write_manifest(&root, &manifest).expect("matching hash for invalid payload");
+        assert!(
+            verify(&root).is_err(),
+            "invalid source events must fail parseability"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_verifier_rejects_invalid_authoritative_versioned_events_with_valid_legacy_projection()
+     {
+        let root = temp_root("authoritative-versioned-source");
+        let hybrid = br#"{
+            "type":"composed","version":5,"bpm":120,
+            "data":{"appName":"Sky"},"pitch":"C","columnTempos":[0],
+            "tracks":[{"instrument":{"name":"Piano"},"notes":[[0,60,0]]}],
+            "songNotes":[{"time":0,"key":"Key0"}]
+        }"#;
+        assert!(parse_song_json(hybrid, "hybrid").is_ok());
+        assert!(decode_song_json(hybrid, "hybrid").is_err());
+        test_catalog(
+            &root,
+            &[("0123456789abcdef0123456789abcdef", "hybrid.json", hybrid)],
+        );
+
+        assert!(
+            verify(&root).is_err(),
+            "matching legacy projection and manifest hash must not mask invalid versioned tracks"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
