@@ -25,6 +25,8 @@ jobs:
   proof:
     name: Build unsigned NSIS then sign exact bytes with a disposable key
     runs-on: windows-latest
+    outputs:
+      signed_installer_sha256: ${{ steps.signed-nsis-upload.outputs.sha256 }}
     timeout-minutes: 90
     permissions:
       contents: read
@@ -173,6 +175,24 @@ jobs:
           - signed version: $($evidence.signed_version)
           "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
 
+      - name: Upload exact signed disposable NSIS installer for cross-platform malware proof
+        id: signed-nsis-upload
+        shell: pwsh
+        run: |
+          $installer = $env:SKY_PROOF_INSTALLER
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Signed NSIS malware proof has no installer" }
+          $sha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -cne $env:SKY_PROOF_INSTALLER_SHA256) { throw "Signed disposable installer bytes changed" }
+          "sha256=$sha" | Add-Content $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Hand off real signed disposable NSIS to independent Linux malware proof
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-signed-malware-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 1
+          path: ${{ env.SKY_PROOF_INSTALLER }}
+
       - name: Remove synthetic key and hosted proof workspace
         if: always()
         run: |
@@ -188,9 +208,10 @@ jobs:
           }
 
   malware-scan-proof:
-    name: Prove exact signed-artifact ClamAV scanner on GitHub-hosted Ubuntu
+    name: Prove real signed NSIS ClamAV scanner on GitHub-hosted Ubuntu
+    needs: [proof]
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -210,7 +231,7 @@ jobs:
           sudo systemctl stop clamav-freshclam.service || true
           sudo freshclam
 
-      - name: Build isolated synthetic manifest without any production credentials
+      - name: Initialize independent malware proof directory
         shell: bash
         run: |
           set -euo pipefail
@@ -218,13 +239,31 @@ jobs:
           test ! -e "$root"
           mkdir -p "$root/candidate-bundle"
           echo "SKY_MALWARE_PROOF_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Download exact-run real signed NSIS from isolated Windows proof
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-signed-malware-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.SKY_MALWARE_PROOF_ROOT }}/candidate-bundle
+
+      - name: Build exact-byte manifest for the downloaded real signed NSIS
+        shell: bash
+        env:
+          EXPECTED_SIGNED_SHA256: ${{ needs.proof.outputs.signed_installer_sha256 }}
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           import hashlib, json, os
           root = Path(os.environ["RUNNER_TEMP"]) / f"sky-v4-malware-proof-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
           name = "Sky Auto Player_4.3.0_x64-setup.exe"
           fixture = root / "candidate-bundle" / name
-          fixture.write_bytes(b"MZ GITHUB-HOSTED ONLY disposable malware scanner positive/negative qualification fixture")
+          if not fixture.is_file() or fixture.stat().st_size < 1024 * 1024:
+              raise RuntimeError("real signed NSIS proof must contain a substantial installer")
+          actual_hash = hashlib.sha256(fixture.read_bytes()).hexdigest()
+          if actual_hash != os.environ["EXPECTED_SIGNED_SHA256"]:
+              raise RuntimeError("Windows-signed NSIS artifact SHA changed across runner handoff")
+          print("Real signed NSIS exact-byte Windows-to-Ubuntu handoff: PASS")
           record = {
               "role": "installer", "source_name": name,
               "state_path": "candidate-bundle/" + name, "size": fixture.stat().st_size,
@@ -243,7 +282,7 @@ jobs:
           (root / "candidate-manifest.json").write_text(json.dumps({**context, "public_assets": [record, signature]}))
           PY
 
-      - name: Prove exact synthetic artifact clean and EICAR is detected
+      - name: Prove real signed NSIS is clean and EICAR is detected
         shell: bash
         run: |
           set -euo pipefail
