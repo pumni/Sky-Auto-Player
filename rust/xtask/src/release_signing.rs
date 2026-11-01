@@ -113,6 +113,19 @@ struct RemoveOnFailure {
     keep: bool,
 }
 
+impl RemoveOnFailure {
+    /// Refuse to adopt or erase a signature that this signer did not create.
+    /// symlink_metadata also detects dangling symlinks; exists() does not.
+    fn for_new_output(path: PathBuf) -> Result<Self> {
+        match fs::symlink_metadata(&path) {
+            Ok(_) => return Err("refusing to overwrite a pre-existing updater signature".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(Self { path, keep: false })
+    }
+}
+
 impl Drop for RemoveOnFailure {
     fn drop(&mut self) {
         if !self.keep {
@@ -159,13 +172,7 @@ pub(crate) fn sign_installer(
     updater_trust::verify_local_private_key(root, &temporary_key.path, Some(&secrets.passphrase))?;
 
     let signature = PathBuf::from(format!("{}.sig", installer.display()));
-    let mut cleanup = RemoveOnFailure {
-        path: signature.clone(),
-        keep: false,
-    };
-    if signature.exists() {
-        return Err("refusing to overwrite a pre-existing updater signature".into());
-    }
+    let mut cleanup = RemoveOnFailure::for_new_output(signature.clone())?;
     let mut args = vec![
         "run".to_owned(),
         "tauri".to_owned(),
@@ -444,6 +451,58 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn signing_failure_cleanup_never_adopts_an_existing_signature() {
+        let directory = std::env::temp_dir().join(format!(
+            "sky-v4-signing-output-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).expect("create isolated test directory");
+        let signature = directory.join("candidate.exe.sig");
+        let foreign_content = b"pre-existing detached signature";
+        fs::write(&signature, foreign_content).expect("write pre-existing signature");
+
+        assert!(RemoveOnFailure::for_new_output(signature.clone()).is_err());
+        assert_eq!(
+            fs::read(&signature).expect("foreign signature remains readable"),
+            foreign_content
+        );
+
+        fs::remove_file(&signature).expect("remove test fixture");
+        {
+            let guard = RemoveOnFailure::for_new_output(signature.clone())
+                .expect("empty signature path may be owned");
+            fs::write(&signature, b"partially written signer output")
+                .expect("simulate signer failure");
+            drop(guard);
+        }
+        assert!(
+            fs::symlink_metadata(&signature).is_err(),
+            "failure cleanup must remove only the output it owns"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(directory.join("missing-target"), &signature).expect("create dangling symlink");
+            assert!(
+                RemoveOnFailure::for_new_output(signature.clone()).is_err(),
+                "dangling symlinks are occupied paths, not new output"
+            );
+            assert!(
+                fs::symlink_metadata(&signature).is_ok(),
+                "rejected symlink must remain untouched"
+            );
+            fs::remove_file(&signature).expect("remove symlink fixture");
+        }
+
+        fs::remove_dir(&directory).expect("clean up isolated test directory");
     }
 
     #[test]
