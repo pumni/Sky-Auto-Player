@@ -235,6 +235,44 @@ jobs:
           file -b "$installer" | grep -q 'PE32'
           echo "GitHub-hosted real NSIS PE scanner fixture: PASS"
 
+      - name: Prove ClamAV detects harmless EICAR hidden inside an actual compressed NSIS
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$SKY_MALWARE_PROOF_ROOT"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
+          eicar = b"X5O!P%@AP[4" + bytes([92]) + b"PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+          (root / "nsis-eicar-positive-control.txt").write_bytes(eicar)
+          (root / "nsis-eicar-positive-control.nsi").write_text(
+              'Name "Sky Auto Player NSIS Scanner Positive Control"\n'
+              'OutFile "nsis-eicar-positive-control.exe"\n'
+              'RequestExecutionLevel user\n'
+              'SetCompress force\n'
+              'Section\n'
+              '  SetOutPath "$TEMP"\n'
+              '  File "nsis-eicar-positive-control.txt"\n'
+              'SectionEnd\n',
+              encoding="utf-8",
+          )
+          PY
+          (cd "$root" && makensis -V2 nsis-eicar-positive-control.nsi)
+          set +e
+          scan_output="$(clamscan --stdout --no-summary --scan-archive=yes \
+            --alert-exceeds-max=yes --max-filesize=300M --max-scansize=1024M \
+            --max-recursion=30 "$root/nsis-eicar-positive-control.exe" 2>&1)"
+          scanner_status=$?
+          set -e
+          if [ "$scanner_status" -ne 1 ] || ! grep -q ' FOUND' <<<"$scan_output" || \
+             ! grep -qi 'EICAR' <<<"$scan_output"; then
+            echo "Hosted scanner did not detect EICAR inside a compressed NSIS archive" >&2
+            exit 1
+          fi
+          rm -f "$root/nsis-eicar-positive-control.exe" "$root/nsis-eicar-positive-control.nsi" "$root/nsis-eicar-positive-control.txt"
+          echo "Nested EICAR detection inside actual NSIS archive: PASS"
+
       - name: Bind the real disposable NSIS to an isolated exact-byte release manifest
         shell: bash
         run: |
