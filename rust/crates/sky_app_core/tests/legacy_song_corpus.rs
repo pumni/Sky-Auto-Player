@@ -35,11 +35,19 @@ fn all_builtin_songs_match_the_pinned_legacy_schedule_baseline() {
         .join("../../../songs")
         .canonicalize()
         .expect("repository songs directory");
-    // Only the original 106 assets are pinned to this historical schedule baseline.
-    // New built-in additions are validated by the catalog verifier separately.
-    let mut paths = expected
-        .keys()
-        .map(|filename| songs_dir.join(filename))
+    let mut paths = fs::read_dir(&songs_dir)
+        .expect("read songs directory")
+        .map(|entry| entry.expect("read song entry").path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    matches!(
+                        extension.to_ascii_lowercase().as_str(),
+                        "json" | "skysheet" | "txt"
+                    )
+                })
+        })
         .collect::<Vec<_>>();
     paths.sort();
     assert_eq!(paths.len(), EXPECTED_SONG_COUNT);
