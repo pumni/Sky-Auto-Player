@@ -44,6 +44,12 @@
       "sha256": "ebca80820b7914222906ea89b0cf0b7a35dcffdbc2e6ae0986d6de82a927aa8a"
     },
     {
+      "id": "3bccd25ec601edb05ca4500f4f8bb5dc",
+      "path": "sheets/Canon in C.json",
+      "title": "Canon in C",
+      "sha256": "d13d4a9fcff525aca9f5c77acc1f688eb8bd5144d8dc735bd04d3498327c31e7"
+    },
+    {
       "id": "06d7decb456d711e8979fcc6fae398b9",
       "path": "sheets/Careless Whisper.json",
       "title": "Careless Whisper",
@@ -62,6 +68,18 @@
       "sha256": "c82388832a4c303b4a392c9e4bfc321ceaaddf1828cf28410b647cd5fa892849"
     },
     {
+      "id": "b56a2d27b8aabecb8c2b7475cb21ad1e",
+      "path": "sheets/City of Stars.json",
+      "title": "City of Stars",
+      "sha256": "09bcc638747dca5833f788efb3b80da1649a230cec1003cdad2d6f88a576441b"
+    },
+    {
+      "id": "c3107e359f23e2826748dc44f1286d92",
+      "path": "sheets/Clair de Lune.json",
+      "title": "Clair de Lune",
+      "sha256": "b7f5b3bc8133ff4844c7ff88302b552125a83631dbfd61ce1a3ce3051f6930db"
+    },
+    {
       "id": "769c601449b6223626f47a1a36e14628",
       "path": "sheets/Comedy easy ver.json",
       "title": "Comedy easy ver",
@@ -72,6 +90,12 @@
       "path": "sheets/Comedy.json",
       "title": "Comedy",
       "sha256": "ba73c278d652d059ed0909c9af5f7aefdfb0055efd91e23ff4161cac3e031885"
+    },
+    {
+      "id": "1d42ccdf3f64eb49870aa1f474d28f24",
+      "path": "sheets/Comptine d'un autre été.json",
+      "title": "Comptine d'un autre été",
+      "sha256": "190f48a4be15752891609c2c2e2c611f043a29f353e4b33b3871ec3b3cb58e2f"
     },
     {
       "id": "fe4dec121d56e39e3ed38a271b02bff2",
@@ -158,6 +182,12 @@
       "sha256": "21f39b08809deffa47e6ce8d0a370e6b87cf1f0010f2f39238640ec6b782522e"
     },
     {
+      "id": "5798e7faec20c81bb13479fd28d2a2f7",
+      "path": "sheets/Für Elise.json",
+      "title": "Für Elise",
+      "sha256": "07ff107ade0954593f4b2e4b5b506906a7529994ba5d565b46ec36fe107947c4"
+    },
+    {
       "id": "6e8a58e9d97d1ddc55ec9311ea0b8560",
       "path": "sheets/Glimpse of Us.json",
       "title": "Glimpse of Us",
@@ -168,6 +198,12 @@
       "path": "sheets/Golden hour.json",
       "title": "Golden hour",
       "sha256": "0c341b5e4f06009c5d7a8b22a7265d474537b0aef6aee54f6a5f45f09f5c0363"
+    },
+    {
+      "id": "89cafc052bff77da77ddd771cd8ea06f",
+      "path": "sheets/Gymnopédie No. 1.json",
+      "title": "Gymnopédie No. 1",
+      "sha256": "259184f289a69c135299e16bfe58d34b18ba274cae34d7b7feea0d506bca69bc"
     },
     {
       "id": "15ddc01725fe8ad63e940796238314ff",
@@ -218,6 +254,12 @@
       "sha256": "1619721e9e5bf0f5c185820cf1f13d89c0ff60f5ebf6c08dd5d0e4d3e355f8b2"
     },
     {
+      "id": "a7f8734e9563d518a624fccdee36b402",
+      "path": "sheets/Interstellar Main Theme.json",
+      "title": "Interstellar Main Theme",
+      "sha256": "1bd055754b87331c7a48a5f2645c8abab9c59be2bcc001f3d4fe15ab3b0bfa98"
+    },
+    {
       "id": "bb2005dd2b0775342f6f05b58de8d4ba",
       "path": "sheets/Jingle Bells.json",
       "title": "Jingle Bells",
@@ -239,7 +281,7 @@
       "id": "7708eb28b904c4baac308ce0d51da3d4",
       "path": "sheets/Kiss The Rain.json",
       "title": "Kiss The Rain",
-      "sha256": "e2cadf258f12a72fae8437e55c3b7e172082971a89260df6fc1f82d10118fcc9"
+      "sha256": "76f3f7e07a9e7bac02b1304527d1da1ab6148f04c9e4e24939e8e522f3b1aabc"
     },
     {
       "id": "e3c0fcd965beca7f7df8d7e23d22f745",
@@ -302,6 +344,12 @@
       "sha256": "e811d8ca5f5c27483fcf5e2ef3f5d1a50b288c0fc94350b20aae45bf6396b24a"
     },
     {
+      "id": "6389be0dca0d47b1bff3ae4d84a705b8",
+      "path": "sheets/Married Life (Up).json",
+      "title": "Married Life (Up)",
+      "sha256": "fa71b6e4c4aaeda96dff878c0152680e799e60183ea36aa6ac75dca0423f1ebc"
+    },
+    {
       "id": "6683944935975a712b7ab032bf660e2b",
       "path": "sheets/Mary On A Cross - Ghost.json",
       "title": "Mary On A Cross - Ghost",
@@ -318,6 +366,12 @@
       "path": "sheets/Memories.json",
       "title": "Memories",
       "sha256": "2c71a61bfe14b76c84b073102d3e0d7c9b1288e1c0f9567b0c731d80237764e7"
+    },
+    {
+      "id": "48e23f6f922aa2d21f3f9cc53c6f3982",
+      "path": "sheets/Nuvole Bianche.json",
+      "title": "Nuvole Bianche",
+      "sha256": "0ca66e45ad5c7483652c0545b2323d1b5a22ba8b336f0fea74033e54dbbbac88"
     },
     {
       "id": "b54c02629122b17eb3f61ec26ad4de05",
@@ -524,6 +578,12 @@
       "sha256": "01cd2b035ceafb9ad82dc7b7d495fa71130895d8ec3eeed928536e5ff46259d3"
     },
     {
+      "id": "388659c5fbacdcbdff3471f86e9992ec",
+      "path": "sheets/Sweden (Minecraft).json",
+      "title": "Sweden (Minecraft)",
+      "sha256": "b483173056d4b69fdff5cc0f87ab209600ca96420d2ba08a73e48ca32802aa5e"
+    },
+    {
       "id": "be821a19c7e35023e5ed008845d7a364",
       "path": "sheets/Thang dien.json",
       "title": "Thang dien",
@@ -564,6 +624,12 @@
       "path": "sheets/Victory.json",
       "title": "Victory",
       "sha256": "f28ae280f98b81f9fb1e00cf8f65d828ff8d9c063854762c98ed22f1a0e2b033"
+    },
+    {
+      "id": "adc6bc145e931bc3f4989bd784889e46",
+      "path": "sheets/Viva La Vida.json",
+      "title": "Viva La Vida",
+      "sha256": "f762cff62519426de8729b3ef0819eeb8e1915bfd588ca881a2f6c5e3c9532bd"
     },
     {
       "id": "e64f6e5346ab94fa7c8d15e0680c98b8",
