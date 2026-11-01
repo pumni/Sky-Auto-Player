@@ -365,7 +365,9 @@ fn rust_release_state_machine_contract(
         || !scanner_script.contains("require_eicar_detection(archive)")
         || !scanner_script.contains("\"--scan-archive=yes\"")
     {
-        return Err("production malware qualification must prove compressed NSIS inspection on the actual hosted scanner".into());
+        return Err(
+            "production malware qualification must prove compressed NSIS inspection on the actual hosted scanner".into(),
+        );
     }
     // Malware scanning is mandatory on a working hosted Linux engine before
     // OIDC and irreversible publication; the Windows-hosted image cannot
