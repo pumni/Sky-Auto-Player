@@ -362,10 +362,13 @@ fn rust_release_state_machine_contract(
     // satisfy the retired self-hosted Defender real-time policy.
     if !attest_workflow.contains("scan_v4_malware_exact.py")
         || !attest_workflow.contains("release-v4 verify-malware-scan --state-root")
-        || !attest_workflow.contains("Attest separately verified exact-installer malware scan evidence")
-        || !attest_workflow.contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
+        || !attest_workflow
+            .contains("Attest separately verified exact-installer malware scan evidence")
+        || !attest_workflow
+            .contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
         || !job("publish")?.contains("Download exact-run independent malware scan evidence")
-        || !job("publish")?.contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
+        || !job("publish")?
+            .contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
     {
         return Err("hosted release must scan and attest the exact signed candidate with real EICAR proof before publication".into());
     }
