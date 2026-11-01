@@ -142,7 +142,7 @@ does **not** establish any detection. The former self-hosted-only Defender requi
 produce honest evidence on hosted Windows. The independent GitHub-hosted Ubuntu 24.04
 `attest` job instead requires refreshed ClamAV official malware signatures, a **detected EICAR
 positive control**, and an exact scan of the unchanged production-signed NSIS installer,
-with bounded freshness and file size. Rust verifies a separate JSON record against the
+with bounded freshness and file size. The scanner must prove **both plain EICAR\nand EICAR embedded inside compressed NSIS** on the same runner; its attested\nevidence records these two controls independently. Rust verifies a separate JSON record against the
 signed immutable manifest's exact SHA/size, run ID/attempt, version and source. GitHub OIDC
 attests that evidence alongside `.exe`, `.sig` and SPDX SBOM; `publish` downloads and
 independently verifies the exact-run scanner evidence and OIDC attestation **before any release mutation**.
