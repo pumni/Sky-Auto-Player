@@ -1484,7 +1484,10 @@ mod tests {
     fn pinned_ubuntu_2404_is_allowed_only_for_malware_scanner_jobs() {
         for (path, job) in [
             (".github/workflows/release-v4.yml", "attest"),
-            (".github/workflows/hosted-v4-signing-proof.yml", "malware-scan-proof"),
+            (
+                ".github/workflows/hosted-v4-signing-proof.yml",
+                "malware-scan-proof",
+            ),
         ] {
             let valid = format!("jobs:\n  {job}:\n    runs-on: ubuntu-24.04\n");
             assert!(validate_active_github_hosted_ubuntu_labels(path, &valid).is_ok());
