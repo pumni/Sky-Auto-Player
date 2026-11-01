@@ -94,6 +94,41 @@ describe('desktop store', () => {
     expect(store.getState().settings?.auto_play).toBe(true);
   });
 
+  it('drops stale sheet detail responses after a pitch change and revokes old loss proposals', async () => {
+    const songId = (496).toString(16).padStart(32, '0');
+    const bridge = createMockBridge({ builtinSongIds: [songId] });
+    const originalDetail = bridge.getSongDetail.bind(bridge);
+    const staleRelease = deferred<void>();
+    const detailRequests: Parameters<typeof bridge.getSongDetail>[0][] = [];
+    bridge.getSongDetail = async (request) => {
+      detailRequests.push(request);
+      if (request.targetPitch === undefined) await staleRelease.promise;
+      return originalDetail(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const staleSelection = store.getState().selectSong(songId);
+    await waitFor(() => expect(detailRequests).toHaveLength(1));
+    await act(async () => store.getState().setSheetTargetPitch('D'));
+    staleRelease.resolve(undefined);
+    await act(async () => staleSelection);
+
+    expect(detailRequests.at(-1)).toMatchObject({ targetPitch: 'D' });
+    expect(selectSelectedDetail(store.getState()).value?.sheet_analysis?.target_pitch).toBe('D');
+
+    const prepare = vi.spyOn(bridge, 'preparePlayback');
+    await act(async () => store.getState().prepareSelectedPlayback());
+    expect(store.getState().playback.prepared?.error_code).toBe('conversion_confirmation_required');
+    expect(store.getState().library.conversionConsentFingerprint).toBeNull();
+
+    await act(async () => store.getState().setSheetTargetPitch('E'));
+    expect(store.getState().playback.prepared).toBeNull();
+    expect(store.getState().library.conversionConsentFingerprint).toBeNull();
+    await act(async () => store.getState().acknowledgeSheetLoss());
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
   it('loads authoritative navigation while the first catalog page is still pending', async () => {
     const builtinSongIds = Array.from({ length: 96 }, (_, index) =>
       index.toString(16).padStart(32, '0'),
@@ -1580,7 +1615,7 @@ describe('desktop store', () => {
     await act(async () => store.getState().setViewport(200, 220));
     expect(viewportCalls).toBe(1);
     expect(viewportSongIds).toHaveLength(21);
-    expect(store.getState().library.resultTotal).toBe(488);
+    expect(store.getState().library.resultTotal).toBe(485);
     expect(store.getState().library.catalogTotal).toBe(500);
     expect(rowAt(store, 200)?.title).toBe('Song 212');
   });

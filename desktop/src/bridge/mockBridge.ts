@@ -2,6 +2,7 @@ import type {
   AppearanceMode,
   Bootstrap,
   PlaybackConfig,
+  PreparedPlayback,
   CalibrationCancel,
   CalibrationCancelAck,
   CalibrationStart,
@@ -13,6 +14,9 @@ import type {
   SearchResult,
   Settings,
   SettingsPatch,
+  SheetAnalysis,
+  SheetConversionMode,
+  SheetPitch,
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
   LibraryPlaylistSummary,
@@ -105,20 +109,141 @@ const LONG_CONTENT_INDEX = 495;
 const LONG_CONTENT_TITLE = 'A sheet with an intentionally long title for layout verification';
 const LONG_CONTENT_REASON =
   'This intentionally long timing-risk explanation verifies wrapping and prevents horizontal overflow in narrow layouts.';
+const MODERN_MULTI_INDEX = 496;
+const MODERN_UNSUPPORTED_INDEX = 497;
+const MODERN_PITCH_INDEX = 498;
 
 function mockId(index: number): string {
   return index.toString(16).padStart(32, '0');
 }
 
+function mockSheetAnalysis(
+  index: number,
+  mode?: SheetConversionMode,
+  targetPitch?: SheetPitch,
+  confirmationFingerprint?: string,
+): SheetAnalysis {
+  const isMulti = index === MODERN_MULTI_INDEX;
+  const isUnsupported = index === MODERN_UNSUPPORTED_INDEX;
+  const isPitch = index === MODERN_PITCH_INDEX;
+  const modern = isMulti || isUnsupported || isPitch;
+  if (!modern) {
+    return {
+      stage: 'schedule_admitted',
+      readiness: 'ready',
+      format_label: 'Legacy flat',
+      schema_version: null,
+      source_note_count: 128 + index * 9,
+      source_track_count: null,
+      tracks: [],
+      conversion_mode: null,
+      target_pitch: null,
+      target_pitch_assumed_from_source: false,
+      output_onset_count: 128 + index * 9,
+      merged_duplicate_count: 0,
+      tempo_quantization_collapse_count: 0,
+      source_unpitched_count: 0,
+      source_unresolved_count: 0,
+      target_unplayable_count: 0,
+      omitted_source_event_count: 0,
+      authored_sustain_lost_count: 0,
+      impossible_same_key_repeats: 0,
+      loss_reasons: [],
+      error_message: null,
+      confirmation_fingerprint: null,
+      confirmation_received: false,
+    };
+  }
+  if (isUnsupported) {
+    return {
+      stage: 'discovered',
+      readiness: 'unsupported',
+      format_label: 'Composed v99',
+      schema_version: 99,
+      source_note_count: null,
+      source_track_count: null,
+      tracks: [],
+      conversion_mode: null,
+      target_pitch: null,
+      target_pitch_assumed_from_source: false,
+      output_onset_count: null,
+      merged_duplicate_count: null,
+      tempo_quantization_collapse_count: null,
+      source_unpitched_count: null,
+      source_unresolved_count: null,
+      target_unplayable_count: null,
+      omitted_source_event_count: null,
+      authored_sustain_lost_count: null,
+      impossible_same_key_repeats: null,
+      loss_reasons: [],
+      error_message:
+        'Unsupported composed sheet version 99. Export this song using a supported schema version.',
+      confirmation_fingerprint: null,
+      confirmation_received: false,
+    };
+  }
+  const selectedMode = mode ?? { kind: 'merge_playable' as const };
+  const selectedTargetPitch = targetPitch ?? (isPitch ? 'Ab' : 'C');
+  const lossy = isMulti;
+  const omitted = selectedMode.kind === 'single_track' ? 6 : 0;
+  return {
+    stage: 'schedule_admitted',
+    readiness: lossy ? 'requires_confirmation' : 'ready',
+    format_label: isMulti ? 'Composed v5' : 'Composed v4',
+    schema_version: isMulti ? 5 : 4,
+    source_note_count: isMulti ? 12 : 18,
+    source_track_count: isMulti ? 2 : 1,
+    tracks: isMulti
+      ? [
+          { track_id: 0, instrument: 'Piano', effective_pitch: 'C' },
+          { track_id: 2, instrument: 'Piano', effective_pitch: 'C' },
+        ]
+      : [{ track_id: 0, instrument: 'Piano', effective_pitch: 'Ab' }],
+    conversion_mode: selectedMode,
+    target_pitch: selectedTargetPitch,
+    target_pitch_assumed_from_source: targetPitch === undefined,
+    output_onset_count: isMulti ? (omitted > 0 ? 4 : 8) : 18,
+    merged_duplicate_count: isMulti ? 1 : 0,
+    tempo_quantization_collapse_count: isMulti ? 1 : 0,
+    source_unpitched_count: isMulti ? 1 : 0,
+    source_unresolved_count: 0,
+    target_unplayable_count: isMulti ? 1 : 0,
+    omitted_source_event_count: omitted,
+    authored_sustain_lost_count: isMulti ? 4 : 0,
+    impossible_same_key_repeats: 0,
+    loss_reasons: isMulti
+      ? [
+          'Different authored onsets collapse to the same scheduled onset.',
+          'Some source events have no playable pitch.',
+          'Some pitches fall outside the selected Piano range.',
+          'Authored sustain is not reproduced by Piano one-shots.',
+          ...(omitted > 0 ? ['Events from unselected tracks are omitted.'] : []),
+        ]
+      : [],
+    error_message: null,
+    confirmation_fingerprint: confirmationFingerprint ?? null,
+    confirmation_received: false,
+  };
+}
+
 function row(index: number, title: string): SearchResult['items'][number] {
+  const isMulti = index === MODERN_MULTI_INDEX;
+  const isUnsupported = index === MODERN_UNSUPPORTED_INDEX;
+  const isPitch = index === MODERN_PITCH_INDEX;
   return {
     song_id: mockId(index),
-    title,
-    format_label: 'TXT',
+    title: isMulti
+      ? 'Composed multi-track loss demo'
+      : isUnsupported
+        ? 'Unsupported Composed v99 demo'
+        : isPitch
+          ? 'Source pitch assumption demo'
+          : title,
+    format_label: isMulti || isUnsupported || isPitch ? 'JSON' : 'TXT',
     duration_us: 120_000_000 + index * 5_000_000,
     note_count: 128 + index * 9,
     risk_level: index % 5 === 0 ? 'medium' : 'low',
-    metadata_state: 'ready',
+    metadata_state: isMulti ? 'requires_confirmation' : isUnsupported ? 'unsupported' : 'ready',
     liked: false,
   };
 }
@@ -626,12 +751,18 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     async getSongDetail(request: DetailRequest) {
       const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
+      const foundIndex = rows.findIndex((item) => item.song_id === request.songId);
+      const sheetAnalysis = mockSheetAnalysis(
+        foundIndex,
+        request.conversionMode,
+        request.targetPitch,
+      );
       return {
         song_id: found.song_id,
         title: found.title,
         duration_us: found.duration_us ?? 0,
         note_count: found.note_count ?? 0,
-        format_label: 'TXT',
+        format_label: found.format_label,
         risk: {
           level: found.risk_level,
           headline: found.risk_level === 'low' ? 'Low timing risk' : 'Medium timing risk',
@@ -652,6 +783,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           summary:
             found.risk_level === 'low' ? 'Keep the selected settings.' : 'Try a slower tempo.',
         },
+        sheet_analysis: sheetAnalysis,
       };
     },
     async reloadLibrary() {
@@ -1053,7 +1185,81 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     async preparePlayback(request) {
       const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
+      const foundIndex = rows.findIndex((item) => item.song_id === request.songId);
+      const conversionMode = request.conversionMode ?? { kind: 'merge_playable' as const };
+      const confirmationFingerprint = [
+        'mock-sheet-consent-v1',
+        found.song_id,
+        JSON.stringify(conversionMode),
+        request.targetPitch ?? 'source',
+        request.config.fps,
+        request.config.hold_frames,
+        request.config.timing_margin_us,
+        request.config.tempo_scale,
+      ].join(':');
+      const sheetAnalysis = mockSheetAnalysis(
+        foundIndex,
+        conversionMode,
+        request.targetPitch,
+        confirmationFingerprint,
+      );
+      sheetAnalysis.confirmation_received =
+        request.conversionConfirmationFingerprint === confirmationFingerprint;
       const risk = found.risk_level === 'low' ? 'low' : 'medium';
+      const riskSummary: PreparedPlayback['risk'] = {
+        level: risk,
+        headline: risk === 'low' ? 'Low timing risk' : 'Medium timing risk',
+        reasons:
+          risk === 'low'
+            ? []
+            : [
+                found.song_id === mockId(LONG_CONTENT_INDEX)
+                  ? LONG_CONTENT_REASON
+                  : 'Dense note transitions may need a slower tempo.',
+              ],
+        recommendations: ['Keep the selected settings.'],
+      };
+      const songDetail: PreparedPlayback['song'] = {
+        song_id: found.song_id,
+        title: found.title,
+        duration_us: found.duration_us ?? 0,
+        note_count: found.note_count ?? 0,
+        format_label: found.format_label,
+        risk: riskSummary,
+        recommendation: null,
+        sheet_analysis: sheetAnalysis,
+      };
+      if (sheetAnalysis.readiness === 'unsupported' || sheetAnalysis.readiness === 'unplayable') {
+        return {
+          prepared_id: null,
+          song: songDetail,
+          config: request.config,
+          admission: 'blocked',
+          risk: riskSummary,
+          decisions: [],
+          plan_fingerprint: null,
+          variants: [],
+          error_code: 'unsupported_sheet',
+          error_message: sheetAnalysis.error_message ?? 'This sheet cannot be prepared.',
+        };
+      }
+      if (
+        sheetAnalysis.readiness === 'requires_confirmation' &&
+        !sheetAnalysis.confirmation_received
+      ) {
+        return {
+          prepared_id: null,
+          song: songDetail,
+          config: request.config,
+          admission: 'confirmation_required',
+          risk: riskSummary,
+          decisions: [],
+          plan_fingerprint: null,
+          variants: [],
+          error_code: 'conversion_confirmation_required',
+          error_message: 'Explicit conversion loss consent is required before preparation.',
+        };
+      }
       const proceedAdvisoryStatus =
         risk === 'low' ? (options.readyPlanAdvisoryStatus ?? 'no_modeled_risk') : 'modeled_risk';
       const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
@@ -1079,7 +1285,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           title: found.title,
           duration_us: found.duration_us ?? 0,
           note_count: found.note_count ?? 0,
-          format_label: 'TXT',
+          format_label: found.format_label,
           risk: {
             level: risk,
             headline: risk === 'low' ? 'Low timing risk' : 'Medium timing risk',
@@ -1094,6 +1300,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
             recommendations: ['Keep the selected settings.'],
           },
           recommendation: null,
+          sheet_analysis: sheetAnalysis,
         },
         config: request.config,
         admission: risk === 'low' ? 'ready' : 'confirmation_required',

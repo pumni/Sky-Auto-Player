@@ -284,7 +284,8 @@ fn sender_trace_capture_memory_stays_under_two_mib() {
 }
 
 #[test]
-fn diagnostics_statistics_match_python_rounding_and_population_sigma() {
+fn diagnostics_statistics_use_nearest_even_and_population_sigma() {
+    assert_eq!(percentile_ms(&[1, 2], 0.50), 0.001);
     assert_eq!(percentile_ms(&[1, 2, 3, 4], 0.50), 0.003);
     assert_eq!(percentile_ms(&[1, 2, 3, 4], 0.95), 0.004);
     assert_eq!(
@@ -414,7 +415,7 @@ fn diagnostics_sender_samples_distinguish_empty_zero_and_nonzero_measurements() 
 }
 
 #[test]
-fn diagnostics_gate_matches_python_rate_reset_and_sequence_contract() {
+fn diagnostics_gate_matches_native_rate_reset_and_sequence_contract() {
     let gate = DiagnosticsPublicationGate::default();
     gate.set_enabled(true).expect("enable");
     let start = Instant::now();

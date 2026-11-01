@@ -315,6 +315,9 @@ export function createLibraryMutationActions(
                 selectedSongId: null,
                 selectedSongSummary: null,
                 selectedSongIndex: null,
+                conversionMode: { kind: 'merge_playable' },
+                targetPitch: null,
+                conversionConsentFingerprint: null,
               },
               details: { bySongId: new Map() },
             });
@@ -401,6 +404,9 @@ export function createLibraryMutationActions(
                 selectedSongId: null,
                 selectedSongSummary: null,
                 selectedSongIndex: null,
+                conversionMode: { kind: 'merge_playable' },
+                targetPitch: null,
+                conversionConsentFingerprint: null,
               },
               details: { bySongId: new Map() },
             });

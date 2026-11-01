@@ -39,7 +39,7 @@ fn persisted_settings_cases_exercise_json_store_and_settings_service() {
 
         let store = JsonSettingsStore::new(&path);
         let service = SettingsService::load(store)
-            .unwrap_or_else(|error| panic!("Rust adapter rejected Python fixture {name}: {error}"));
+            .unwrap_or_else(|error| panic!("Rust adapter rejected settings case {name}: {error}"));
         let mut actual = serde_json::to_value(service.snapshot()).expect("serialize settings");
         let mut expected_normalized = case["normalized"].clone();
         actual["appearance_mode"] = Value::from(expected_appearance_mode);
@@ -47,7 +47,7 @@ fn persisted_settings_cases_exercise_json_store_and_settings_service() {
         assert_eq!(actual, expected_normalized, "normalized case {name}");
 
         let mut migrated: Value = serde_json::from_str(
-            &fs::read_to_string(&path).expect("Python-compatible load writes migrated config"),
+            &fs::read_to_string(&path).expect("load writes the migrated config"),
         )
         .expect("migrated config remains JSON");
         let mut expected_migrated = case["migrated"].clone();

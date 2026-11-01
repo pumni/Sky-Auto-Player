@@ -1,0 +1,9 @@
+{
+  "name": "Recorded v2 hexadecimal mask",
+  "type": "recorded",
+  "version": 2,
+  "pitch": "C",
+  "data": { "appName": "Genshin" },
+  "instruments": [{ "name": "Lyre" }, { "name": "Vintage-Lyre" }],
+  "notes": [[1, 25, "3"]]
+}

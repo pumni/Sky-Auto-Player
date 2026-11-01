@@ -114,6 +114,8 @@ pub(super) struct NativePreparedPlan {
     pub(super) generation: u64,
     pub(super) settings_fingerprint: String,
     pub(super) song: Song,
+    pub(super) source_path: PathBuf,
+    pub(super) source_hash: String,
     pub(super) dto: PreparedPlaybackDto,
     pub(super) variants: HashMap<PlaybackDecision, NativePlaybackVariant>,
 }
@@ -132,11 +134,17 @@ pub(super) struct NativePreparedInput {
     pub(super) generation: u64,
     pub(super) config: PlaybackConfigDto,
     pub(super) song: Song,
+    pub(super) sheet_analysis: Option<crate::commands::SheetAnalysisDto>,
     pub(super) schedule: ScheduleMetadata,
     pub(super) risk: RiskReport,
     pub(super) timing_policy: MaterializedTimingPolicy,
     pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub(super) settings_fingerprint: String,
+    pub(super) publication_fingerprint: String,
+    pub(super) source_path: PathBuf,
+    pub(super) source_hash: String,
+    pub(super) plan_identity: String,
+    pub(super) plan_source: Option<super::NativeSheetSource>,
     pub(super) source_epoch: u64,
 }
 
@@ -253,6 +261,9 @@ pub(super) struct NativePlaybackPrepareRequest {
     pub(super) song_id: String,
     pub(super) generation: u64,
     pub(super) config: PlaybackConfigDto,
+    pub(super) conversion_mode: Option<crate::commands::SheetConversionModeDto>,
+    pub(super) target_pitch: Option<crate::commands::SheetPitchDto>,
+    pub(super) conversion_confirmation_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,6 +287,9 @@ impl NativePlaybackPrepareRequest {
             song_id: self.song_id,
             generation: self.generation,
             config: self.config,
+            conversion_mode: self.conversion_mode,
+            target_pitch: self.target_pitch,
+            conversion_confirmation_fingerprint: self.conversion_confirmation_fingerprint,
         }
     }
 }

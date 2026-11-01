@@ -29,7 +29,7 @@ evidence:
 ## Yêu cầu hệ thống
 
 - Windows 10 hoặc 11, 64-bit
-- Không cần Python hệ thống — bản đóng gói là native và độc lập
+- Không cần developer toolchain hay scripting runtime riêng — bản đóng gói chạy độc lập
 - Không cần quyền quản trị viên cho cài đặt current-user
 - Không có installer toàn hệ thống hoặc service
 

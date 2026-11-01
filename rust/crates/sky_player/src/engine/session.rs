@@ -283,8 +283,7 @@ impl NativeDispatchSession {
         power_endpoint.reset_for_new_session()?;
         validate_timing_constants()?;
         validate_native_timing_contract(&options.timing)?;
-        // This is the authoritative native admission boundary.  Python calls
-        // the same core validator before crossing into Rust, but direct native
+        // This is the authoritative native admission boundary. Direct native
         // callers must not be able to construct a session that can only fail
         // after the worker has started.
         let qpc_clock = QpcClock::initialize()

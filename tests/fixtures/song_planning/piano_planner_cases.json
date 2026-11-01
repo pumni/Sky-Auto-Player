@@ -1,0 +1,373 @@
+{
+  "cases": [
+    {
+      "name": "C target maps to the standard Sky Piano table",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "Piano" }, "notes": [[0, 72]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 7,
+          "scan_code": 37,
+          "provenance_count": 1
+        }
+      ],
+      "expected_target_pitch": { "pitch": "C", "selection": "source_song_pitch" },
+      "diagnostics": {
+        "source_tuple_count": 1,
+        "decoded_event_count": 1,
+        "selected_source_event_count": 1,
+        "omitted_source_event_count": 0,
+        "resolved_event_count": 1,
+        "mapped_source_event_count": 1,
+        "mapped_onset_count": 1,
+        "merged_duplicate_count": 0,
+        "source_unpitched_count": 0,
+        "source_unresolved_count": 0,
+        "target_unplayable_count": 0,
+        "authored_sustain_lost_count": 0
+      }
+    },
+    {
+      "name": "D source pitch defaults the target piano to D",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "D",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "Piano" }, "notes": [[0, 74]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 7,
+          "scan_code": 37,
+          "provenance_count": 1
+        }
+      ],
+      "expected_target_pitch": { "pitch": "D", "selection": "source_song_pitch" }
+    },
+    {
+      "name": "D source notes map exactly to C target keys",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "D",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "Piano" }, "notes": [[0, 74]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": "C",
+      "tempo_scale": 1.0,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 8,
+          "scan_code": 38,
+          "provenance_count": 1
+        }
+      ],
+      "expected_target_pitch": { "pitch": "C", "selection": "explicit" }
+    },
+    {
+      "name": "v4 nominal WinterPiano note maps through its source table",
+      "sheet": {
+        "type": "composed",
+        "version": 4,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "WinterPiano" }, "notes": [[0, 72]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 14,
+          "scan_code": 53,
+          "provenance_count": 1
+        }
+      ]
+    },
+    {
+      "name": "v5 absolute WinterPiano note is not nominally transposed",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "WinterPiano" }, "notes": [[0, 72]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 7,
+          "scan_code": 37,
+          "provenance_count": 1
+        }
+      ]
+    },
+    {
+      "name": "merge chords and preserve duplicate source provenance",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          {
+            "instrument": { "name": "Piano" },
+            "notes": [[0, 72], [0, 74]]
+          },
+          {
+            "instrument": { "name": "Piano" },
+            "notes": [[0, 72]]
+          }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 7,
+          "scan_code": 37,
+          "provenance_count": 2
+        },
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 8,
+          "scan_code": 38,
+          "provenance_count": 1
+        }
+      ],
+      "diagnostics": {
+        "source_tuple_count": 3,
+        "decoded_event_count": 3,
+        "selected_source_event_count": 3,
+        "omitted_source_event_count": 0,
+        "resolved_event_count": 3,
+        "mapped_source_event_count": 3,
+        "mapped_onset_count": 2,
+        "merged_duplicate_count": 1,
+        "source_unpitched_count": 0,
+        "source_unresolved_count": 0,
+        "target_unplayable_count": 0,
+        "authored_sustain_lost_count": 0
+      }
+    },
+    {
+      "name": "single track id selects one of identically named instruments",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "Piano" }, "notes": [[0, 72]] },
+          { "instrument": { "name": "Piano" }, "notes": [[0, 74]] }
+        ]
+      },
+      "mode": { "kind": "single_track", "track_id": 1 },
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "requires_confirmation",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 8,
+          "scan_code": 38,
+          "provenance_count": 1
+        }
+      ],
+      "diagnostics": {
+        "source_tuple_count": 2,
+        "decoded_event_count": 2,
+        "selected_source_event_count": 1,
+        "omitted_source_event_count": 1,
+        "resolved_event_count": 1,
+        "mapped_source_event_count": 1,
+        "mapped_onset_count": 1,
+        "merged_duplicate_count": 0,
+        "source_unpitched_count": 0,
+        "source_unresolved_count": 0,
+        "target_unplayable_count": 0,
+        "authored_sustain_lost_count": 0
+      },
+      "loss_reasons": ["track_selection_omission"]
+    },
+    {
+      "name": "tempo scale is applied once after exact source timing",
+      "sheet": {
+        "type": "composed",
+        "version": 5,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0, 0],
+        "tracks": [
+          { "instrument": { "name": "Piano" }, "notes": [[0, 72], [1, 74]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 0.5,
+      "status": "ready",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 200000,
+          "button_index": 7,
+          "scan_code": 37,
+          "provenance_count": 1
+        },
+        {
+          "onset_us": 600000,
+          "scheduled_onset_us": 1200000,
+          "button_index": 8,
+          "scan_code": 38,
+          "provenance_count": 1
+        }
+      ]
+    },
+    {
+      "name": "unpitched and unresolved source notes do not become Piano notes",
+      "sheet": {
+        "type": "composed",
+        "version": 4,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0, 0],
+        "tracks": [
+          { "instrument": { "name": "Piano" }, "notes": [[0, 72, 2]] },
+          { "instrument": { "name": "Drum" }, "notes": [[0, 60]] },
+          { "instrument": { "name": "Piano" }, "notes": [[0, 999]] },
+          { "instrument": { "name": "Cello" }, "notes": [[0, 72]] }
+        ]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "requires_confirmation",
+      "events": [
+        {
+          "onset_us": 100000,
+          "scheduled_onset_us": 100000,
+          "button_index": 7,
+          "scan_code": 37,
+          "provenance_count": 1
+        }
+      ],
+      "diagnostics": {
+        "source_tuple_count": 4,
+        "decoded_event_count": 4,
+        "selected_source_event_count": 4,
+        "omitted_source_event_count": 0,
+        "resolved_event_count": 2,
+        "mapped_source_event_count": 1,
+        "mapped_onset_count": 1,
+        "merged_duplicate_count": 0,
+        "source_unpitched_count": 1,
+        "source_unresolved_count": 1,
+        "target_unplayable_count": 1,
+        "authored_sustain_lost_count": 1
+      },
+      "loss_reasons": [
+        "source_unpitched",
+        "source_unresolved",
+        "target_piano_unplayable",
+        "authored_sustain_not_reproduced"
+      ]
+    },
+    {
+      "name": "all target-unplayable notes fail closed despite songNotes",
+      "sheet": {
+        "type": "composed",
+        "version": 4,
+        "bpm": 120,
+        "pitch": "C",
+        "data": { "appName": "Sky" },
+        "columnTempos": [0],
+        "tracks": [
+          { "instrument": { "name": "Cello" }, "notes": [[0, 72]] }
+        ],
+        "songNotes": [{ "key": "Key0", "time": 0 }]
+      },
+      "mode": null,
+      "target_pitch": null,
+      "tempo_scale": 1.0,
+      "status": "unsupported",
+      "events": [],
+      "diagnostics": {
+        "source_tuple_count": 1,
+        "decoded_event_count": 1,
+        "selected_source_event_count": 1,
+        "omitted_source_event_count": 0,
+        "resolved_event_count": 1,
+        "mapped_source_event_count": 0,
+        "mapped_onset_count": 0,
+        "merged_duplicate_count": 0,
+        "source_unpitched_count": 0,
+        "source_unresolved_count": 0,
+        "target_unplayable_count": 1,
+        "authored_sustain_lost_count": 0
+      },
+      "loss_reasons": ["target_piano_unplayable"]
+    }
+  ]
+}

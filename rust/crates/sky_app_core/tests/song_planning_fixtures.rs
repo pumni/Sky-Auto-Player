@@ -6,13 +6,13 @@ use sky_app_core::timing::MaterializedTimingPolicy;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
-        "../../../../tests/fixtures/song_planning/oracle_cases.json"
+        "../../../../tests/fixtures/song_planning/schedule_contract_cases.json"
     ))
-    .expect("valid committed song-planning oracle fixture")
+    .expect("valid committed schedule contract fixture")
 }
 
 #[test]
-fn parser_cases_are_generated_by_the_current_python_oracle() {
+fn parser_cases_preserve_the_checked_in_legacy_contract() {
     let raw = fixture();
     let cases = raw["parser_cases"].as_array().unwrap();
     assert!(cases.len() >= 10);
@@ -21,7 +21,7 @@ fn parser_cases_are_generated_by_the_current_python_oracle() {
         match case["status"].as_str().unwrap() {
             "ok" => {
                 let expected = &case["song"];
-                let actual = parse_song_json(&bytes, "fixture").expect("valid oracle case");
+                let actual = parse_song_json(&bytes, "fixture").expect("valid fixture case");
                 assert_eq!(actual.name, expected["name"].as_str().unwrap(), "{case}");
                 let expected_notes = expected["notes"].as_array().unwrap();
                 assert_eq!(actual.notes.len(), expected_notes.len(), "{case}");
@@ -41,7 +41,7 @@ fn parser_cases_are_generated_by_the_current_python_oracle() {
 }
 
 #[test]
-fn schedule_and_risk_cases_match_python_oracle_fields() {
+fn schedule_and_risk_cases_match_recorded_contract_fields() {
     let raw = fixture();
     let cases = raw["schedule_cases"].as_array().unwrap();
     assert!(cases.len() >= 4);
@@ -53,10 +53,10 @@ fn schedule_and_risk_cases_match_python_oracle_fields() {
             case["hold_frames"].as_f64().unwrap(),
             case["timing_margin_us"].as_u64().unwrap(),
         )
-        .expect("timing policy oracle case");
+        .expect("timing policy fixture case");
         let schedule =
             build_schedule_with_policy(&song, case["tempo_scale"].as_f64().unwrap(), &policy)
-                .expect("schedule oracle case");
+                .expect("schedule fixture case");
         let expected = &case["schedule"];
         let actual = serde_json::to_value(&schedule).unwrap();
         for field in [
@@ -123,7 +123,7 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
     let raw = fixture();
     let cases = raw["timing_policy_cases"]
         .as_array()
-        .expect("timing policy oracle cases");
+        .expect("timing policy fixture cases");
     assert!(cases.len() >= 4);
     for case in cases {
         let policy = MaterializedTimingPolicy::from_user_margin(
@@ -131,7 +131,7 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
             case["hold_frames"].as_f64().unwrap(),
             case["timing_margin_us"].as_u64().unwrap(),
         )
-        .expect("materialized policy oracle case");
+        .expect("materialized policy fixture case");
         assert_eq!(
             policy.frame_us,
             case["frame_us"].as_u64().unwrap(),

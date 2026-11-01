@@ -371,8 +371,8 @@ impl RuntimeDispatchCoordinator {
         Ok(())
     }
 
-    /// Build a `HashMap<String, u64>` generation status summary compatible with
-    /// the existing Python/snapshot API. Counts come directly from the checked
+    /// Build a `HashMap<String, u64>` generation status summary for snapshot
+    /// publication. Counts come directly from the checked
     /// generation ledger, so no subtraction or saturating arithmetic can hide
     /// an accounting mismatch.
     ///

@@ -19,7 +19,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   const retryStatus = useStore((store) => store.retryPlaybackStatus);
   const cancel = useStore((store) => store.cancelPreparedPlayback);
   const admissionActionRef = useRef<HTMLButtonElement>(null);
-  const admissionRequired = prepared?.admission === 'confirmation_required';
+  const admissionRequired =
+    prepared?.admission === 'confirmation_required' && prepared.prepared_id !== null;
   const issue = playbackIssuePresentation(playback);
   const blockedMessage =
     prepared?.admission === 'blocked' ? (prepared.error_message ?? playback.error) : null;

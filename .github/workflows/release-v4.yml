@@ -10,8 +10,6 @@ concurrency:
   group: v4-release-control-plane
   cancel-in-progress: false
 
-env:
-  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
   prepare:
@@ -40,9 +38,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Require latest exact-head CI run to be successful
         shell: bash
         env:
@@ -132,14 +129,21 @@ jobs:
           name: v4-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
-      - name: Install pinned Rust and Bun toolchains
-        run: |
-          rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Build and export the unsigned handoff once
         run: cargo xtask release-v4 build-unsigned --state-root $env:V4_RELEASE_STATE_ROOT --workflow-sha $env:GITHUB_SHA
@@ -198,13 +202,21 @@ jobs:
           name: v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}/incoming-unsigned
 
-      - name: Install pinned Rust and Bun toolchains
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Install locked signer dependencies without building the installer
         working-directory: desktop
@@ -321,9 +333,8 @@ jobs:
           name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Independently verify source, run, manifest, and production signature
         run: cargo xtask release-v4 verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
@@ -377,9 +388,8 @@ jobs:
           name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Revalidate qualified handoff before using metadata credentials
         run: cargo xtask release-v4 probe-verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
@@ -437,9 +447,8 @@ jobs:
           name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Verify OIDC attestations against exact published bytes and source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -502,9 +511,8 @@ jobs:
           name: v4-published-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Mint contents-scoped metadata App token
         id: metadata-app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -572,9 +580,8 @@ jobs:
           name: v4-promoted-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Re-fetch and verify immutable assets, stable endpoint, and metadata
         env:
           GH_TOKEN: ${{ github.token }}

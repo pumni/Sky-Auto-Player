@@ -1,9 +1,7 @@
 //! Native desktop application runtime.
 //!
-//! This is the composition root for commands that have crossed the strangler
-//! boundary.  It owns live application state and calls pure app-core services
-//! plus outer adapters.  It never delegates a native-owned command to the
-//! Python Core.
+//! This is the composition root for native desktop commands. It owns live
+//! application state and calls pure app-core services plus outer adapters.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, PhysicalActivityLease};
 use crate::commands::{
@@ -13,11 +11,11 @@ use crate::commands::{
     LibraryCreatePlaylistRequest, LibraryPlaylistIdRequest, LibraryPlaylistSongsRequest,
     LibraryRenamePlaylistRequest, PlaybackActiveStatusDto, PlaybackAdmission,
     PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision, PlaybackDecisionAcceptanceDto,
-    PlaybackDefaultsDto, PlaybackPendingControl, PlaybackPlanVariantDto, PlaybackPrepareRequest,
-    PlaybackSessionDto, PlaybackSessionState, PlaybackStartRequest, PlaybackStatusDto,
-    PlaybackTerminalStatusDto, PreparedPlaybackDto, RiskDecisionDto, RiskSummaryDto, SettingsDto,
-    SettingsPatch, SongDetailDto, UpdateCheckAckDto, UpdateInstallAckDto, UpdatePreferencesDto,
-    UpdatePreferencesPatch,
+    PlaybackPendingControl, PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto,
+    PlaybackSessionState, PlaybackStartRequest, PlaybackStatusDto, PlaybackTerminalStatusDto,
+    PreparedPlaybackDto, RiskDecisionDto, RiskSummaryDto, SettingsDto, SettingsPatch,
+    SheetConversionModeDto, SheetPitchDto, SheetReadinessDto, SongDetailDto, UpdateCheckAckDto,
+    UpdateInstallAckDto, UpdatePreferencesDto, UpdatePreferencesPatch,
 };
 use crate::power_lifecycle::{
     PowerLifecycleDiagnostics, PowerLifecycleSnapshot, SuspendResumeRegistration,
@@ -43,7 +41,6 @@ use catalog::compute_catalog_source_fingerprint;
 use catalog::{catalog_error, compute_catalog_source_static_fingerprint};
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use sky_app_core::catalog::CatalogIndex;
 use sky_app_core::library::{ImportedSourceKind, LibraryManifestService};
 use sky_app_core::settings::{
@@ -51,8 +48,8 @@ use sky_app_core::settings::{
     UpdatePreferencesPatch as CoreUpdatePreferencesPatch,
 };
 use sky_app_core::song::{
-    ActionKind, RiskReport, ScheduleMetadata, Song, analyze_schedule_with_context,
-    build_schedule_with_policy, parse_song_json,
+    ActionKind, RiskReport, ScheduleMetadata, Song, SongPlan, analyze_schedule_with_context,
+    build_schedule_with_policy, build_song_plan,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_native_adapters::{
@@ -165,6 +162,19 @@ struct CatalogMetadata {
     state: &'static str,
 }
 
+pub(super) struct SongAnalysisRequest<'a> {
+    pub(super) path: &'a Path,
+    pub(super) source_bytes: Option<&'a [u8]>,
+    pub(super) song_id: &'a str,
+    pub(super) title: &'a str,
+    pub(super) fallback: &'a str,
+    pub(super) generation: u64,
+    pub(super) settings: &'a ApplicationSettings,
+    pub(super) policy: &'a MaterializedTimingPolicy,
+    pub(super) conversion_mode: Option<SheetConversionModeDto>,
+    pub(super) target_pitch: Option<SheetPitchDto>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -226,6 +236,7 @@ impl CachedSongAnalysis {
         Self {
             metadata: CatalogMetadata::error(format_label),
             detail: None,
+            source_hash: None,
         }
     }
 }
@@ -246,6 +257,14 @@ impl CatalogMetadata {
 struct CachedSongAnalysis {
     metadata: CatalogMetadata,
     detail: Option<SongDetailDto>,
+    source_hash: Option<String>,
+}
+
+pub(super) struct NativeSheetSource {
+    pub(super) bytes: Vec<u8>,
+    pub(super) fallback_name: String,
+    pub(super) conversion_mode: Option<SheetConversionModeDto>,
+    pub(super) target_pitch: Option<SheetPitchDto>,
 }
 
 impl NativeDesktopRuntime {
@@ -526,6 +545,8 @@ impl NativeDesktopRuntime {
                 encode_result(self.detail(CatalogDetailRequest {
                     song_id: request.song_id,
                     generation: request.generation,
+                    conversion_mode: request.conversion_mode,
+                    target_pitch: request.target_pitch,
                 }))
             }
             "catalog.reload" => encode_result(self.reload()),
@@ -949,9 +970,44 @@ impl NativeDesktopRuntime {
         let cancelled = self.playback.begin_preparation()?;
         let result = (|| {
             self.ensure_catalog_loaded()?;
-            let (source_epoch, (path, fallback, source_fingerprint)) =
+            let (path, indexed_title) = {
+                let catalog = self
+                    .catalog
+                    .lock()
+                    .map_err(|_| "native catalog lock poisoned".to_string())?;
+                let entry = catalog
+                    .index
+                    .entry_for_song_id(&request.song_id, Some(request.generation))
+                    .map_err(catalog_error)?;
+                (
+                    PathBuf::from(&entry.canonical_path),
+                    entry.row.title.clone(),
+                )
+            };
+            // The catalog and settings locks are not held across file I/O or
+            // decoding. Bind the content digest to the plan and recheck it at start.
+            let bytes = fs::read(&path).map_err(|error| format!("song read failed: {error}"))?;
+            let source_hash = sha256_hex(&bytes);
+            let fallback = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&indexed_title)
+                .to_owned();
+            let plan_identity = sheet_confirmation_fingerprint(SheetConfirmationIdentity {
+                song_id: &request.song_id,
+                generation: request.generation,
+                path: &path,
+                bytes: &bytes,
+                mode: request.conversion_mode,
+                pitch: request.target_pitch,
+                fps: request.config.fps,
+                hold_frames: request.config.hold_frames,
+                timing_margin_us: request.config.timing_margin_us,
+                tempo_scale: request.config.tempo_scale,
+            })?;
+            let (source_epoch, (actual_settings_fingerprint, publication_fingerprint)) =
                 self.playback.capture_preparation_sources(&cancelled, || {
-                    let (path, fallback, generation) = {
+                    let (current_path, generation) = {
                         let catalog = self
                             .catalog
                             .lock()
@@ -962,52 +1018,121 @@ impl NativeDesktopRuntime {
                             .map_err(catalog_error)?;
                         (
                             PathBuf::from(&entry.canonical_path),
-                            entry.row.title.clone(),
                             catalog.index.generation(),
                         )
                     };
+                    if current_path != path {
+                        return Err(
+                            "song source path changed while preparation was reading it".into()
+                        );
+                    }
                     let settings = self.settings_snapshot()?;
-                    let fingerprint = settings_fingerprint(&settings)?;
+                    let actual_settings_fingerprint = settings_fingerprint(&settings)?;
                     Ok((
                         generation,
-                        fingerprint.clone(),
-                        (path, fallback, fingerprint),
+                        actual_settings_fingerprint.clone(),
+                        (
+                            actual_settings_fingerprint.clone(),
+                            actual_settings_fingerprint,
+                        ),
                     ))
                 })?;
-
-            // The catalog and settings locks are no longer held across file
-            // I/O, parsing, schedule construction, or whole-stream analysis.
-            let bytes = fs::read(&path).map_err(|error| format!("song read failed: {error}"))?;
-            let fallback = path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or(&fallback);
-            let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
             let policy = self.timing_policy(
                 request.config.fps,
                 request.config.hold_frames,
                 request.config.timing_margin_us,
             )?;
             let timing_margin_recommendation = self.timing_margin_recommendation();
-            let schedule = build_schedule_with_policy(&song, request.config.tempo_scale, &policy)
-                .map_err(|error| error.to_string())?;
-            let risk = analyze_schedule_with_context(
-                &schedule,
-                Some(&song.notes),
-                request.config.hold_frames,
+            let options = planner_options(
+                request.conversion_mode,
+                request.target_pitch,
                 request.config.tempo_scale,
             );
+            let plan = match build_song_plan(&bytes, &fallback, &options, &policy) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let sheet =
+                        failed_sheet_analysis(&catalog::format_label_for_path(&path), &error);
+                    return Ok(blocked_sheet_prepare(
+                        &request.song_id,
+                        &fallback,
+                        request.config.clone(),
+                        sheet,
+                    ));
+                }
+            };
+            let (song, schedule, risk, sheet_analysis, plan_source) = match plan {
+                SongPlan::LegacyCompatibility(plan) => {
+                    let risk = analyze_schedule_with_context(
+                        &plan.schedule,
+                        Some(&plan.song.notes),
+                        request.config.hold_frames,
+                        request.config.tempo_scale,
+                    );
+                    let sheet = legacy_sheet_analysis(&plan.song, &plan.schedule);
+                    (plan.song, plan.schedule, risk, sheet, None)
+                }
+                SongPlan::PianoConversion(plan) => {
+                    let risk = piano_plan_risk(
+                        &plan,
+                        request.config.hold_frames,
+                        request.config.tempo_scale,
+                    );
+                    let sheet = piano_plan_sheet_analysis(
+                        &plan,
+                        Some(plan_identity.clone()),
+                        risk.as_ref(),
+                    );
+                    let mut sheet = sheet;
+                    sheet.confirmation_received =
+                        request.conversion_confirmation_fingerprint.as_deref()
+                            == sheet.confirmation_fingerprint.as_deref();
+                    let Some(schedule) = plan.schedule else {
+                        return Ok(blocked_sheet_prepare(
+                            &request.song_id,
+                            &plan.name,
+                            request.config.clone(),
+                            sheet,
+                        ));
+                    };
+                    let Some(risk) = risk else {
+                        return Ok(blocked_sheet_prepare(
+                            &request.song_id,
+                            &plan.name,
+                            request.config.clone(),
+                            sheet,
+                        ));
+                    };
+                    let song = Song {
+                        name: plan.name.clone(),
+                        notes: Vec::new(),
+                    };
+                    let source = NativeSheetSource {
+                        bytes: bytes.clone(),
+                        fallback_name: fallback.clone(),
+                        conversion_mode: request.conversion_mode,
+                        target_pitch: request.target_pitch,
+                    };
+                    (song, schedule, risk, sheet, Some(source))
+                }
+            };
             self.playback.prepare_with_token(
                 NativePreparedInput {
                     song_id: request.song_id,
                     generation: request.generation,
                     config: request.config,
                     song,
+                    sheet_analysis: Some(sheet_analysis),
                     schedule,
                     risk,
                     timing_policy: policy,
                     timing_margin_recommendation,
-                    settings_fingerprint: source_fingerprint,
+                    settings_fingerprint: actual_settings_fingerprint,
+                    publication_fingerprint,
+                    source_path: path,
+                    source_hash,
+                    plan_identity,
+                    plan_source,
                     source_epoch,
                 },
                 &cancelled,
@@ -1032,6 +1157,30 @@ impl NativeDesktopRuntime {
         request: crate::commands::PlaybackStartRequest,
     ) -> Result<PlaybackSessionDto, String> {
         validate_public_playback_start_request(&request)?;
+        if let Some((path, expected_hash)) = self
+            .playback
+            .prepared_source_identity(&request.prepared_id)?
+        {
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.playback
+                        .invalidate_prepared_source(&request.prepared_id)?;
+                    return Err(format!(
+                        "prepared sheet source is no longer readable: {error}"
+                    ));
+                }
+            };
+            let current_hash = sha256_hex(&bytes);
+            if current_hash != expected_hash {
+                self.playback
+                    .invalidate_prepared_source(&request.prepared_id)?;
+                return Err(
+                    "prepared playback is stale because the source sheet changed; prepare it again"
+                        .into(),
+                );
+            }
+        }
         let settings = self.settings_snapshot()?;
         self.playback.start(request, &settings, self.events.clone())
     }
@@ -1106,6 +1255,7 @@ mod catalog;
 mod catalog_cache;
 mod catalog_reconcile;
 mod catalog_search;
+mod dtos;
 #[cfg(test)]
 use catalog_cache::AnalysisTestGate;
 use catalog_cache::{
@@ -1114,6 +1264,9 @@ use catalog_cache::{
     ViewportResponseProjection,
 };
 mod playback;
+pub(super) mod sheet;
+pub(crate) use dtos::native_build_dto;
+use dtos::{settings_dto, update_preferences_dto};
 #[cfg(test)]
 use playback::*;
 use playback::{
@@ -1121,81 +1274,22 @@ use playback::{
     NativePlaybackStartRequest, NativePreparedInput, opaque_native_id, settings_fingerprint,
     validate_playback_start_request, validate_public_playback_start_request,
 };
+use sheet::{
+    SheetConfirmationIdentity, blocked_sheet_prepare, failed_sheet_analysis, legacy_sheet_analysis,
+    piano_plan_risk, piano_plan_sheet_analysis, planner_options, sha256_hex,
+    sheet_confirmation_fingerprint,
+};
 
 #[cfg(test)]
 pub(crate) fn resolve_install_root() -> Result<PathBuf, String> {
     AppPaths::resolve().map(|paths| paths.install_root().to_path_buf())
 }
 
-pub(crate) fn native_build_dto() -> crate::commands::NativeBuildDto {
-    crate::commands::NativeBuildDto {
-        native_build_commit: option_env!("SKY_NATIVE_BUILD_COMMIT")
-            .unwrap_or("unknown")
-            .into(),
-        native_version: env!("CARGO_PKG_VERSION").into(),
-        schema_version: sky_dispatch_win32::calibration::CALIBRATION_SCHEMA_VERSION as u64,
-        native_abi: option_env!("SKY_NATIVE_ABI")
-            .unwrap_or("native-win32")
-            .into(),
-        rustc_version: option_env!("SKY_RUSTC_VERSION").unwrap_or("unknown").into(),
-        win32_backend: sky_dispatch_win32::win32_available(),
-    }
-}
-
-fn playback_defaults(settings: &ApplicationSettings) -> PlaybackDefaultsDto {
-    PlaybackDefaultsDto {
-        hold_frames: settings.playback_defaults.hold_frames,
-        timing_margin_us: settings.playback_defaults.timing_margin_us,
-        tempo_scale: settings.playback_defaults.tempo_scale,
-        fps: settings.playback_defaults.fps,
-        dry_run: false,
-    }
-}
-
-fn update_preferences_dto(settings: &ApplicationSettings) -> UpdatePreferencesDto {
-    UpdatePreferencesDto {
-        auto_check: settings.update.auto_check,
-        channel: match settings.update.channel {
-            sky_app_core::settings::UpdateChannel::Stable => {
-                crate::ui_events::UpdateChannel::Stable
-            }
-            sky_app_core::settings::UpdateChannel::Beta => crate::ui_events::UpdateChannel::Beta,
-        },
-        skip_version: settings.update.skip_version.clone(),
-        check_interval_s: settings.update.check_interval_s,
-        last_check_ts: settings.update.last_check_ts,
-        last_error_ts: settings.update.last_error_ts,
-    }
-}
-
-fn settings_dto(
-    settings: &ApplicationSettings,
-    timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
-) -> SettingsDto {
-    SettingsDto {
-        appearance_mode: match settings.appearance_mode {
-            sky_app_core::settings::AppearanceMode::System => {
-                crate::commands::AppearanceMode::System
-            }
-            sky_app_core::settings::AppearanceMode::Light => crate::commands::AppearanceMode::Light,
-            sky_app_core::settings::AppearanceMode::Dark => crate::commands::AppearanceMode::Dark,
-        },
-        palette: settings.palette.clone(),
-        ui_background_mode: settings.ui_background_mode.clone(),
-        playback_defaults: playback_defaults(settings),
-        auto_play: settings.playback_behavior.auto_play,
-        timing_margin_recommendation,
-        telemetry_enabled: settings.telemetry_enabled,
-        verbose_hud: settings.verbose_hud,
-        update_preferences: update_preferences_dto(settings),
-    }
-}
-
 fn json_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-fn bounded_text(value: impl AsRef<str>) -> String {
+pub(super) fn bounded_text(value: impl AsRef<str>) -> String {
     value.as_ref().chars().take(4096).collect()
 }
 
@@ -1205,6 +1299,8 @@ fn bounded_text(value: impl AsRef<str>) -> String {
 struct NativeCatalogDetailRequest {
     song_id: String,
     generation: Option<u64>,
+    conversion_mode: Option<SheetConversionModeDto>,
+    target_pitch: Option<SheetPitchDto>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1830,9 +1926,7 @@ fn count_buffered_snapshots(buffered: &VecDeque<UiEvent>) -> u64 {
         .count() as u64
 }
 
-/// Match the Python diagnostics percentile contract.  Python's ``round``
-/// uses ties-to-even, so using `f64::round()` here would diverge for small
-/// sample sets at an exact half index.
+/// Select a percentile with nearest-even index rounding for half-index cases.
 fn percentile_ms(values: &[i64], fraction: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -1840,15 +1934,7 @@ fn percentile_ms(values: &[i64], fraction: f64) -> f64 {
     let mut ordered = values.to_vec();
     ordered.sort_unstable();
     let position = fraction * (ordered.len() - 1) as f64;
-    let lower = position.floor();
-    let fractional = position - lower;
-    let index = if fractional < 0.5 {
-        lower as usize
-    } else if fractional > 0.5 || (lower as usize) % 2 == 1 {
-        (lower as usize + 1).min(ordered.len() - 1)
-    } else {
-        lower as usize
-    };
+    let index = (position.round_ties_even() as usize).min(ordered.len() - 1);
     ordered[index] as f64 / 1000.0
 }
 

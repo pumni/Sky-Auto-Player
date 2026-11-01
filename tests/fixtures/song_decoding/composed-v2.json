@@ -1,0 +1,13 @@
+{
+  "name": "Composed v2 hexadecimal layers",
+  "type": "composed",
+  "version": 2,
+  "bpm": 120,
+  "pitch": "C",
+  "data": { "appName": "Sky" },
+  "instruments": ["Piano", "Cello"],
+  "columns": [
+    [0, [[0, "2"]]],
+    [0, [[1, "3"]]]
+  ]
+}

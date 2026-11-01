@@ -1,0 +1,13 @@
+{
+  "name": "Composed v3 instrument pitch",
+  "type": "composed",
+  "version": 3,
+  "bpm": 120,
+  "pitch": "C",
+  "data": { "appName": "Sky" },
+  "instruments": [
+    { "name": "Piano", "pitch": "" },
+    { "name": "Guitar", "pitch": "D" }
+  ],
+  "columns": [[0, [[1, "2"]]]]
+}

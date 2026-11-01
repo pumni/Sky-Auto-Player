@@ -1,0 +1,13 @@
+{
+  "name": "Recorded v3 nominal notes",
+  "type": "recorded",
+  "version": 3,
+  "pitch": "C",
+  "data": { "appName": "Genshin" },
+  "tracks": [
+    {
+      "instrument": { "name": "Lyre", "pitch": "" },
+      "notes": [[72, 12.5, 20]]
+    }
+  ]
+}

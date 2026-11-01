@@ -541,21 +541,22 @@ fn catalog_viewport_hydrates_metadata_and_liked_songs_persist_by_song_id() {
         .detail(crate::commands::CatalogDetailRequest {
             song_id: song_id.clone(),
             generation: Some(generation),
+            conversion_mode: None,
+            target_pitch: None,
         })
         .expect("detail from hydrated analysis");
     assert_eq!(hydrated_detail.format_label, "JSON");
     let unavailable_path = root.join("songs/hydrate-unavailable.json");
     fs::rename(root.join("songs/hydrate.json"), &unavailable_path).expect("hide source");
-    let cached_detail = runtime
+    let unavailable_detail = runtime
         .detail(crate::commands::CatalogDetailRequest {
             song_id: song_id.clone(),
             generation: Some(generation),
+            conversion_mode: None,
+            target_pitch: None,
         })
-        .expect("cached detail after source unavailable");
-    assert_eq!(
-        serde_json::to_value(cached_detail).expect("cached detail JSON"),
-        serde_json::to_value(hydrated_detail).expect("hydrated detail JSON")
-    );
+        .expect_err("selected detail must reject an unavailable source");
+    assert!(unavailable_detail.contains("song read failed"));
     fs::rename(&unavailable_path, root.join("songs/hydrate.json")).expect("restore source");
 
     let liked = runtime
@@ -652,6 +653,7 @@ fn warmed_native_catalog_routes_avoid_full_snapshot_clones() {
                     state: "ready",
                 },
                 detail: None,
+                source_hash: None,
             },
         );
 

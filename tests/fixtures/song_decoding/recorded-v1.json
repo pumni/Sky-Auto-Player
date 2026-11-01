@@ -1,0 +1,15 @@
+{
+  "name": "Recorded v1 decimal-as-hex mask",
+  "type": "recorded",
+  "version": 1,
+  "pitch": "C",
+  "data": { "appName": "Sky" },
+  "instruments": [
+    { "name": "Piano" },
+    { "name": "Harp", "pitch": "D" },
+    { "name": "Piano" },
+    { "name": "Piano" },
+    { "name": "Cello" }
+  ],
+  "notes": [[0, 10, 2], [1, 20, 10], [2, 30, 0], [3, 40]]
+}

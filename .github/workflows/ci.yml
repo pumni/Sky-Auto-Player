@@ -55,11 +55,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Install pinned Rust toolchain for path classification
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Rust cache for path classifier
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -70,8 +67,6 @@ jobs:
 
       - name: Classify changed paths
         id: classify
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           set -euo pipefail
           classifier_args=()
@@ -113,7 +108,6 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
@@ -133,11 +127,14 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned stable toolchain for updater bridge
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
@@ -155,14 +152,15 @@ jobs:
       - name: Set up Bun for updater bridge
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on updater bridge dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
 
       - name: Build exactly one updater bridge fixture
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $bridgeRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-updater-bridge"
           $bridgeFixture = Join-Path $env:RUNNER_TEMP "sky-auto-player-updater-bridge-build"
@@ -212,8 +210,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    env:
-      RUSTUP_TOOLCHAIN: 1.99.1
 
     steps:
       - name: Start CI timing
@@ -228,13 +224,18 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned stable toolchain for updater contract
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
       - name: Set up Bun for updater contract
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on updater contract dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx
@@ -244,8 +245,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Test Tauri signer key pair interoperability
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_fixture::tests::tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair -- --ignored --exact
 
       - name: Exercise non-production updater key rotation fixture
@@ -277,9 +276,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Set up pinned Go for workflow validation
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
@@ -297,18 +295,15 @@ jobs:
           "$GOBIN/actionlint" -color
 
       - name: Run startup calibration export hash self-test
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_startup_calibration_evidence_export.ps1
 
+      - name: Test canonical toolchain pin resolver
+        run: node --test scripts/toolchain-pin.test.mjs
+
       - name: Run Rust-native CI, candidate, bridge, and calibration self-tests
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
 
       - name: Repository verification — static
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo xtask check static --skip-supply-chain
 
       - name: Report CI timing
@@ -347,13 +342,15 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned toolchain for release contract tests
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Set up Bun for release contract tests
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Verify release contract test tools
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,signtool.exe
@@ -372,8 +369,6 @@ jobs:
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_updater_private_key.ps1
 
       - name: Run Rust NSIS and registry owner regression tests
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           cargo test --locked --manifest-path rust/xtask/Cargo.toml || {
             exit_code=$?
@@ -393,8 +388,6 @@ jobs:
 
       - name: Build bounded unsigned Authenticode PE fixture
         shell: pwsh
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $fixtureRoot = Join-Path $env:RUNNER_TEMP "sky-v4-authenticode-unsigned-fixture"
           if (Test-Path -LiteralPath $fixtureRoot) {
@@ -477,8 +470,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      RUSTUP_TOOLCHAIN: 1.99.1
 
     steps:
       - name: Checkout exact source
@@ -489,9 +480,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Rust cache for Linux production binary
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -531,22 +521,21 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
       - name: Restore pinned cargo-audit tool
         id: cargo-audit-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
-          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.99
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust/rust-toolchain.toml') }}
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
-          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.99
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-${{ hashFiles('rust/rust-toolchain.toml') }}
 
       - name: RustSec dependency audit
         env:
@@ -567,7 +556,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
-          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.99
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust/rust-toolchain.toml') }}
 
       - name: JavaScript dependency advisory scan
         uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347 # v2.7.0
@@ -594,7 +583,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
-          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-rust-1.99
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-${{ hashFiles('rust/rust-toolchain.toml') }}
 
       - name: Report CI timing
         if: always()
@@ -634,17 +623,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned stable toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Rust — verify pinned stable toolchain
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: |
-          $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.99\.1\s') {
-            throw "Expected stable Rust 1.99.1 from rust/rust-toolchain.toml, got: $version"
-          }
+        run: node scripts/toolchain-pin.mjs verify rust
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -664,14 +652,10 @@ jobs:
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
       - name: Stage calibration resource for Tauri validation
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo xtask calibration build
 
       - name: Repository verification — Rust
         if: needs.changes.outputs.rust_required == 'true'
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $ErrorActionPreference = "Stop"
           $isolatedXtask = Join-Path $env:RUNNER_TEMP ("xtask-rust-check-" + [guid]::NewGuid().ToString("N") + ".exe")
@@ -687,8 +671,6 @@ jobs:
 
       - name: Repository verification — native desktop
         if: needs.changes.outputs.desktop_native_required == 'true'
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: cargo xtask check desktop-native
 
       - name: Show sccache stats
@@ -725,7 +707,10 @@ jobs:
       - name: Set up Bun for desktop web validation
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Install pinned desktop web dependencies
         working-directory: desktop
@@ -799,19 +784,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned stable toolchain for current candidate
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Rust — verify current-candidate compiler
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: |
-          $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.99\.1\s') {
-            throw "Expected stable Rust 1.99.1 for current candidate, got: $version"
-          }
+        run: node scripts/toolchain-pin.mjs verify rust
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -830,7 +812,10 @@ jobs:
       - name: Set up Bun for current candidate
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on current-candidate dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
@@ -840,8 +825,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build exactly one current Tauri candidate
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate.key"
           $publicKeyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate.pub"
@@ -888,8 +871,6 @@ jobs:
         run: bun run dev:build-info -- --exe ..\rust\target\dist\sky_desktop_shell.exe
 
       - name: Create exact current-candidate contract
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
           cargo xtask ci candidate create `
@@ -924,7 +905,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
       SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SCCACHE_GHA_ENABLED: "true"
@@ -944,19 +924,13 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned stable toolchain for updater fixture
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
       - name: Rust — verify updater-fixture compiler
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: |
-          $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.99\.1\s') {
-            throw "Expected stable Rust 1.99.1 for updater fixture, got: $version"
-          }
+        run: node scripts/toolchain-pin.mjs verify rust
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -966,7 +940,10 @@ jobs:
       - name: Set up Bun for updater fixture frontend
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Fail fast on updater fixture dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
@@ -1038,8 +1015,6 @@ jobs:
         run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
 
       - name: Install provided bridge and qualify packaged Tauri updater rotation
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $fixtureRoot = Join-Path $env:RUNNER_TEMP ("sky-auto-player-updater-fixture-" + [guid]::NewGuid().ToString("N"))
           $evidence = Join-Path $env:RUNNER_TEMP "sky-auto-player-updater-fixture-http-evidence.json"
@@ -1073,7 +1048,6 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
@@ -1092,19 +1066,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Rust — install pinned stable toolchain for packaged build
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Rust — verify packaged-build compiler
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
-        run: |
-          $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.99\.1\s') {
-            throw "Expected stable Rust 1.99.1 for packaged build, got: $version"
-          }
+        run: node scripts/toolchain-pin.mjs verify rust
 
       - name: Download current candidate from this workflow run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1174,8 +1145,6 @@ jobs:
           "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify Tauri Authenticode signature
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           $installers = @(Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File)
           if ($installers.Count -ne 1) {
@@ -1189,8 +1158,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
 
       - name: Generate Tauri SPDX SBOM
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           cargo xtask sbom generate `
             --artifact-dir $env:SKY_TAURI_BUNDLE `
@@ -1198,8 +1165,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE" }
 
       - name: Verify Tauri SPDX SBOM
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           cargo xtask sbom verify `
             --artifact-dir $env:SKY_TAURI_BUNDLE `
@@ -1207,8 +1172,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "SBOM verification failed with exit code $LASTEXITCODE" }
 
       - name: Verify exact Tauri NSIS bundle
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.1
         run: |
           cargo xtask verify-tauri-bundle `
             --bundle-dir $env:SKY_TAURI_BUNDLE `

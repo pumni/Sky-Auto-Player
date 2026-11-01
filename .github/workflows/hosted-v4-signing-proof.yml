@@ -6,6 +6,8 @@ on:
       - ".github/workflows/hosted-v4-signing-proof.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release-v4.yml"
+      - ".github/actions/setup-rust-pinned/action.yml"
+      - "site/package.json"
       - "desktop/**"
       - "rust/**"
       - "scripts/**"
@@ -27,7 +29,6 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
       SKY_AUTHENTICODE_MODE: unsigned-zero-budget
       SKY_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -50,13 +51,21 @@ jobs:
           fetch-tags: false
           persist-credentials: false
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
-
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: site/package.json
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
 
       - name: Install locked desktop dependencies
         working-directory: desktop

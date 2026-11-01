@@ -3,7 +3,7 @@
 //! telemetry and the terminal SLO decision.
 //!
 //! Structural ownership: this module must not import `SharedMetrics`,
-//! `TelemetryCollector`, `Mutex`, or any Python type.  It stays pure and
+//! `TelemetryCollector`, `Mutex`, or UI/configuration types. It stays pure and
 //! unit-testable (no wall-clock beyond the QPC samples already captured by the
 //! caller into `result_started_ticks` / `result_completed_ticks`).
 

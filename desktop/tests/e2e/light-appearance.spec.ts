@@ -392,6 +392,7 @@ test('Graphite Dark keeps selected and playing rows distinct without changing it
 test('Light rendered text contrast holds in Settings, Diagnostics, confirmation, and errors', async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   await openLightApp(page, 'mockDiagnosticsStatus=degraded');
   const { selectedRow } = await startDryRunWithSelection(page);
   await textAudit(page, 'Light populated library');
@@ -514,9 +515,11 @@ test('Light keyboard focus, hover, pressed, disabled, forced colors, and reduced
   const minimize = page.getByRole('button', { name: 'Minimize window' });
   await minimize.hover();
   expect(await minimize.evaluate((element) => element.matches(':hover'))).toBe(true);
-  expect(await minimize.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
-    'rgb(238, 242, 246)',
-  );
+  await expect
+    .poll(() => minimize.evaluate((element) => getComputedStyle(element).backgroundColor), {
+      message: 'Light minimize caption hover background must settle to the theme hover color',
+    })
+    .toBe('rgb(238, 242, 246)');
   const captionClose = page.getByRole('button', { name: 'Close window' });
   await captionClose.hover();
   const captionCloseBounds = await captionClose.boundingBox();

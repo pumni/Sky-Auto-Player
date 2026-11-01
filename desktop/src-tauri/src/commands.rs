@@ -74,6 +74,110 @@ impl Default for LibrarySource {
 pub struct CatalogDetailRequest {
     pub song_id: String,
     pub generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conversion_mode: Option<SheetConversionModeDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_pitch: Option<SheetPitchDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SheetConversionModeDto {
+    MergePlayable,
+    SingleTrack { track_id: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum SheetPitchDto {
+    #[serde(rename = "C")]
+    C,
+    #[serde(rename = "Db")]
+    Db,
+    #[serde(rename = "D")]
+    D,
+    #[serde(rename = "Eb")]
+    Eb,
+    #[serde(rename = "E")]
+    E,
+    #[serde(rename = "F")]
+    F,
+    #[serde(rename = "Gb")]
+    Gb,
+    #[serde(rename = "G")]
+    G,
+    #[serde(rename = "Ab")]
+    Ab,
+    #[serde(rename = "A")]
+    A,
+    #[serde(rename = "Bb")]
+    Bb,
+    #[serde(rename = "B")]
+    B,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetPipelineStageDto {
+    Discovered,
+    Parsed,
+    MappedTo15Key,
+    ScheduleAdmitted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetReadinessDto {
+    Loading,
+    Malformed,
+    Unsupported,
+    Unplayable,
+    RequiresConfirmation,
+    PhysicalRisk,
+    Ready,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct SheetTrackDto {
+    pub track_id: u32,
+    pub instrument: Option<String>,
+    pub effective_pitch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct SheetAnalysisDto {
+    pub stage: SheetPipelineStageDto,
+    pub readiness: SheetReadinessDto,
+    pub format_label: String,
+    pub schema_version: Option<u8>,
+    pub source_note_count: Option<u64>,
+    pub source_track_count: Option<u64>,
+    pub tracks: Vec<SheetTrackDto>,
+    pub conversion_mode: Option<SheetConversionModeDto>,
+    pub target_pitch: Option<SheetPitchDto>,
+    pub target_pitch_assumed_from_source: bool,
+    pub output_onset_count: Option<u64>,
+    pub merged_duplicate_count: Option<u64>,
+    pub tempo_quantization_collapse_count: Option<u64>,
+    pub source_unpitched_count: Option<u64>,
+    pub source_unresolved_count: Option<u64>,
+    pub target_unplayable_count: Option<u64>,
+    pub omitted_source_event_count: Option<u64>,
+    pub authored_sustain_lost_count: Option<u64>,
+    pub impossible_same_key_repeats: Option<u64>,
+    pub loss_reasons: Vec<String>,
+    pub error_message: Option<String>,
+    pub confirmation_fingerprint: Option<String>,
+    pub confirmation_received: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -179,6 +283,15 @@ pub struct PlaybackPrepareRequest {
     pub song_id: String,
     pub generation: u64,
     pub config: PlaybackConfigDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conversion_mode: Option<SheetConversionModeDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_pitch: Option<SheetPitchDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conversion_confirmation_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -413,6 +526,8 @@ pub struct SongDetailDto {
     pub format_label: String,
     pub risk: RiskSummaryDto,
     pub recommendation: Option<PlaybackRecommendationDto>,
+    #[serde(default)]
+    pub sheet_analysis: Option<SheetAnalysisDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

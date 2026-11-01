@@ -380,6 +380,16 @@ try {
     $isDiagnosticsRun = $evidenceModeContract.IsDiagnostics
 
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    $toolchainPinScript = Join-Path $repoRoot 'scripts\toolchain-pin.mjs'
+    $rustPinOutput = @(& node $toolchainPinScript read rust 2>&1)
+    $rustPinExit = $LASTEXITCODE
+    if ($rustPinExit -ne 0) { throw "Could not read the canonical Rust toolchain pin: $($rustPinOutput -join ' ')" }
+    $rustVersion = ($rustPinOutput -join "`n").Trim()
+    $bunPinOutput = @(& node $toolchainPinScript read bun 2>&1)
+    $bunPinExit = $LASTEXITCODE
+    if ($bunPinExit -ne 0) { throw "Could not read the canonical Bun toolchain pin: $($bunPinOutput -join ' ')" }
+    $bunToolchainVersion = ($bunPinOutput -join "`n").Trim()
+    $env:RUSTUP_TOOLCHAIN = $rustVersion
     $outputBase = if ([System.IO.Path]::IsPathRooted($OutputRoot)) {
         [System.IO.Path]::GetFullPath($OutputRoot)
     } else {
@@ -440,11 +450,13 @@ try {
     if (-not [Environment]::UserInteractive) { throw 'BLOCKED-ENV: Windows interactive desktop is unavailable' }
     if ($target -ne 'x86_64-pc-windows-msvc') { throw "BLOCKED-ENV: expected x86_64-pc-windows-msvc, found $target" }
     if ($osInfo.Caption -notmatch 'Windows 11') { throw "BLOCKED-ENV: expected Windows 11, found $($osInfo.Caption)" }
-    if ($rustcVersion -notmatch '^rustc 1\.99\.1(?:\s|$)' -or $cargoVersion -notmatch '^cargo 1\.99\.1(?:\s|$)') {
-        throw "BLOCKED-ENV: expected Rust/Cargo 1.99.1; found '$rustcVersion' / '$cargoVersion'"
+    $rustVersionPattern = [regex]::Escape($rustVersion)
+    if ($rustcVersion -notmatch "^rustc $rustVersionPattern(?:\s|$)" -or
+        $cargoVersion -notmatch "^cargo $rustVersionPattern(?:\s|$)") {
+        throw "BLOCKED-ENV: expected canonical Rust/Cargo $rustVersion; found '$rustcVersion' / '$cargoVersion'"
     }
-    if ($bunVersion -ne '1.4.3') {
-        throw "BLOCKED-ENV: expected Bun 1.4.3; found '$bunVersion'"
+    if ($bunVersion -ne $bunToolchainVersion) {
+        throw "BLOCKED-ENV: expected canonical Bun $bunToolchainVersion; found '$bunVersion'"
     }
     $hostMetadata = [ordered]@{
         rustc = $rustcVersion

@@ -36,6 +36,9 @@ import type {
   PlaybackSessionDto,
   PlaybackStatusDto,
   PreparedPlaybackDto,
+  SheetAnalysisDto,
+  SheetConversionModeDto,
+  SheetPitchDto,
   PlaybackStartRequest,
   PlaybackDefaultsDto,
   PlaybackOptionSetsDto,
@@ -117,6 +120,9 @@ export type SetSongLikedRequest = Omit<CatalogSetLikedRequest, 'generation'> & {
 export type RiskSummary = Omit<RiskSummaryDto, 'level'> & { level: RiskLevel };
 export type PlaybackRecommendation = PlaybackRecommendationDto;
 export type SongDetail = Omit<SongDetailDto, 'risk'> & { risk: RiskSummary };
+export type SheetAnalysis = SheetAnalysisDto;
+export type SheetConversionMode = SheetConversionModeDto;
+export type SheetPitch = SheetPitchDto;
 export type ViewportRequest = CatalogViewportRequest;
 export type ViewportResult = Omit<CatalogViewportDto, 'items'> & { items: SongRow[] };
 export type LibrarySource = GeneratedLibrarySource;
@@ -160,7 +166,15 @@ export type GeneratedCoreEvent = GeneratedUiEvent;
 
 export type SongRow = Omit<CatalogRowDto, 'risk_level' | 'metadata_state'> & {
   risk_level: RiskLevel;
-  metadata_state: 'pending' | 'ready' | 'error';
+  metadata_state:
+    | 'pending'
+    | 'ready'
+    | 'error'
+    | 'malformed'
+    | 'unsupported'
+    | 'unplayable'
+    | 'requires_confirmation'
+    | 'physical_risk';
 };
 
 export type UiEvent = GeneratedUiEvent;

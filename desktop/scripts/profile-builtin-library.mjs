@@ -13,6 +13,41 @@ import { chromium } from 'playwright';
 // repository shell, writes fixtures only under a new temporary app-data root,
 // invokes catalog commands, and never starts playback or sends input.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const toolchainResolver = resolve(root, 'scripts/toolchain-pin.mjs');
+function readToolchainPin(kind) {
+  const result = spawnSync(process.execPath, [toolchainResolver, 'read', kind], {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    throw new Error(`Cannot read canonical ${kind} toolchain pin: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trim();
+}
+const rustVersion = readToolchainPin('rust');
+const bunVersion = readToolchainPin('bun');
+const rustVerification = spawnSync(process.execPath, [toolchainResolver, 'verify', 'rust'], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { ...process.env, RUSTUP_TOOLCHAIN: rustVersion },
+  windowsHide: true,
+});
+if (rustVerification.status !== 0) {
+  throw new Error(
+    `Canonical Rust toolchain verification failed: ${rustVerification.stderr.trim()}`,
+  );
+}
+const installedBun = spawnSync('bun', ['--version'], {
+  cwd: root,
+  encoding: 'utf8',
+  windowsHide: true,
+});
+if (installedBun.status !== 0 || installedBun.stdout.trim() !== bunVersion) {
+  throw new Error(
+    `Canonical Bun version mismatch: expected ${bunVersion}, found ${installedBun.stdout?.trim() ?? 'unavailable'}`,
+  );
+}
 const options = Object.fromEntries(
   process.argv.slice(2).map((arg) => arg.replace(/^--/, '').split('=')),
 );
@@ -216,7 +251,7 @@ const report = {
   source_branch: sourceBranch,
   source_worktree_clean: true,
   build_command:
-    'cargo +1.99.1 build --manifest-path desktop/src-tauri/Cargo.toml --locked --features packaged-assets --bin sky_desktop_shell',
+    'node scripts/toolchain-pin.mjs exec -- cargo build --manifest-path desktop/src-tauri/Cargo.toml --locked --features packaged-assets --bin sky_desktop_shell',
   executable: exe,
   executable_sha256: exeSha256,
   captured_at_utc: new Date().toISOString(),

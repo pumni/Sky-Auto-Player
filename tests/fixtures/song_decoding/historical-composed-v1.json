@@ -1,0 +1,11 @@
+{
+  "name": "Synthetic historical composed v1 shape",
+  "bpm": 120,
+  "pitch": "C",
+  "data": {
+    "appName": "Sky",
+    "isComposedVersion": true
+  },
+  "instruments": ["Piano", "Harp", "Cello", "Flute"],
+  "columns": [[0, [[12, "1000"]]]]
+}

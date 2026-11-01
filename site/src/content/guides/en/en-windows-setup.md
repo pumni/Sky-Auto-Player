@@ -30,7 +30,7 @@ evidence:
 ## Requirements
 
 - Windows 10 or 11, 64-bit
-- No system Python required — the packaged build is native and standalone
+- No developer toolchain or separate scripting runtime is required — the packaged build is standalone
 - No administrator rights required for the current-user install
 - No system-wide installer or service
 

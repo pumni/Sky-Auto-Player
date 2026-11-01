@@ -112,6 +112,21 @@ fn classify_path(
         return;
     }
 
+    if path == "site/package.json" {
+        classification.add_many(&LANES);
+        return;
+    }
+
+    if [
+        "scripts/toolchain-pin.mjs",
+        ".github/actions/setup-rust-pinned/action.yml",
+    ]
+    .contains(&path)
+    {
+        classification.add_many(&LANES);
+        return;
+    }
+
     if path.starts_with("site/")
         || path.starts_with(".github/actions/site-validate/")
         || path == ".github/workflows/pages.yml"
@@ -757,6 +772,11 @@ mod tests {
             assert_lanes(&classify_paths([path.to_owned()]), &[]);
         }
         assert_lanes(&classify_paths(["docs/releases/v4.0.2.md".to_owned()]), &[]);
+        assert_lanes(&classify_paths(["site/package.json".to_owned()]), &LANES);
+        assert_lanes(
+            &classify_paths(["site/src/pages/index.astro".to_owned()]),
+            &["site_required"],
+        );
         let static_site = classify_paths([
             ".config/rust_architecture_allowlist.json".to_owned(),
             "site/src/pages/index.astro".to_owned(),
@@ -858,6 +878,8 @@ mod tests {
                 &["site_required"],
             ),
             (".github/workflows/pages.yml", &["site_required"]),
+            ("site/package.json", &LANES),
+            ("site/src/pages/index.astro", &["site_required"]),
             (".github/workflows/release-v4.yml", &["release_required"]),
             (".github/workflows/ci.yml", &LANES),
             (
@@ -1194,6 +1216,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rust_toolchain_resolver_and_setup_action_select_all_validation_lanes() {
+        for path in [
+            "scripts/toolchain-pin.mjs",
+            ".github/actions/setup-rust-pinned/action.yml",
+        ] {
+            assert_lanes(&classify_paths([path.to_owned()]), &LANES);
+        }
+        assert_lanes(
+            &classify_paths(["rust/rust-toolchain.toml".to_owned()]),
+            &[
+                "rust_required",
+                "desktop_required",
+                "desktop_native_required",
+                "package_required",
+                "updater_required",
+                "release_required",
+            ],
+        );
+        assert_lanes(
+            &classify_paths(["site/src/pages/index.astro".to_owned()]),
+            &["site_required"],
+        );
     }
 
     #[test]

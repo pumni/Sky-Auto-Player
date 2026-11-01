@@ -571,6 +571,7 @@ fn prepare_physical_failure_plan(
             generation: 1,
             config,
             song,
+            sheet_analysis: None,
             schedule,
             risk,
             timing_policy,
@@ -580,6 +581,11 @@ fn prepare_physical_failure_plan(
                 source: "default_fallback".into(),
             },
             settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            publication_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            source_path: std::path::PathBuf::new(),
+            source_hash: String::new(),
+            plan_identity: "test-plan".into(),
+            plan_source: None,
             source_epoch: 0,
         })
         .expect("physical fixture plan");
@@ -627,6 +633,7 @@ fn prepare_dry_run_plan(
             generation: 1,
             config,
             song,
+            sheet_analysis: None,
             schedule,
             risk,
             timing_policy,
@@ -636,6 +643,11 @@ fn prepare_dry_run_plan(
                 source: "default_fallback".into(),
             },
             settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            publication_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            source_path: std::path::PathBuf::new(),
+            source_hash: String::new(),
+            plan_identity: "test-plan".into(),
+            plan_source: None,
             source_epoch: 0,
         })
         .expect("dry-run fixture plan");

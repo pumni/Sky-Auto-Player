@@ -373,6 +373,8 @@ fn explicit_selected_viewports_reuse_adjacent_windows_and_match_fresh_hydration(
                 .detail(crate::commands::CatalogDetailRequest {
                     song_id: selected_song_id.clone(),
                     generation: Some(generation),
+                    conversion_mode: None,
+                    target_pitch: None,
                 })
                 .expect("selected detail after first explicit viewport");
             assert_eq!(selected_detail.song_id, selected_song_id);
@@ -434,6 +436,8 @@ fn explicit_selected_viewports_reuse_adjacent_windows_and_match_fresh_hydration(
                 .detail(crate::commands::CatalogDetailRequest {
                     song_id: selected_song_id.clone(),
                     generation: Some(generation),
+                    conversion_mode: None,
+                    target_pitch: None,
                 })
                 .expect("selected detail after explicit shift");
             assert_eq!(selected_after_shift.song_id, selected_song_id);
@@ -744,6 +748,8 @@ fn selected_analysis_stays_in_the_bounded_lru_and_detail_remains_independent() {
             .detail(crate::commands::CatalogDetailRequest {
                 song_id: ids[selected_index].clone(),
                 generation: Some(generation),
+                conversion_mode: None,
+                target_pitch: None,
             })
             .unwrap_or_else(|error| panic!("{label} selected detail failed: {error}"));
         assert_eq!(detail.song_id, ids[selected_index]);
@@ -756,6 +762,8 @@ fn selected_analysis_stays_in_the_bounded_lru_and_detail_remains_independent() {
             .detail(crate::commands::CatalogDetailRequest {
                 song_id: ids[selected_index].clone(),
                 generation: Some(generation),
+                conversion_mode: None,
+                target_pitch: None,
             })
             .expect("repeat selected detail");
         assert_eq!(repeated_detail.song_id, detail.song_id);

@@ -1,0 +1,9 @@
+{
+  "name": "Flat layered keys",
+  "pitchLevel": 9,
+  "songNotes": [
+    { "key": "2Key2", "time": 2.5 },
+    { "key": "Key3", "time": 0 },
+    { "key": "3Key2", "time": 2.5 }
+  ]
+}

@@ -2,8 +2,8 @@
 
 The supported desktop is the native Tauri application. Playback scheduling,
 focus admission, timing, diagnostics, and calibration are implemented by the
-Rust services and the qualified native player; there is no Python or terminal
-UI preset to select.
+Rust services and the qualified native player; there is no alternate
+runtime or terminal UI preset to select.
 
 ## Where to tune
 

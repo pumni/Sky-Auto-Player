@@ -150,10 +150,17 @@ export function createPlaybackPreparationController(
       );
     }
     const config = makePlaybackConfig(overrides, playbackContext.dryRun);
+    const library = getLibrary();
+    const selectedSongOptions = library.selectedSongId === identity.songId;
     const prepared = await bridge.preparePlayback({
       songId: identity.songId,
       generation: playbackContext.generation,
       config,
+      conversionMode: selectedSongOptions ? library.conversionMode : { kind: 'merge_playable' },
+      ...(selectedSongOptions && library.targetPitch ? { targetPitch: library.targetPitch } : {}),
+      ...(selectedSongOptions && library.conversionConsentFingerprint
+        ? { conversionConfirmationFingerprint: library.conversionConsentFingerprint }
+        : {}),
     });
     if (
       playbackContext.generation !== getLibrary().generation ||
@@ -164,14 +171,32 @@ export function createPlaybackPreparationController(
       );
     }
     if (!operationIsCurrent(operationEpoch)) return null;
+    const latestLibrary = getLibrary();
+    const nextConsent =
+      prepared.error_code === 'conversion_confirmation_required' &&
+      latestLibrary.conversionConsentFingerprint !==
+        prepared.song.sheet_analysis?.confirmation_fingerprint
+        ? null
+        : latestLibrary.conversionConsentFingerprint;
     const preparedContext = { ...playbackContext, dryRun: config.dry_run };
     set({
+      ...(nextConsent === latestLibrary.conversionConsentFingerprint
+        ? {}
+        : {
+            library: {
+              ...latestLibrary,
+              conversionConsentFingerprint: nextConsent,
+            },
+          }),
       playback: {
         ...get().playback,
         prepared,
         preparedIdentity: identity,
         preparedContext,
-        error: prepared.error_message,
+        error:
+          prepared.error_code === 'conversion_confirmation_required'
+            ? null
+            : prepared.error_message,
       },
     });
     return prepared;

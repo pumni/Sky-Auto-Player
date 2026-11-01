@@ -33,7 +33,7 @@ impl SettingsStore for MemoryStore {
 }
 
 #[test]
-fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
+fn settings_fixture_preserves_patch_and_atomic_failure_semantics() {
     let raw = fixture("settings");
     assert_eq!(
         raw["config_layouts"]["legacy_v2"]["normalized_hold_frames"],
@@ -178,7 +178,7 @@ fn catalog_fixture_preserves_ids_order_normalization_and_generation() {
     assert!(
         index
             .search_substrings("", 1_000_000_001, 1, Some(1))
-            .expect("large Python-compatible offset")
+            .expect("large compatibility offset")
             .items
             .is_empty()
     );

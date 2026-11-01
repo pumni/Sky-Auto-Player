@@ -16,6 +16,8 @@ import type {
   SettingsPatch,
   SongDetail,
   SongRow,
+  SheetConversionMode,
+  SheetPitch,
   UiEvent,
   UpdateChannelId,
   UpdateErrorCode,
@@ -94,6 +96,9 @@ export interface LibraryState {
   selectedSongId: string | null;
   selectedSongSummary: SongRow | null;
   selectedSongIndex: number | null;
+  conversionMode: SheetConversionMode;
+  targetPitch: SheetPitch | null;
+  conversionConsentFingerprint: string | null;
   membershipRevision: number;
   indexMembershipRevision: number;
   visibleRange: { first: number; last: number };
@@ -196,6 +201,9 @@ export interface DesktopStore {
   applyEvent: (event: UiEvent) => void;
   search: (query?: string, source?: LibrarySource) => Promise<void>;
   selectSong: (songId: string) => Promise<void>;
+  setSheetConversionMode: (mode: SheetConversionMode) => Promise<void>;
+  setSheetTargetPitch: (pitch: SheetPitch | null) => Promise<void>;
+  acknowledgeSheetLoss: () => Promise<void>;
   setViewport: (first: number, last: number) => Promise<void>;
   navigateBuiltinPage: (page: number) => Promise<void>;
   retryBuiltinPage: () => Promise<void>;

@@ -33,8 +33,11 @@ fn validate_workflow_source(source: &str) -> Result<()> {
         "    runs-on: windows-latest\n",
         "persist-credentials: false",
         "SKY_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
-        "RUSTUP_TOOLCHAIN: 1.99.1",
-        "bun-version: 1.4.3",
+        "      - \"site/package.json\"",
+        "      - \".github/actions/setup-rust-pinned/action.yml\"",
+        "uses: ./.github/actions/setup-rust-pinned",
+        "bun-version-file: site/package.json",
+        "run: bun scripts/verify-bun-pin.mjs",
         "Expected pinned Tauri CLI 2.12.3",
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
         "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
@@ -86,6 +89,7 @@ fn validate_workflow_source(source: &str) -> Result<()> {
         .collect::<BTreeSet<_>>();
     let expected_uses = BTreeSet::from([
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1".to_owned(),
+        "./.github/actions/setup-rust-pinned".to_owned(),
         "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6".to_owned(),
     ]);
     if uses != expected_uses {

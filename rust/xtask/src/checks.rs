@@ -1,9 +1,11 @@
 mod bindings;
+mod bun_pin;
 mod ci_contracts;
 mod hosted_signing;
 mod recovery_auth;
 mod release_pipeline;
 mod release_runner;
+mod rust_toolchain;
 mod tauri_metadata;
 mod trust;
 mod workflow;
@@ -115,6 +117,7 @@ fn run_with_session(
         "static" => {
             audits::docs_integrity::run(&root)?;
             audits::durable_names::run(&root)?;
+            audits::legacy_compatibility_names::run(&root)?;
             audits::architecture::run(&root)?;
             audits::security::run(&root)?;
             tauri_metadata::tauri_feature_contract(&root)?;
@@ -130,6 +133,8 @@ fn run_with_session(
             tauri_metadata::tauri_build_freshness_contract(&root)?;
             verify_builtin_catalog(&root, session)?;
             trust::v4_trust_material_contract(&root)?;
+            bun_pin::bun_pin_contract(&root)?;
+            rust_toolchain::rust_toolchain_contract(&root)?;
             ci_contracts::ci_control_plane_contract(&root)?;
             tauri_metadata::release_metadata_contract(&root)?;
             release_runner::release_runner_contract(&root)?;
