@@ -598,15 +598,27 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/v4-metadata-recovery.yml",
 ];
 
-fn validate_active_github_hosted_ubuntu_labels(source: &str) -> Result<()> {
+fn validate_active_github_hosted_ubuntu_labels(relative: &str, source: &str) -> Result<()> {
+    let dedicated_malware_scanner = match relative {
+        ".github/workflows/release-v4.yml" => Some("  attest:"),
+        ".github/workflows/hosted-v4-signing-proof.yml" => Some("  malware-scan-proof:"),
+        _ => None,
+    };
+    let mut job = "";
     for line in source.lines() {
+        if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':') {
+            job = line.trim();
+        }
         let trimmed = line.trim_start();
         if !trimmed.starts_with("runs-on:") || !trimmed.contains("ubuntu-") {
             continue;
         }
-        if !trimmed.contains("ubuntu-latest") {
+        let designated = dedicated_malware_scanner.is_some_and(|expected| job == expected.trim());
+        if trimmed != "runs-on: ubuntu-latest"
+            && !(designated && trimmed == "runs-on: ubuntu-24.04")
+        {
             return Err(format!(
-                "active GitHub-hosted Linux job must use runs-on: ubuntu-latest: {trimmed}"
+                "active GitHub-hosted Linux job must use ubuntu-latest, except its explicitly pinned Ubuntu 24.04 malware scanner: {trimmed}"
             )
             .into());
         }
@@ -650,7 +662,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     }
     for relative in ACTIVE_CI_WORKFLOW_FILES {
         let source = fs::read_to_string(root.join(relative))?;
-        validate_active_github_hosted_ubuntu_labels(&source)
+        validate_active_github_hosted_ubuntu_labels(relative, &source)
             .map_err(|error| format!("{relative}: {error}"))?;
     }
 
@@ -1452,6 +1464,7 @@ mod tests {
     #[test]
     fn active_github_hosted_ubuntu_contract_accepts_latest() {
         validate_active_github_hosted_ubuntu_labels(
+            ".github/workflows/ci.yml",
             "jobs:\n  build:\n    runs-on: ubuntu-latest\n",
         )
         .expect("active GitHub-hosted Ubuntu jobs should use ubuntu-latest");
@@ -1460,10 +1473,24 @@ mod tests {
     #[test]
     fn active_github_hosted_ubuntu_contract_rejects_numbered_labels() {
         let error = validate_active_github_hosted_ubuntu_labels(
+            ".github/workflows/ci.yml",
             "jobs:\n  build:\n    runs-on: ubuntu-24.04\n",
         )
         .expect_err("numbered GitHub-hosted Ubuntu labels must be rejected");
         assert!(error.to_string().contains("ubuntu-latest"));
+    }
+
+    #[test]
+    fn pinned_ubuntu_2404_is_allowed_only_for_malware_scanner_jobs() {
+        for (path, job) in [
+            (".github/workflows/release-v4.yml", "attest"),
+            (".github/workflows/hosted-v4-signing-proof.yml", "malware-scan-proof"),
+        ] {
+            let valid = format!("jobs:\n  {job}:\n    runs-on: ubuntu-24.04\n");
+            assert!(validate_active_github_hosted_ubuntu_labels(path, &valid).is_ok());
+            let wrong = "jobs:\n  publish:\n    runs-on: ubuntu-24.04\n";
+            assert!(validate_active_github_hosted_ubuntu_labels(path, wrong).is_err());
+        }
     }
 
     #[test]
