@@ -612,7 +612,7 @@ fn rust_release_state_machine_contract(
         "mock_unknown_publication_never_cleans_up",
         "canonical_upload_url",
         "RELEASE_BUILD_STEP_TIMEOUT",
-        "RELEASE_DEFENDER_STEP_TIMEOUT",
+        "malware::verify_scan(root, options)?",
         "ATTESTATION_VERIFY_TIMEOUT",
         "mock_release_doctor_detects_metadata_endpoint_divergence",
         "mock_metadata_promotion_is_idempotent_after_committed_timeout",
