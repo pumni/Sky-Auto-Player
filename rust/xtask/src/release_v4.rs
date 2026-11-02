@@ -375,6 +375,7 @@ fn release_upload_curl_args(url: &url::Url, path: &Path, auth_config: &Path) -> 
     #[cfg(not(windows))]
     let null_sink = "/dev/null";
     vec![
+        "--disable".to_owned(),
         "--silent".to_owned(),
         "--show-error".to_owned(),
         "--proto".to_owned(),
@@ -639,7 +640,9 @@ impl Transport for GhTransport {
                     .map_err(|_| "release upload requires the scoped GitHub Actions token")?;
                 if token.len() < 8
                     || token.len() > 8192
-                    || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                    || !token
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
                 {
                     return Err("release upload GitHub token has invalid format".into());
                 }
@@ -688,10 +691,13 @@ impl Transport for GhTransport {
                 match (upload, cleanup) {
                     (Ok(()), Ok(())) => Ok(()),
                     (Err(error), Ok(())) => Err(error),
-                    (Ok(()), Err(error)) => Err(format!("failed to remove upload authorization: {error}").into()),
+                    (Ok(()), Err(error)) => {
+                        Err(format!("failed to remove upload authorization: {error}").into())
+                    }
                     (Err(error), Err(cleanup_error)) => Err(format!(
                         "{error}; failed to remove upload authorization: {cleanup_error}"
-                    ).into()),
+                    )
+                    .into()),
                 }
             },
             std::thread::sleep,
@@ -7171,7 +7177,9 @@ fn main() {{
             Path::new("/tmp/private-auth.cfg"),
         );
         assert!(args.windows(2).any(|pair| pair == ["--url", url.as_str()]));
-        assert!(url.as_str().starts_with("https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets?name="));
+        assert!(url.as_str().starts_with(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets?name="
+        ));
         for forbidden in ["api.uploads.github.com", "--hostname", "ghs_dummy_secret"] {
             assert!(!args.iter().any(|arg| arg.contains(forbidden)));
         }
