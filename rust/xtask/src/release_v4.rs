@@ -7182,7 +7182,13 @@ fn main() {{
             release_upload_authorization_config("quoted\"back\\slash").unwrap(),
             "header = \"Authorization: Bearer quoted\\\"back\\\\slash\"\n"
         );
-        for invalid in ["", "token\rBad: yes", "token\nBad: yes", "token\tbad", "token\0bad"] {
+        for invalid in [
+            "",
+            "token\rBad: yes",
+            "token\nBad: yes",
+            "token\tbad",
+            "token\0bad",
+        ] {
             assert!(
                 release_upload_authorization_config(invalid).is_err(),
                 "control characters must be rejected without echoing credentials"
@@ -7246,7 +7252,9 @@ fn main() {{
                 assert!(request.len() < 16 * 1024, "unexpected fixture request size");
             }
             stream
-                .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .write_all(
+                    b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
                 .unwrap();
             request
         });
