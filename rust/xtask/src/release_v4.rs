@@ -369,6 +369,17 @@ fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
 
 // gh api --hostname uploads.github.com silently targets api.uploads.github.com.
 // GitHub Release binary uploads require the validated HTTPS upload_url itself.
+// GitHub Actions-issued and GitHub App installation tokens are opaque.
+// In particular, the 2026 token format may include JWT dots and change in length.
+// Escaping is for curl's private config-file syntax, NOT token-format validation.
+fn release_upload_authorization_config(token: &str) -> Result<String> {
+    if token.is_empty() || token.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("release upload token missing or contains HTTP control characters".into());
+    }
+    let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("header = \"Authorization: Bearer {escaped}\"\n"))
+}
+
 fn release_upload_curl_args(url: &url::Url, path: &Path, auth_config: &Path) -> Vec<String> {
     #[cfg(windows)]
     let null_sink = "NUL";
@@ -638,14 +649,7 @@ impl Transport for GhTransport {
             || {
                 let token = env::var("GH_TOKEN")
                     .map_err(|_| "release upload requires the scoped GitHub Actions token")?;
-                if token.len() < 8
-                    || token.len() > 8192
-                    || !token
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                {
-                    return Err("release upload GitHub token has invalid format".into());
-                }
+                let auth_config = release_upload_authorization_config(&token)?;
                 // Keep credentials out of command-line args, process logs and child env.
                 // A private curl config is destroyed after every completed/error attempt.
                 let config_path = unique_temp(&env::temp_dir(), "sky-release-upload-auth");
@@ -659,7 +663,7 @@ impl Transport for GhTransport {
                 let mut config = config_options.open(&config_path)?;
                 let upload = (|| -> Result<()> {
                     use std::io::Write;
-                    writeln!(config, "header = \"Authorization: Bearer {token}\"")?;
+                    config.write_all(auth_config.as_bytes())?;
                     config.flush()?;
                     drop(config);
                     let args = release_upload_curl_args(&url, path, &config_path);
@@ -7160,6 +7164,131 @@ fn main() {{
             decode_api_response("GET", "repos/example", br#"{"ok":true}"#)
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn release_upload_authentication_is_opaque_but_rejects_header_injection() {
+        // GitHub's 2026 installation-token format can contain JWT dots and
+        // punctuation; an old A-Za-z0-9_- regex rejected production credentials.
+        let token = "ghs_12345_header.payload+with/slash~and=padding-underscore_";
+        assert_eq!(
+            release_upload_authorization_config(token).unwrap(),
+            format!("header = \"Authorization: Bearer {token}\"\n")
+        );
+        let long_token = "x".repeat(9000);
+        assert!(release_upload_authorization_config(&long_token).is_ok());
+        assert_eq!(
+            release_upload_authorization_config("quoted\"back\\slash").unwrap(),
+            "header = \"Authorization: Bearer quoted\\\"back\\\\slash\"\n"
+        );
+        for invalid in ["", "token\rBad: yes", "token\nBad: yes", "token\tbad", "token\0bad"] {
+            assert!(
+                release_upload_authorization_config(invalid).is_err(),
+                "control characters must be rejected without echoing credentials"
+            );
+        }
+    }
+
+    #[test]
+    fn real_curl_parses_private_opaque_token_config_and_sends_exact_binary() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        // Localhost-only harmless fixture. Never mint tokens or mutate GitHub.
+        let token = "ghs_12345_header.payload+with/slash~and=padding-underscore_";
+        let auth_path = unique_temp(&env::temp_dir(), "sky-v4-test-auth");
+        let binary_path = unique_temp(&env::temp_dir(), "sky-v4-test-binary");
+        let contents = b"exact-binary\0payload";
+        fs::write(
+            &auth_path,
+            release_upload_authorization_config(token).unwrap(),
+        )
+        .unwrap();
+        fs::write(&binary_path, contents).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local fixture");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let started = Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && started.elapsed() < Duration::from_secs(7) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("local upload fixture never received curl: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(7)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let received = stream.read(&mut chunk).expect("read fixture request");
+                assert!(received > 0, "curl closed fixture request early");
+                request.extend_from_slice(&chunk[..received]);
+                let header_end = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .map(|position| position + 4);
+                if let Some(header_end) = header_end {
+                    if request.len() >= header_end + contents.len() {
+                        break;
+                    }
+                }
+                assert!(request.len() < 16 * 1024, "unexpected fixture request size");
+            }
+            stream
+                .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            request
+        });
+
+        let url = canonical_upload_url(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
+        )
+        .unwrap();
+        let mut args = release_upload_curl_args(&url, &binary_path, &auth_path);
+        // Redirect ONLY this isolated, non-production unit test to a loopback
+        // HTTP fixture; production continues to require canonical HTTPS.
+        let proto = args.iter().position(|arg| arg == "--proto").unwrap() + 1;
+        args[proto] = "=http".into();
+        let url_index = args.iter().position(|arg| arg == "--url").unwrap() + 1;
+        args[url_index] = format!("http://127.0.0.1:{port}/fixture");
+
+        let result = std::process::Command::new(if cfg!(windows) { "curl.exe" } else { "curl" })
+            .args(&args)
+            .output();
+        let cleanup_auth = fs::remove_file(&auth_path);
+        let cleanup_binary = fs::remove_file(&binary_path);
+        let request = server.join().expect("local fixture thread");
+        cleanup_auth.unwrap();
+        cleanup_binary.unwrap();
+        let output = result.expect("curl available on hosted runners");
+        assert!(output.status.success(), "fixture curl returned failure");
+        assert_eq!(output.stdout, b"201");
+        let header_end = request
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        assert_eq!(&request[header_end..], contents);
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        assert!(headers.starts_with("POST /fixture HTTP/1.1\r\n"));
+        let authorization = headers
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+            .expect("curl config must supply the private header");
+        assert_eq!(
+            authorization.trim_end_matches('\r'),
+            format!("Authorization: Bearer {token}")
         );
     }
 
