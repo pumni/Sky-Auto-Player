@@ -7244,10 +7244,10 @@ fn main() {{
                     .windows(4)
                     .position(|part| part == b"\r\n\r\n")
                     .map(|position| position + 4);
-                if let Some(header_end) = header_end {
-                    if request.len() >= header_end + contents.len() {
-                        break;
-                    }
+                if let Some(header_end) = header_end
+                    && request.len() >= header_end + contents.len()
+                {
+                    break;
                 }
                 assert!(request.len() < 16 * 1024, "unexpected fixture request size");
             }
