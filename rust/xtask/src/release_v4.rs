@@ -367,6 +367,112 @@ fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
     Ok(url)
 }
 
+// gh api --hostname uploads.github.com silently targets api.uploads.github.com.
+// GitHub Release binary uploads require the validated HTTPS upload_url itself.
+// GitHub Actions-issued and GitHub App installation tokens are opaque.
+// In particular, the 2026 token format may include JWT dots and change in length.
+// Escaping is for curl's private config-file syntax, NOT token-format validation.
+fn release_upload_authorization_config(token: &str) -> Result<String> {
+    if token.is_empty() || token.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("release upload token missing or contains HTTP control characters".into());
+    }
+    let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("header = \"Authorization: Bearer {escaped}\"\n"))
+}
+
+fn release_upload_curl_args(url: &url::Url, path: &Path, auth_config: &Path) -> Vec<String> {
+    #[cfg(windows)]
+    let null_sink = "NUL";
+    #[cfg(not(windows))]
+    let null_sink = "/dev/null";
+    vec![
+        "--disable".to_owned(),
+        "--silent".to_owned(),
+        "--show-error".to_owned(),
+        "--proto".to_owned(),
+        "=https".to_owned(),
+        "--connect-timeout".to_owned(),
+        "20".to_owned(),
+        "--max-time".to_owned(),
+        "600".to_owned(),
+        "--max-redirs".to_owned(),
+        "0".to_owned(),
+        "--max-filesize".to_owned(),
+        "65536".to_owned(),
+        "--request".to_owned(),
+        "POST".to_owned(),
+        "--config".to_owned(),
+        auth_config.to_string_lossy().into_owned(),
+        "--header".to_owned(),
+        "Accept: application/vnd.github+json".to_owned(),
+        "--header".to_owned(),
+        "Content-Type: application/octet-stream".to_owned(),
+        "--data-binary".to_owned(),
+        format!("@{}", path.display()),
+        "--output".to_owned(),
+        null_sink.to_owned(),
+        "--write-out".to_owned(),
+        "%{http_code}".to_owned(),
+        "--url".to_owned(),
+        url.to_string(),
+    ]
+}
+
+fn execute_release_upload_curl(
+    args: &[String],
+    config_path: &Path,
+    auth_config: &str,
+) -> Result<()> {
+    let mut config_options = fs::OpenOptions::new();
+    config_options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        config_options.mode(0o600);
+    }
+    let mut config = config_options.open(config_path)?;
+    let upload = (|| -> Result<()> {
+        use std::io::Write;
+        config.write_all(auth_config.as_bytes())?;
+        config.flush()?;
+        drop(config);
+        let output = process::capture_owned_timeout_filtered(
+            std::ffi::OsStr::new(if cfg!(windows) { "curl.exe" } else { "curl" }),
+            args,
+            &repo::root(),
+            &[],
+            &["GH_TOKEN".to_owned(), "GITHUB_TOKEN".to_owned()],
+            Duration::from_secs(10 * 60),
+        )?;
+        let status = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|code| *code > 0);
+        if !output.status.success() || status != Some(201) {
+            return Err(Box::new(HttpFailure {
+                status,
+                detail: format!(
+                    "release binary upload did not return HTTP 201: {}",
+                    safe_cli_error(&String::from_utf8_lossy(&output.stderr))
+                ),
+            }));
+        }
+        Ok(())
+    })();
+    let cleanup = fs::remove_file(config_path);
+    match (upload, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => {
+            Err(format!("failed to remove upload authorization: {error}").into())
+        }
+        (Err(error), Err(cleanup_error)) => {
+            Err(format!("{error}; failed to remove upload authorization: {cleanup_error}").into())
+        }
+    }
+}
+
 impl GhTransport {
     fn new() -> Self {
         Self {
@@ -590,29 +696,20 @@ impl Transport for GhTransport {
         }
         let mut url = canonical_upload_url(endpoint)?;
         url.query_pairs_mut().append_pair("name", name);
-        let path_query = format!("{}?{}", url.path(), url.query().unwrap_or_default());
-        let args = vec![
-            "api".to_owned(),
-            "--hostname".to_owned(),
-            url.host_str().ok_or("upload host missing")?.to_owned(),
-            "--method".to_owned(),
-            "POST".to_owned(),
-            path_query.clone(),
-            "--input".to_owned(),
-            "-".to_owned(),
-            "--header".to_owned(),
-            "Content-Type: application/octet-stream".to_owned(),
-        ];
+        // POST is never retried blindly: a lost response may mean the upload committed.
+        // The caller must read back the exact release/asset digest before proceeding.
         request_with_retry_policy(
             "POST",
-            &path_query,
+            url.path(),
             || {
-                let mut request = args.clone();
-                if let Some(input) = request.iter_mut().find(|arg| arg.as_str() == "-") {
-                    *input = path.to_string_lossy().into_owned();
-                }
-                self.invoke_with_timeout(&request, None, None, Duration::from_secs(10 * 60))
-                    .map(|_| ())
+                let token = env::var("GH_TOKEN")
+                    .map_err(|_| "release upload requires the scoped GitHub Actions token")?;
+                let auth_config = release_upload_authorization_config(&token)?;
+                // Keep credentials out of command-line args, process logs and child env.
+                // A private curl config is destroyed after every completed/error attempt.
+                let config_path = unique_temp(&env::temp_dir(), "sky-release-upload-auth");
+                let args = release_upload_curl_args(&url, path, &config_path);
+                execute_release_upload_curl(&args, &config_path, &auth_config)
             },
             std::thread::sleep,
         )
@@ -744,19 +841,31 @@ fn extract_http_status(stderr: &str) -> Option<u16> {
         .ok()
 }
 
-fn safe_cli_error(stderr: &str) -> String {
+fn safe_cli_error_with_secrets(stderr: &str, secrets: &[&str]) -> String {
     let mut result = stderr.trim().to_owned();
-    for secret_name in ["GH_TOKEN", "GITHUB_TOKEN", METADATA_WRITE_TOKEN_ENV] {
-        if let Ok(secret) = env::var(secret_name)
-            && secret.len() > 4
-        {
-            result = result.replace(&secret, "[REDACTED]");
+    for secret in secrets {
+        if secret.len() > 4 {
+            result = result.replace(secret, "[REDACTED]");
         }
     }
     if result.len() > 600 {
         result.truncate(600);
     }
     result
+}
+
+fn safe_cli_error(stderr: &str) -> String {
+    let mut secrets = Vec::new();
+    let gh_token = env::var("GH_TOKEN").ok();
+    let github_token = env::var("GITHUB_TOKEN").ok();
+    let metadata_token = env::var(METADATA_WRITE_TOKEN_ENV).ok();
+    for secret in [&gh_token, &github_token, &metadata_token]
+        .into_iter()
+        .flatten()
+    {
+        secrets.push(secret.as_str());
+    }
+    safe_cli_error_with_secrets(stderr, &secrets)
 }
 
 const GITHUB_RETRY_ATTEMPTS: usize = 4;
@@ -5456,6 +5565,15 @@ fn mock_partial_upload_cleans_owned_draft() -> Result<()> {
             .count(),
         2
     );
+    assert!(
+        !github
+            .events
+            .iter()
+            .any(|event| event.starts_with("PATCH "))
+    );
+    assert!(!github.events.iter().any(|event| event.starts_with("POST ")
+        && (event.contains("/git/refs") || event.contains("tags"))));
+    assert_eq!(github.latest["id"], 11);
     let _ = fs::remove_dir_all(&options.state_root);
     Ok(())
 }
@@ -7078,6 +7196,490 @@ fn main() {{
     }
 
     #[test]
+    fn release_upload_authentication_is_opaque_but_rejects_header_injection() {
+        // GitHub's 2026 installation-token format can contain JWT dots and
+        // punctuation; an old A-Za-z0-9_- regex rejected production credentials.
+        let token = "ghs_12345_header.payload+with/slash~and=padding-underscore_";
+        assert_eq!(
+            release_upload_authorization_config(token).unwrap(),
+            format!("header = \"Authorization: Bearer {token}\"\n")
+        );
+        let long_token = "x".repeat(9000);
+        assert!(release_upload_authorization_config(&long_token).is_ok());
+        assert_eq!(
+            release_upload_authorization_config("quoted\"back\\slash").unwrap(),
+            "header = \"Authorization: Bearer quoted\\\"back\\\\slash\"\n"
+        );
+        for invalid in [
+            "",
+            "token\rBad: yes",
+            "token\nBad: yes",
+            "token\tbad",
+            "token\0bad",
+        ] {
+            assert!(
+                release_upload_authorization_config(invalid).is_err(),
+                "control characters must be rejected without echoing credentials"
+            );
+        }
+    }
+
+    #[test]
+    fn real_curl_parses_private_opaque_token_config_and_sends_exact_binary() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        // Localhost-only harmless fixture. Never mint tokens or mutate GitHub.
+        let token =
+            "ghs_12345_header.payload+with/slash~and=padding-underscore_\"quoted\"\\backslash";
+        let auth_path = unique_temp(&env::temp_dir(), "sky-v4-test-auth");
+        let binary_path = unique_temp(&env::temp_dir(), "sky-v4-test-binary");
+        let contents = b"exact-binary\0payload\xFF\xFE\x00special";
+        let auth_config = release_upload_authorization_config(token).unwrap();
+        fs::write(&binary_path, contents).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local fixture");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let started = Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && started.elapsed() < Duration::from_secs(7) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("local upload fixture never received curl: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(7)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let received = stream.read(&mut chunk).expect("read fixture request");
+                assert!(received > 0, "curl closed fixture request early");
+                request.extend_from_slice(&chunk[..received]);
+                let header_end = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .map(|position| position + 4);
+                if let Some(header_end) = header_end
+                    && request.len() >= header_end + contents.len()
+                {
+                    break;
+                }
+                assert!(request.len() < 16 * 1024, "unexpected fixture request size");
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            request
+        });
+
+        let url = canonical_upload_url(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
+        )
+        .unwrap();
+        let mut args = release_upload_curl_args(&url, &binary_path, &auth_path);
+        // Redirect ONLY this isolated, non-production unit test to a loopback
+        // HTTP fixture; production continues to require canonical HTTPS.
+        let proto = args.iter().position(|arg| arg == "--proto").unwrap() + 1;
+        args[proto] = "=http".into();
+        let url_index = args.iter().position(|arg| arg == "--url").unwrap() + 1;
+        args[url_index] = format!("http://127.0.0.1:{port}/fixture");
+
+        let result = execute_release_upload_curl(&args, &auth_path, &auth_config);
+        let cleanup_binary = fs::remove_file(&binary_path);
+        let request = server.join().expect("local fixture thread");
+        cleanup_binary.unwrap();
+        assert!(result.is_ok(), "fixture curl returned failure: {result:?}");
+        assert!(
+            !auth_path.exists(),
+            "auth config must be removed deterministically"
+        );
+        let header_end = request
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        assert_eq!(&request[header_end..], contents);
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        assert!(headers.starts_with("POST /fixture HTTP/1.1\r\n"));
+        let authorization = headers
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+            .expect("curl config must supply the private header");
+        assert_eq!(
+            authorization.trim_end_matches('\r'),
+            format!("Authorization: Bearer {token}")
+        );
+    }
+
+    fn loopback_curl_response_fixture(response_status: &[u8]) -> (Result<()>, PathBuf, PathBuf) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let token = "ghs_12345_fixture_token";
+        let auth_path = unique_temp(&env::temp_dir(), "sky-v4-test-auth");
+        let binary_path = unique_temp(&env::temp_dir(), "sky-v4-test-binary");
+        let auth_config = release_upload_authorization_config(token).unwrap();
+        fs::write(&binary_path, b"fixture-binary-data").unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local fixture");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let response_bytes = response_status.to_vec();
+        let server = std::thread::spawn(move || {
+            let started = Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && started.elapsed() < Duration::from_secs(7) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("local upload fixture never received curl: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(7)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            while let Ok(received) = stream.read(&mut chunk) {
+                if received == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..received]);
+                let header_end = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .map(|position| position + 4);
+                if let Some(header_end) = header_end
+                    && request.len() >= header_end + b"fixture-binary-data".len()
+                {
+                    break;
+                }
+                if request.len() >= 16 * 1024 {
+                    break;
+                }
+            }
+            if !response_bytes.is_empty() {
+                let _ = stream.write_all(&response_bytes);
+                let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                let mut drain = [0_u8; 1024];
+                while let Ok(n) = stream.read(&mut drain) {
+                    if n == 0 {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let url = canonical_upload_url(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
+        )
+        .unwrap();
+        let mut args = release_upload_curl_args(&url, &binary_path, &auth_path);
+        let proto = args.iter().position(|arg| arg == "--proto").unwrap() + 1;
+        args[proto] = "=http".into();
+        let url_index = args.iter().position(|arg| arg == "--url").unwrap() + 1;
+        args[url_index] = format!("http://127.0.0.1:{port}/fixture");
+
+        let result = execute_release_upload_curl(&args, &auth_path, &auth_config);
+        let _ = server.join();
+        (result, auth_path, binary_path)
+    }
+
+    #[test]
+    fn real_curl_upload_fails_closed_on_http_errors_and_redirects() {
+        for (code, response) in [
+            (
+                Some(401),
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_slice(),
+            ),
+            (
+                Some(403),
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_slice(),
+            ),
+            (
+                Some(422),
+                b"HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_slice(),
+            ),
+            (
+                Some(500),
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_slice(),
+            ),
+            (
+                Some(503),
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_slice(),
+            ),
+            (
+                Some(302),
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9999/redirect\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .as_slice(),
+            ),
+            (None, b"".as_slice()),
+        ] {
+            let (result, auth_path, binary_path) = loopback_curl_response_fixture(response);
+            let _ = fs::remove_file(&binary_path);
+            assert!(result.is_err(), "expected error for response {code:?}");
+            assert!(!auth_path.exists(), "auth config must be removed on error: {code:?}");
+            if let Some(expected_code) = code {
+                let failure = result
+                    .unwrap_err()
+                    .downcast::<HttpFailure>()
+                    .expect("HttpFailure");
+                assert_eq!(failure.status, Some(expected_code));
+            }
+        }
+    }
+
+    #[test]
+    fn real_curl_production_args_refuse_cleartext_http() {
+        let auth_path = unique_temp(&env::temp_dir(), "sky-v4-test-auth");
+        let binary_path = unique_temp(&env::temp_dir(), "sky-v4-test-binary");
+        fs::write(&binary_path, b"test-data").unwrap();
+        let url = canonical_upload_url(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
+        )
+        .unwrap();
+        let mut args = release_upload_curl_args(&url, &binary_path, &auth_path);
+        // Change url to http:// WITHOUT changing --proto =https
+        let url_index = args.iter().position(|arg| arg == "--url").unwrap() + 1;
+        args[url_index] = "http://127.0.0.1:9/fixture".into();
+
+        let result = execute_release_upload_curl(
+            &args,
+            &auth_path,
+            &release_upload_authorization_config("dummy_token").unwrap(),
+        );
+        let _ = fs::remove_file(&binary_path);
+        assert!(
+            result.is_err(),
+            "curl must reject http protocol under --proto =https"
+        );
+        assert!(
+            !auth_path.exists(),
+            "auth config must be removed on protocol failure"
+        );
+    }
+
+    #[test]
+    fn safe_cli_error_redacts_credentials_and_bounds_output() {
+        let secret = "ghs_test_secret_redaction_token_12345";
+        let dirty = format!("curl failed: Authorization: Bearer {secret} occurred");
+        let sanitized = safe_cli_error_with_secrets(&dirty, &[secret]);
+        assert!(!sanitized.contains(secret), "secret token must be redacted");
+        assert!(sanitized.contains("[REDACTED]"));
+
+        let oversized = "x".repeat(1000);
+        assert_eq!(safe_cli_error_with_secrets(&oversized, &[]).len(), 600);
+    }
+
+    #[test]
+    fn request_with_retry_policy_never_blind_retries_post() {
+        let mut attempts = 0;
+        let result: Result<()> = request_with_retry_policy(
+            "POST",
+            "/repos/pumni/Sky-Auto-Player/releases/123/assets",
+            || {
+                attempts += 1;
+                Err("network timeout during POST".into())
+            },
+            |_| panic!("POST must never sleep or retry blindly"),
+        );
+        assert!(result.is_err());
+        assert_eq!(attempts, 1, "POST must be executed exactly once");
+        let error = result.unwrap_err();
+        assert!(error.is::<MutationOutcomeUnknown>());
+        assert!(
+            error
+                .to_string()
+                .contains("POST /repos/pumni/Sky-Auto-Player/releases/123/assets")
+        );
+
+        let mut get_attempts = 0;
+        let get_result = request_with_retry_policy(
+            "GET",
+            "/repos/pumni/Sky-Auto-Player/releases/123",
+            || {
+                get_attempts += 1;
+                if get_attempts < 3 {
+                    Err(Box::new(HttpFailure {
+                        status: Some(503),
+                        detail: "service unavailable".into(),
+                    }))
+                } else {
+                    Ok("success")
+                }
+            },
+            |_| {},
+        );
+        assert_eq!(get_result.unwrap(), "success");
+        assert_eq!(get_attempts, 3, "GET may retry on transient errors");
+    }
+
+    #[test]
+    fn reconciliation_identifies_exact_asset_and_refuses_mismatches() {
+        let (_root, _options, context, manifest) = fixture().unwrap();
+        let record = &manifest.public_assets[0];
+        let mut github = FakeTransport::new();
+        let mut draft = fake_release(12, &context.tag, &context.source_sha, true, false, false);
+        let marker = format!(
+            "<!-- v4-release-tx: {} -->",
+            serde_json::to_string(&json!({
+                "repository": context.repository,
+                "run_id": context.run_id,
+                "source_sha": context.source_sha,
+                "run_attempt": context.run_attempt,
+                "version": context.version,
+                "tag": context.tag
+            }))
+            .unwrap()
+        );
+        draft["body"] = json!(format!("Release notes\n{marker}"));
+
+        // 1. Exact matching asset -> Ok(true)
+        draft["assets"] = json!([{
+            "name": record.release_name,
+            "size": record.size,
+            "state": "uploaded",
+            "digest": format!("sha256:{}", record.sha256),
+        }]);
+        github.releases.insert(12, draft.clone());
+        assert!(reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap());
+
+        // 2. No matching asset -> Ok(false)
+        draft["assets"] = json!([]);
+        github.releases.insert(12, draft.clone());
+        assert!(!reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap());
+
+        // 3. Duplicate matching assets -> Err
+        draft["assets"] = json!([
+            {
+                "name": record.release_name,
+                "size": record.size,
+                "state": "uploaded",
+                "digest": format!("sha256:{}", record.sha256),
+            },
+            {
+                "name": record.release_name,
+                "size": record.size,
+                "state": "uploaded",
+                "digest": format!("sha256:{}", record.sha256),
+            }
+        ]);
+        github.releases.insert(12, draft.clone());
+        let err = reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
+
+        // 4. Size mismatch -> Err
+        draft["assets"] = json!([{
+            "name": record.release_name,
+            "size": record.size + 1,
+            "state": "uploaded",
+            "digest": format!("sha256:{}", record.sha256),
+        }]);
+        github.releases.insert(12, draft.clone());
+        let err = reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap_err();
+        assert!(err.to_string().contains("exact asset validation failed"));
+
+        // 5. Digest mismatch -> Err
+        draft["assets"] = json!([{
+            "name": record.release_name,
+            "size": record.size,
+            "state": "uploaded",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        }]);
+        github.releases.insert(12, draft.clone());
+        let err = reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap_err();
+        assert!(err.to_string().contains("exact asset validation failed"));
+
+        // 6. Digest missing sha256 prefix -> Err
+        draft["assets"] = json!([{
+            "name": record.release_name,
+            "size": record.size,
+            "state": "uploaded",
+            "digest": record.sha256,
+        }]);
+        github.releases.insert(12, draft.clone());
+        let err = reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap_err();
+        assert!(err.to_string().contains("exact asset validation failed"));
+
+        // 7. State not "uploaded" -> Err
+        draft["assets"] = json!([{
+            "name": record.release_name,
+            "size": record.size,
+            "state": "uploading",
+            "digest": format!("sha256:{}", record.sha256),
+        }]);
+        github.releases.insert(12, draft.clone());
+        let err = reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap_err();
+        assert!(err.to_string().contains("exact asset validation failed"));
+
+        // 8. Draft is not draft (draft=false) -> Err
+        draft["draft"] = json!(false);
+        github.releases.insert(12, draft.clone());
+        let err = reconcile_uncertain_upload(&mut github, 12, &context, record).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("exact draft identity failed validation")
+        );
+    }
+
+    #[test]
+    fn release_asset_upload_transport_targets_real_upload_host_without_exposing_token() {
+        let mut url = canonical_upload_url(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
+        )
+        .expect("canonical upload URL");
+        url.query_pairs_mut()
+            .append_pair("name", "Sky.Auto.Player_4.3.0_x64-setup.exe");
+        let args = release_upload_curl_args(
+            &url,
+            Path::new("/tmp/installer.exe"),
+            Path::new("/tmp/private-auth.cfg"),
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--url", url.as_str()]));
+        assert!(url.as_str().starts_with(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets?name="
+        ));
+        for forbidden in ["api.uploads.github.com", "--hostname", "ghs_dummy_secret"] {
+            assert!(!args.iter().any(|arg| arg.contains(forbidden)));
+        }
+        for expected in [
+            ["--request", "POST"],
+            ["--data-binary", "@/tmp/installer.exe"],
+            ["--config", "/tmp/private-auth.cfg"],
+            ["--write-out", "%{http_code}"],
+            ["--proto", "=https"],
+            ["--max-redirs", "0"],
+        ] {
+            assert!(args.windows(2).any(|pair| pair == expected));
+        }
+        assert!(!args.iter().any(|arg| arg == "--location"));
+    }
+
+    #[test]
     fn release_upload_url_is_bound_to_canonical_numeric_release_route() {
         let endpoint = canonical_upload_url(
             "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
@@ -7123,6 +7725,7 @@ fn main() {{
     fn mock_failure_cleanup_and_immutability() {
         mock_conflicting_draft_is_not_deleted().unwrap();
         mock_digest_mismatch_cleans_owned_draft().unwrap();
+        mock_partial_upload_cleans_owned_draft().unwrap();
         mock_unknown_publication_never_cleans_up().unwrap();
         mock_latest_policy_failure_is_post_publication().unwrap();
         mock_stale_evidence_identity_fails_closed().unwrap();
