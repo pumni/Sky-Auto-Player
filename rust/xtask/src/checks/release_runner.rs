@@ -35,7 +35,7 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
         return Err("the independent static check must run exactly once".to_owned());
     }
     for marker in [
-        "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00",
+        "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
         "go-version: 1.25.0",
         "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
         "actionlint\" -color",
@@ -1117,7 +1117,7 @@ jobs:
     needs: changes
     steps:
       - run: cargo xtask check static --skip-supply-chain
-      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: 1.25.0
       - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
