@@ -1,11 +1,11 @@
 {
-  "version": "4.2.0",
-  "notes": "# Sky Auto Player v4.2.0\n\nA refreshed desktop workbench with better library workflows, clearer playback feedback, and more reliable Windows playback.\n\n- **New:** Graphite dark theme and a responsive Library, Search, Track Browser, and Inspector.\n- **New:** Pre-playback Timing Advisory highlighting potential timing constraints without changing the music or playback behavior.\n- **Improved:** Playlist creation, playlist-scoped imports, scoped search, keyboard navigation, and selection feedback.\n- **Improved:** Persistent window and workspace layouts, adaptive Inspector, and clearer Auto Play, Shuffle, Dry Run, and playback status.\n- **Fixed:** Playback edge cases involving Stop/Skip, focus, pause/resume, key-release recovery, and Windows sleep/hibernate.",
-  "pub_date": "2026-10-21T10:39:42Z",
+  "version": "4.3.0",
+  "notes": "# Sky Auto Player v4.3.0\n\n## New\n- The built-in library gains six songs—*Experience*, *Fly Me To The Moon*, *Kiss The Rain*, *Passacaglia (Shinraki Sky)*, *Perfect*, and *The Scientist*—bringing the catalog from 106 to 112 entries.\n- Choose System (Follow Windows), Light, or Dark appearance. Browse built-in songs in pages of up to 100, with navigation that keeps selection and playback context available as you move between pages.\n- Supported versioned sheets show their schema and readiness for Sky's 15-key layout. If preparation would lose notes or tracks, review the proposed losses and accept them before playback is prepared.\n\n## Improved\n- Catalog browsing and search feel more responsive, and workbench pane resizing feels smoother.\n- Startup restores saved window geometry before showing the main window, reducing the white flash and initial size jump.\n\n## Fixed\n- Settings changed around calibration are no longer replaced by a stale refresh.\n- If the desktop UI stops rendering, an on-screen message advises closing and reopening the app.",
+  "pub_date": "2026-11-02T05:31:52Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1RWQ3NQZENlZWpoYTVIMkNzVnQ5RzZxWi83YTlkT2tMQjFUVjc3N1UxUndqRDVZaHFoK2QvczZHYW56cG5kOW9FRFFDbGpyVEdSbzErZ1d1aWJOWHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTc4NjA2CWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMi4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjIuMAovajBHVWRPcy82Qm9ycDF4c1ZXeWVvdlFqUk5welk4aFlXbEJUeEZzaWVsUVFzOUovVEpXR3FreXN3akE4dlQ5SVRqSGpPVDhNTU13dWc2NzRUYXNCQT09Cg==",
-      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.2.0/Sky.Auto.Player_4.2.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1ZoRmZEOE4xUHNvSUdzbkcrVDdlSU1BYWpjWll2dUp0RTdqSWZ1MXpjWkErakZWSWhuc2t1MnR1WGoyWjduRDgxNUFBVTR4TE1BNG1uWmJtbjA5NHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTk2NTQwCWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMy4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjMuMApvT0tXRG1HNU81MktsSzROR1NXd1Z1TTg3RG43eTY3b0xPWUFlemFFRGJJeHpoMk9WckVuMTRGZzQ0WVVsSzh0QkNac2ZDVDNEeFRzYTc3NHpvK1pDZz09Cg==",
+      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.3.0/Sky.Auto.Player_4.3.0_x64-setup.exe"
     }
   }
 }
