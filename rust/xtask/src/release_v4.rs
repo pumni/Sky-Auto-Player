@@ -367,6 +367,45 @@ fn canonical_upload_url(endpoint: &str) -> Result<url::Url> {
     Ok(url)
 }
 
+// gh api --hostname uploads.github.com silently targets api.uploads.github.com.
+// GitHub Release binary uploads require the validated HTTPS upload_url itself.
+fn release_upload_curl_args(url: &url::Url, path: &Path, auth_config: &Path) -> Vec<String> {
+    #[cfg(windows)]
+    let null_sink = "NUL";
+    #[cfg(not(windows))]
+    let null_sink = "/dev/null";
+    vec![
+        "--silent".to_owned(),
+        "--show-error".to_owned(),
+        "--proto".to_owned(),
+        "=https".to_owned(),
+        "--connect-timeout".to_owned(),
+        "20".to_owned(),
+        "--max-time".to_owned(),
+        "600".to_owned(),
+        "--max-redirs".to_owned(),
+        "0".to_owned(),
+        "--max-filesize".to_owned(),
+        "65536".to_owned(),
+        "--request".to_owned(),
+        "POST".to_owned(),
+        "--config".to_owned(),
+        auth_config.to_string_lossy().into_owned(),
+        "--header".to_owned(),
+        "Accept: application/vnd.github+json".to_owned(),
+        "--header".to_owned(),
+        "Content-Type: application/octet-stream".to_owned(),
+        "--data-binary".to_owned(),
+        format!("@{}", path.display()),
+        "--output".to_owned(),
+        null_sink.to_owned(),
+        "--write-out".to_owned(),
+        "%{http_code}".to_owned(),
+        "--url".to_owned(),
+        url.to_string(),
+    ]
+}
+
 impl GhTransport {
     fn new() -> Self {
         Self {
@@ -590,29 +629,70 @@ impl Transport for GhTransport {
         }
         let mut url = canonical_upload_url(endpoint)?;
         url.query_pairs_mut().append_pair("name", name);
-        let path_query = format!("{}?{}", url.path(), url.query().unwrap_or_default());
-        let args = vec![
-            "api".to_owned(),
-            "--hostname".to_owned(),
-            url.host_str().ok_or("upload host missing")?.to_owned(),
-            "--method".to_owned(),
-            "POST".to_owned(),
-            path_query.clone(),
-            "--input".to_owned(),
-            "-".to_owned(),
-            "--header".to_owned(),
-            "Content-Type: application/octet-stream".to_owned(),
-        ];
+        // POST is never retried blindly: a lost response may mean the upload committed.
+        // The caller must read back the exact release/asset digest before proceeding.
         request_with_retry_policy(
             "POST",
-            &path_query,
+            url.path(),
             || {
-                let mut request = args.clone();
-                if let Some(input) = request.iter_mut().find(|arg| arg.as_str() == "-") {
-                    *input = path.to_string_lossy().into_owned();
+                let token = env::var("GH_TOKEN")
+                    .map_err(|_| "release upload requires the scoped GitHub Actions token")?;
+                if token.len() < 8
+                    || token.len() > 8192
+                    || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    return Err("release upload GitHub token has invalid format".into());
                 }
-                self.invoke_with_timeout(&request, None, None, Duration::from_secs(10 * 60))
-                    .map(|_| ())
+                // Keep credentials out of command-line args, process logs and child env.
+                // A private curl config is destroyed after every completed/error attempt.
+                let config_path = unique_temp(&env::temp_dir(), "sky-release-upload-auth");
+                let mut config_options = fs::OpenOptions::new();
+                config_options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    config_options.mode(0o600);
+                }
+                let mut config = config_options.open(&config_path)?;
+                let upload = (|| -> Result<()> {
+                    use std::io::Write;
+                    writeln!(config, "header = \"Authorization: Bearer {token}\"")?;
+                    config.flush()?;
+                    drop(config);
+                    let args = release_upload_curl_args(&url, path, &config_path);
+                    let output = process::capture_owned_timeout_filtered(
+                        std::ffi::OsStr::new(if cfg!(windows) { "curl.exe" } else { "curl" }),
+                        &args,
+                        &repo::root(),
+                        &[],
+                        &["GH_TOKEN".to_owned(), "GITHUB_TOKEN".to_owned()],
+                        Duration::from_secs(10 * 60),
+                    )?;
+                    let status = String::from_utf8_lossy(&output.stdout)
+                        .trim()
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|code| *code > 0);
+                    if !output.status.success() || status != Some(201) {
+                        return Err(Box::new(HttpFailure {
+                            status,
+                            detail: format!(
+                                "release binary upload did not return HTTP 201: {}",
+                                safe_cli_error(&String::from_utf8_lossy(&output.stderr))
+                            ),
+                        }));
+                    }
+                    Ok(())
+                })();
+                let cleanup = fs::remove_file(&config_path);
+                match (upload, cleanup) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), Ok(())) => Err(error),
+                    (Ok(()), Err(error)) => Err(format!("failed to remove upload authorization: {error}").into()),
+                    (Err(error), Err(cleanup_error)) => Err(format!(
+                        "{error}; failed to remove upload authorization: {cleanup_error}"
+                    ).into()),
+                }
             },
             std::thread::sleep,
         )
@@ -7075,6 +7155,37 @@ fn main() {{
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn release_asset_upload_transport_targets_real_upload_host_without_exposing_token() {
+        let mut url = canonical_upload_url(
+            "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets{?name,label}",
+        )
+        .expect("canonical upload URL");
+        url.query_pairs_mut()
+            .append_pair("name", "Sky.Auto.Player_4.3.0_x64-setup.exe");
+        let args = release_upload_curl_args(
+            &url,
+            Path::new("/tmp/installer.exe"),
+            Path::new("/tmp/private-auth.cfg"),
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--url", url.as_str()]));
+        assert!(url.as_str().starts_with("https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/123/assets?name="));
+        for forbidden in ["api.uploads.github.com", "--hostname", "ghs_dummy_secret"] {
+            assert!(!args.iter().any(|arg| arg.contains(forbidden)));
+        }
+        for expected in [
+            ["--request", "POST"],
+            ["--data-binary", "@/tmp/installer.exe"],
+            ["--config", "/tmp/private-auth.cfg"],
+            ["--write-out", "%{http_code}"],
+            ["--proto", "=https"],
+            ["--max-redirs", "0"],
+        ] {
+            assert!(args.windows(2).any(|pair| pair == expected));
+        }
+        assert!(!args.iter().any(|arg| arg == "--location"));
     }
 
     #[test]
