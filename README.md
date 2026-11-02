@@ -4,150 +4,123 @@
 
 # Sky Auto Player
 
-_Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision._
+**Play the sheet. Not the keyboard.**
 
-[![Version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue)](https://github.com/pumni/Sky-Auto-Player/releases)
+A free, open-source music-sheet player for **Sky: Children of the Light** on Windows, powered by Rust and Tauri.
+
+[![Version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue)](https://github.com/pumni/Sky-Auto-Player/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/pumni/Sky-Auto-Player/total?style=for-the-badge&label=downloads&logo=github&color=success)](https://github.com/pumni/Sky-Auto-Player/releases)
-[![License](https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange)](https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/pumni/Sky-Auto-Player?style=for-the-badge&label=stars&color=gold)](https://github.com/pumni/Sky-Auto-Player/stargazers)
 
-**[🌐 Landing Page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)** · **[Releases / Downloads](https://github.com/pumni/Sky-Auto-Player/releases)**
+**[Download for Windows](https://github.com/pumni/Sky-Auto-Player/releases/latest)** ·
+[Website](https://pumni.github.io/Sky-Auto-Player/) ·
+[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)
 
 </div>
 
 <div align="center">
-  <a href="branding/app-mockup.png" target="_blank">
-    <img src="branding/app-mockup.png" alt="Sky Auto Player v4.0.1 desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
+  <a href="branding/app-mockup.png">
+    <img src="branding/app-mockup.png" alt="Sky Auto Player desktop library and playback workbench" width="720">
   </a>
 </div>
 
 ---
 
-**Sky Auto Player** transforms song sheets from the [specy/skyMusic](https://specy.github.io/skyMusic/) editor into chords, arpeggios, and frame-based holds using an immutable authored schedule, QPC-based runtime scheduling, and explicit sender-side timing floors.
+**Sky Auto Player** turns supported music sheets into timed keyboard input for Sky's 15-key instruments. Browse the included song library, organize playlists, or bring your own sheets—then let the native playback engine handle notes, chords, and holds while you enjoy the music.
 
-The application uses a **high-performance native architecture**:
+Unlike a generic sequence of keyboard macros, the player follows the sheet's musical timing and applies frame-aware hold and release policies. Actual input timing still depends on Windows, the game, and your system.
 
-- 🦀 **Native Rust Real-Time Core (`sky_player`)** — Dedicated RT worker handling timeline compilation, absolute QPC scheduling, MMCSS thread priority, sub-millisecond spin-wait, focus gating, and safe input dispatch.
-- 🖥️ **Tauri 2 + React/TypeScript desktop GUI** — The canonical packaged interface for Library, Song Detail, Player Dock, Diagnostics, Settings, and Updates.
+## Highlights
 
-Keystrokes are submitted solely through the public Windows `SendInput` API — the exact same channel used by standard keyboard macros. Sky Auto Player **never** reads game memory, injects DLLs, hooks processes, attaches debuggers, or tampers with game files.
-
-## Why it sounds right
-
-Sky Auto Player keeps authored schedule offsets fixed and records sender-side timing details:
-
-- **Contiguous chord batches** — Chord notes are submitted in a single `SendInput` batch to minimize sender-side skew.
-- **QPC-based native scheduling** — Immutable authored offsets, a high-resolution waitable-timer wake, and bounded QPC spin. `Auto` priority uses the MMCSS `Games` task when available, then falls back to `THREAD_PRIORITY_HIGHEST`.
-- **Frame-based hold policy** — A musical Up waits for successful Down completion plus the materialized hold floor. If a Down is late, its full authored duration is not guaranteed; later packets can also be delayed while authored offsets remain unchanged.
-- **Explicit hold-frame timing** — Select exact game frame holds (`1.0`, `1.25`, or `1.5` frames) tailored to the in-game FPS configuration.
-- **Explicit timing margin** — The persisted margin contributes once to authored hold and release-gap policy; startup wait calibration is a heuristic, not a percentile or service-level guarantee.
-- **Native standalone runtime** — the packaged desktop runs without a separate scripting runtime or extension module.
-
-> [!WARNING]
-> Automated music playback may violate Thatgamecompany's Terms of Service. Use this tool responsibly and at your own risk.
-
----
+- **Built-in music library** — Explore 100+ bundled songs, search by title, and save favorites.
+- **Playlists and imports** — Create playlists, add built-in tracks, or import local sheet files and folders without moving the originals.
+- **Music-aware playback** — Native Rust scheduling, grouped chord input, and configurable tempo, target FPS, hold frames, and timing margin.
+- **Sheet compatibility tools** — Inspect supported sheet versions, select playable tracks or target pitch, and review conversion losses before playback.
+- **Playback you can inspect** — Player Dock controls, dry-run testing (no keyboard input), timing diagnostics, and focus-aware safeguards.
+- **Modern desktop experience** — Tauri 2 + React interface with System / Light / Dark appearance, color palettes, and in-app update support.
 
 ## Quick Start
 
-**Requirements:** Windows 11 (64-bit). The production real-time worker requires the high-resolution waitable-timer API. The canonical build is a per-user Tauri NSIS installer; it does not require administrator rights for installation. No development toolchain or separate scripting runtime is required at runtime.
+**Requirements:** Windows 11 (64-bit). The desktop installer is intended for the current Windows user and normally needs no administrator privileges. No Python installation or separate scripting runtime is required.
 
-1. Download the canonical Tauri NSIS installer from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
-2. Run the installer and keep the default current-user install location.
-3. Launch **Sky Auto Player** from the Start menu or installed shortcut.
+1. **Download** the Windows `.exe` installer from [Latest Release](https://github.com/pumni/Sky-Auto-Player/releases/latest).
+2. **Install and launch** Sky Auto Player, then select a song under **Built-in Songs**.
+3. **Open Sky**, equip a compatible 15-key instrument, and return focus to the game when starting playback.
 
-### Adding Songs
+Want to check a playback profile first? Choose **Playback profile → Test playback (no input)** to run a dry-run preview without sending keystrokes.
 
-1. Open the [Sky Music Nightly editor](https://specy.github.io/skyMusic/).
-2. Export a song as **JSON**, **skysheet**, or JSON-compatible **txt**.
-3. Import the file through the desktop Library.
-4. In the desktop Library, press **Reload songs**.
+### Bring Your Own Sheets
 
----
+1. Create or open a **playlist** in the Library.
+2. Choose **Add songs → Import files…** or **Import folder…**. You can also select **Browse Built-in Songs…** to add bundled tracks.
+3. Select compatible `.json`, `.skysheet`, or JSON-compatible `.txt` files. Successfully imported songs appear in the playlist without a manual reload.
 
-## Features
+Imports reference files where they already live; they **do not copy, move, or delete** your originals. If you need to create a sheet, try the separate [Sky Music Nightly editor](https://specy.github.io/skyMusic/).
 
-- ⚡ **Native Rust Dispatch Core** — Absolute QPC scheduling with MMCSS `Games` priority when available and a documented priority fallback
-- 🎹 **Timing-first playback** — Contiguous chord batching, frame-based hold policy, and sender-side release floors
-- 🖥️ **Modern Tauri desktop GUI** — Library search, Song Detail, Player Dock, Diagnostics, Settings, and Updates
-- 🎛️ **Per-song configuration** — Customizable hold profile, tempo multiplier, target FPS, and color palettes
-- 🛡️ **Fail-safe controls** — Focus loss immediately blocks new Downs and pauses musical time. Resumable release and reconciliation can wait until trustworthy target restoration or terminal cleanup; a long unfocused period does not prove that held keys were physically released.
-- 🔍 **Dry-run mode** — Preview playback rhythm in the HUD without sending keyboard input
-- ⌨️ **Desktop shortcuts** — `/` or `Ctrl+F` focuses search · `Esc` closes safe overlays · `q` does not quit the GUI
+## Why the Native Engine Matters
 
----
+Sky Auto Player is built around a Rust real-time playback engine (`sky_player`), not a browser timer or a separate scripting process.
 
-## Updating
+- **Consistent musical targets:** The runtime preserves authored schedule offsets and uses Windows high-resolution timers with QueryPerformanceCounter (QPC) scheduling.
+- **Chords dispatched together:** Notes belonging to the same chord are grouped into a single Windows `SendInput` batch to reduce sender-side skew.
+- **Frame-aware holds:** Minimum key-hold and release-gap policies account for the selected game FPS and timing margin.
+- **Focus-aware handling:** When the target game loses focus, new key-down events are blocked and playback timing is paused; recovery and key-release cleanup remain conservative.
 
-Sky Auto Player checks the configured v4 channel through validated metadata on the main repository's `release-metadata` branch and displays a notification banner when an update is available.
+The engine uses MMCSS scheduling when available and records diagnostics for analysis. These mechanisms improve control over *sender-side* timing; they are **not a guarantee of sub-millisecond in-game or audible accuracy**.
 
-Selecting **Update and Restart** uses the official Tauri updater through the Rust-owned `UpdateService`. It verifies the Tauri updater signature over the exact NSIS update artifact, then runs the current-user installer. The v4 product does not bundle `Sky-Auto-Player-Updater.exe`, use a portable ZIP updater, or use the retired v3 `MANIFEST.json.sig` contract.
+For implementation details and measurement limitations, see [Timing Principles](docs/timing-principles.md) and [Real-Time Dispatch Architecture](docs/rt-dispatch-architecture.md).
+
+## Safety, Compatibility & Updates
+
+**Windows input only.** Sky Auto Player sends simulated key presses through the public Windows `SendInput` API. It does **not** read or write game memory, inject DLLs, install input hooks, attach debuggers, bypass anti-cheat, or alter game files.
 
 > [!WARNING]
-> Windows binaries in the current v4 release use the `unsigned-zero-budget` policy: they are
-> intentionally Authenticode-unsigned, so Windows may show Unknown Publisher or a SmartScreen
-> warning. This is a publisher-identity/UX trade-off, not a bypass of Tauri updater cryptographic
-> trust. Download v4 installers only from the official [Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases); the installer and Tauri `.sig` sidecar are verified as exact release bytes during qualification.
+> Automated playback may conflict with **Sky: Children of the Light** Terms of Service. Using ordinary keyboard input does not guarantee account safety. Use the application responsibly and at your own risk. This is an unofficial community project, not affiliated with or endorsed by thatgamecompany.
 
----
+**Updates:** The app can notify you about updates and offer **Update and Restart**. The official Tauri updater verifies the downloaded update artifact's cryptographic signature before installation.
+
+> [!NOTE]
+> Current Windows installers are intentionally **not Authenticode-signed**; Windows may display **Unknown Publisher** or a SmartScreen warning. The updater's cryptographic signature does **not** provide an Authenticode publisher identity. Only download installers from the [official GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
+
+See the [Security Policy](SECURITY.md) and [Distribution & Update](docs/distribution-and-update.md) documentation for the full security model.
 
 ## FAQ
 
 <details>
-<summary><b>Will this get me banned?</b></summary>
+<summary><strong>Will it run on macOS or Linux?</strong></summary>
 
-It sends standard keyboard input only and never touches the game process — no memory reading, no hooking, no DLL injection, and no file modification. This is identical to the mechanism used by physical programmable keyboards and macro utilities. However, automated playback may still conflict with Sky's Terms of Service, so use it responsibly and at your own risk.
-
-</details>
-
-<details>
-<summary><b>Does it run on macOS or Linux?</b></summary>
-
-No. Sky Auto Player depends on Windows-specific system APIs — `SendInput` for input dispatch and MMCSS / QPC for real-time thread scheduling. macOS and Linux are not supported.
+No. The supported desktop application depends on Windows-specific timing and input APIs.
 
 </details>
 
 <details>
-<summary><b>Can I build it from source?</b></summary>
+<summary><strong>What kinds of music sheets work?</strong></summary>
 
-Yes. Prerequisites: Windows 11 x64, [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). The canonical product checks and Tauri NSIS package use Rust and Bun only.
-
-```powershell
-# 1. Clone repository
-git clone https://github.com/pumni/Sky-Auto-Player.git
-cd Sky-Auto-Player
-
-# 2. Install frontend dependencies
-cd desktop
-bun install --frozen-lockfile
-cd ..
-
-# 3. Run repository verification
-cargo xtask check all
-
-# 4. Build the canonical Tauri NSIS package (use the test-signing context
-#    described in docs/v4-tauri-packaging.md)
-cd desktop
-bun run tauri build --ci -- --profile dist
-```
+The app accepts supported JSON-based Sky sheets in `.json`, `.skysheet`, and JSON-compatible `.txt` files. Not every historical or versioned sheet can be played losslessly: Song Details shows compatibility information and may ask you to review conversion losses.
 
 </details>
 
-The complete FAQ — covering supported file formats, troubleshooting, timing architecture, and the security model — is available at **<https://pumni.github.io/Sky-Auto-Player/faq/>**.
+<details>
+<summary><strong>Can I build it from source?</strong></summary>
 
----
+Yes. The project uses Rust and Bun for development and verification. See [Contributing](CONTRIBUTING.md), the [Documentation Index](docs/INDEX.md), and [Tauri Packaging](docs/v4-tauri-packaging.md) for the maintained developer workflow.
 
-## Support
+</details>
 
-If Sky Auto Player has helped your musical journey, consider giving the project a star ⭐ on GitHub! For bug reports, feature suggestions, or questions, please open an issue on [GitHub Issues](https://github.com/pumni/Sky-Auto-Player/issues).
+More answers are available in the [full FAQ](https://pumni.github.io/Sky-Auto-Player/faq/).
+
+## Support the Project
+
+If Sky Auto Player makes your Sky music experience better, consider [starring the repository](https://github.com/pumni/Sky-Auto-Player/stargazers). For bug reports, ideas, or feedback, open a [GitHub Issue](https://github.com/pumni/Sky-Auto-Player/issues). Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+If you would like to support continued development:
 
 <div align="center">
   <a href="https://ko-fi.com/pumni">
-    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Donate on Ko-fi" width="220">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support Sky Auto Player on Ko-fi" width="220">
   </a>
 </div>
-
----
 
 ## License
 
