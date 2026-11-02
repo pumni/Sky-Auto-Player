@@ -289,7 +289,6 @@ jobs:
             ${{ steps.state.outputs.path }}/candidate-manifest.json
             ${{ steps.state.outputs.path }}/release-state.json
             ${{ steps.state.outputs.path }}/fixture-http-evidence.json
-            ${{ steps.state.outputs.path }}/defender-evidence.json
 
       - name: Remove runner-local signing material
         if: always() && steps.state.outputs.path != ''
@@ -302,8 +301,8 @@ jobs:
   attest:
     name: Verify qualified handoff and publish OIDC attestations
     needs: [prepare, sign_qualify]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
@@ -338,6 +337,28 @@ jobs:
       - name: Independently verify source, run, manifest, and production signature
         run: cargo xtask release-v4 verify-candidate --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
 
+      # GitHub-hosted Windows images intentionally disable Defender real-time
+      # scanning and broadly exclude C:/D:. Never pretend those instances
+      # produced clean Defender evidence. Independent hosted Linux scanning
+      # must prove fresh signatures, a plain EICAR control, and real NSIS unpacking first.
+      - name: Install ClamAV and refresh official malware signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam nsis
+          sudo systemctl stop clamav-freshclam.service || true
+          sudo freshclam
+
+      - name: Scan the exact signed installer with positive-control detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/scan_v4_malware_exact.py --state-root "$V4_RELEASE_STATE_ROOT"
+
+      - name: Independently bind malware scan evidence to exact signed manifest
+        run: cargo xtask release-v4 verify-malware-scan --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
+
       - name: Attest exact installer and updater signature
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -350,6 +371,19 @@ jobs:
         with:
           subject-path: ${{ steps.state.outputs.path }}/candidate-bundle/*.exe
           sbom-path: ${{ steps.state.outputs.path }}/candidate-evidence/SBOM.spdx.json
+
+      - name: Attest separately verified exact-installer malware scan evidence
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.state.outputs.path }}/malware-evidence.json
+
+      - name: Upload exact-run malware scan evidence for independent pre-publication readback
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ steps.state.outputs.path }}/malware-evidence.json
 
       - name: Clean runner-local attestation state
         if: always() && steps.state.outputs.path != ''
@@ -447,6 +481,12 @@ jobs:
           name: v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.state.outputs.path }}
 
+      - name: Download exact-run independent malware scan evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.state.outputs.path }}
+
       - name: Set up canonical Rust toolchain
         uses: ./.github/actions/setup-rust-pinned
       - name: Verify OIDC attestations against exact published bytes and source
@@ -473,6 +513,7 @@ jobs:
             ${{ steps.state.outputs.path }}/candidate-evidence/*
             ${{ steps.state.outputs.path }}/candidate-manifest.json
             ${{ steps.state.outputs.path }}/release-state.json
+            ${{ steps.state.outputs.path }}/malware-evidence.json
 
       - name: Clean runner-local publication state
         if: always() && steps.state.outputs.path != ''

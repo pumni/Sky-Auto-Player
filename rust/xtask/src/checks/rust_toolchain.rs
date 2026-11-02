@@ -463,6 +463,7 @@ fn validate_workflow_source(source: &str, path: &Path) -> Result<usize> {
                 ["desktop_web", "site", "status", "deploy_pages"].contains(&id.as_str())
             }
             ".github/workflows/v4-metadata-recovery.yml" => id == "validate",
+            ".github/workflows/hosted-v4-signing-proof.yml" => id == "malware-scan-proof",
             _ => false,
         };
         if !rust_consumer && !expected_non_rust {

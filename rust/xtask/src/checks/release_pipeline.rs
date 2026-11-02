@@ -338,7 +338,7 @@ fn rust_release_state_machine_contract(
         ("prepare", "runs-on: ubuntu-latest"),
         ("build_unsigned", "runs-on: windows-latest"),
         ("sign_qualify", "runs-on: windows-latest"),
-        ("attest", "runs-on: ubuntu-latest"),
+        ("attest", "runs-on: ubuntu-24.04"),
         ("metadata_probe", "runs-on: ubuntu-latest"),
         ("publish", "runs-on: ubuntu-latest"),
         ("metadata_promote", "runs-on: ubuntu-latest"),
@@ -357,6 +357,21 @@ fn rust_release_state_machine_contract(
     }
     let attest_workflow = job("attest")?;
     let metadata_probe_workflow = job("metadata_probe")?;
+    // Malware scanning is mandatory on a working hosted Linux engine before
+    // OIDC and irreversible publication; the Windows-hosted image cannot
+    // satisfy the retired self-hosted Defender real-time policy.
+    if !attest_workflow.contains("scan_v4_malware_exact.py")
+        || !attest_workflow.contains("release-v4 verify-malware-scan --state-root")
+        || !attest_workflow
+            .contains("Attest separately verified exact-installer malware scan evidence")
+        || !attest_workflow
+            .contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
+        || !job("publish")?.contains("Download exact-run independent malware scan evidence")
+        || !job("publish")?
+            .contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
+    {
+        return Err("hosted release must scan and attest the exact signed candidate with real EICAR proof before publication".into());
+    }
     if !attest_workflow.contains("release-v4 verify-candidate --state-root")
         || !metadata_probe_workflow.contains("release-v4 probe-verify-candidate --state-root")
         || metadata_probe_workflow.contains("release-v4 verify-candidate --state-root")
@@ -612,7 +627,7 @@ fn rust_release_state_machine_contract(
         "mock_unknown_publication_never_cleans_up",
         "canonical_upload_url",
         "RELEASE_BUILD_STEP_TIMEOUT",
-        "RELEASE_DEFENDER_STEP_TIMEOUT",
+        "malware::verify_scan(root, options)?",
         "ATTESTATION_VERIFY_TIMEOUT",
         "mock_release_doctor_detects_metadata_endpoint_divergence",
         "mock_metadata_promotion_is_idempotent_after_committed_timeout",

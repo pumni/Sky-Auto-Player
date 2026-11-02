@@ -598,18 +598,46 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/v4-metadata-recovery.yml",
 ];
 
-fn validate_active_github_hosted_ubuntu_labels(source: &str) -> Result<()> {
+fn validate_active_github_hosted_ubuntu_labels(relative: &str, source: &str) -> Result<()> {
+    let dedicated_malware_scanner = match relative {
+        ".github/workflows/release-v4.yml" => Some("  attest:"),
+        ".github/workflows/hosted-v4-signing-proof.yml" => Some("  malware-scan-proof:"),
+        _ => None,
+    };
+    let mut job = "";
     for line in source.lines() {
+        if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':') {
+            job = line.trim();
+        }
         let trimmed = line.trim_start();
         if !trimmed.starts_with("runs-on:") || !trimmed.contains("ubuntu-") {
             continue;
         }
-        if !trimmed.contains("ubuntu-latest") {
+        let designated = dedicated_malware_scanner.is_some_and(|expected| job == expected.trim());
+        if trimmed != "runs-on: ubuntu-latest"
+            && !(designated && trimmed == "runs-on: ubuntu-24.04")
+        {
             return Err(format!(
-                "active GitHub-hosted Linux job must use runs-on: ubuntu-latest: {trimmed}"
+                "active GitHub-hosted Linux job must use ubuntu-latest, except its explicitly pinned Ubuntu 24.04 malware scanner: {trimmed}"
             )
             .into());
         }
+    }
+    Ok(())
+}
+
+/// Keep the hosted malware archive positive control on the actual release
+/// scanner, not only in a disposable PR proof. A standalone EICAR detection
+/// does not prove that the engine can unpack the signed NSIS payload.
+fn hosted_nsis_scan_contract(workflow: &str, scanner: &str) -> Result<()> {
+    if !workflow.contains("clamav clamav-freshclam nsis")
+        || !scanner.contains("require_eicar_detection(sample)")
+        || !scanner.contains("require_eicar_detection(archive)")
+        || !scanner.contains("\"--scan-archive=yes\"")
+    {
+        return Err(
+            "hosted release must demonstrate ClamAV archive inspection on the actual scanner runner".into(),
+        );
     }
     Ok(())
 }
@@ -650,9 +678,14 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     }
     for relative in ACTIVE_CI_WORKFLOW_FILES {
         let source = fs::read_to_string(root.join(relative))?;
-        validate_active_github_hosted_ubuntu_labels(&source)
+        validate_active_github_hosted_ubuntu_labels(relative, &source)
             .map_err(|error| format!("{relative}: {error}"))?;
     }
+
+    hosted_nsis_scan_contract(
+        &fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?,
+        &fs::read_to_string(root.join("scripts/scan_v4_malware_exact.py"))?,
+    )?;
 
     let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?.replace("\r\n", "\n");
     for output in [
@@ -1452,6 +1485,7 @@ mod tests {
     #[test]
     fn active_github_hosted_ubuntu_contract_accepts_latest() {
         validate_active_github_hosted_ubuntu_labels(
+            ".github/workflows/ci.yml",
             "jobs:\n  build:\n    runs-on: ubuntu-latest\n",
         )
         .expect("active GitHub-hosted Ubuntu jobs should use ubuntu-latest");
@@ -1460,10 +1494,46 @@ mod tests {
     #[test]
     fn active_github_hosted_ubuntu_contract_rejects_numbered_labels() {
         let error = validate_active_github_hosted_ubuntu_labels(
+            ".github/workflows/ci.yml",
             "jobs:\n  build:\n    runs-on: ubuntu-24.04\n",
         )
         .expect_err("numbered GitHub-hosted Ubuntu labels must be rejected");
         assert!(error.to_string().contains("ubuntu-latest"));
+    }
+
+    #[test]
+    fn hosted_release_requires_archive_detection_on_the_actual_scanner() {
+        let workflow = "attest:\n    runs-on: ubuntu-24.04\n    run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam nsis\n";
+        let scanner = "require_eicar_detection(sample)\nrequire_eicar_detection(archive)\n\"--scan-archive=yes\"";
+        assert!(hosted_nsis_scan_contract(workflow, scanner).is_ok());
+        assert!(hosted_nsis_scan_contract(&workflow.replace(" nsis", ""), scanner).is_err());
+        assert!(
+            hosted_nsis_scan_contract(
+                workflow,
+                &scanner.replace("require_eicar_detection(archive)", "")
+            )
+            .is_err()
+        );
+        assert!(
+            hosted_nsis_scan_contract(workflow, &scanner.replace("\"--scan-archive=yes\"", ""))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pinned_ubuntu_2404_is_allowed_only_for_malware_scanner_jobs() {
+        for (path, job) in [
+            (".github/workflows/release-v4.yml", "attest"),
+            (
+                ".github/workflows/hosted-v4-signing-proof.yml",
+                "malware-scan-proof",
+            ),
+        ] {
+            let valid = format!("jobs:\n  {job}:\n    runs-on: ubuntu-24.04\n");
+            assert!(validate_active_github_hosted_ubuntu_labels(path, &valid).is_ok());
+            let wrong = "jobs:\n  publish:\n    runs-on: ubuntu-24.04\n";
+            assert!(validate_active_github_hosted_ubuntu_labels(path, wrong).is_err());
+        }
     }
 
     #[test]
