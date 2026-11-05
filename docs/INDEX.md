@@ -13,7 +13,8 @@ invariants that must not be discarded because an implementation differs.
   [hold frames](hold-frame-model.md), [presets](tuning-presets.md);
   [timing observation semantics](rt-dispatch-timing-evidence.md)
   (field definitions are current; dated qualification results are historical).
-- **Desktop UI:** [workbench](desktop-workbench.md).
+- **Desktop UI:** [workbench](desktop-workbench.md),
+  [React Aria type boundary](desktop-type-boundary.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Sheet compatibility and playback consent:** [desktop workbench](desktop-workbench.md#sheet-compatibility-and-playback-preparation),
   [source decoding](song-source-decoding.md), [15-key planning](song-planning.md),

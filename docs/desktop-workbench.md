@@ -189,6 +189,8 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
 - `desktop/tests/e2e/playback.spec.ts` and
   `desktop/tests/e2e/playback-recovery.spec.ts` cover transport geometry, start and retirement
   races, recovery, and dry-run versus physical labels.
+- `desktop/src/components/utility/UtilityPane.test.tsx` covers utility tab selection, keyboard tab
+  movement, the lazy Diagnostics mount, and close focus restoration.
 - `desktop/src/components/workbench` unit tests plus `desktop/tests/e2e/workbench-layout.spec.ts`,
   `desktop/tests/e2e/workbench-resize.spec.ts`, and
   `desktop/tests/e2e/workbench-state-regression.spec.ts` cover pane geometry, pointer/keyboard
