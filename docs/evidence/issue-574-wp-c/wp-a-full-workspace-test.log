@@ -1,0 +1,798 @@
+   Compiling sky_dispatch_win32 v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\crates\sky_dispatch_win32)
+   Compiling sky_desktop_shell v4.3.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\desktop\src-tauri)
+   Compiling sky_windows_security v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\crates\sky_windows_security)
+   Compiling sky_app_core v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\crates\sky_app_core)
+   Compiling sky_dispatch_core v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\crates\sky_dispatch_core)
+   Compiling sky_xtask v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\xtask)
+   Compiling sky_player v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\crates\sky_player)
+   Compiling sky_native_adapters v0.1.0 (D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\rust\crates\sky_native_adapters)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 44s
+     Running unittests src\lib.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\sky_app_core-667e39ae82b56e97.exe)
+
+running 50 tests
+test catalog::perf_tests::allowed_song_counts_match_preoptimization_for_sparse_and_dense_sets ... ok
+test catalog::perf_tests::cached_search_orders_match_the_wratio_reference_across_scopes_and_pages ... ok
+test catalog::perf_tests::catalog_length_and_generation_match_snapshot_metadata ... ok
+test catalog::perf_tests::opt_in_catalog_performance_measurement ... ignored, opt-in bounded catalog performance measurement
+test catalog::perf_tests::opt_in_package_b_catalog_query_benchmark ... ignored, opt-in Package B catalog query benchmark
+test catalog::perf_tests::short_query_pagination_matches_preoptimization_at_high_cardinality ... ok
+test catalog::tests::identity_conflicts_are_rejected_instead_of_deduplicated ... ok
+test catalog::tests::ids_and_generation_are_stable_and_path_free ... ok
+test catalog::tests::normalization_uses_unicode_casefold_not_only_lowercase ... ok
+test catalog::tests::query_bounds_count_unicode_scalars_and_allow_large_offsets ... ok
+test catalog::tests::search_orders_deduplicate_ranker_indices_in_first_seen_order_and_fence_keys ... ok
+test catalog::tests::stable_identity_survives_resource_path_and_content_changes ... ok
+test catalog::tests::stale_generation_and_bad_windows_fail_closed ... ok
+test catalog::tests::wratio_matches_reference_vectors ... ok
+test catalog::tests::wratio_ranker_preserves_stable_ties_after_cutoff ... ok
+test catalog_manifest::tests::active_and_retired_id_validation_is_disjoint_and_strict ... ok
+test catalog_manifest::tests::manifest_rejects_unsafe_paths_and_invalid_hashes ... ok
+test library::tests::import_and_add_songs_commits_import_reference_and_membership_once ... ok
+test library::tests::like_mutation_is_validated_and_idempotent ... ok
+test library::tests::liked_song_ids_are_deduplicated_and_malformed_values_are_discarded ... ok
+test library::tests::manifest_rejects_invalid_ids_and_path_like_names ... ok
+test library::tests::manifest_service_persists_collection_membership_without_paths_in_domain_operations ... ok
+test settings::tests::appearance_mode_patch_is_validated_atomically_and_leaves_other_preferences_unchanged ... ok
+test settings::tests::auto_play_patch_persists_as_behavior_without_changing_timing_defaults ... ok
+test settings::tests::defaults_match_normalized_settings_contract ... ok
+test settings::tests::palette_patch_accepts_graphite_and_all_saved_palettes ... ok
+test settings::tests::patch_validates_before_mutating ... ok
+test settings::tests::timing_margin_patch_accepts_boundaries_and_steps_but_rejects_other_values_atomically ... ok
+test song::numeric::tests::checked_nearest_even_timestamp_rounding_covers_ties_edges_and_u64_bound ... ok
+test song::numeric::tests::checked_schedule_accepts_maximum_release_and_rejects_the_next_timestamp ... ok
+test song::numeric::tests::hundredths_quantization_uses_nearest_even_and_omits_nonfinite_results ... ok
+test song::numeric::tests::legacy_schedule_rejects_invalid_source_and_release_time_overflow ... ok
+test song::numeric::tests::risk_gap_overflow_is_omitted_and_nonfinite_suggestions_are_diagnosed ... ok
+test song::numeric::tests::scaled_onset_conversion_rejects_nonfinite_and_unrepresentable_values ... ok
+test song::numeric::tests::unrepresentable_tempo_advice_is_omitted_with_a_schedule_warning ... ok
+test song::tests::empty_song_has_the_materialized_hold_duration ... ok
+test song::tests::legacy_timestamp_coercion_preserves_documented_json_values ... ok
+test song::tests::parser_accepts_legacy_aliases_and_stably_sorts ... ok
+test song::tests::risk_reports_dense_cluster ... ok
+test song::tests::schedule_preserves_authored_chord_scan_order ... ok
+test song::tests::schedule_preserves_chords_and_deduplicates_same_key_timestamp ... ok
+test song::tests::user_margin_is_symmetric_and_never_compresses_an_infeasible_repeat ... ok
+test timing::tests::materialization_rejects_out_of_range_or_non_step_margin ... ok
+test timing::tests::materializes_all_supported_fps_with_checked_symmetric_equations ... ok
+test timing::tests::materializes_symmetric_user_margin_for_supported_hold_profiles ... ok
+test timing::tests::timing_margin_zero_is_valid_and_increases_both_floors_equally ... ok
+test update::tests::fresh_install_with_recent_error_obeys_backoff ... ok
+test update::tests::fresh_install_without_error_checks_immediately ... ok
+test update::tests::policy_and_throttle_match_current_service ... ok
+test update::tests::recent_success_with_no_newer_error_obeys_normal_interval ... ok
+
+test result: ok. 48 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 83.01s
+
+     Running tests\legacy_song_corpus.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\legacy_song_corpus-8d92cfe974fb0ac8.exe)
+
+running 1 test
+test frozen_historical_songs_match_the_pinned_legacy_schedule_baseline ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
+
+     Running tests\piano_planner.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\piano_planner-226e0100e10f1241.exe)
+
+running 14 tests
+test decoder_warnings_remain_separate_from_physical_risk ... ok
+test duplicated_track_ids_are_rejected_even_when_instrument_names_are_valid ... ok
+test equal_authored_same_key_onsets_merge_without_conversion_loss ... ok
+test full_fifteen_key_chord_keeps_all_simultaneous_scan_codes ... ok
+test layer_expansion_is_counted_separately_from_serialized_source_tuples ... ok
+test legacy_source_keeps_the_original_parser_and_schedule_path ... ok
+test malformed_versioned_sources_and_bad_times_do_not_fall_back_to_song_notes ... ok
+test piano_planner_golden_cases_cover_pitch_mapping_modes_and_losses ... ok
+test planner_output_and_schedule_fingerprint_ignore_canonical_vector_order ... ok
+test same_key_repeat_conflicts_are_preserved_for_existing_risk_gates ... ok
+test scaled_onset_must_leave_room_for_the_minimum_physical_hold ... ok
+test tempo_rounding_merges_same_key_schedule_collisions_with_provenance ... ok
+test tiny_positive_tempo_scale_rejects_out_of_range_scaled_onset ... ok
+test track_selection_rejects_unknown_ids ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\settings_catalog_update_fixtures.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\settings_catalog_update_fixtures-1dc9a4f2cb8af9cb.exe)
+
+running 3 tests
+test catalog_fixture_preserves_ids_order_normalization_and_generation ... ok
+test settings_fixture_preserves_patch_and_atomic_failure_semantics ... ok
+test update_fixture_preserves_channel_and_throttle_policy ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests\song_planning_fixtures.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\song_planning_fixtures-b63cf17c4005ec41.exe)
+
+running 4 tests
+test action_kind_wire_names_remain_stable ... ok
+test parser_cases_preserve_the_checked_in_legacy_contract ... ok
+test schedule_and_risk_cases_match_recorded_contract_fields ... ok
+test timing_policy_cases_match_the_authored_timing_contract ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\song_source_decoding.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\song_source_decoding-bbdcb6920a6ce7a2.exe)
+
+running 11 tests
+test composed_timing_rounds_millisecond_boundaries_with_long_compositions ... ok
+test composed_v1_through_v3_decode_their_authoritative_layer_encodings ... ok
+test composed_v4_converts_nominal_pitch_and_only_spans_longer_than_one_column_sustain ... ok
+test decoder_enforces_source_track_note_and_column_limits ... ok
+test flat_keys_preserve_layer_identity_and_stable_timing ... ok
+test legacy_layer_masks_reject_tracks_outside_declared_rosters ... ok
+test official_historical_sky_headers_select_authoritative_v1_sources ... ok
+test recorded_v1_through_v4_keep_their_layer_time_pitch_and_duration_semantics ... ok
+test recorded_v1_v2_absent_rosters_allow_only_the_single_default_track ... ok
+test source_instrument_tables_keep_unpitched_notes_and_special_transpositions ... ok
+test versioned_authority_and_container_validation_fail_closed ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+     Running unittests src\lib.rs (D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests\debug\deps\sky_desktop_shell_lib-01a9ebd502c9a8cd.exe)
+
+running 331 tests
+native_event_snapshots coalesced=0 dropped=0
+test app_state::tests::close_transition_is_idempotent ... ok
+test app_state::tests::concurrent_playback_and_calibration_reservation_has_one_winner ... ok
+native_event_snapshots coalesced=0 dropped=0
+test app_state::tests::event_subscription_does_not_construct_native_runtime ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test app_state::tests::gui_smoke_authorization_is_explicit_and_not_implied_by_safe_package ... ok
+native_event_snapshots coalesced=0 dropped=0
+test app_state::tests::physical_playback_and_calibration_are_one_atomic_exclusion_gate ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test app_state::tests::pre_runtime_subscription_receives_ordered_runtime_lifecycle_events ... ok
+native_event_snapshots coalesced=0 dropped=0
+test app_state::tests::settings_patch_and_native_start_share_one_linearization_gate ... ok
+test app_state::tests::shutdown_closes_admission_without_releasing_the_playback_reservation ... ok
+test app_state::tests::unverified_playback_release_quarantines_physical_activity_until_restart ... ok
+test app_state::tests::update_installation_is_rejected_while_physical_playback_is_active ... ok
+test command_ownership::tests::every_current_desktop_method_has_exactly_one_native_owner ... ok
+test command_ownership::tests::tauri_capability_and_handler_are_explicitly_bound_to_the_contract ... ok
+test commands::export_bindings_appearancemode ... ok
+test commands::export_bindings_bootstrapdto ... ok
+test commands::export_bindings_calibrationcancelackdto ... ok
+test commands::export_bindings_calibrationcancelrequest ... ok
+test commands::export_bindings_calibrationstartackdto ... ok
+test commands::export_bindings_calibrationstartrequest ... ok
+test commands::export_bindings_catalogdetailrequest ... ok
+test commands::export_bindings_catalogreloaddto ... ok
+test commands::export_bindings_catalogrowdto ... ok
+test commands::export_bindings_catalogsearchdto ... ok
+test commands::export_bindings_catalogsearchrequest ... ok
+test commands::export_bindings_catalogsetlikeddto ... ok
+test commands::export_bindings_catalogsetlikedrequest ... ok
+test commands::export_bindings_catalogsourceid ... ok
+test commands::export_bindings_catalogviewportdto ... ok
+test commands::export_bindings_catalogviewportrequest ... ok
+test commands::export_bindings_diagnosticsenableddto ... ok
+test commands::export_bindings_diagnosticssetenabledrequest ... ok
+test commands::export_bindings_librarycreateplaylistrequest ... ok
+test commands::export_bindings_librarynavigationdto ... ok
+test commands::export_bindings_libraryplaylistidrequest ... ok
+test commands::export_bindings_libraryplaylistimportresultdto ... ok
+test commands::export_bindings_libraryplaylistsongsrequest ... ok
+test commands::export_bindings_libraryplaylistsummarydto ... ok
+test commands::export_bindings_libraryrenameplaylistrequest ... ok
+test commands::export_bindings_librarysource ... ok
+test commands::export_bindings_nativebuilddto ... ok
+test commands::export_bindings_playbackactivestatusdto ... ok
+test commands::export_bindings_playbackadmission ... ok
+test commands::export_bindings_playbackcommandackdto ... ok
+test commands::export_bindings_playbackconfigdto ... ok
+test commands::export_bindings_playbackcontrol ... ok
+test commands::export_bindings_playbackdecision ... ok
+test commands::export_bindings_playbackdecisionacceptancedto ... ok
+test commands::export_bindings_playbackdefaultsdto ... ok
+test commands::export_bindings_playbackoptionsetsdto ... ok
+test commands::export_bindings_playbackpatch ... ok
+test commands::export_bindings_playbackpendingcontrol ... ok
+test commands::export_bindings_playbackplanvariantdto ... ok
+test commands::export_bindings_playbackpreparerequest ... ok
+test commands::export_bindings_playbackrecommendationdto ... ok
+test commands::export_bindings_playbacksessioncommandrequest ... ok
+test commands::export_bindings_playbacksessiondto ... ok
+test commands::export_bindings_playbacksessionstate ... ok
+test commands::export_bindings_playbackstartrequest ... ok
+test commands::export_bindings_playbackstatusdto ... ok
+test commands::export_bindings_playbackterminalstatusdto ... ok
+test commands::export_bindings_preparedplaybackdto ... ok
+test commands::export_bindings_riskdecisiondto ... ok
+test commands::export_bindings_risksummarydto ... ok
+test commands::export_bindings_settingsdto ... ok
+test commands::export_bindings_settingspatch ... ok
+test commands::export_bindings_sheetanalysisdto ... ok
+test commands::export_bindings_sheetconversionmodedto ... ok
+test commands::export_bindings_sheetpipelinestagedto ... ok
+test commands::export_bindings_sheetpitchdto ... ok
+test commands::export_bindings_sheetreadinessdto ... ok
+test commands::export_bindings_sheettrackdto ... ok
+test commands::export_bindings_songdetaildto ... ok
+test commands::export_bindings_timingadvisoryassumptionsdto ... ok
+test commands::export_bindings_timingadvisorystatus ... ok
+test commands::export_bindings_timingmarginrecommendationdto ... ok
+test commands::export_bindings_updatebeginhandoffrequest ... ok
+test commands::export_bindings_updatepreferencesdto ... ok
+test commands::export_bindings_updatepreferencespatch ... ok
+test commands::export_bindings_wholestreamtimingadvisorydto ... ok
+test commands::tests::appearance_mode_uses_only_the_generated_wire_values ... ok
+test commands::tests::playback_command_ack_is_typed_and_rejects_unknown_fields ... ok
+test commands::tests::playback_variant_advisory_is_optional_and_has_a_stable_compact_wire_shape ... ok
+test commands::tests::settings_dto_serializes_canonical_palette_field ... ok
+test commands::tests::settings_patch_accepts_canonical_palette_input ... ok
+test commands::tests::settings_patch_accepts_empty_and_partial_input ... ok
+test commands::tests::settings_patch_accepts_legacy_theme_input_but_serializes_palette ... ok
+test commands::tests::settings_patch_rejects_ambiguous_palette_and_theme_input ... ok
+test commands::tests::settings_patch_rejects_unknown_fields ... ok
+test ipc_contract::tests::stable_command_contract_is_exactly_the_native_set ... ok
+native_event_snapshots coalesced=0 dropped=0
+test lifecycle::tests::controlled_close_cleans_native_before_destroy_and_is_idempotent ... ok
+native_event_snapshots coalesced=0 dropped=0
+test lifecycle::tests::startup_failsafe_cancellation_precedes_close_commit ... ok
+test native_runtime::catalog_reconcile::package_b_benchmark_tests::opt_in_package_b_catalog_reconciliation_benchmark ... ignored, opt-in Package B catalog reconciliation benchmark
+test native_runtime::playback::session::preparation_cancellation_tests::catalog_generation_invalidation_cancels_outstanding_prepare_and_keeps_new_generation ... ok
+test native_runtime::playback::session::preparation_cancellation_tests::newer_prepare_cancels_old_analysis_without_clearing_new_owner ... ok
+test native_runtime::playback::session::preparation_cancellation_tests::settings_invalidation_while_model_is_queued_cancels_stale_publication ... ok
+test native_runtime::playback::session::preparation_cancellation_tests::superseding_request_before_cache_commit_cannot_publish_or_return_old_plan ... ok
+test native_runtime::playback::timing_advisory::tests::adapter_can_construct_an_empty_model_from_a_real_domain_song ... ok
+test native_runtime::playback::timing_advisory::tests::cancellation_and_invalid_authored_order_fail_closed_as_advisory_only ... ok
+test native_runtime::playback::timing_advisory::tests::dense_alternating_keys_keep_authored_packet_count_and_report_modeled_pressure ... ok
+test native_runtime::playback::timing_advisory::tests::dry_run_marks_physical_projection_as_hypothetical_and_fingerprint_specific ... ok
+test native_runtime::playback::timing_advisory::tests::empty_sparse_mixed_and_fifteen_key_packets_keep_canonical_boundaries ... ok
+test native_runtime::playback::timing_advisory::tests::near_floor_same_key_cycle_models_h_and_physical_g_without_changing_authored_actions ... ok
+test native_runtime::playback::timing_advisory::tests::physical_assumption_overflow_is_reported_as_invalid_assumptions ... ok
+test native_runtime::playback::timing_advisory::tests::supported_fps_hold_profiles_and_margin_edges_preserve_each_materialized_floor ... ok
+test native_runtime::playback::timing_advisory::tests::unrelated_key_head_of_line_pressure_is_reported_without_admission_changes ... ok
+test native_runtime::playback::timing_advisory::tests::validates_floor_assumptions_and_preserves_explicit_unavailable_statuses ... ok
+test native_runtime::tests::calibration::calibrated_timing_margin_reports_insufficient_headroom_without_clamping ... ok
+test native_runtime::tests::calibration::calibration_budget_preserves_mode_specific_reserves ... ok
+test native_runtime::tests::calibration::calibration_cache_writer_and_loader_round_trip_out_of_envelope ... ok
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::calibration::calibration_commit_before_shutdown_has_one_bounded_outcome ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::calibration::calibration_recommendation_never_changes_the_persisted_user_margin ... ok
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::calibration::calibration_shutdown_before_commit_cannot_mutate_after_return ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::calibration::calibration_shutdown_hung_worker_is_bounded_and_nonpublishing ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::calibration::duplicate_calibration_start_keeps_already_running_contract ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::calibration::routed_calibration_start_maps_physical_activity_to_playback_active ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::calibration::routed_duplicate_calibration_start_maps_to_already_running ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::calibration::synthetic_calibration_requires_explicit_package_composition ... ok
+test native_runtime::tests::calibration::unqualified_margin_recommendation_uses_default_timing_margin ... ok
+test native_runtime::tests::calibration::user_margin_changes_authored_schedule_and_plan_fingerprint ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::cache_source_fingerprint_rejects_removed_import_before_hydration ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::cache_source_fingerprint_tracks_imports_added_during_runtime ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::catalog_cache_reconciles_add_change_delete_and_matches_clean_compose ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::catalog_viewport_hydrates_metadata_and_liked_songs_persist_by_song_id ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::catalog_worker_cannot_mutate_after_shutdown_claims_closing ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::duplicate_catalog_start_is_single_flight ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::duplicate_imports_share_cached_entries_without_losing_source_status ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::native_missing_import_does_not_break_all_songs_or_navigation ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::native_playlist_import_commits_membership_and_import_reference_together ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::settings_and_catalog_changes_invalidate_prepared_native_playback ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::stale_reconcile_cannot_overwrite_newer_import_reload ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::unavailable_import_preserves_cached_entries_and_manifest_intent ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog::warmed_native_catalog_routes_avoid_full_snapshot_clones ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::analysis_results_are_discarded_after_settings_change_and_catalog_reload ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::builtin_smart_source_uses_native_builtin_membership_only ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::catalog_cache_reconciliation_requires_exact_identity_and_path ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::catalog_reload_completes_while_prepare_model_is_paused_and_supersedes_it ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::native_analysis_admission_caps_two_active_workers_and_sixty_four_queued_ids ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::native_analysis_cache_recomputes_safely_after_lru_eviction ... ok
+test native_runtime::tests::catalog_package_b::native_analysis_cache_uses_a_128_entry_lru ... ok
+test native_runtime::tests::catalog_package_b::native_catalog_search_order_cache_caps_total_indices_at_one_hundred_thousand ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::native_catalog_search_order_cache_is_bounded_lru_and_source_invalidated ... ok
+test native_runtime::tests::catalog_package_b::opt_in_package_b_native_viewport_benchmark ... ignored, opt-in Package B native viewport benchmark
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::viewport_analysis_coalesces_song_revisions_and_runs_selected_first ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_package_b::viewport_discards_analysis_after_like_and_viewport_churn ... ok
+test native_runtime::tests::catalog_viewport_benchmark::opt_in_package_b_production_shape_viewport_benchmark ... ignored, opt-in Package B production-shape viewport benchmark
+test native_runtime::tests::catalog_viewport_benchmark::opt_in_package_b_viewport_projection_benchmark ... ignored, opt-in Package B compact viewport projection benchmark
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::explicit_selected_viewports_reuse_adjacent_windows_and_match_fresh_hydration ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::explicit_unselected_viewports_reuse_adjacent_windows_and_match_fresh_hydration ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::selected_analysis_stays_in_the_bounded_lru_and_detail_remains_independent ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::stale_explicit_shift_cannot_publish_over_the_latest_viewport_intent ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::viewport_projection_rejects_like_playlist_settings_and_generation_changes ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::viewport_projection_retains_no_more_than_200_row_summaries ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::catalog_viewport_projection::viewport_projection_reuses_only_the_exact_last_accepted_window ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=31 publisher_dropped=31
+native_event_snapshots coalesced=31 dropped=32
+native_event_snapshots coalesced=31 dropped=32
+test native_runtime::tests::event_delivery::blocked_ui_publication_past_lease_keeps_supervision_live_and_shutdown_releases ... ok
+native_event_snapshots coalesced=0 dropped=0
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::event_delivery::event_delivery_failure_preserves_the_terminal_worker_outcome ... ok
+native_event_snapshots coalesced=1 dropped=3
+test native_runtime::tests::event_delivery::event_hub_coalesces_snapshots_and_fails_closed_for_lifecycle_overflow ... ok
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::event_delivery::event_hub_counts_snapshot_eviction_on_close_and_failed_channel_send ... ok
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::event_delivery::event_hub_evicts_snapshots_before_lifecycle_events ... ok
+native_event_snapshots coalesced=0 dropped=0
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::event_delivery::failed_critical_channel_delivery_requests_tracked_terminal_cleanup ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::event_delivery::finished_and_failed_events_are_retirement_barriers_for_the_next_reservation ... ok
+playback_presentation_snapshots session_coalesced=1 session_dropped=1 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::event_delivery::newer_snapshot_coalesces_a_frame_held_behind_an_older_critical_event ... ok
+playback_presentation_snapshots session_coalesced=1 session_dropped=1 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::event_delivery::older_critical_events_preserve_the_freshest_pending_snapshot_in_order ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::event_delivery::shutdown_completion_uses_the_same_terminal_event_sequence ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::event_delivery::startup_state_event_failure_does_not_start_a_worker_or_drop_terminal_evidence ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=1 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::event_delivery::taken_snapshot_superseded_by_terminal_close_is_counted ... ok
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::playback_integration::commands_status::native_startup_projection_keeps_ready_worker_starting_until_armed_publication ... ok
+test native_runtime::tests::playback_integration::commands_status::physical_startup_failures_have_actionable_classified_messages ... ok
+test native_runtime::tests::playback_integration::commands_status::playback_status_preserves_prepared_identity_and_failure_details ... ok
+test native_runtime::tests::playback_integration::commands_status::playback_status_tracks_active_ownership_through_the_retirement_barrier ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::commands_status::repeated_pending_controls_and_invalid_transitions_match_command_contract ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::commands_status::skip_is_live_only_and_clears_pending_pause_or_resume ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::commands_status::terminal_stop_returns_the_stored_terminal_state ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_disable_waits_for_in_flight_publication ... ok
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_dry_run_publishes_unavailable_snapshot ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_gate_matches_native_rate_reset_and_sequence_contract ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_physical_healthy_status_remains_healthy ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_sender_samples_distinguish_empty_zero_and_nonzero_measurements ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_statistics_use_nearest_even_and_population_sigma ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_status_distinguishes_unavailable_and_inconsistent_attachment ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_status_matches_native_observer_contract ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::diagnostics_unavailable_path_keeps_rate_gate_and_monotonic_sequence ... ok
+native_event_snapshots coalesced=1 dropped=2
+test native_runtime::tests::playback_integration::diagnostics_trace::final_diagnostics_snapshot_bypasses_sampling_interval ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::diagnostics_trace::focus_rejection_publishes_starting_then_failed_trace ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::sender_trace_beginning_physical_session_b_clears_session_a_and_rejects_late_a_completion ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::sender_trace_capture_memory_stays_under_two_mib ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::sender_trace_export_includes_session_identity_and_frozen_policy ... ok
+test native_runtime::tests::playback_integration::diagnostics_trace::sender_trace_failed_session_b_extraction_does_not_restore_session_a ... ok
+native_event_snapshots coalesced=0 dropped=2
+native_event_snapshots coalesced=0 dropped=2
+native_event_snapshots coalesced=0 dropped=2
+native_event_snapshots coalesced=0 dropped=2
+native_event_snapshots coalesced=0 dropped=2
+test native_runtime::tests::playback_integration::diagnostics_trace::terminal_outcome_health_projection_preserves_trigger_and_release_identity ... ok
+native_event_snapshots coalesced=1 dropped=1
+native_event_snapshots coalesced=1 dropped=1
+test native_runtime::tests::playback_integration::presentation_events::blocked_event_publisher_coalesces_snapshots_and_preserves_lifecycle_order ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::presentation_events::dry_run_completion_publishes_finished_before_terminal_event ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=1 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::presentation_events::presentation_critical_queue_overflow_fails_closed_and_releases ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::presentation_events::rapid_playback_sessions_queue_terminal_before_successor_starting ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::presentation_events::stop_paths_publish_stopping_finished_then_finished_event ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::presentation_events::terminal_player_statuses_publish_state_before_terminal_event ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::appearance_and_palette_only_patch_preserves_inflight_prepare_and_native_start_token ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::auto_play_patch_keeps_prepared_native_playback_valid ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::mixed_palette_and_timing_patch_rejects_stale_native_prepared_token ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_source_guard ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::native_detail_matches_tempo_recommendation_contract_cases ... ok
+test native_runtime::tests::playback_integration::start_prepare::native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_pressure ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::native_prepare_keeps_typed_validation_failure_contract ... ok
+test native_runtime::tests::playback_integration::start_prepare::native_prepared_ids_are_random_lowercase_hex_and_eviction_is_fifo ... ok
+test native_runtime::tests::playback_integration::start_prepare::playback_start_validation_bounds_decisions_before_admission ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::playback_start_validation_distinguishes_malformed_and_stale_ids ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::routed_playback_start_validates_input_before_confirmation_and_lookup ... ok
+test native_runtime::tests::playback_integration::start_prepare::settings_fingerprint_excludes_appearance_and_auto_play ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::start_prepare::settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_analysis ... ok
+test native_runtime::tests::playback_integration::start_prepare::target_integrity_admission_precedes_focus_and_session_arm ... ok
+test native_runtime::tests::playback_integration::start_prepare::target_integrity_startup_admission_fails_only_for_mismatch ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::beta_patch_rejected ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::cache_source_fingerprint_rejects_changed_user_root_before_hydration ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::corrupt_cache_falls_back_to_cold_rebuild ... ok
+test native_runtime::tests::playback_integration::storage_bootstrap::debug_install_root_is_repository_root_not_cwd ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::invalid_appearance_patch_rejects_neighboring_settings_atomically ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::native_bootstrap_uses_explicit_install_root_and_returns_plain_dto ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::persisted_beta_repair_fails_closed_and_persists_stable ... ok
+test native_runtime::tests::playback_integration::storage_bootstrap::production_composition_has_no_environment_only_safe_bypass ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::same_size_same_mtime_content_mutation_still_matches_clean_compose ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::shutdown_fences_background_reconciliation_and_cache_write ... ok
+native_event_snapshots coalesced=0 dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::storage_bootstrap::update_check_uses_cached_settings_without_refreshing_external_file ... ok
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::playback_integration::storage_bootstrap::v4_runtime_operates_with_read_only_install_root_and_separate_app_data ... ok
+playback_presentation_snapshots session_coalesced=31 session_dropped=31 publisher_coalesced=3 publisher_dropped=3
+native_event_snapshots coalesced=3 dropped=5
+native_event_snapshots coalesced=3 dropped=5
+test native_runtime::tests::playback_integration::supervisor_lease::blocked_diagnostics_gate_past_lease_does_not_block_safety_progress ... ok
+playback_presentation_snapshots session_coalesced=31 session_dropped=31 publisher_coalesced=1 publisher_dropped=1
+native_event_snapshots coalesced=1 dropped=2
+native_event_snapshots coalesced=1 dropped=2
+test native_runtime::tests::playback_integration::supervisor_lease::blocked_snapshot_projection_past_lease_keeps_supervisor_live ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=1
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::playback_integration::supervisor_lease::blocked_terminal_presentation_does_not_hold_supervisor_after_release ... ok
+test native_runtime::tests::playback_integration::supervisor_lease::direct_native_player_keeps_the_qualified_supervisor_lease ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=1
+test native_runtime::tests::playback_integration::supervisor_lease::native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::supervisor_lease::supervisor_spawn_failure_is_retired_before_physical_activation ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup ... FAILED
+test native_runtime::tests::playback_integration::terminal_release::joined_worker_with_unverified_release_quarantines_future_physical_activity ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::terminal_release::native_worker_cleanup_barrier_keeps_session_exclusive_until_join_and_release ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=1 publisher_dropped=1
+native_event_snapshots coalesced=1 dropped=2
+test native_runtime::tests::playback_integration::terminal_release::native_worker_release_error_after_stop_quarantines_successor_admission ... ok
+test native_runtime::tests::playback_integration::terminal_release::panic_release_before_armed_has_no_physical_release_obligation ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::terminal_release::physical_startup_target_failure_retires_without_reentrant_active_lock ... ok
+test native_runtime::tests::playback_integration::terminal_release::pre_exit_release_marker_requires_verified_shutdown_result ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::terminal_release::recovered_join_error_cannot_be_masked_by_a_requested_stop ... ok
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::terminal_release::shutdown_timeout_keeps_the_physical_reservation_and_omits_release_proof ... ok
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+playback_presentation_snapshots session_coalesced=0 session_dropped=0 publisher_coalesced=0 publisher_dropped=0
+native_event_snapshots coalesced=0 dropped=0
+test native_runtime::tests::playback_integration::terminal_release::stop_skip_and_shutdown_cancel_the_published_pre_arm_session ... ok
+test native_runtime::tests::playback_integration::terminal_release::terminal_handoff_uses_worker_result_and_release_evidence_after_join ... ok
+test native_update::tests::check_disposition_matrix_enforces_background_throttling_and_manual_bypass ... ok
+test native_update::tests::check_persistence_failure_produces_state_persistence_failed_and_performed_ack ... ok
+test native_update::tests::classify_check_error_maps_known_classes ... ok
+test native_update::tests::download_progress_accumulates_chunk_lengths ... ok
+test native_update::tests::download_progress_accumulates_without_a_content_length ... ok
+test native_update::tests::download_progress_fails_closed_at_the_artifact_bound ... ok
+test native_update::tests::download_progress_never_decreases_within_an_attempt ... ok
+test native_update::tests::download_progress_stays_within_a_valid_total ... ok
+test native_update::tests::final_ready_and_installing_progress_use_exact_verified_artifact_length ... ok
+test native_update::tests::fixture_new_only_mode_selects_only_the_last_supplied_root ... ok
+test native_update::tests::fixture_runtime_configuration_reads_bounded_keys_and_selects_new_only ... ok
+test native_update::tests::fixture_runtime_configuration_rejects_invalid_port_and_private_key ... ok
+test native_update::tests::fixture_runtime_configuration_requires_a_loopback_port_and_public_keys ... ok
+test native_update::tests::native_update_state_bounds_error_detail_by_characters ... ok
+test native_update::tests::native_update_state_bounds_oversized_error_detail_at_transition_boundary ... ok
+test native_update::tests::native_update_state_default_has_zero_revision_and_idle ... ok
+test native_update::tests::native_update_state_preserves_short_error_detail_exactly ... ok
+test native_update::tests::native_update_state_transitions_maintain_monotonic_revisions_and_invariants ... ok
+test native_update::tests::production_error_is_bounded_and_does_not_name_a_release_namespace ... ok
+test native_update::tests::production_fixture_manifest_is_tauri_consumable ... ok
+test native_update::tests::runtime_rotation_download_fails_closed_when_no_root_verifies_bytes ... ok
+test native_update::tests::runtime_rotation_download_falls_through_to_the_root_that_verifies_bytes ... ok
+test native_update::tests::update_installation_has_a_distinct_playback_policy_error ... ok
+test power_lifecycle::tests::callback_context_cardinality_is_bounded_across_session_registration_stress ... ok
+test power_lifecycle::tests::close_and_unregistration_failures_are_retried_during_raii_drop ... ok
+test power_lifecycle::tests::dry_run_does_not_register_or_create_a_power_request ... ok
+test power_lifecycle::tests::failed_notification_unregistration_is_reported_and_keeps_callback_state_alive ... ok
+test power_lifecycle::tests::notification_failure_prevents_power_acquisition_and_request_failure_is_explicitly_degraded ... ok
+test power_lifecycle::tests::notification_registration_is_raii_and_failure_is_distinct ... ok
+test power_lifecycle::tests::power_request_failure_points_are_separately_reported_and_cleaned ... ok
+test power_lifecycle::tests::power_request_raii_sets_then_clears_and_closes_once ... ok
+test power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch ... ok
+test single_instance::tests::debug_build_refuses_an_existing_instance ... ok
+test single_instance::tests::named_mutex_rejects_a_second_live_guard_and_releases_on_drop ... ok
+test single_instance::tests::packaged_build_focuses_an_existing_instance ... ok
+test startup_telemetry::tests::startup_window_reveal_diagnostics_are_allowed_frontend_markers ... ok
+test startup_window::tests::accepted_close_before_fallback_prevents_reveal ... ok
+test startup_window::tests::close_and_fallback_reveal_share_a_linearizable_transition ... ok
+test startup_window::tests::fallback_show_failure_is_terminal_and_diagnostic ... ok
+test startup_window::tests::hidden_window_cannot_acknowledge_startup_success ... ok
+test startup_window::tests::late_timer_expiry_does_not_reveal_a_successfully_hidden_window ... ok
+test startup_window::tests::successful_frontend_reveal_completes_startup_once ... ok
+test ui_events::export_bindings_calibrationfinishedpayload ... ok
+test ui_events::export_bindings_calibrationmode ... ok
+test ui_events::export_bindings_calibrationoutcome ... ok
+test ui_events::export_bindings_calibrationprogresspayload ... ok
+test ui_events::export_bindings_calibrationstate ... ok
+test ui_events::export_bindings_catalogchangedpayload ... ok
+test ui_events::export_bindings_catalogloadfailedpayload ... ok
+test ui_events::export_bindings_catalogreadiness ... ok
+test ui_events::export_bindings_corefatalpayload ... ok
+test ui_events::export_bindings_corereadypayload ... ok
+test ui_events::export_bindings_diagnosticsbackendstatus ... ok
+test ui_events::export_bindings_diagnosticssnapshotdto ... ok
+test ui_events::export_bindings_nativebuildpayload ... ok
+test ui_events::export_bindings_playbackeventstate ... ok
+test ui_events::export_bindings_playbackfailedpayload ... ok
+test ui_events::export_bindings_playbackfinishedpayload ... ok
+test ui_events::export_bindings_playbackfocusstate ... ok
+test ui_events::export_bindings_playbackhealthstate ... ok
+test ui_events::export_bindings_playbacksnapshotpayload ... ok
+test ui_events::export_bindings_playbackstatechangedpayload ... ok
+test ui_events::export_bindings_uievent ... ok
+test ui_events::export_bindings_updatechannel ... ok
+test ui_events::export_bindings_updatecheckackdto ... ok
+test ui_events::export_bindings_updatecheckdisposition ... ok
+test ui_events::export_bindings_updatecheckorigin ... ok
+test ui_events::export_bindings_updatecheckrequest ... ok
+test ui_events::export_bindings_updateerrorcode ... ok
+test ui_events::export_bindings_updateinstallackdto ... ok
+test ui_events::export_bindings_updateprogressdto ... ok
+test ui_events::export_bindings_updateretryaction ... ok
+test ui_events::export_bindings_updatesnapshotpayload ... ok
+test ui_events::export_bindings_updatestate ... ok
+test update_smoke_tests::accepted_install_waits_for_updater_lifecycle ... ok
+test update_smoke_tests::rejected_install_becomes_packaged_selftest_failure ... ok
+test update_smoke_tests::rejected_install_requires_error_state ... ok
+test update_smoke_tests::rejected_install_requires_typed_error ... ok
+test update_smoke_tests::rejected_install_without_snapshot_fails_closed ... ok
+test windows_caption::tests::destruction_reentered_during_child_creation_prevents_later_child_operations ... ok
+test windows_caption::tests::failed_positioning_removes_subclass_and_destroys_child ... ok
+test windows_caption::tests::failed_subclass_installation_keeps_registry_empty_without_creating_child ... ok
+test windows_caption::tests::independent_child_destruction_forgets_state_and_detaches_parent ... ok
+test windows_caption::tests::installs_once_and_duplicate_setup_is_idempotent ... ok
+test windows_caption::tests::invalid_parent_and_child_creation_failure_leave_no_state ... ok
+test windows_caption::tests::parent_destruction_drops_registry_and_leaves_child_to_windows ... ok
+test windows_caption::tests::partial_configuration_failure_destroys_created_child ... ok
+test windows_caption::tests::queued_child_creation_is_skipped_after_parent_destruction ... ok
+test windows_caption::tests::snap_hit_target_tracks_the_shared_logical_titlebar_height_at_each_dpi ... ok
+test windows_icon::tests::dpi_replacement_releases_superseded_pair_then_final_pair_once ... ok
+test windows_icon::tests::installs_owned_icons_and_releases_them_once_at_destroy ... ok
+test windows_icon::tests::invalid_window_and_partial_icon_allocation_do_not_leak ... ok
+test windows_icon::tests::reentrant_destroy_during_dpi_apply_does_not_send_big_icon_or_leak ... ok
+test windows_icon::tests::subclass_failure_releases_both_new_icons ... ok
+
+failures:
+
+---- native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup stdout ----
+
+thread 'native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup' (12344) panicked at D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\desktop\src-tauri\src\native_runtime\tests\playback_integration\terminal_release.rs:946:5:
+assertion failed: active.done.load(Ordering::Acquire)
+stack backtrace:
+   0:     0x7ff6b6489779 - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ff6b6489779 - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ff6b6489779 - std::sys::backtrace::_print_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:74
+   3:     0x7ff6b6489779 - std::sys::backtrace::impl$0::print::impl$0::fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:44
+   4:     0x7ff6b649e3ae - core::fmt::write
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\fmt\mod.rs:0
+   5:     0x7ff6b648ed04 - core::io::write::default_write_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\io\write.rs:402
+   6:     0x7ff6b648ed04 - core::io::write::Write::write_fmt<alloc::vec::Vec<u8,alloc::alloc::Global> >
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\io\write.rs:335
+   7:     0x7ff6b646aae5 - std::sys::backtrace::BacktraceLock::print
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:47
+   8:     0x7ff6b646aae5 - std::panicking::default_hook::closure$0
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:292
+   9:     0x7ff6b647f543 - std::panicking::default_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:316
+  10:     0x7ff6b5662c69 - alloc::boxed::impl$33::call
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\alloc\src\boxed.rs:2334
+  11:     0x7ff6b5662c69 - test::test_main_inner::closure$0<test::test_main_static::closure_env$0>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\test\src\lib.rs:155
+  12:     0x7ff6b647f924 - std::panicking::panic_with_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:823
+  13:     0x7ff6b646abf4 - std::panicking::panic_handler::closure$0
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:681
+  14:     0x7ff6b6467aff - std::sys::backtrace::__rust_end_short_backtrace<std::panicking::panic_handler::closure_env$0,never$>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:182
+  15:     0x7ff6b646b50e - std::panicking::panic_handler
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:679
+  16:     0x7ff6b64c648d - core::panicking::panic_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\panicking.rs:80
+  17:     0x7ff6b64c6457 - core::panicking::panic
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\panicking.rs:150
+  18:     0x7ff6b55bcd74 - sky_desktop_shell_lib::native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup
+                               at D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\desktop\src-tauri\src\native_runtime\tests\playback_integration\terminal_release.rs:946
+  19:     0x7ff6b5580158 - sky_desktop_shell_lib::native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup::closure$0
+                               at D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\desktop\src-tauri\src\native_runtime\tests\playback_integration\terminal_release.rs:830
+  20:     0x7ff6b5508626 - core::ops::function::FnOnce::call_once<sky_desktop_shell_lib::native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup::closure_env$0,tuple$<> >
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\ops\function.rs:250
+  21:     0x7ff6b56554d0 - core::ops::function::FnOnce::call_once
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\ops\function.rs:250
+  22:     0x7ff6b56554d0 - test::__rust_begin_short_backtrace<enum2$<core::result::Result<tuple$<>,alloc::string::String> >,enum2$<core::result::Result<tuple$<>,alloc::string::String> > (*)()>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\test\src\lib.rs:733
+  23:     0x7ff6b566349b - test::run_test_in_process
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\test\src\lib.rs:756
+  24:     0x7ff6b566349b - test::run_test::closure$0
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\test\src\lib.rs:677
+  25:     0x7ff6b565d90d - test::run_test::closure$1
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\test\src\lib.rs:707
+  26:     0x7ff6b565d90d - std::sys::backtrace::__rust_begin_short_backtrace<test::run_test::closure_env$1,tuple$<> >
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:166
+  27:     0x7ff6b5667515 - std::thread::lifecycle::spawn_unchecked::closure$1::closure$0
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\thread\lifecycle.rs:70
+  28:     0x7ff6b5667515 - core::panic::unwind_safe::impl$25::call_once
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\panic\unwind_safe.rs:275
+  29:     0x7ff6b5667515 - std::panicking::catch_unwind::do_call
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:576
+  30:     0x7ff6b5667515 - std::panicking::catch_unwind
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panicking.rs:544
+  31:     0x7ff6b5667515 - std::panic::catch_unwind
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\panic.rs:359
+  32:     0x7ff6b5667515 - std::thread::lifecycle::spawn_unchecked::closure$1
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\thread\lifecycle.rs:68
+  33:     0x7ff6b5667515 - core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<test::run_test::closure_env$1,tuple$<> >,tuple$<> >
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\ops\function.rs:250
+  34:     0x7ff6b6487de3 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+  35:     0x7ffd5cc5dda7 - BaseThreadInitThunk
+  36:     0x7ffd5e57ee4c - RtlUserThreadStart
+
+
+failures:
+    native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup
+
+test result: FAILED. 326 passed; 1 failed; 4 ignored; 0 measured; 0 filtered out; finished in 20.65s
+
+error: test failed, to rerun pass `-p sky_desktop_shell --lib`
+EXIT_CODE=101

@@ -1,0 +1,211 @@
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 18 tests
+test release_v4::tests::public_v4_2_0_asset_pair_downloads_through_production_adapter ... ignored, manual read-only GET integration against the immutable public v4.2.0 assets
+test release_v4::tests::candidate_verification_dispatcher_requires_the_exact_workflow_job ... ok
+test release_v4::tests::metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens ... ok
+test release_v4::tests::malformed_github_api_json_fails_closed_with_endpoint_context ... ok
+test release_v4::tests::release_asset_upload_transport_targets_real_upload_host_without_exposing_token ... ok
+test release_v4::tests::request_with_retry_policy_never_blind_retries_post ... ok
+test release_v4::tests::release_upload_authentication_is_opaque_but_rejects_header_injection ... ok
+test release_v4::tests::test_key_signature_is_verified_after_draft_readback_before_patch ... ignored, hermetic fake-transport proof using disposable local Tauri test keys
+test release_v4::tests::release_upload_url_is_bound_to_canonical_numeric_release_route ... ok
+test release_v4::tests::safe_cli_error_redacts_credentials_and_bounds_output ... ok
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =https --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681340357900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681340382900 --output NUL --write-out %{http_code} --url http://127.0.0.1:9/fixture (timeout=600000ms)
+[xtask] git rev-parse --verify HEAD (timeout=30000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681339862400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681339929300 --output NUL --write-out %{http_code} --url http://127.0.0.1:60080/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681340407600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681340415800 --output NUL --write-out %{http_code} --url http://127.0.0.1:60079/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_production_args_refuse_cleartext_http ... ok
+[xtask] git status --porcelain (timeout=30000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681451090000 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681451105300 --output NUL --write-out %{http_code} --url http://127.0.0.1:60083/fixture (timeout=600000ms)
+test release_v4::tests::reconciliation_identifies_exact_asset_and_refuses_mismatches ... ok
+test release_v4::tests::doctor_and_timestamp_negative_contracts ... ok
+test release_v4::tests::real_curl_parses_private_opaque_token_config_and_sends_exact_binary ... ok
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681502057800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681502073000 --output NUL --write-out %{http_code} --url http://127.0.0.1:60085/fixture (timeout=600000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-4\prepublication-candidate-metadata.json
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-2\prepublication-candidate-metadata.json
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681551490700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681551506800 --output NUL --write-out %{http_code} --url http://127.0.0.1:60087/fixture (timeout=600000ms)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-2\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681601471100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681601485400 --output NUL --write-out %{http_code} --url http://127.0.0.1:60089/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681651023300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681651032500 --output NUL --write-out %{http_code} --url http://127.0.0.1:60091/fixture (timeout=600000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-9568-1793908681700949300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-9568-1793908681700967300 --output NUL --write-out %{http_code} --url http://127.0.0.1:60093/fixture (timeout=600000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-5\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-6\prepublication-candidate-metadata.json
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-7\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-8\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-9\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-9\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-10\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-11\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-12\prepublication-candidate-metadata.json
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-11\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-13\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-13\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=13, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-16\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-16\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-17\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-16\latest.json
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-17\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+V4 Rust PromoteMetadata: PASS (channel=stable, tag=v4.3.0)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-16\final-expected-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 raw metadata convergence: PASS (sha256=693442801d2e7a546e49fca05752ae4486949b379c4425a171cf1e6d103c2096)
+V4 Rust FinalVerify: PASS (tag=v4.3.0 channel=stable raw endpoint verified)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+test release_v4::tests::sign_candidate_entrypoint_does_not_leak_updater_secrets_to_git_child ... ok
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-18\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-18\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+test release_v4::tests::mock_failure_cleanup_and_immutability ... ok
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-20\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-20\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-20\latest.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 Rust PromoteMetadata: PASS (channel=stable, tag=v4.3.0)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-20\final-expected-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 raw metadata convergence: PASS (sha256=693442801d2e7a546e49fca05752ae4486949b379c4425a171cf1e6d103c2096)
+V4 Rust FinalVerify: PASS (tag=v4.3.0 channel=stable raw endpoint verified)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-21\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-21\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-21\latest.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 Rust PromoteMetadata: PASS (channel=stable, tag=v4.3.0)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-21\latest.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 Rust PromoteMetadata: PASS (channel=stable already contains exact candidate bytes)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-22\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-22\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-22\latest.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] git rev-parse HEAD (timeout=30000ms)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-23\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+[xtask] generated stable v4.3.0 metadata: C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-release-mock-9568-23\prepublication-candidate-metadata.json
+[xtask] v4 stable metadata: PASS (v4.3.0, destination channels/stable/latest.json)
+V4 pre-publication metadata qualification: PASS (channel=stable, candidate=4.3.0, GitHub Latest unchanged)
+V4 Rust PublishRelease: PASS (tag=v4.3.0, release_id=12, immutable=true)
+V4 Rust metadata App token probe: PASS (contents:write mint succeeded; exact repository scope; GET-only branch, bootstrap, stable, and beta access)
+test release_v4::tests::mock_release_success_and_reconciliation ... ok
+
+test result: ok. 16 passed; 0 failed; 2 ignored; 0 measured; 305 filtered out; finished in 2.58s
+
+EXIT_CODE=0

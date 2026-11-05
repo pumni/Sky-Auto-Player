@@ -13,7 +13,9 @@ invariants that must not be discarded because an implementation differs.
   [hold frames](hold-frame-model.md), [presets](tuning-presets.md);
   [timing observation semantics](rt-dispatch-timing-evidence.md)
   (field definitions are current; dated qualification results are historical).
-- **Desktop UI:** [workbench](desktop-workbench.md).
+- **Desktop UI:** [workbench](desktop-workbench.md),
+  [React Aria type boundary](desktop-type-boundary.md),
+  [desktop JavaScript tooling](desktop-tooling.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Sheet compatibility and playback consent:** [desktop workbench](desktop-workbench.md#sheet-compatibility-and-playback-preparation),
   [source decoding](song-source-decoding.md), [15-key planning](song-planning.md),
@@ -47,6 +49,7 @@ measurements, and limitations intact.
 
 - **Decisions:** [ADRs](adr/).
 - **Measured / reviewed evidence:** [evidence](evidence/),
+  [WP-C Rust tooling audit and Issue #574 diagnostics](evidence/issue-574-wp-c/README.md),
   [native playback ownership migration](native-playback-ownership.md),
   [hosted signing proof](v4-hosted-signing-proof.md),
   [dispatch forensics qualification](dispatch-forensics-cost-qualification.md),

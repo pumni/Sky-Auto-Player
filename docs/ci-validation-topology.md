@@ -70,6 +70,7 @@ lane to true. This preserves fail-closed behavior.
 | `desktop/src-tauri/src/**` | Rust and Windows native Desktop validation |
 | `desktop/src-tauri/tauri.conf.json` | Desktop web, native, package, and updater qualification |
 | Cargo manifests, lockfiles, or toolchain configuration | Rust plus the affected package/updater/release/security lanes |
+| `.bun-version` or `site/package.json` Bun mirror | Every Bun-consuming lane |
 | `site/**` | Site validation and exact Pages artifact packaging |
 | Release workflow or executable release script | Release contract and its required static/security lanes |
 | Classifier or CI workflow | Fail-closed/full validation |

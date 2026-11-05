@@ -1,0 +1,12 @@
+L-007 hosted failure excerpt (sanitized)
+Source: https://github.com/pumni/Sky-Auto-Player/actions/runs/42094708972/job/127481938775
+Run date: 2026-11-05 UTC
+Runner: Windows Server 2025; windows-2025-vs2026 image 20261030.294.1
+Toolchain recorded in job: Rust/Cargo 1.99.1; Bun 1.4.4
+Failing step: V4 Rust release state-machine regression tests
+Command: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests
+Summary: 18 tests, 15 passed, 1 failed, 2 ignored; failing test process exit 101.
+Failure: real_curl_upload_fails_closed_on_http_errors_and_redirects at release_v4.rs:7451:17; assertion had left None and right Some(503).
+The test had printed five local loopback curl invocations for statuses 401, 403, 422, 500, and 503 on ports 64746, 64748, 64750, 64752, and 64754. The assertion failed at the 503 case, so later 302 and no-response cases were not reached in that hosted invocation.
+Curl invocation used --output NUL and --write-out %{http_code}; the archived job output shows the invocation arguments but does not contain the child's captured stdout or stderr and does not report curl --version. CI tool preflight checked cargo, rustc, rustup, git, bun, bunx, and signtool.exe, not curl.
+No credentials, auth-config contents, or proxy endpoint values are included here.

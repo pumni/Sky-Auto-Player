@@ -1,0 +1,209 @@
+LOCAL ENVIRONMENT: Windows 11 local; curl path C:\Windows\System32\curl.exe; curl 8.21.0; HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY all unset; WinHTTP direct; proxy values not collected.
+
+=== SERIAL RUN 1 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20880-1793908199344873800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20880-1793908199347721700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62505/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20880-1793908199414716900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20880-1793908199414727400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62507/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20880-1793908199470599100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20880-1793908199470609900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62509/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20880-1793908199526625700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20880-1793908199526635900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62511/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20880-1793908199560439900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20880-1793908199560456600 --output NUL --write-out %{http_code} --url http://127.0.0.1:62513/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20880-1793908199594654500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20880-1793908199594672900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62515/fixture (timeout=600000ms)
+
+thread 'release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects' (23972) panicked at xtask\src\release_v4.rs:7451:17:
+assertion `left == right` failed
+  left: None
+ right: Some(302)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... FAILED
+
+failures:
+
+failures:
+    release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.31s
+
+error: test failed, to rerun pass `--bin xtask`
+RUN_1_EXIT_CODE=101
+
+=== SERIAL RUN 2 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-23276-1793908199965499100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-23276-1793908199965565900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62517/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-23276-1793908200020653000 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-23276-1793908200020662800 --output NUL --write-out %{http_code} --url http://127.0.0.1:62519/fixture (timeout=600000ms)
+
+thread 'release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects' (8868) panicked at xtask\src\release_v4.rs:7451:17:
+assertion `left == right` failed
+  left: None
+ right: Some(403)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... FAILED
+
+failures:
+
+failures:
+    release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `--bin xtask`
+RUN_2_EXIT_CODE=101
+
+=== SERIAL RUN 3 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200372715300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200372753900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62521/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200430325100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200430339900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62523/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200477077800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200477091500 --output NUL --write-out %{http_code} --url http://127.0.0.1:62525/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200534469900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200534486100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62527/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200587661400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200587671100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62529/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200644069500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200644080700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62531/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-2528-1793908200700009100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-2528-1793908200700021300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62533/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.38s
+
+RUN_3_EXIT_CODE=0
+
+=== SERIAL RUN 4 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201080530500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201080596300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62535/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201116698100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201116710100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62537/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201172858800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201172882800 --output NUL --write-out %{http_code} --url http://127.0.0.1:62539/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201225340900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201225356300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62541/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201278189500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201278199300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62543/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201331316800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201331333700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62545/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-7892-1793908201386228700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-7892-1793908201386244700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62547/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.34s
+
+RUN_4_EXIT_CODE=0
+
+=== SERIAL RUN 5 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201715841800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201715884200 --output NUL --write-out %{http_code} --url http://127.0.0.1:62549/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201753008600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201753018100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62551/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201786705400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201786723300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62553/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201820816800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201820831300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62555/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201877350800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201877360000 --output NUL --write-out %{http_code} --url http://127.0.0.1:62557/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201933505400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201933519500 --output NUL --write-out %{http_code} --url http://127.0.0.1:62559/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-21600-1793908201989406000 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-21600-1793908201989420400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62561/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.31s
+
+RUN_5_EXIT_CODE=0
+
+=== SERIAL RUN 6 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202332294900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202332361700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62563/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202390381300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202390393000 --output NUL --write-out %{http_code} --url http://127.0.0.1:62565/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202424412300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202424422400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62567/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202459189300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202459206100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62569/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202493407300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202493417400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62571/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202549060300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202549077800 --output NUL --write-out %{http_code} --url http://127.0.0.1:62573/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-10988-1793908202605528700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-10988-1793908202605542200 --output NUL --write-out %{http_code} --url http://127.0.0.1:62575/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.33s
+
+RUN_6_EXIT_CODE=0
+
+=== SERIAL RUN 7 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908202951461300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908202951501400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62577/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908203009787300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908203009796500 --output NUL --write-out %{http_code} --url http://127.0.0.1:62579/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908203064480700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908203064491200 --output NUL --write-out %{http_code} --url http://127.0.0.1:62581/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908203121330100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908203121348300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62583/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908203177719300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908203177730800 --output NUL --write-out %{http_code} --url http://127.0.0.1:62585/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908203227244700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908203227260700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62588/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-15372-1793908203275971600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-15372-1793908203275986300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62590/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.38s
+
+RUN_7_EXIT_CODE=0
+
+=== SERIAL RUN 8 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203649955100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203649992700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62593/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203708015700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203708031100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62595/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203742338600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203742348400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62597/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203799236900 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203799251800 --output NUL --write-out %{http_code} --url http://127.0.0.1:62599/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203846236200 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203846250700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62601/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203895008600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203895022400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62603/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-20928-1793908203943314000 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-20928-1793908203943325200 --output NUL --write-out %{http_code} --url http://127.0.0.1:62605/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.34s
+
+RUN_8_EXIT_CODE=0
+
+=== SERIAL RUN 9 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204318291200 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204318355700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62607/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204355095500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204355105500 --output NUL --write-out %{http_code} --url http://127.0.0.1:62609/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204389268500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204389279900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62611/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204423505100 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204423520200 --output NUL --write-out %{http_code} --url http://127.0.0.1:62613/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204479531700 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204479547400 --output NUL --write-out %{http_code} --url http://127.0.0.1:62615/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204528030800 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204528047500 --output NUL --write-out %{http_code} --url http://127.0.0.1:62617/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-11552-1793908204561588600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-11552-1793908204561600900 --output NUL --write-out %{http_code} --url http://127.0.0.1:62619/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.28s
+
+RUN_9_EXIT_CODE=0
+
+=== SERIAL RUN 10 / 10 ===
+COMMAND: cargo test --manifest-path rust/xtask/Cargo.toml --locked --bin xtask release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects -- --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src\main.rs (rust\target\debug\deps\xtask-e98514bd4fc49de3.exe)
+
+running 1 test
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908204893793600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908204893832300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62621/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908204946097600 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908204946109100 --output NUL --write-out %{http_code} --url http://127.0.0.1:62623/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908205002235400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908205002249800 --output NUL --write-out %{http_code} --url http://127.0.0.1:62625/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908205036445400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908205036464600 --output NUL --write-out %{http_code} --url http://127.0.0.1:62627/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908205093253400 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908205093270700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62629/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908205150113300 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908205150128700 --output NUL --write-out %{http_code} --url http://127.0.0.1:62631/fixture (timeout=600000ms)
+[xtask] curl.exe --disable --silent --show-error --proto =http --connect-timeout 20 --max-time 600 --max-redirs 0 --max-filesize 65536 --request POST --config C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-auth-12160-1793908205206489500 --header Accept: application/vnd.github+json --header Content-Type: application/octet-stream --data-binary @C:\Users\PE4CE_~1\AppData\Local\Temp\sky-v4-test-binary-12160-1793908205206506300 --output NUL --write-out %{http_code} --url http://127.0.0.1:62633/fixture (timeout=600000ms)
+test release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 322 filtered out; finished in 0.37s
+
+RUN_10_EXIT_CODE=0

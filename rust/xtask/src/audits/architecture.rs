@@ -1,7 +1,16 @@
 use super::source::strip_rust_comments;
+#[path = "architecture/allowlist.rs"]
+mod allowlist;
 use crate::Result;
-use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use allowlist::{
+    ArchitectureAllowlist, ArchitectureMetric, architecture_metric_record, architecture_record,
+    load_architecture_allowlist, stale_metric_allowlist_entries,
+};
+#[cfg(test)]
+use allowlist::{ArchitectureException, parse_architecture_allowlist};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -281,6 +290,7 @@ const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
     ("rust/xtask/src/checks/workflow.rs", 850),
     ("rust/xtask/src/audits/security.rs", 700),
     ("rust/xtask/src/audits/architecture.rs", 1_600),
+    ("rust/xtask/src/audits/architecture/allowlist.rs", 350),
     ("rust/xtask/src/audits/source.rs", 100),
 ];
 
@@ -486,66 +496,6 @@ const UNSAFE_AUDIT_SOURCE_ROOTS: &[&str] = &[
     "desktop/src-tauri/src",
 ];
 
-fn load_architecture_allowlist(root: &Path) -> Result<BTreeMap<(String, String), String>> {
-    let path = root.join(".config/rust_architecture_allowlist.json");
-    if !path.is_file() {
-        return Err(format!("architecture allowlist is missing: {}", path.display()).into());
-    }
-    let payload: Value = serde_json::from_slice(&fs::read(path)?)?;
-    let entries = payload
-        .get("entries")
-        .and_then(Value::as_array)
-        .ok_or("architecture allowlist entries must be an array")?;
-    let mut result = BTreeMap::new();
-    for entry in entries {
-        let object = entry
-            .as_object()
-            .ok_or("architecture allowlist entry must be an object")?;
-        let path = object
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or("architecture allowlist path missing")?;
-        let rule = object
-            .get("rule")
-            .and_then(Value::as_str)
-            .ok_or("architecture allowlist rule missing")?;
-        let reason = object
-            .get("reason")
-            .and_then(Value::as_str)
-            .ok_or("architecture allowlist reason missing")?;
-        let expires = object
-            .get("review_trigger")
-            .and_then(Value::as_str)
-            .ok_or("architecture allowlist review trigger missing")?;
-        if !root.join(path).is_file() {
-            return Err(format!("architecture allowlist path does not exist: {path}").into());
-        }
-        result.insert(
-            (path.replace('\\', "/"), rule.to_owned()),
-            format!("{reason} ({expires})"),
-        );
-    }
-    Ok(result)
-}
-
-fn architecture_record(
-    errors: &mut Vec<String>,
-    warnings: &mut Vec<String>,
-    allowlist: &BTreeMap<(String, String), String>,
-    path: &str,
-    rule: &str,
-    message: impl Into<String>,
-) {
-    let message = message.into();
-    if let Some(debt) = allowlist.get(&(path.to_owned(), rule.to_owned())) {
-        warnings.push(format!(
-            "[{rule}] {path}: {message}; temporary allowlist: {debt}"
-        ));
-    } else {
-        errors.push(format!("[{rule}] {path}: {message}"));
-    }
-}
-
 fn clean_lines(source: &str) -> Vec<String> {
     strip_rust_comments(source)
         .lines()
@@ -567,7 +517,7 @@ fn brace_end(lines: &[String], start: usize) -> Option<usize> {
     None
 }
 
-fn context_violations(lines: &[String]) -> Vec<(String, String)> {
+fn context_violations(lines: &[String]) -> Vec<(String, usize)> {
     let mut result = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -598,7 +548,7 @@ fn context_violations(lines: &[String]) -> Vec<(String, String)> {
             })
             .count();
         if fields > CONTEXT_FIELD_HARD_LIMIT {
-            result.push((name.to_owned(), fields.to_string()));
+            result.push((name.to_owned(), fields));
         }
     }
     result
@@ -629,12 +579,24 @@ fn function_line_violations(lines: &[String], hard_limit: usize) -> Vec<(String,
     result
 }
 
-fn top_level_glob_import(lines: &[String]) -> bool {
-    lines
-        .iter()
-        .map(|line| line.trim())
-        .find(|line| !line.is_empty() && !line.starts_with("#![") && !line.starts_with("#["))
-        == Some("use super::*;")
+fn top_level_glob_import_count(lines: &[String]) -> usize {
+    let mut depth = 0isize;
+    let mut count = 0;
+    for line in lines {
+        if depth == 0 && line.trim() == "use super::*;" {
+            count += 1;
+        }
+        depth = (depth + line.matches('{').count() as isize - line.matches('}').count() as isize)
+            .max(0);
+    }
+    count
+}
+
+fn is_test_source_path(path: &str, source: &str) -> bool {
+    path.ends_with("/tests.rs")
+        || path.ends_with("_tests.rs")
+        || path.contains("/tests/")
+        || source.lines().any(|line| line.trim() == "#![cfg(test)]")
 }
 
 fn gated_test_support(lines: &[String], path: &str) -> bool {
@@ -669,9 +631,7 @@ struct UnsafeCodeInventory {
 }
 
 fn unsafe_code_inventory(path: &str, source: &str) -> UnsafeCodeInventory {
-    let file_is_test = path.contains("/tests/")
-        || path.ends_with("/tests.rs")
-        || source.lines().any(|line| line.trim() == "#![cfg(test)]");
+    let file_is_test = is_test_source_path(path, source);
     let source = source
         .replace("#![forbid(unsafe_code)]", "")
         .replace("#![cfg(test)]", "");
@@ -739,7 +699,7 @@ fn unsafe_code_inventory(path: &str, source: &str) -> UnsafeCodeInventory {
 fn audit_unsafe_source(
     path: &str,
     source: &str,
-    allowlist: &BTreeMap<(String, String), String>,
+    allowlist: &ArchitectureAllowlist,
     errors: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) -> UnsafeCodeInventory {
@@ -765,6 +725,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
     let allowlist = load_architecture_allowlist(root)?;
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
+    let mut used_metric_allowlist = BTreeSet::new();
     let app_core_manifest = root.join("rust/crates/sky_app_core/Cargo.toml");
     let app_core: toml::Value = toml::from_str(&fs::read_to_string(&app_core_manifest)?)?;
     if let Some(dependencies) = app_core.get("dependencies").and_then(toml::Value::as_table) {
@@ -913,17 +874,23 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     REGULAR_HARD_LIMIT
                 };
                 if clean.len() > limit {
-                    architecture_record(
+                    architecture_metric_record(
                         &mut errors,
                         &mut warnings,
                         &allowlist,
-                        &relative,
-                        if limit == FACADE_HARD_LIMIT {
-                            "facade_lines"
-                        } else {
-                            "regular_module_lines"
+                        &mut used_metric_allowlist,
+                        ArchitectureMetric {
+                            path: &relative,
+                            rule: if limit == FACADE_HARD_LIMIT {
+                                "facade_lines"
+                            } else {
+                                "regular_module_lines"
+                            },
+                            subject: "",
+                            observed: clean.len(),
+                            unit: "lines",
+                            hard_limit: limit,
                         },
-                        format!("{} lines (> {limit})", clean.len()),
                     );
                 }
                 if limit == REGULAR_HARD_LIMIT
@@ -953,13 +920,19 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             if relative.starts_with("rust/crates/sky_player/src/engine/worker/dispatch/") {
                 for (name, count) in function_line_violations(&clean, DISPATCH_FUNCTION_HARD_LIMIT)
                 {
-                    architecture_record(
+                    architecture_metric_record(
                         &mut errors,
                         &mut warnings,
                         &allowlist,
-                        &relative,
-                        "dispatch_function_lines",
-                        format!("{name} has {count} lines (> {DISPATCH_FUNCTION_HARD_LIMIT})"),
+                        &mut used_metric_allowlist,
+                        ArchitectureMetric {
+                            path: &relative,
+                            rule: "dispatch_function_lines",
+                            subject: &name,
+                            observed: count,
+                            unit: "lines",
+                            hard_limit: DISPATCH_FUNCTION_HARD_LIMIT,
+                        },
                     );
                 }
             }
@@ -988,17 +961,21 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     "lower crate imports sky_player",
                 );
             }
-            if top_level_glob_import(&clean)
-                && !relative.ends_with("/tests.rs")
-                && !relative.contains("/tests/")
-            {
-                architecture_record(
+            let glob_imports = top_level_glob_import_count(&clean);
+            if glob_imports > 0 && !is_test_source_path(&relative, &source) {
+                architecture_metric_record(
                     &mut errors,
                     &mut warnings,
                     &allowlist,
-                    &relative,
-                    "production_glob_import",
-                    "top-level use super::* in production module",
+                    &mut used_metric_allowlist,
+                    ArchitectureMetric {
+                        path: &relative,
+                        rule: "production_glob_import",
+                        subject: "",
+                        observed: glob_imports,
+                        unit: "top-level `use super::*` imports",
+                        hard_limit: 0,
+                    },
                 );
             }
             for (index, line) in clean.iter().enumerate() {
@@ -1039,13 +1016,19 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                 );
             }
             for (name, fields) in context_violations(&clean) {
-                architecture_record(
+                architecture_metric_record(
                     &mut errors,
                     &mut warnings,
                     &allowlist,
-                    &relative,
-                    "context_fields",
-                    format!("{name} has {fields} fields (> {CONTEXT_FIELD_HARD_LIMIT})"),
+                    &mut used_metric_allowlist,
+                    ArchitectureMetric {
+                        path: &relative,
+                        rule: "context_fields",
+                        subject: &name,
+                        observed: fields,
+                        unit: "fields",
+                        hard_limit: CONTEXT_FIELD_HARD_LIMIT,
+                    },
                 );
             }
             if (relative == "rust/crates/sky_player/src/engine.rs")
@@ -1106,13 +1089,17 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             }
         }
     }
-    for (path, rule) in allowlist.keys() {
+    for (path, rule, _) in allowlist.keys() {
         if rule == "unsafe_boundary" && !production_unsafe_modules.contains(path) {
             errors.push(format!(
                 "[stale_unsafe_allowlist_entry] {path}: no production unsafe code remains"
             ));
         }
     }
+    errors.extend(stale_metric_allowlist_entries(
+        &allowlist,
+        &used_metric_allowlist,
+    ));
     let production_inventory = production_unsafe_modules
         .iter()
         .cloned()
@@ -1130,10 +1117,11 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             println!("[xtask] architecture warning: {warning}");
         }
     }
-    if let Some(error) = errors.first() {
+    if !errors.is_empty() {
         return Err(format!(
-            "architecture audit failed: {error} ({} error(s))",
-            errors.len()
+            "architecture audit failed: {} ({} error(s))",
+            errors.join("; "),
+            errors.len(),
         )
         .into());
     }
@@ -1339,10 +1327,96 @@ mod tests {
     fn architecture_allowlist_is_loaded_and_current_tree_passes() {
         let root = repo::root();
         let allowlist = load_architecture_allowlist(&root).unwrap();
-        assert!(
-            !allowlist.contains_key(&(ENGINE_TEST_ROOT_PATH.into(), "regular_module_lines".into()))
+        assert!(!allowlist.contains_key(&(
+            ENGINE_TEST_ROOT_PATH.into(),
+            "regular_module_lines".into(),
+            String::new()
+        )));
+        let session_glob_key = (
+            "rust/crates/sky_player/src/engine/session.rs".to_owned(),
+            "production_glob_import".to_owned(),
+            String::new(),
         );
-        architecture(&root).unwrap();
+        assert_eq!(
+            allowlist.get(&session_glob_key),
+            Some(&ArchitectureException {
+                reason: "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change".into(),
+                review_trigger: "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified".into(),
+                baseline: Some(1),
+            })
+        );
+        architecture(&root).expect("current full architecture policy passes");
+    }
+
+    #[test]
+    fn session_glob_exception_fails_closed_when_missing_mismatched_grown_or_stale() {
+        let path = "rust/crates/sky_player/src/engine/session.rs";
+        let rule = "production_glob_import";
+        let key = (path.to_owned(), rule.to_owned(), String::new());
+        let exception = ArchitectureException {
+            reason: "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change".into(),
+            review_trigger: "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified".into(),
+            baseline: Some(1),
+        };
+        let allowlist = BTreeMap::from([(key, exception)]);
+        let live_session_glob = ArchitectureMetric {
+            path,
+            rule,
+            subject: "",
+            observed: 1,
+            unit: "top-level `use super::*` imports",
+            hard_limit: 0,
+        };
+
+        let mut missing_errors = Vec::new();
+        architecture_metric_record(
+            &mut missing_errors,
+            &mut Vec::new(),
+            &BTreeMap::new(),
+            &mut BTreeSet::new(),
+            live_session_glob,
+        );
+        assert!(missing_errors[0].contains("without an exact baseline exception"));
+
+        let mismatched_allowlist = BTreeMap::from([(
+            (
+                "rust/crates/sky_player/src/engine/worker.rs".to_owned(),
+                rule.to_owned(),
+                String::new(),
+            ),
+            ArchitectureException {
+                reason: "wrong path".into(),
+                review_trigger: "wrong path".into(),
+                baseline: Some(1),
+            },
+        )]);
+        let mut mismatch_errors = Vec::new();
+        architecture_metric_record(
+            &mut mismatch_errors,
+            &mut Vec::new(),
+            &mismatched_allowlist,
+            &mut BTreeSet::new(),
+            live_session_glob,
+        );
+        assert!(mismatch_errors[0].contains("without an exact baseline exception"));
+
+        let mut growth_errors = Vec::new();
+        architecture_metric_record(
+            &mut growth_errors,
+            &mut Vec::new(),
+            &allowlist,
+            &mut BTreeSet::new(),
+            ArchitectureMetric {
+                observed: 2,
+                ..live_session_glob
+            },
+        );
+        assert!(growth_errors[0].contains("above baseline 1"));
+
+        let stale = stale_metric_allowlist_entries(&allowlist, &BTreeSet::new());
+        assert_eq!(stale.len(), 1);
+        assert!(stale[0].contains(path));
+        assert!(stale[0].contains("has no live violation"));
     }
 
     #[test]
@@ -1357,15 +1431,126 @@ mod tests {
             .chain(std::iter::once("}\n".to_owned()))
             .collect::<Vec<_>>();
         assert_eq!(function_line_violations(&function, 180).len(), 1);
-        assert!(top_level_glob_import(&clean_lines(
-            "use super::*;\nfn f() {}\n"
-        )));
+        assert_eq!(
+            top_level_glob_import_count(&clean_lines(
+                "use super::*;\nmod tests {\n    use super::*;\n}\nfn f() {\n    use super::*;\n}\n"
+            )),
+            1
+        );
+        assert!(is_test_source_path(
+            "rust/crates/sky_player/src/engine/worker/dispatch/authored_tests.rs",
+            ""
+        ));
+        assert!(!is_test_source_path(
+            "rust/crates/sky_player/src/engine/worker/dispatch/authored.rs",
+            ""
+        ));
+        assert!(is_test_source_path(
+            "fixture.rs",
+            "#![cfg(test)]\nuse super::*;"
+        ));
         assert!(contains_unsafe_code("unsafe { value(); }"));
         assert!(
             WORKER_SCHEDULE_CLONE_PATTERNS
                 .iter()
                 .any(|pattern| "schedule.clone()".contains(pattern))
         );
+    }
+
+    #[test]
+    fn metric_allowlist_is_exact_monotonic_and_stale_entries_are_rejected() {
+        let key = (
+            "rust/crates/example/src/module.rs".to_owned(),
+            "regular_module_lines".to_owned(),
+            String::new(),
+        );
+        let allowlist = BTreeMap::from([(
+            key.clone(),
+            ArchitectureException {
+                reason: "existing cohesive module".into(),
+                review_trigger: "review before expansion".into(),
+                baseline: Some(901),
+            },
+        )]);
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mut used = BTreeSet::new();
+        let baseline_metric = ArchitectureMetric {
+            path: &key.0,
+            rule: &key.1,
+            subject: "",
+            observed: 901,
+            unit: "lines",
+            hard_limit: REGULAR_HARD_LIMIT,
+        };
+        architecture_metric_record(
+            &mut errors,
+            &mut warnings,
+            &allowlist,
+            &mut used,
+            baseline_metric,
+        );
+        assert!(errors.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(stale_metric_allowlist_entries(&allowlist, &used).is_empty());
+
+        architecture_metric_record(
+            &mut errors,
+            &mut warnings,
+            &allowlist,
+            &mut used,
+            ArchitectureMetric {
+                observed: 902,
+                ..baseline_metric
+            },
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("above baseline 901"));
+        assert_eq!(
+            stale_metric_allowlist_entries(&allowlist, &BTreeSet::new()).len(),
+            1
+        );
+
+        let mut unlisted_errors = Vec::new();
+        architecture_metric_record(
+            &mut unlisted_errors,
+            &mut Vec::new(),
+            &allowlist,
+            &mut BTreeSet::new(),
+            ArchitectureMetric {
+                path: "rust/crates/example/src/new_module.rs",
+                rule: "regular_module_lines",
+                subject: "",
+                observed: 901,
+                unit: "lines",
+                hard_limit: REGULAR_HARD_LIMIT,
+            },
+        );
+        assert!(unlisted_errors[0].contains("without an exact baseline exception"));
+    }
+
+    #[test]
+    fn architecture_allowlist_rejects_duplicate_and_baseline_free_metric_entries() {
+        let root = repo::root();
+        let entry = serde_json::json!({
+            "path": "rust/xtask/src/audits/architecture.rs",
+            "rule": "regular_module_lines",
+            "baseline": 901,
+            "reason": "existing cohesive module",
+            "review_trigger": "review before expansion"
+        });
+        let duplicate = serde_json::json!({"entries": [entry.clone(), entry.clone()]});
+        assert!(parse_architecture_allowlist(&root, duplicate).is_err());
+
+        let missing_baseline = serde_json::json!({
+            "entries": [{
+                "path": "rust/xtask/src/audits/architecture.rs",
+                "rule": "regular_module_lines",
+                "reason": "existing cohesive module",
+                "review_trigger": "review before expansion"
+            }]
+        });
+        assert!(parse_architecture_allowlist(&root, missing_baseline).is_err());
     }
 
     #[test]

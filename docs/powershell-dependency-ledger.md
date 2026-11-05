@@ -120,6 +120,23 @@ physical-acceptance or assembly-qualification evidence.
 | scripts/test_startup_calibration_evidence_export.ps1 | Cross-runtime LF/hash and Git checkout self-test for the PowerShell adapter | KEEP — invokes Rust after the pinned toolchain is installed |
 | scripts/capture_defender_evidence.ps1 | Separate Defender evidence workflow/tooling; removal remains blocked by issue #521 pending owner confirmation | MANUAL KEEP |
 
+### Standalone test-script caller audit
+
+WP-C checked the tracked workflow, documentation, script, configuration, and `rust/xtask/src`
+callers at source `aa00b9d5ac9095e141698e199cfcdfdd14c86803`. A source read by a Rust contract
+check is recorded separately from a script invocation.
+
+| Test entrypoint | CI or runbook caller | Other tracked relationship | Finding |
+| --- | --- | --- | --- |
+| `scripts/test_v4_updater_key_rotation.ps1` | `.github/workflows/ci.yml:251`; `docs/v4-tauri-packaging.md:233` | Rust CI contracts verify the workflow command | Active CI and documented packaging test |
+| `scripts/test_v4_updater_private_key.ps1` | `.github/workflows/ci.yml:369` | Rust trust checks read its contract text | Active CI test |
+| `scripts/test_v4_production_signing_contract.ps1` | `.github/workflows/ci.yml:446`; `docs/v4-authenticode-provider-seam.md:108` | Rust CI/trust contracts verify the runner entrypoint | Active CI and runbook test |
+| `scripts/test_v4_authenticode_integrity.ps1` | `.github/workflows/ci.yml:416` | Rust CI/trust contracts verify the runner entrypoint | Active CI test |
+| `scripts/test_startup_calibration_evidence_export.ps1` | `.github/workflows/ci.yml:298` | Verifies the PowerShell adapter against Rust projection | Active CI test |
+| `scripts/test_v4_updater_credential_broker.ps1` | No direct workflow or runbook invocation found | Windows-only self-test reads the Rust Credential Manager owner and PowerShell adapters | **INVESTIGATE** caller/owner; do not treat absence as retirement evidence |
+| `scripts/test_evidence_contracts.ps1` | No CI invocation found; `docs/maintenance-test-pipeline-report.md:36` assigns evidence runner fixtures to the specialized RT evidence/manual lane | Rust classifier and durable-name tests preserve lane/path contracts | Retain for the documented manual lane; no automatic CI execution established |
+| `scripts/test_build_provenance_switch.ps1` | No direct workflow or runbook invocation found | `rust/xtask/src/checks/tauri_metadata.rs:252` reads its text and checks required markers; this is not script execution | Retain as a Rust-checked acceptance source fixture; standalone execution caller remains unverified |
+
 The packaged, updater_e2e, and protected release jobs retain real Windows install and update
 coverage only on their guarded runner contexts. The production transaction now uses GitHub-hosted
 Windows and Ubuntu jobs; the old `rehearse-v4.yml` is retired. `scripts/verify_v4_release_runner.ps1`

@@ -159,11 +159,11 @@ export function playbackContextMatchesLibrary(
 ): context is PlaybackContext {
   return Boolean(
     context?.valid &&
-    context.generation === library.generation &&
-    context.membershipRevision === library.membershipRevision &&
-    context.query === library.query &&
-    context.source.kind === library.searchSource.kind &&
-    context.source.id === library.searchSource.id,
+      context.generation === library.generation &&
+      context.membershipRevision === library.membershipRevision &&
+      context.query === library.query &&
+      context.source.kind === library.searchSource.kind &&
+      context.source.id === library.searchSource.id,
   );
 }
 

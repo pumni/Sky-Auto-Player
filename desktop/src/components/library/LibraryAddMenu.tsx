@@ -18,7 +18,6 @@ export function LibraryAddMenu({
       ref={triggerRef}
       className={`icon-button library-add-button${collapsed ? ' is-collapsed' : ''}`}
       aria-label="Create playlist"
-      title="Create playlist"
       onPress={onNewPlaylist}
     >
       <Plus size={18} aria-hidden="true" />

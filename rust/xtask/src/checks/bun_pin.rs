@@ -6,14 +6,30 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 const BUN_ACTION: &str = "oven-sh/setup-bun";
-const BUN_VERSION_FILE: &str = "site/package.json";
+const BUN_VERSION_FILE: &str = ".bun-version";
+const SITE_PACKAGE: &str = "site/package.json";
 const BUN_VERIFIER_STEP: &str = "bun scripts/verify-bun-pin.mjs";
 
 fn canonical_bun_version(source: &str) -> Result<Version> {
+    let raw_version = source
+        .strip_suffix("\r\n")
+        .or_else(|| source.strip_suffix('\n'))
+        .unwrap_or(source);
+    if raw_version.contains('\r') || raw_version.contains('\n') {
+        return Err(".bun-version must contain one exact numeric Bun version".into());
+    }
+    let version = Version::parse(raw_version)
+        .map_err(|error| format!(".bun-version has an invalid Bun version: {error}"))?;
+    if !version.pre.is_empty() || !version.build.is_empty() || version.to_string() != raw_version {
+        return Err(".bun-version must contain one exact numeric Bun version".into());
+    }
+    Ok(version)
+}
+
+fn mirrored_bun_version(source: &str) -> Result<Version> {
     if source.matches("\"packageManager\"").count() != 1 {
         return Err("site/package.json must contain exactly one packageManager field".into());
     }
-
     let manifest: Value = serde_json::from_str(source)?;
     let package_manager = manifest
         .get("packageManager")
@@ -30,6 +46,27 @@ fn canonical_bun_version(source: &str) -> Result<Version> {
         );
     }
     Ok(version)
+}
+
+fn validate_application_lockfiles(root: &Path) -> Result<()> {
+    for path in ["package.json", "bun.lock", "bun.lockb"] {
+        if root.join(path).exists() {
+            return Err(format!("root Bun workspace artifacts are not allowed: {path}").into());
+        }
+    }
+    for path in ["desktop/bun.lockb", "site/bun.lockb"] {
+        if root.join(path).exists() {
+            return Err(format!("legacy or extra app lockfile is not allowed: {path}").into());
+        }
+    }
+    for path in ["desktop/package.json", "desktop/bun.lock", "site/bun.lock"] {
+        if !root.join(path).is_file() {
+            return Err(
+                format!("required independent app manifest/lockfile is missing: {path}").into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn code_without_comment(line: &str) -> &str {
@@ -365,6 +402,15 @@ fn validate_repository(root: &Path) -> Result<usize> {
     let manifest_path = root.join(BUN_VERSION_FILE);
     let manifest = fs::read_to_string(&manifest_path)?;
     let version = canonical_bun_version(&manifest)?;
+    let site_package = fs::read_to_string(root.join(SITE_PACKAGE))?;
+    let mirror = mirrored_bun_version(&site_package)?;
+    if mirror != version {
+        return Err(format!(
+            "site/package.json packageManager ({mirror}) must mirror .bun-version ({version})"
+        )
+        .into());
+    }
+    validate_application_lockfiles(root)?;
     let mut consumers = 0usize;
 
     for directory in [".github/workflows", ".github/actions"] {
@@ -402,159 +448,5 @@ pub(crate) fn bun_pin_contract(root: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ci_artifacts;
-    use std::fs;
-    use std::path::PathBuf;
-
-    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
-    const PACKAGE: &str = r#"{"name":"fixture","packageManager":"bun@9.8.7"}"#;
-    const VALID_STEP: &str = "jobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Set up Bun\n        uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n        with:\n          bun-version-file: site/package.json\n      - name: Verify Bun pin\n        run: bun scripts/verify-bun-pin.mjs\n";
-    const VALID_COMPOSITE: &str = "runs:\n  using: composite\n  steps:\n    - name: Set up Bun\n      uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n      with:\n        bun-version-file: site/package.json\n    - name: Verify Bun pin\n      shell: bash\n      run: bun scripts/verify-bun-pin.mjs\n";
-
-    fn fixture_root() -> PathBuf {
-        let path = ci_artifacts::unique_sibling(&std::env::temp_dir().join("sky-bun-pin"), "test");
-        fs::create_dir_all(path.join(".github/workflows")).unwrap();
-        fs::create_dir_all(path.join(".github/actions/site-validate")).unwrap();
-        fs::create_dir_all(path.join("site")).unwrap();
-        fs::write(path.join(BUN_VERSION_FILE), PACKAGE).unwrap();
-        path
-    }
-
-    fn write_workflow(root: &Path, path: &str, source: &str) {
-        let path = root.join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, source).unwrap();
-    }
-
-    fn assert_rejected(source: &str, name: &str) {
-        assert!(
-            validate_yaml_source(source, Path::new(name)).is_err(),
-            "{name}"
-        );
-    }
-
-    #[test]
-    fn accepts_exact_numeric_manifest_and_sha_pinned_file_input() {
-        let version = canonical_bun_version(PACKAGE).unwrap();
-        assert_eq!(version.to_string(), "9.8.7");
-        assert_eq!(
-            validate_yaml_source(VALID_STEP, Path::new("fixture.yml")).unwrap(),
-            1
-        );
-    }
-
-    #[test]
-    fn rejects_missing_floating_duplicate_and_ambiguous_package_manager() {
-        for source in [
-            r#"{"name":"fixture"}"#,
-            r#"{"name":"fixture","packageManager":"bun@latest"}"#,
-            r#"{"name":"fixture","packageManager":"bun@9.8"}"#,
-            r#"{"packageManager":"bun@9.8.7","packageManager":"bun@9.8.8"}"#,
-            r#"{"nested":{"packageManager":"bun@9.8.7"},"packageManager":"bun@9.8.7"}"#,
-        ] {
-            assert!(canonical_bun_version(source).is_err(), "{source}");
-        }
-    }
-
-    #[test]
-    fn rejects_missing_wrong_literal_and_implicit_latest_inputs() {
-        for (name, source) in [
-            (
-                "missing.yml",
-                VALID_STEP.replace("          bun-version-file: site/package.json\n", ""),
-            ),
-            (
-                "wrong.yml",
-                VALID_STEP.replace("site/package.json", ".bun-version"),
-            ),
-            (
-                "literal.yml",
-                VALID_STEP.replace(
-                    "          bun-version-file: site/package.json",
-                    "          bun-version: 9.8.7\n          bun-version-file: site/package.json",
-                ),
-            ),
-            (
-                "latest.yml",
-                VALID_STEP.replace(
-                    "          bun-version-file: site/package.json",
-                    "          bun-version: latest",
-                ),
-            ),
-        ] {
-            assert_rejected(&source, name);
-        }
-    }
-
-    #[test]
-    fn rejects_unpinned_and_unrecognized_new_consumers() {
-        let pinned_reference = format!("@{SHA}");
-        let unpinned = VALID_STEP.replace(&pinned_reference, "@v2");
-        assert_rejected(&unpinned, "tag.yml");
-
-        let inline = VALID_STEP.replace(
-            "        uses: oven-sh/setup-bun@",
-            "      - uses: oven-sh/setup-bun@",
-        );
-        assert_rejected(&inline, "inline.yml");
-    }
-
-    #[test]
-    fn rejects_conditionally_skipped_or_failure_ignored_verifier() {
-        for control in ["if: false", "continue-on-error: true"] {
-            let source = VALID_STEP.replace(
-                "        run: bun scripts/verify-bun-pin.mjs",
-                &format!("        {control}\n        run: bun scripts/verify-bun-pin.mjs"),
-            );
-            assert_rejected(&source, "verification-bypass.yml");
-        }
-    }
-
-    #[test]
-    fn rejects_duplicate_ambiguous_and_unsupported_verifier_definitions() {
-        let run = "        run: bun scripts/verify-bun-pin.mjs";
-        for source in [
-            VALID_STEP.replace(run, &format!("{run}\n{run}")),
-            VALID_STEP.replace(
-                run,
-                &format!("{run}\n      - name: Duplicate verifier\n{run}"),
-            ),
-            VALID_STEP.replace(run, "        uses: local/verify-bun-pin@v1"),
-            VALID_STEP.replace(
-                run,
-                "        run: |\n          bun scripts/verify-bun-pin.mjs",
-            ),
-        ] {
-            assert_rejected(&source, "ambiguous-verifier.yml");
-        }
-    }
-
-    #[test]
-    fn rejects_verifier_in_a_different_job() {
-        let source = "jobs:\n  setup:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Set up Bun\n        uses: oven-sh/setup-bun@0123456789abcdef0123456789abcdef01234567 # v2\n        with:\n          bun-version-file: site/package.json\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Verify Bun pin\n        run: bun scripts/verify-bun-pin.mjs\n";
-        let error = validate_yaml_source(source, Path::new("two-jobs.yml")).unwrap_err();
-        assert!(error.to_string().contains("must be followed immediately"));
-    }
-
-    #[test]
-    fn repository_scan_discovers_new_workflows_and_composite_actions() {
-        let root = fixture_root();
-        write_workflow(&root, ".github/workflows/first.yml", VALID_STEP);
-        write_workflow(
-            &root,
-            ".github/actions/site-validate/action.yml",
-            VALID_COMPOSITE,
-        );
-        assert_eq!(validate_repository(&root).unwrap(), 2);
-
-        write_workflow(
-            &root,
-            ".github/workflows/new-consumer.yml",
-            &VALID_STEP.replace("site/package.json", ".bun-version"),
-        );
-        assert!(validate_repository(&root).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-}
+#[path = "bun_pin/tests.rs"]
+mod tests;

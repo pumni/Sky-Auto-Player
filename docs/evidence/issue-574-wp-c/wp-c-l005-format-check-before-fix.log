@@ -1,0 +1,30 @@
+COMMAND: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+Diff in \\?\D:\Dev\Sky-Auto-Player\rust\xtask\src\audits\architecture.rs:1367:
+         );
+         assert!(missing_errors[0].contains("without an exact baseline exception"));
+ 
+-        let mismatched_allowlist = BTreeMap::from([((
+-            "rust/crates/sky_player/src/engine/worker.rs".to_owned(),
+-            rule.to_owned(),
+-            String::new(),
+-        ), ArchitectureException {
+-            reason: "wrong path".into(),
+-            review_trigger: "wrong path".into(),
+-            baseline: Some(1),
+-        })]);
++        let mismatched_allowlist = BTreeMap::from([(
++            (
++                "rust/crates/sky_player/src/engine/worker.rs".to_owned(),
++                rule.to_owned(),
++                String::new(),
++            ),
++            ArchitectureException {
++                reason: "wrong path".into(),
++                review_trigger: "wrong path".into(),
++                baseline: Some(1),
++            },
++        )]);
+         let mut mismatch_errors = Vec::new();
+         architecture_metric_record(
+             &mut mismatch_errors,
+EXIT_CODE=1

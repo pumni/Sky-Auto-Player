@@ -74,7 +74,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             className="player-tool-button profile-summary-button"
             type="button"
             aria-label="Configure playback profile"
-            title="Configure playback profile"
           >
             <SlidersHorizontal size={15} aria-hidden="true" />
             <span>
@@ -82,12 +81,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               <small>{profileSummary}</small>
             </span>
           </AriaButton>
-          <Popover
-            id="playback-profile-popover"
-            className="profile-popover"
-            placement="top end"
-            offset={8}
-          >
+          <Popover className="profile-popover" placement="top end" offset={8}>
             <Dialog aria-label="Playback profile">
               <div className="profile-fields">
                 <ProfileFields

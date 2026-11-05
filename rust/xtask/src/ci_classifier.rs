@@ -112,7 +112,7 @@ fn classify_path(
         return;
     }
 
-    if path == "site/package.json" {
+    if path == ".bun-version" || path == "site/package.json" {
         classification.add_many(&LANES);
         return;
     }
@@ -879,6 +879,7 @@ mod tests {
             ),
             (".github/workflows/pages.yml", &["site_required"]),
             ("site/package.json", &LANES),
+            (".bun-version", &LANES),
             ("site/src/pages/index.astro", &["site_required"]),
             (".github/workflows/release-v4.yml", &["release_required"]),
             (".github/workflows/ci.yml", &LANES),

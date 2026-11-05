@@ -1,29 +1,12 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  type ComponentProps,
-  type ComponentType,
-  type RefObject,
-} from 'react';
+import { lazy, Suspense, useCallback, useEffect, type RefObject } from 'react';
 import { Tabs, TabPanel } from 'react-aria-components';
-import type { DesktopStoreHook, UtilityView } from '../../state/store';
+import type { DesktopStoreHook } from '../../state/store';
 import { SongDetailsView } from './SongDetailsView';
 import { UtilityHeader } from './UtilityHeader';
 
 const DiagnosticsView = lazy(() =>
   import('./DiagnosticsView').then(({ DiagnosticsView: component }) => ({ default: component })),
 );
-
-type UtilityTabsProps = ComponentProps<typeof Tabs> & {
-  defaultSelectedKey?: UtilityView;
-  onSelectionChange?: (key: UtilityView) => void;
-};
-
-// react-aria-components 1.20 omits the selection props from TabsProps even
-// though the runtime forwards them to useTabListState.
-const UtilityTabs = Tabs as unknown as ComponentType<UtilityTabsProps>;
 
 interface UtilityPaneProps {
   presentationMode: 'docked' | 'overlay';
@@ -87,11 +70,11 @@ export function UtilityPane({ presentationMode, utilityTriggerRef, useStore }: U
         }
       }}
     >
-      <UtilityTabs
+      <Tabs
         className="utility-tabs"
         defaultSelectedKey={utility.activeView}
         onSelectionChange={(key) => {
-          setUtilityView(key);
+          if (key === 'details' || key === 'diagnostics') setUtilityView(key);
         }}
       >
         <UtilityHeader activeView={utility.activeView} onClose={close} />
@@ -113,7 +96,7 @@ export function UtilityPane({ presentationMode, utilityTriggerRef, useStore }: U
             )}
           </TabPanel>
         </div>
-      </UtilityTabs>
+      </Tabs>
     </section>
   );
 }

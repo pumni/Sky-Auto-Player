@@ -1,0 +1,15 @@
+   Compiling sky_xtask v0.1.0 (D:\Dev\Sky-Auto-Player\rust\xtask)
+warning: unused import: `ArchitectureAllowlistKey`
+ --> xtask\src\audits\architecture.rs:6:28
+  |
+6 |     ArchitectureAllowlist, ArchitectureAllowlistKey, architecture_metric_record,
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sky_xtask` (bin "xtask") generated 1 warning (run `cargo fix --bin "xtask" -p sky_xtask` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.63s
+     Running `rust\target\check-all-rust-tests\debug\xtask.exe check static`
+Error: "Broken local Markdown links detected:\n  - docs/INDEX.md:52: `evidence/issue-574-wp-c/README.md` resolves to missing `docs/evidence/issue-574-wp-c/README.md`"
+error: process didn't exit successfully: `rust\target\check-all-rust-tests\debug\xtask.exe check static` (exit code: 1)
+EXIT_CODE=1

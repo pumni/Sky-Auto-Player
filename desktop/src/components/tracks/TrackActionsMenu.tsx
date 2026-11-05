@@ -41,7 +41,6 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
         ref={triggerRef}
         className="icon-button track-actions-button"
         aria-label={`More actions for ${row.title}`}
-        title={`More actions for ${row.title}`}
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </Button>
@@ -61,7 +60,7 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
                 .catch(() => undefined);
               return;
             }
-            if (key.startsWith('playlist:')) {
+            if (typeof key === 'string' && key.startsWith('playlist:')) {
               void state
                 .addSongToPlaylist(key.slice('playlist:'.length), row.song_id)
                 .catch(() => undefined);

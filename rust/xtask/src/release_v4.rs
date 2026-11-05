@@ -7354,14 +7354,21 @@ fn main() {{
                 }
             };
             stream
+                .set_nonblocking(false)
+                .expect("set accepted upload fixture stream blocking");
+            stream
                 .set_read_timeout(Some(Duration::from_secs(7)))
                 .unwrap();
             let mut request = Vec::new();
             let mut chunk = [0_u8; 4096];
-            while let Ok(received) = stream.read(&mut chunk) {
-                if received == 0 {
-                    break;
-                }
+            loop {
+                let received = stream
+                    .read(&mut chunk)
+                    .expect("read loopback upload fixture request");
+                assert_ne!(
+                    received, 0,
+                    "curl closed before sending the complete fixture upload request"
+                );
                 request.extend_from_slice(&chunk[..received]);
                 let header_end = request
                     .windows(4)
@@ -7370,16 +7377,28 @@ fn main() {{
                 if let Some(header_end) = header_end
                     && request.len() >= header_end + b"fixture-binary-data".len()
                 {
+                    assert_eq!(
+                        &request[header_end..],
+                        b"fixture-binary-data",
+                        "curl sent an unexpected fixture upload body"
+                    );
                     break;
                 }
-                if request.len() >= 16 * 1024 {
-                    break;
-                }
+                assert!(
+                    request.len() < 16 * 1024,
+                    "fixture upload request exceeded bound before complete body"
+                );
             }
             if !response_bytes.is_empty() {
-                let _ = stream.write_all(&response_bytes);
-                let _ = stream.flush();
-                let _ = stream.shutdown(std::net::Shutdown::Write);
+                stream
+                    .write_all(&response_bytes)
+                    .expect("write loopback upload fixture response");
+                stream
+                    .flush()
+                    .expect("flush loopback upload fixture response");
+                stream
+                    .shutdown(std::net::Shutdown::Write)
+                    .expect("finish loopback upload fixture response");
                 let mut drain = [0_u8; 1024];
                 while let Ok(n) = stream.read(&mut drain) {
                     if n == 0 {
@@ -7400,7 +7419,7 @@ fn main() {{
         args[url_index] = format!("http://127.0.0.1:{port}/fixture");
 
         let result = execute_release_upload_curl(&args, &auth_path, &auth_config);
-        let _ = server.join();
+        server.join().expect("local fixture thread");
         (result, auth_path, binary_path)
     }
 
@@ -7448,7 +7467,12 @@ fn main() {{
                     .unwrap_err()
                     .downcast::<HttpFailure>()
                     .expect("HttpFailure");
-                assert_eq!(failure.status, Some(expected_code));
+                assert_eq!(
+                    failure.status,
+                    Some(expected_code),
+                    "sanitized curl error: {}",
+                    failure.detail
+                );
             }
         }
     }

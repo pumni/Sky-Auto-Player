@@ -53,7 +53,7 @@ function CollapsedPlaylistTile({
         className={`library-nav-item library-collapsed-playlist-tile${active ? ' is-active' : ''}`}
         type="button"
         aria-label={accessibleName}
-        aria-current={active ? 'page' : undefined}
+        {...(active ? { 'aria-current': 'page' as const } : {})}
         data-playlist-id={id}
         onFocus={() => setFocusTooltipOpen(true)}
         onBlur={() => setFocusTooltipOpen(false)}
@@ -231,7 +231,6 @@ export function LibraryNavigator({
                   className="library-collapsed-retry"
                   type="button"
                   aria-label="Retry library navigation"
-                  title="Retry library navigation"
                   onPress={() => void useStore.getState().loadLibraryNavigation()}
                 >
                   <RefreshCw size={16} aria-hidden="true" />

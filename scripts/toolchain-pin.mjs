@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exactVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const rustToolchainPath = 'rust/rust-toolchain.toml';
+const bunVersionPath = '.bun-version';
 const bunManifestPath = 'site/package.json';
 
 function invalid(message) {
@@ -95,6 +96,28 @@ export function parseBunPackageManager(source) {
   return version;
 }
 
+export function parseBunVersionFile(source) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\r?\n)?$/.exec(source);
+  if (!match) invalid('.bun-version must contain one exact numeric Bun version');
+  return `${match[1]}.${match[2]}.${match[3]}`;
+}
+
+export function readBunPin(root = repositoryRoot) {
+  const version = parseBunVersionFile(readFileSync(resolve(root, bunVersionPath), 'utf8'));
+  const mirror = parseBunPackageManager(readFileSync(resolve(root, bunManifestPath), 'utf8'));
+  if (mirror !== version) {
+    invalid(`site/package.json packageManager must mirror .bun-version (${version})`);
+  }
+  return version;
+}
+
+export function assertBunVersion(actual, expected) {
+  if (actual !== expected) {
+    invalid(`Installed Bun version mismatch: expected ${expected} from .bun-version, got ${actual}`);
+  }
+  return actual;
+}
+
 function assertNoConflictingOverrides(version, environment) {
   const rustupKeys = Object.keys(environment).filter((key) => key.toUpperCase() === 'RUSTUP_TOOLCHAIN');
   if (rustupKeys.length > 1) invalid('Inherited RUSTUP_TOOLCHAIN override is ambiguous');
@@ -128,7 +151,7 @@ export function readPins(root = repositoryRoot, environment = process.env) {
     }
   }
   const rust = parseRustToolchain(readFileSync(resolve(root, rustToolchainPath), 'utf8'));
-  const bun = parseBunPackageManager(readFileSync(resolve(root, bunManifestPath), 'utf8'));
+  const bun = readBunPin(root);
   assertNoConflictingOverrides(rust.channel, environment);
   return { rust, bun };
 }
@@ -208,7 +231,12 @@ async function executeRustCommand(command, args, version) {
 async function main(args) {
   if (args[0] === 'read' && ['rust', 'bun'].includes(args[1]) && args.length === 2) {
     const pins = readPins();
-    console.log(args[1] === 'rust' ? pins.rust.channel : pins.bun);
+    if (args[1] === 'bun') {
+      const actual = toolOutput('bun', ['--version'], process.env);
+      console.log(assertBunVersion(actual, pins.bun));
+    } else {
+      console.log(pins.rust.channel);
+    }
     return;
   }
   if (args[0] === 'verify' && args[1] === 'rust' && args.length === 2) {
