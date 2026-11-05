@@ -46,7 +46,7 @@ The only React Aria call-site cast removed was the `Tabs as unknown as Component
 `UtilityPane`. Remaining `as unknown as` casts in desktop source are test-only fixtures for
 `MediaQueryList`, store snapshots, and prepared playback; they do not mask React Aria declarations.
 
-With the shim removed at baseline `8af1bbb1`, TypeScript reported 12 errors across 8 files: seven
+With the shim removed at baseline `8af1bbb1`, TypeScript reported 12 errors across 7 files: seven
 non-rendered `title` props, one optional `aria-current`, one inert `Popover` id, two `Key` string
 operations, and one `Tabs` selection callback. All were corrected without compiler or runtime
 suppression.
