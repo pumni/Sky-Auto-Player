@@ -28,7 +28,13 @@ import type {
 export type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
 
 export type PlaybackUiState =
-  'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
+  | 'idle'
+  | 'starting'
+  | 'playing'
+  | 'paused'
+  | 'stopping'
+  | 'finished'
+  | 'failed';
 
 export type TransportOperation =
   | null
@@ -71,7 +77,13 @@ export interface ShuffleTraversal {
 }
 
 export type CalibrationUiState =
-  'idle' | 'starting' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
+  | 'idle'
+  | 'starting'
+  | 'running'
+  | 'cancelling'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
 
 export type UtilityView = 'details' | 'diagnostics';
 
@@ -256,7 +268,10 @@ export const DETAIL_CACHE_LIMIT = 64;
 export const AUTO_PLAY_HANDOFF_MS = 450;
 
 export type PlaybackIssueKind =
-  'recoverable_status' | 'playback_failure' | 'target_failure' | 'conflict';
+  | 'recoverable_status'
+  | 'playback_failure'
+  | 'target_failure'
+  | 'conflict';
 
 export interface PlaybackIssuePresentation {
   kind: PlaybackIssueKind;

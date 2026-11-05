@@ -81,10 +81,14 @@ outcome and the tests make the behavior change explicit. Avoid unrelated cleanup
 
 ## Dependency management
 
-Use the pinned Rust toolchain and Bun lockfiles for canonical product checks. Rust and Bun are
-the canonical product/development toolchains; do not introduce a Python product runtime or
+Use the pinned Rust toolchain and Bun 1.4.4 from the repository-root `.bun-version` for canonical
+product checks. Desktop and site keep independent `bun.lock` files; install dependencies from the
+matching app directory with `bun install --frozen-lockfile`. Rust and Bun are the canonical
+product/development toolchains; do not introduce a Python product runtime or
 general-purpose repository toolchain. The existing hosted Python ClamAV scanner is a narrowly
 scoped release qualification adapter, governed by [release authority](docs/v4-release-authority.md).
+Desktop formatting and lint commands, including the blocking ESLint policy gate, are documented in
+[desktop tooling](docs/desktop-tooling.md).
 
 ## Commit messages
 

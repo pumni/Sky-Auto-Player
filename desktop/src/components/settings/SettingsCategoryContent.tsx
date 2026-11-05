@@ -9,7 +9,12 @@ import { AutoPlaySwitch } from './AutoPlaySwitch';
 import { TimingMarginControl } from './TimingMarginControl';
 
 export type SettingsCategory =
-  'playback' | 'appearance' | 'diagnostics' | 'updates' | 'advanced' | 'about';
+  | 'playback'
+  | 'appearance'
+  | 'diagnostics'
+  | 'updates'
+  | 'advanced'
+  | 'about';
 
 export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }> = [
   { id: 'playback', label: 'Playback' },

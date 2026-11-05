@@ -196,14 +196,21 @@
 
 .player-transport .player-shuffle-action {
   left: calc(
-    50% - var(--player-primary-half) - var(--player-control-gap) - var(--player-secondary-target) -
-      var(--player-control-gap) - var(--player-secondary-target)
+    50% -
+    var(--player-primary-half) -
+    var(--player-control-gap) -
+    var(--player-secondary-target) -
+    var(--player-control-gap) -
+    var(--player-secondary-target)
   );
 }
 
 .player-transport .player-previous-action {
   left: calc(
-    50% - var(--player-primary-half) - var(--player-control-gap) - var(--player-secondary-target)
+    50% -
+    var(--player-primary-half) -
+    var(--player-control-gap) -
+    var(--player-secondary-target)
   );
 }
 
@@ -240,8 +247,11 @@
   position: absolute;
   top: 50%;
   left: calc(
-    50% + var(--player-primary-half) + var(--player-control-gap) + var(--player-secondary-target) +
-      var(--player-stop-gap)
+    50% +
+    var(--player-primary-half) +
+    var(--player-control-gap) +
+    var(--player-secondary-target) +
+    var(--player-stop-gap)
   );
   transform: translateY(-50%);
 }
@@ -1012,9 +1022,9 @@
 }
 
 :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true']
-  ):disabled::after {
+  .player-transport .player-shuffle-action[aria-pressed='true'],
+  .player-tools .player-auto-play-button[aria-pressed='true']
+):disabled::after {
   background-color: var(--workbench-control-disabled);
 }
 

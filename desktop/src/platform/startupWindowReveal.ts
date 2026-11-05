@@ -7,7 +7,10 @@ import { isTauriRuntime } from './runtime';
 export const STARTUP_WINDOW_REVEAL_FALLBACK_MS = 2_500;
 
 export type StartupWindowRevealReason =
-  'bootstrap-ready' | 'bootstrap-failed' | 'slow-bootstrap' | 'render-error';
+  | 'bootstrap-ready'
+  | 'bootstrap-failed'
+  | 'slow-bootstrap'
+  | 'render-error';
 
 export interface StartupWindowRevealCoordinator {
   scheduleFallback(): void;

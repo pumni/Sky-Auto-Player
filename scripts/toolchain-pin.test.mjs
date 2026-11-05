@@ -4,24 +4,56 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
-import { parseBunPackageManager, parseRustToolchain, readPins } from './toolchain-pin.mjs';
+import {
+  assertBunVersion,
+  parseBunPackageManager,
+  parseBunVersionFile,
+  parseRustToolchain,
+  readBunPin,
+  readPins,
+} from './toolchain-pin.mjs';
 
 const validRust = `[toolchain]\nchannel = "7.8.9"\nprofile = "minimal"\ntargets = ["x86_64-pc-windows-msvc"]\ncomponents = ["rustfmt", "clippy"]\n`;
-const validBun = '{"name":"fixture","packageManager":"bun@2.3.4"}';
+const validBun = '{"name":"fixture","packageManager":"bun@7.8.9"}';
 
 function fixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), 'toolchain pin fixture with spaces-'));
   mkdirSync(join(root, 'rust'));
   mkdirSync(join(root, 'site'));
   writeFileSync(join(root, 'rust/rust-toolchain.toml'), validRust);
+  writeFileSync(join(root, '.bun-version'), '7.8.9\n');
   writeFileSync(join(root, 'site/package.json'), validBun);
   return root;
 }
 
 test('reads only exact nested Rust and Bun package-manager pins', () => {
   assert.equal(parseRustToolchain(validRust).channel, '7.8.9');
-  assert.equal(parseBunPackageManager(validBun), '2.3.4');
+  assert.equal(parseBunVersionFile('7.8.9\n'), '7.8.9');
+  assert.equal(parseBunVersionFile('7.8.9'), '7.8.9');
+  assert.equal(parseBunPackageManager(validBun), '7.8.9');
+  assert.equal(assertBunVersion('7.8.9', '7.8.9'), '7.8.9');
+  assert.throws(() => assertBunVersion('7.8.8', '7.8.9'), /Installed Bun version mismatch/);
   assert.throws(() => parseBunPackageManager('{"packageManager":"bun@2.3.4","packageManager":"bun@2.3.5"}'), /exactly one/);
+});
+
+test('rejects malformed canonical Bun pin files and stale site mirrors', () => {
+  for (const source of ['stable\n', '7.8\n', '07.8.9\n', '7.8.9\n\n', ' 7.8.9\n']) {
+    assert.throws(() => parseBunVersionFile(source), /\.bun-version/);
+  }
+
+  const root = fixtureRoot();
+  try {
+    assert.equal(readBunPin(root), '7.8.9');
+    writeFileSync(join(root, 'site/package.json'), '{"packageManager":"bun@7.8.8"}');
+    assert.throws(() => readBunPin(root), /must mirror \.bun-version/);
+    writeFileSync(join(root, 'site/package.json'), '{"packageManager":"bun@latest"}');
+    assert.throws(() => readBunPin(root), /exact numeric version/);
+    writeFileSync(join(root, '.bun-version'), '7.8.8\n');
+    writeFileSync(join(root, 'site/package.json'), validBun);
+    assert.throws(() => readBunPin(root), /must mirror \.bun-version/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('rejects malformed, duplicate, floating, and conflicting Rust pin sources', () => {

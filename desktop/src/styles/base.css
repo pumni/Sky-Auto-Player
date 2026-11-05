@@ -249,16 +249,16 @@ h3 {
   }
 
   :is(
-      .button:not(.button-primary):not(.button-danger),
-      .icon-button:not(.button-primary):not(.button-danger),
-      .update-indicator,
-      .library-menu-item,
-      .library-nav-item,
-      .settings-nav-item,
-      .track-actions-button,
-      .track-like-button,
-      [role='tab']
-    ):hover:not(:disabled):not([aria-disabled='true']) {
+    .button:not(.button-primary):not(.button-danger),
+    .icon-button:not(.button-primary):not(.button-danger),
+    .update-indicator,
+    .library-menu-item,
+    .library-nav-item,
+    .settings-nav-item,
+    .track-actions-button,
+    .track-like-button,
+    [role='tab']
+  ):hover:not(:disabled):not([aria-disabled='true']) {
     border-color: Highlight;
     color: HighlightText;
     background-color: Highlight;
@@ -288,11 +288,11 @@ h3 {
   }
 
   :is(
-      .player-transport .player-shuffle-action[aria-pressed='true'],
-      .player-tools .player-auto-play-button[aria-pressed='true'],
-      .player-tools .player-utility-button[aria-expanded='true'],
-      .track-row .track-like-button[aria-pressed='true']
-    ):hover:not(:disabled):not([aria-disabled='true']) {
+    .player-transport .player-shuffle-action[aria-pressed='true'],
+    .player-tools .player-auto-play-button[aria-pressed='true'],
+    .player-tools .player-utility-button[aria-expanded='true'],
+    .track-row .track-like-button[aria-pressed='true']
+  ):hover:not(:disabled):not([aria-disabled='true']) {
     forced-color-adjust: none;
     border-color: Highlight;
     color: HighlightText;
@@ -443,45 +443,45 @@ h3 {
 }
 
 .button:not(.button-primary):not(.button-danger):not(.button-ghost):hover:not(:disabled):not(
-    [aria-disabled='true']
-  ) {
+  [aria-disabled='true']
+) {
   border-color: var(--workbench-action-hover-edge);
   color: var(--text-primary);
   background-color: var(--workbench-action-hover);
 }
 
 .button:not(.button-primary):not(.button-danger):not(.button-ghost):hover:active:not(:disabled):not(
-    [aria-disabled='true']
-  ) {
+  [aria-disabled='true']
+) {
   background-color: var(--workbench-control-pressed);
 }
 
 :is(
-    .button-ghost,
-    .icon-button:not(.button-primary):not(.button-danger),
-    .library-menu-item:not(.is-danger),
-    .track-actions-button,
-    .track-like-button:not([aria-pressed='true'])
-  ):hover:not(:disabled):not([aria-disabled='true']) {
+  .button-ghost,
+  .icon-button:not(.button-primary):not(.button-danger),
+  .library-menu-item:not(.is-danger),
+  .track-actions-button,
+  .track-like-button:not([aria-pressed='true'])
+):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: transparent;
   color: var(--text-primary);
   background-color: var(--workbench-control-hover);
 }
 
 :is(
-    .button-ghost,
-    .library-menu-item:not(.is-danger),
-    .track-actions-button,
-    .track-like-button:not([aria-pressed='true'])
-  ):hover:active:not(:disabled):not([aria-disabled='true']) {
+  .button-ghost,
+  .library-menu-item:not(.is-danger),
+  .track-actions-button,
+  .track-like-button:not([aria-pressed='true'])
+):hover:active:not(:disabled):not([aria-disabled='true']) {
   background-color: var(--workbench-control-pressed);
 }
 
 :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true'],
-    .track-row .track-like-button[aria-pressed='true']
-  ):focus-visible:not(:disabled):not([aria-disabled='true']):not(:hover) {
+  .player-transport .player-shuffle-action[aria-pressed='true'],
+  .player-tools .player-auto-play-button[aria-pressed='true'],
+  .track-row .track-like-button[aria-pressed='true']
+):focus-visible:not(:disabled):not([aria-disabled='true']):not(:hover) {
   color: var(--toggle-active-ink);
   background-color: transparent;
 }
@@ -497,19 +497,19 @@ h3 {
 }
 
 :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true'],
-    .track-row .track-like-button[aria-pressed='true']
-  ):hover:not(:disabled):not([aria-disabled='true']) {
+  .player-transport .player-shuffle-action[aria-pressed='true'],
+  .player-tools .player-auto-play-button[aria-pressed='true'],
+  .track-row .track-like-button[aria-pressed='true']
+):hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--toggle-active-ink);
   background-color: var(--workbench-control-hover);
 }
 
 :is(
-    .player-transport .player-shuffle-action[aria-pressed='true'],
-    .player-tools .player-auto-play-button[aria-pressed='true'],
-    .track-row .track-like-button[aria-pressed='true']
-  ):hover:active:not(:disabled):not([aria-disabled='true']) {
+  .player-transport .player-shuffle-action[aria-pressed='true'],
+  .player-tools .player-auto-play-button[aria-pressed='true'],
+  .track-row .track-like-button[aria-pressed='true']
+):hover:active:not(:disabled):not([aria-disabled='true']) {
   background-color: var(--workbench-control-pressed);
 }
 
@@ -522,10 +522,10 @@ h3 {
 }
 
 :is(
-    .player-transport .player-shuffle-action[aria-pressed='false'],
-    .player-tools .player-auto-play-button[aria-pressed='false'],
-    .track-row .track-like-button[aria-pressed='false']
-  ):hover:not(:disabled):not([aria-disabled='true']) {
+  .player-transport .player-shuffle-action[aria-pressed='false'],
+  .player-tools .player-auto-play-button[aria-pressed='false'],
+  .track-row .track-like-button[aria-pressed='false']
+):hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--text-primary);
 }
 

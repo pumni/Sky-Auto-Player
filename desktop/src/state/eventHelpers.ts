@@ -3,8 +3,8 @@ import { MAX_DIAGNOSTIC_LINE_LENGTH } from './types';
 
 export function boundedText(value: string): string {
   // The NUL replacement is intentional: diagnostic lines must remain single-line text.
-  // eslint-disable-next-line no-control-regex
-  const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Strip NUL and line-break controls from diagnostic text.
+  const normalized = value.replace(/[\u0000\r\n\t]/g, ' '); // eslint-disable-line no-control-regex
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   if (encoder.encode(normalized).length <= MAX_DIAGNOSTIC_LINE_LENGTH) {
