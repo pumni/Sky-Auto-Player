@@ -49,6 +49,7 @@ measurements, and limitations intact.
 
 - **Decisions:** [ADRs](adr/).
 - **Measured / reviewed evidence:** [evidence](evidence/),
+  [WP-C Rust tooling audit and Issue #574 diagnostics](evidence/issue-574-wp-c/README.md),
   [native playback ownership migration](native-playback-ownership.md),
   [hosted signing proof](v4-hosted-signing-proof.md),
   [dispatch forensics qualification](dispatch-forensics-cost-qualification.md),

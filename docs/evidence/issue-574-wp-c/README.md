@@ -1,0 +1,168 @@
+# WP-C Rust tooling audit and Issue #574 diagnostics
+
+Date: 2026-11-05
+
+WP-B source snapshot: `aa00b9d5ac9095e141698e199cfcdfdd14c86803`
+
+Accepted WP-A source snapshot: `2e0e5d1613848e1c57fd474d1bfc985e09fc9438`
+
+This record covers the Rust architecture allowlist ratchet, the tracked evidence
+inventory and retention recommendation, a read-only investigation of Issue
+#574, and the desktop Biome diagnostics. No playback/runtime source, timing,
+session ownership, native test assertion, concurrency, release profile,
+evidence asset, or ClamAV scanner was changed.
+
+## Rust architecture allowlist
+
+`cargo xtask check static` owns the architecture policy. The allowlist now uses
+exact baselines for live metric exceptions, subjects for individual functions
+and context structs, non-empty reason/review fields, normalized repository
+paths, known rule names, and duplicate-entry rejection. A metric above its
+recorded baseline fails. A metric exception that no longer represents a live
+violation fails as stale. The 19 live `unsafe_boundary` entries remain intact.
+
+Eight stale metric entries were removed: `planning.rs` (`regular_module_lines`),
+the two Win32 facades (`input.rs`, `wait.rs`), `SessionShared` in `shared.rs`,
+and four removed glob-import sites (`physical.rs`, `raw.rs`, `wait/spin.rs`,
+`worker/orchestration.rs`). Active baselines are recorded in
+`.config/rust_architecture_allowlist.json` and checked by
+`rust/xtask/src/audits/architecture/allowlist.rs`.
+
+The production glob check now counts root-level `use super::*;` imports and
+ignores nested test-module imports and test-only `*_tests.rs` source files. It
+finds one existing import in
+`rust/crates/sky_player/src/engine/worker.rs`, covered by its existing exact
+baseline of one, and one in `rust/crates/sky_player/src/engine/session.rs`,
+which has no approved `production_glob_import` exception. Static therefore
+fails at `session.rs` until the Leader decides whether to approve a targeted
+baseline exception or require an explicit-import refactor. No exception or
+runtime refactor was chosen here.
+
+Focused architecture tests passed **16/16** after the module split. They cover
+baseline acceptance, baseline growth, missing/duplicate exception rejection,
+stale exceptions, top-level versus nested imports, unsafe-boundary negatives,
+and module budgets. The initial focused run found `architecture.rs` at 1,734
+lines; the allowlist implementation was split into a child module with a 350
+line budget, leaving the existing 1,600 line limit unchanged.
+
+## Issue #574 read-only reproduction
+
+The test file has the same Git blob at WP-A and WP-B:
+
+```text
+desktop/src-tauri/src/native_runtime/tests/playback_integration/terminal_release.rs
+blob 521e2737f338866603770748aaf7570717c54883
+```
+
+The reproduced failure is at line 946:
+
+```text
+assertion failed: active.done.load(Ordering::Acquire)
+```
+
+It occurs after the delayed cleanup notification and monitor join. The full
+backtrace and raw command output are preserved in the workspace log. No root
+cause is established. Runs used Windows 11 Home build 26300, an AMD Ryzen 5
+5500U with 12 logical processors, Rust/Cargo 1.99.1, `RUST_TEST_THREADS=1`,
+`RUST_BACKTRACE=full`, and the same Cargo target directory. Exact environment
+records are in [`wp-a-environment.txt`](wp-a-environment.txt) and
+[`wp-b-environment.txt`](wp-b-environment.txt).
+
+| Source | Command/result | Diagnostic outcome |
+| --- | --- | --- |
+| WP-A | `cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked`; exit 101 | Reproduced #574: `sky_desktop_shell --lib` had 326 passed, 1 failed, 4 ignored; the failing assertion was `active.done` at line 946. |
+| WP-A | `cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --all-features --locked`; exit 0 | 327 passed, 4 ignored. |
+| WP-A | Three exact isolated runs with `--all-features --locked -- <test-name> --exact --nocapture`; exit 0 each | 3/3 passed in 0.13s, 0.10s, and 0.10s. |
+| WP-B | `cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked`; exit 101 | Did not reach the #574 crate: `sky_xtask::release_v4::tests::real_curl_upload_fails_closed_on_http_errors_and_redirects` failed at `release_v4.rs:7451` (`left: None`, `right: Some(422)`). Its full log is retained. |
+| WP-B | `cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --all-features --locked`; exit 0 | 327 passed, 4 ignored. |
+| WP-B | Three exact isolated runs with `--all-features --locked -- <test-name> --exact --nocapture`; exit 0 each | 3/3 passed, each in 0.10s. |
+
+The package-wide and isolated passes alongside the WP-A workspace failure are
+consistent with a broader-run interaction or an intermittent failure; they do
+not identify the cause. The handoff's earlier WP-B `check all` failure was
+reported at the same assertion, but its temporary RTK log disappeared before
+it could be copied into this record. The captured WP-B workspace rerun above
+stopped at the independent Curl test, so it is not a fresh full-workspace
+result for #574.
+
+The first WP-A build attempt did not start tests because its detached worktree
+lacked the Git-ignored `native_calibration.exe` required by Tauri build setup.
+The retry used a copy of the existing local file, verified at SHA-256
+`13AAB87A7EEE3F2BB98D2F6993266320CC3B0FD5A48854807469FECB1CBF868B`; the
+worktree remained clean. The initial WP-B crate command without
+`--all-features` and three malformed isolated invocations also did not run the
+test; their complete logs are retained and are excluded from the pass counts.
+
+No timeout, scheduling, runtime, or test change was made. Any fix requires a
+separate Leader approval.
+
+## Biome inventory
+
+From `desktop`, `bun run biome lint . --reporter=json` exited 0 with 177
+unchanged files, 0 errors, 17 warnings, and 5 infos. The raw reporter output is
+[`biome-lint.json`](biome-lint.json); the path/rule/severity/line and
+actionability inventory is [`biome-inventory.csv`](biome-inventory.csv).
+No diagnostic was suppressed or changed.
+
+## Evidence inventory and retention recommendation
+
+[`evidence-inventory-wp-b.csv`](evidence-inventory-wp-b.csv) snapshots all 210
+tracked files under `docs/evidence` at WP-B, including byte size, SHA-256, and
+text-reference paths. The reference scan covered 214 tracked text files in
+`docs`, `.github`, `scripts`, and `.config`. It found 143 evidence files with a
+matching unique basename (or full repository path when names repeat). This
+tracked-source scan cannot establish whether an external consumer uses an
+unreferenced file. The inventory includes 134 PNGs (7,830,167 bytes) and 25
+gzip traces (6,497,672 bytes); the complete snapshot is 15,370,988 bytes.
+
+Recommendation: retain all existing evidence in place. The total is about
+15.4 MB, and every gzip trace matched a trace manifest. The scan found 47 PNGs
+and 16 Markdown files without a matching reference in the scanned source set;
+these are review candidates only, not proof that they are obsolete. If archive
+cost later becomes material, first assign an evidence owner, verify all
+consumers, preserve original hashes and a durable manifest/pointer, and test
+restore before changing storage. No existing file was deleted, moved,
+compressed, or rewritten.
+
+## PowerShell caller audit
+
+The source-bound caller audit is recorded in
+[`../../powershell-dependency-ledger.md`](../../powershell-dependency-ledger.md).
+Five standalone test scripts have explicit CI invocations; key rotation and
+production-signing tests also have runbook references. The credential-broker
+self-test has no tracked CI/runbook caller found and remains marked
+**INVESTIGATE**. The evidence-contract script belongs to the documented manual
+RT lane. The build-provenance script is read as a source fixture by the Rust
+Tauri metadata check; that is not an invocation. No script was removed or
+reclassified as retired.
+
+## Verification artifacts
+
+All command logs are retained in this directory, including failures. Key
+artifacts:
+
+- [`wp-c-architecture-unit-tests-final-run.log`](wp-c-architecture-unit-tests-final-run.log): 16/16 focused tests passed after the test-only path correction.
+- [`wp-a-full-workspace-test.log`](wp-a-full-workspace-test.log): full-workspace reproduction of #574.
+- [`wp-b-full-workspace-test.log`](wp-b-full-workspace-test.log): unrelated Curl regression failure before the #574 crate.
+- [`wp-a-desktop-shell-lib-all-features-with-resource.log`](wp-a-desktop-shell-lib-all-features-with-resource.log) and [`wp-b-desktop-shell-lib-all-features.log`](wp-b-desktop-shell-lib-all-features.log): package-level passes.
+- [`wp-c-static-gate-final-worktree.log`](wp-c-static-gate-final-worktree.log): final static result; docs integrity passes, then architecture stops at the unapproved session glob.
+- [`wp-c-check-all-final-worktree.log`](wp-c-check-all-final-worktree.log): final aggregate gate stops at that same static error before Rust and desktop groups.
+- Earlier failed attempts remain alongside the final logs, including the initial module-budget and test-source-classification findings.
+
+`cargo fmt --manifest-path rust/Cargo.toml --all -- --check` passed. The final
+focused architecture test command passed 16/16. `cargo xtask check static`
+exited 1 with one architecture error for `engine/session.rs`; its unsafe
+inventory still reports 19 production boundaries. `cargo xtask check all`
+also exited 1 at static, so its Rust and desktop groups did not run. The first
+static attempts, format check, and over-budget architecture unit run are
+retained as well; later runs correct their documentation-link, test-path, and
+module-budget findings.
+
+## Decision request
+
+**DECISION REQUEST — production glob in `engine/session.rs`.** The improved
+check correctly exposes the existing `use super::*;` at line 7 with no
+`production_glob_import` baseline. Please decide whether to authorize an exact baseline exception or
+require an explicit-import change. Until then, `cargo xtask check static` and
+the aggregate gate are expected to stop at this architecture error. No live
+runtime behavior was changed to resolve it.

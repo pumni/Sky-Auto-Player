@@ -1,0 +1,5 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running unittests src\lib.rs (rust\target\check-all-rust-tests\debug\deps\sky_desktop_shell_lib-b69e1b3aa1841c79.exe)
+error: Unrecognized option: 'A'
+error: test failed, to rerun pass `-p sky_desktop_shell --lib`
+EXIT_CODE=101

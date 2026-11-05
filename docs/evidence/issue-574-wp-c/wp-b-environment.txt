@@ -1,0 +1,13 @@
+source_sha=aa00b9d5ac9095e141698e199cfcdfdd14c86803
+timestamp_local=2026-11-05T22:02:27.2989654+07:00
+os=Microsoft Windows 11 Home 10.0.26300 build 26300
+cpu=AMD Ryzen 5 5500U with Radeon Graphics         ; logical_processors=12
+memory_total_bytes=16483872768; memory_free_bytes=7157133312
+powershell=7.6.9
+rustc=rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cargo=cargo 1.99.1 (5f94df478 2026-08-27)
+RUST_TEST_THREADS=1
+RUST_BACKTRACE=full
+CARGO_TARGET_DIR=D:\Dev\Sky-Auto-Player\rust\target\check-all-rust-tests
+TS_RS_EXPORT_DIR=D:\Dev\Sky-Auto-Player\rust\target\xtask-bindings
+command=cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked

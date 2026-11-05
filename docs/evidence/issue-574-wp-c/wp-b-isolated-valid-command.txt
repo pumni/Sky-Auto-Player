@@ -1,0 +1,1 @@
+cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --all-features --locked -- native_runtime::tests::playback_integration::terminal_release::join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup --exact --nocapture
