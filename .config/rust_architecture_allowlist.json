@@ -186,6 +186,13 @@
       "baseline": 1
     },
     {
+      "path": "rust/crates/sky_player/src/engine/session.rs",
+      "rule": "production_glob_import",
+      "reason": "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change",
+      "review_trigger": "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified",
+      "baseline": 1
+    },
+    {
       "path": "rust/crates/sky_player/src/engine/config.rs",
       "rule": "context_fields",
       "reason": "replace WorkerConfig parameter bag with validated options",

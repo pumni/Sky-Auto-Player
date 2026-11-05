@@ -166,3 +166,68 @@ check correctly exposes the existing `use super::*;` at line 7 with no
 require an explicit-import change. Until then, `cargo xtask check static` and
 the aggregate gate are expected to stop at this architecture error. No live
 runtime behavior was changed to resolve it.
+
+## Post-review amendment — L-005 correction
+
+This amendment follows the source review of original WP-C checkpoint
+`45e202b07d54c0f98ee42c732147d8725d9fa933`. That checkpoint intentionally
+failed the static and aggregate gates because `session.rs` had no approved
+glob-import exception. The historical failure logs and the original findings
+above remain unchanged; this correction checkpoint records the approved
+exception and its fresh qualification evidence separately.
+
+L-005 at
+[issue comment 6662903829](https://github.com/pumni/Sky-Auto-Player/issues/595#issuecomment-6662903829),
+with the formal
+[WP-C review](https://github.com/pumni/Sky-Auto-Player/pull/596#pullrequestreview-5788094099),
+approved exactly this `production_glob_import` exception:
+
+```json
+{
+  "path": "rust/crates/sky_player/src/engine/session.rs",
+  "rule": "production_glob_import",
+  "reason": "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change",
+  "review_trigger": "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified",
+  "baseline": 1
+}
+```
+
+It is the only new allowlist entry. The `regular_module_lines` baseline for
+`session.rs` remains exactly 1908; `session.rs` and runtime behavior were not
+changed. All 19 Win32 `unsafe_boundary` entries and other exceptions remain as
+reviewed.
+
+The former test that expected the current repository architecture audit to
+fail is now a positive full-policy test. It checks the exact exception fields
+and requires `architecture(&root)` to pass. A separate targeted negative test
+requires failure when the exception is missing or keyed to another path, when
+the live glob count grows to two, and when the exception is stale after the
+violation is removed. `wp-c-l005-architecture-tests-final.log` records the
+focused test command and complete output: 17 passed, 0 failed, exit 0.
+
+Fresh final static and aggregate gate command outputs, including their exact
+exit codes and any failure diagnostics, are recorded without truncation in
+[`wp-c-l005-static-final.log`](wp-c-l005-static-final.log) and
+[`wp-c-l005-check-all-final.log`](wp-c-l005-check-all-final.log). The final
+format check and whitespace check are recorded in
+[`wp-c-l005-format-check-final.log`](wp-c-l005-format-check-final.log) and
+[`wp-c-l005-diff-check.log`](wp-c-l005-diff-check.log). These uniquely named
+L-005 artifacts do not replace any original WP-C log.
+
+The first static invocation in the new log exited 1 because its check-all log
+link target had not yet been created. After creating that evidence target, the
+final static invocation passed with exit 0. The final `cargo xtask check all`
+run passed its embedded static gate and formatting check, then exited 1 at
+Clippy before Rust or desktop test groups ran. Clippy reported
+`too_many_arguments` (10/7) for the pre-existing WP-C helper
+`architecture_metric_record` in `rust/xtask/src/audits/architecture/allowlist.rs:202`;
+the command's exit code was 1 (nested `cargo clippy` exit code 101). The full
+raw output is retained in `wp-c-l005-check-all-final.log`. It did not reach the
+native #574 or Curl tests, so their historical logs and diagnoses remain the
+only evidence for those failures.
+
+**DECISION REQUEST:** Making the aggregate gate pass requires changing the
+Clippy-reported WP-C helper or its lint policy, which is outside L-005's
+approved exact waiver, focused policy tests, and report correction. Please
+decide whether that helper cleanup is separately authorized; no such change
+was made in this checkpoint.

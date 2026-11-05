@@ -1316,7 +1316,7 @@ mod tests {
     }
 
     #[test]
-    fn architecture_allowlist_is_loaded_and_exposes_unapproved_session_glob() {
+    fn architecture_allowlist_is_loaded_and_current_tree_passes() {
         let root = repo::root();
         let allowlist = load_architecture_allowlist(&root).unwrap();
         assert!(!allowlist.contains_key(&(
@@ -1324,11 +1324,95 @@ mod tests {
             "regular_module_lines".into(),
             String::new()
         )));
-        let error = architecture(&root).unwrap_err().to_string();
-        assert!(
-            error.contains("[production_glob_import] rust/crates/sky_player/src/engine/session.rs"),
-            "{error}"
+        let session_glob_key = (
+            "rust/crates/sky_player/src/engine/session.rs".to_owned(),
+            "production_glob_import".to_owned(),
+            String::new(),
         );
+        assert_eq!(
+            allowlist.get(&session_glob_key),
+            Some(&ArchitectureException {
+                reason: "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change".into(),
+                review_trigger: "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified".into(),
+                baseline: Some(1),
+            })
+        );
+        architecture(&root).expect("current full architecture policy passes");
+    }
+
+    #[test]
+    fn session_glob_exception_fails_closed_when_missing_mismatched_grown_or_stale() {
+        let path = "rust/crates/sky_player/src/engine/session.rs";
+        let rule = "production_glob_import";
+        let key = (path.to_owned(), rule.to_owned(), String::new());
+        let exception = ArchitectureException {
+            reason: "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change".into(),
+            review_trigger: "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified".into(),
+            baseline: Some(1),
+        };
+        let allowlist = BTreeMap::from([(key, exception)]);
+
+        let mut missing_errors = Vec::new();
+        architecture_metric_record(
+            &mut missing_errors,
+            &mut Vec::new(),
+            &BTreeMap::new(),
+            &mut BTreeSet::new(),
+            path,
+            rule,
+            "",
+            1,
+            "top-level `use super::*` imports",
+            0,
+        );
+        assert!(missing_errors[0].contains("without an exact baseline exception"));
+
+        let mismatched_allowlist = BTreeMap::from([(
+            (
+                "rust/crates/sky_player/src/engine/worker.rs".to_owned(),
+                rule.to_owned(),
+                String::new(),
+            ),
+            ArchitectureException {
+                reason: "wrong path".into(),
+                review_trigger: "wrong path".into(),
+                baseline: Some(1),
+            },
+        )]);
+        let mut mismatch_errors = Vec::new();
+        architecture_metric_record(
+            &mut mismatch_errors,
+            &mut Vec::new(),
+            &mismatched_allowlist,
+            &mut BTreeSet::new(),
+            path,
+            rule,
+            "",
+            1,
+            "top-level `use super::*` imports",
+            0,
+        );
+        assert!(mismatch_errors[0].contains("without an exact baseline exception"));
+
+        let mut growth_errors = Vec::new();
+        architecture_metric_record(
+            &mut growth_errors,
+            &mut Vec::new(),
+            &allowlist,
+            &mut BTreeSet::new(),
+            path,
+            rule,
+            "",
+            2,
+            "top-level `use super::*` imports",
+            0,
+        );
+        assert!(growth_errors[0].contains("above baseline 1"));
+
+        let stale = stale_metric_allowlist_entries(&allowlist, &BTreeSet::new());
+        assert_eq!(stale.len(), 1);
+        assert!(stale[0].contains(path));
+        assert!(stale[0].contains("has no live violation"));
     }
 
     #[test]
