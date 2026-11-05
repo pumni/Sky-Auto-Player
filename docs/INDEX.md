@@ -16,12 +16,13 @@ invariants that must not be discarded because an implementation differs.
 - **Desktop UI:** [workbench](desktop-workbench.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Sheet compatibility and playback consent:** [desktop workbench](desktop-workbench.md#sheet-compatibility-and-playback-preparation),
-  [source decoding](song-source-decoding.md), and [15-key planning](song-planning.md).
+  [source decoding](song-source-decoding.md), [15-key planning](song-planning.md),
+  and [numeric compatibility](song-numeric-compatibility.md) (maintained rules;
+  recorded migration inventory is revision-bound).
+- **Built-in songs:** [manifest](../builtin-songs/manifest.json) for current entries;
+  [song curation audit](song-curation/README.md) for review methods and
+  revision-bound inventory evidence.
 - **Security:** [SECURITY.md](../SECURITY.md).
-- **Song source schemas and canonical decoding:** [song source decoding](song-source-decoding.md).
-- **Song numeric compatibility and maintenance inventory:** [numeric compatibility](song-numeric-compatibility.md).
-- **Canonical events to Sky Piano plans:** [song planning](song-planning.md).
-- **Built-in song audit and candidate review:** [song curation audit](song-curation/README.md).
 - **Packaging and updater:** [distribution](distribution-and-update.md),
   [Tauri packaging](v4-tauri-packaging.md).
 - **Release operations:** [release authority](v4-release-authority.md),
@@ -53,7 +54,8 @@ measurements, and limitations intact.
   [test-pipeline report](maintenance-test-pipeline-report.md),
   [PowerShell migration ledger](powershell-dependency-ledger.md), and
   [Issue #560 Package D qualification](evidence/issue-560-package-d/README.md)
-  (source-bound 96-song paging/Windows profile; not current 106-song or installed-upgrade evidence).
+  (source-bound 96-song paging/Windows profile; not evidence of the current
+  catalog size or installed-upgrade behavior).
 - **Release-specific records:** [releases](releases/).
 - Other issue- and phase-scoped reports remain in `docs/` (for example,
   `gate-*-evidence.md`, `r3-*.md`, and `prepared-*-evidence.md`);
