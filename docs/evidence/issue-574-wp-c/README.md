@@ -276,3 +276,64 @@ recur in this run. No native/runtime or Curl/release fixture changes were
 made; prior diagnostic records remain intact. A static check run after this
 report amendment is recorded in
 [`wp-c-l006-report-static-check.log`](wp-c-l006-report-static-check.log).
+
+## Post-review amendment — L-007 integration qualification and Curl fixture RCA
+
+L-007 authorized investigating the GitHub-hosted failure in
+[run 42094708972, job 127481938775](https://github.com/pumni/Sky-Auto-Player/actions/runs/42094708972/job/127481938775).
+This work starts from the WP-C accepted source checkpoint
+`eed18d7d9222b179baeb0e2a239d5871e9b4d94c`; WP-C architecture work was not
+repeated.
+
+The hosted assertion saw `left: None`, expected `Some(503)`, and the test
+process exited 101. Its job log shows the five loopback requests through the
+503 case, but not curl's version or captured child stdout/stderr. The hosted
+runner and missing evidence are summarized in
+[`wp-c-l007-hosted-job-excerpt.txt`](wp-c-l007-hosted-job-excerpt.txt). On this
+Windows 11 machine, curl is 8.21.0 (Schannel), all proxy environment variables
+were unset, and WinHTTP was direct; full sanitized environment details are in
+[`wp-c-l007-environment.txt`](wp-c-l007-environment.txt).
+
+Controlled serial runs on the unmodified fixture reproduced intermittent
+failures: 2/10 in the initial batch (302 and 403), then 3/10 with temporary
+test-only diagnostics (302, 401, and 403). Each had status `None`; the
+sanitized stderr was `curl: (56) Recv failure: Connection was aborted`. The
+fixture diagnostics showed zero request bytes and
+`WouldBlock: A non-blocking socket operation could not be completed
+immediately. (os error 10035)`, with no response write error. The listener was
+made nonblocking so its accept loop could poll; the accepted stream was also
+nonblocking on Windows. Its old `while let Ok(read(...))` treated `WouldBlock`
+as end-of-request and sent the status response before it had read the upload
+body. Curl then aborted the upload. This explains why the observed failing
+status varied with the loop iteration and why the same test reported `None`
+for hosted 503 and local 422. The raw pre-fix runs are preserved in
+[`wp-c-l007-focused-repros.log`](wp-c-l007-focused-repros.log) and
+[`wp-c-l007-focused-diagnostics.log`](wp-c-l007-focused-diagnostics.log).
+
+The correction is confined to the test fixture in `rust/xtask/src/release_v4.rs`:
+it explicitly makes each accepted socket blocking, requires the complete
+expected upload body before sending a response, surfaces fixture read/write
+and thread failures, and keeps the existing read timeout and request bound.
+The production curl command, authorization, response parser, and release
+policy are unchanged. Production still parses trimmed curl stdout as a `u16`,
+filters status zero to `None`, and includes only sanitized stderr in
+`HttpFailure`; the archived hosted log and production test helper do not expose
+the raw child stdout. The regression test still checks each exact status
+401/403/422/500/503/302 and the no-response fail-closed case.
+
+| Qualification on corrected source | Result | Evidence |
+| --- | --- | --- |
+| Focused Curl fixture, 10 serial repetitions (`RUST_TEST_THREADS=1`) | PASS, 10/10, exit 0 | [`wp-c-l007-focused-fixed-repros.log`](wp-c-l007-focused-fixed-repros.log) |
+| `release_v4::tests` | PASS, 16 passed, 2 ignored, exit 0 | [`wp-c-l007-release-tests.log`](wp-c-l007-release-tests.log) |
+| Rust format check | PASS, exit 0 | [`wp-c-l007-format-check.log`](wp-c-l007-format-check.log) |
+| Workspace Clippy (`--all-targets --all-features --locked -- -D warnings`) | PASS, exit 0 | [`wp-c-l007-workspace-clippy.log`](wp-c-l007-workspace-clippy.log) |
+| `cargo xtask check static` | PASS, exit 0 | [`wp-c-l007-static.log`](wp-c-l007-static.log) |
+| `cargo xtask check all` | PASS, exit 0 | [`wp-c-l007-check-all.log`](wp-c-l007-check-all.log) |
+
+The full integration gate passed Rust workspace tests, Bun checks and E2E,
+desktop Cargo checks, and Tauri library tests. No Curl-version pin or logging
+change was made to CI; the hosted runner's curl version remains unrecorded.
+There is no remaining architecture decision request for this test-only
+correction. Final static contract and whitespace checks for this repository
+state are recorded in [`wp-c-l007-final-static.log`](wp-c-l007-final-static.log)
+and [`wp-c-l007-final-diff-check.log`](wp-c-l007-final-diff-check.log).
