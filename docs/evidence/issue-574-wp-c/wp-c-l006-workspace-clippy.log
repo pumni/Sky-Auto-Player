@@ -1,0 +1,16 @@
+COMMAND: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+   Compiling sky_dispatch_win32 v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_dispatch_win32)
+   Compiling ring v0.17.14
+   Compiling sky_desktop_shell v4.3.0 (D:\Dev\Sky-Auto-Player\desktop\src-tauri)
+    Checking sky_xtask v0.1.0 (D:\Dev\Sky-Auto-Player\rust\xtask)
+    Checking sky_player v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_player)
+    Checking sky_native_adapters v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_native_adapters)
+   Compiling rustls v0.23.46
+    Checking rustls-webpki v0.103.16
+    Checking tokio-rustls v0.26.6
+    Checking rustls-platform-verifier v0.7.1
+    Checking hyper-rustls v0.27.10
+    Checking reqwest v0.13.5
+    Checking tauri-plugin-updater v2.14.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 20.15s
+EXIT_CODE=0

@@ -3,7 +3,7 @@ use super::source::strip_rust_comments;
 mod allowlist;
 use crate::Result;
 use allowlist::{
-    ArchitectureAllowlist, architecture_metric_record, architecture_record,
+    ArchitectureAllowlist, ArchitectureMetric, architecture_metric_record, architecture_record,
     load_architecture_allowlist, stale_metric_allowlist_entries,
 };
 #[cfg(test)]
@@ -879,16 +879,18 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                         &mut warnings,
                         &allowlist,
                         &mut used_metric_allowlist,
-                        &relative,
-                        if limit == FACADE_HARD_LIMIT {
-                            "facade_lines"
-                        } else {
-                            "regular_module_lines"
+                        ArchitectureMetric {
+                            path: &relative,
+                            rule: if limit == FACADE_HARD_LIMIT {
+                                "facade_lines"
+                            } else {
+                                "regular_module_lines"
+                            },
+                            subject: "",
+                            observed: clean.len(),
+                            unit: "lines",
+                            hard_limit: limit,
                         },
-                        "",
-                        clean.len(),
-                        "lines",
-                        limit,
                     );
                 }
                 if limit == REGULAR_HARD_LIMIT
@@ -923,12 +925,14 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                         &mut warnings,
                         &allowlist,
                         &mut used_metric_allowlist,
-                        &relative,
-                        "dispatch_function_lines",
-                        &name,
-                        count,
-                        "lines",
-                        DISPATCH_FUNCTION_HARD_LIMIT,
+                        ArchitectureMetric {
+                            path: &relative,
+                            rule: "dispatch_function_lines",
+                            subject: &name,
+                            observed: count,
+                            unit: "lines",
+                            hard_limit: DISPATCH_FUNCTION_HARD_LIMIT,
+                        },
                     );
                 }
             }
@@ -964,12 +968,14 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     &mut warnings,
                     &allowlist,
                     &mut used_metric_allowlist,
-                    &relative,
-                    "production_glob_import",
-                    "",
-                    glob_imports,
-                    "top-level `use super::*` imports",
-                    0,
+                    ArchitectureMetric {
+                        path: &relative,
+                        rule: "production_glob_import",
+                        subject: "",
+                        observed: glob_imports,
+                        unit: "top-level `use super::*` imports",
+                        hard_limit: 0,
+                    },
                 );
             }
             for (index, line) in clean.iter().enumerate() {
@@ -1015,12 +1021,14 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     &mut warnings,
                     &allowlist,
                     &mut used_metric_allowlist,
-                    &relative,
-                    "context_fields",
-                    &name,
-                    fields,
-                    "fields",
-                    CONTEXT_FIELD_HARD_LIMIT,
+                    ArchitectureMetric {
+                        path: &relative,
+                        rule: "context_fields",
+                        subject: &name,
+                        observed: fields,
+                        unit: "fields",
+                        hard_limit: CONTEXT_FIELD_HARD_LIMIT,
+                    },
                 );
             }
             if (relative == "rust/crates/sky_player/src/engine.rs")
@@ -1351,6 +1359,14 @@ mod tests {
             baseline: Some(1),
         };
         let allowlist = BTreeMap::from([(key, exception)]);
+        let live_session_glob = ArchitectureMetric {
+            path,
+            rule,
+            subject: "",
+            observed: 1,
+            unit: "top-level `use super::*` imports",
+            hard_limit: 0,
+        };
 
         let mut missing_errors = Vec::new();
         architecture_metric_record(
@@ -1358,12 +1374,7 @@ mod tests {
             &mut Vec::new(),
             &BTreeMap::new(),
             &mut BTreeSet::new(),
-            path,
-            rule,
-            "",
-            1,
-            "top-level `use super::*` imports",
-            0,
+            live_session_glob,
         );
         assert!(missing_errors[0].contains("without an exact baseline exception"));
 
@@ -1385,12 +1396,7 @@ mod tests {
             &mut Vec::new(),
             &mismatched_allowlist,
             &mut BTreeSet::new(),
-            path,
-            rule,
-            "",
-            1,
-            "top-level `use super::*` imports",
-            0,
+            live_session_glob,
         );
         assert!(mismatch_errors[0].contains("without an exact baseline exception"));
 
@@ -1400,12 +1406,10 @@ mod tests {
             &mut Vec::new(),
             &allowlist,
             &mut BTreeSet::new(),
-            path,
-            rule,
-            "",
-            2,
-            "top-level `use super::*` imports",
-            0,
+            ArchitectureMetric {
+                observed: 2,
+                ..live_session_glob
+            },
         );
         assert!(growth_errors[0].contains("above baseline 1"));
 
@@ -1471,17 +1475,20 @@ mod tests {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         let mut used = BTreeSet::new();
+        let baseline_metric = ArchitectureMetric {
+            path: &key.0,
+            rule: &key.1,
+            subject: "",
+            observed: 901,
+            unit: "lines",
+            hard_limit: REGULAR_HARD_LIMIT,
+        };
         architecture_metric_record(
             &mut errors,
             &mut warnings,
             &allowlist,
             &mut used,
-            &key.0,
-            &key.1,
-            "",
-            901,
-            "lines",
-            REGULAR_HARD_LIMIT,
+            baseline_metric,
         );
         assert!(errors.is_empty());
         assert_eq!(warnings.len(), 1);
@@ -1492,12 +1499,10 @@ mod tests {
             &mut warnings,
             &allowlist,
             &mut used,
-            &key.0,
-            &key.1,
-            "",
-            902,
-            "lines",
-            REGULAR_HARD_LIMIT,
+            ArchitectureMetric {
+                observed: 902,
+                ..baseline_metric
+            },
         );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("above baseline 901"));
@@ -1512,12 +1517,14 @@ mod tests {
             &mut Vec::new(),
             &allowlist,
             &mut BTreeSet::new(),
-            "rust/crates/example/src/new_module.rs",
-            "regular_module_lines",
-            "",
-            901,
-            "lines",
-            REGULAR_HARD_LIMIT,
+            ArchitectureMetric {
+                path: "rust/crates/example/src/new_module.rs",
+                rule: "regular_module_lines",
+                subject: "",
+                observed: 901,
+                unit: "lines",
+                hard_limit: REGULAR_HARD_LIMIT,
+            },
         );
         assert!(unlisted_errors[0].contains("without an exact baseline exception"));
     }

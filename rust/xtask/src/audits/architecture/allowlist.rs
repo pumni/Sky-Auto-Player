@@ -199,18 +199,31 @@ pub(super) fn architecture_record(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ArchitectureMetric<'a> {
+    pub(super) path: &'a str,
+    pub(super) rule: &'a str,
+    pub(super) subject: &'a str,
+    pub(super) observed: usize,
+    pub(super) unit: &'a str,
+    pub(super) hard_limit: usize,
+}
+
 pub(super) fn architecture_metric_record(
     errors: &mut Vec<String>,
     warnings: &mut Vec<String>,
     allowlist: &ArchitectureAllowlist,
     used: &mut BTreeSet<ArchitectureAllowlistKey>,
-    path: &str,
-    rule: &str,
-    subject: &str,
-    observed: usize,
-    unit: &str,
-    hard_limit: usize,
+    metric: ArchitectureMetric<'_>,
 ) {
+    let ArchitectureMetric {
+        path,
+        rule,
+        subject,
+        observed,
+        unit,
+        hard_limit,
+    } = metric;
     let key = (path.to_owned(), rule.to_owned(), subject.to_owned());
     let Some(exception) = allowlist.get(&key) else {
         let label = if subject.is_empty() {
