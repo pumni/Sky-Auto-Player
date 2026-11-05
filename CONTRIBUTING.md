@@ -81,8 +81,10 @@ outcome and the tests make the behavior change explicit. Avoid unrelated cleanup
 
 ## Dependency management
 
-Use the pinned Rust toolchain and Bun lockfile for canonical product checks. Rust and Bun are the
-only required repository toolchains.
+Use the pinned Rust toolchain and Bun lockfiles for canonical product checks. Rust and Bun are
+the canonical product/development toolchains; do not introduce a Python product runtime or
+general-purpose repository toolchain. The existing hosted Python ClamAV scanner is a narrowly
+scoped release qualification adapter, governed by [release authority](docs/v4-release-authority.md).
 
 ## Commit messages
 

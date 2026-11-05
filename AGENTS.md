@@ -11,8 +11,10 @@ music-sheet player for Sky: Children of the Light.
 - Keep domain/orchestration separate from Win32 effects. The native timing
   and focus contracts matter; see [architecture](docs/architecture.md) and
   [dispatch](docs/rt-dispatch-architecture.md) for changes to those boundaries.
-- Rust and Bun are the supported product/repository toolchains; do not
-  introduce a Python product runtime or repository toolchain.
+- Rust and Bun are the canonical product/development toolchains; do not
+  introduce a Python product runtime or general-purpose repository toolchain.
+  The existing Python ClamAV scanner is a narrowly scoped hosted-release
+  adapter governed by [release authority](docs/v4-release-authority.md).
 - Preserve updater and release trust requirements in
   [distribution-and-update.md](docs/distribution-and-update.md).
 
