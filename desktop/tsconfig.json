@@ -4,7 +4,6 @@
     "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "paths": { "react-aria-components": ["./src/types/react-aria-components.d.ts"] },
     "jsx": "react-jsx",
     "useDefineForClassFields": true,
     "resolveJsonModule": true,
