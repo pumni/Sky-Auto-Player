@@ -231,3 +231,48 @@ Clippy-reported WP-C helper or its lint policy, which is outside L-005's
 approved exact waiver, focused policy tests, and report correction. Please
 decide whether that helper cleanup is separately authorized; no such change
 was made in this checkpoint.
+
+## Post-review amendment — L-006 Clippy helper correction
+
+This amendment resolves the Clippy-helper decision request above under L-006.
+
+L-006 at
+[issue comment 6663468784](https://github.com/pumni/Sky-Auto-Player/issues/595#issuecomment-6663468784)
+and the corresponding
+[formal review](https://github.com/pumni/Sky-Auto-Player/pull/596#pullrequestreview-5788438633)
+authorized a local typed descriptor refactor for the architecture ratchet.
+The implementation source checkpoint is
+`c7f390eef809475df152004baec8cc6b31e07992`, based on the reviewed L-005
+checkpoint `5974657d8f44ad12a0a9c373e6635777460c1d40`.
+
+`architecture_metric_record` now takes an immutable, copyable
+`ArchitectureMetric<'a>` containing `path`, `rule`, `subject`, `observed`,
+`unit`, and `hard_limit`. The helper destructures that descriptor and retains
+the existing key lookup, ratchet decisions, warning/error text, and stale
+entry behavior. Production callsites and related tests use the descriptor;
+no lint suppression or flag change was made. No allowlist entry, baseline,
+runtime code, release policy, or security policy changed.
+
+The first focused test run exposed the existing 1,600-line `architecture.rs`
+budget: the converted calls temporarily brought the file to 1,612 lines. The
+full raw failure is preserved in
+[`wp-c-l006-architecture-tests.log`](wp-c-l006-architecture-tests.log). The
+test fixtures now reuse the immutable descriptors for repeated metrics; the
+budget was not raised. The final focused run passed 17/17.
+
+| Final qualification | Result | Raw evidence |
+| --- | --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` | PASS, exit 0 | [`wp-c-l006-format-check-final.log`](wp-c-l006-format-check-final.log) |
+| Focused architecture tests | PASS, 17 passed, exit 0 | [`wp-c-l006-architecture-tests-final.log`](wp-c-l006-architecture-tests-final.log) |
+| Explicit workspace Clippy with all targets/features and `-D warnings` | PASS, exit 0 | [`wp-c-l006-workspace-clippy.log`](wp-c-l006-workspace-clippy.log) |
+| `cargo xtask check static` | PASS, exit 0 | [`wp-c-l006-static-final.log`](wp-c-l006-static-final.log) |
+| `cargo xtask check all` | PASS, exit 0 | [`wp-c-l006-check-all-final.log`](wp-c-l006-check-all-final.log) |
+| `git diff --check` | PASS, exit 0 | [`wp-c-l006-diff-check.log`](wp-c-l006-diff-check.log) |
+
+The aggregate run passed workspace Rust tests, desktop `bun run check` and
+E2E, desktop cargo checks, and the `sky_desktop_shell` `tauri-test` library
+tests. Issue #574's `active.done` failure and the Curl fixture failure did not
+recur in this run. No native/runtime or Curl/release fixture changes were
+made; prior diagnostic records remain intact. A static check run after this
+report amendment is recorded in
+[`wp-c-l006-report-static-check.log`](wp-c-l006-report-static-check.log).
