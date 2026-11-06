@@ -148,19 +148,19 @@ Navigator, charcoal text, hairline neutral separators, and restrained Windows bl
 component-specific workbench aliases are overridden in the theme layer so they cannot leave dark
 surfaces behind in Light mode. Component styles consume semantic variables; the six dark palette
 IDs and their rendered role values remain unchanged. Package B's browser captures and computed
-contrast report are recorded in [`issue-565-package-b evidence`](evidence/issue-565-package-b/README.md).
+contrast report are recorded in [`issue-565-package-b evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-b/README.md).
 Package C's Windows/WebView2, startup, focus and contrast qualification is recorded in
-[`issue-565-package-c evidence`](evidence/issue-565-package-c/README.md). It distinguishes the
+[`issue-565-package-c evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-c/README.md). It distinguishes the
 release-profile Windows WebView run from browser media emulation and lists the packaged startup
 cases that could not be forced in this environment.
 Package D's final A–C integration audit and PASS/FAILED/SKIPPED/UNVERIFIED matrix is recorded in
-[`issue-565-package-d evidence`](evidence/issue-565-package-d/README.md). The Package B compact
+[`issue-565-package-d evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-d/README.md). The Package B compact
 utility-overlay PNGs are explicitly loading-state captures: Diagnostics Runtime still displayed
 `Loading diagnostics…`; they are not described as settled runtime evidence.
 
 Soft Graphite B is a review preview only. Its override exists in the opt-in
 `apps/desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and
-`docs/evidence/issue-563-package-c/`; it is not a production selector or shipped
+[historical Issue #563 Package C captures](https://github.com/pumni/Sky-Auto-Player/tree/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-563-package-c); it is not a production selector or shipped
 `apps/desktop/src/styles/themes.css` palette. Graphite A stays selected unless the owner and Agent Lead
 explicitly approve a future visual decision.
 
@@ -184,7 +184,7 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
   `apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs`.
 - Current browser captures for legacy ready, multitrack loss proposal and acceptance, unsupported
   schema, and source pitch assumption are recorded in
-  [`Issue #567 WP-C UI evidence`](evidence/issue-567-wp-c/README.md). Browser mock screenshots do
+  [`Issue #567 WP-C UI evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-567-wp-c/README.md). Browser mock screenshots do
   not establish native Windows focus or gameplay-input behavior.
 - `apps/desktop/tests/e2e/playback.spec.ts` and
   `apps/desktop/tests/e2e/playback-recovery.spec.ts` cover transport geometry, start and retirement
@@ -206,5 +206,5 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
 Browser tests use the mock bridge. The 640×448 overlay cases are responsive browser fallbacks,
 not supported native sizes. Packaged WebView2 resize/startup measurements and their baseline
 comparison, when available, are recorded separately in
-[`issue-563-package-d evidence`](evidence/issue-563-package-d/README.md); neither browser mocks nor
+[`issue-563-package-d evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-563-package-d/README.md); neither browser mocks nor
 packaged dry runs send gameplay input or establish in-game behavior.

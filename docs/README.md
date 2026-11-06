@@ -1,15 +1,17 @@
 # Technical Documentation
 
-Start at [INDEX.md](INDEX.md) when a task requires a technical contract.
-For a visual desktop UI reference, use [ui/README.md](ui/README.md) and verify its capture SHA.
-It distinguishes active references from revision-bound records.
+Start at [INDEX.md](INDEX.md) when a task requires a technical contract;
+it routes current references separately from revision-bound records. For a visual
+desktop UI reference, use [ui/README.md](ui/README.md) and check its capture SHA.
 
 Current behavior comes from source, tests, and configuration at the
 checked-out SHA; security and release requirements also come from their
 respective contracts. Measurements and historical decisions are evidence
 only for the revisions and conditions they name.
 
-[ADRs](adr/), [evidence](evidence/), and [release records](releases/)
-remain available without being included in routine agent context.
+[ADRs](adr/), [release records](releases/), and the
+[historical evidence archive](HISTORY.md) remain retrievable without being
+loaded as routine agent context. The small `evidence/` directory retains only
+reproduction data that has live consumers.
 Documentation changes follow [AGENTS.md](AGENTS.md). The public Astro
 site is maintained in [apps/website/](../apps/website/).

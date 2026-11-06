@@ -1,7 +1,0 @@
-COMMAND: git diff --check
-warning: in the working copy of '.config/rust_architecture_allowlist.json', CRLF will be replaced by LF the next time Git touches it
-EXIT_CODE=0
-
-FINAL COMMAND AFTER REPORT AMENDMENT: git diff --check
-warning: in the working copy of '.config/rust_architecture_allowlist.json', CRLF will be replaced by LF the next time Git touches it
-EXIT_CODE=0
