@@ -2,7 +2,7 @@
 
 This directory is the **only recommended starting point** for agents who need a visual reference for the desktop app. Do not search the issue-specific screenshots as if they were current UI.
 
-Check [current/manifest.json](current/manifest.json) before using an image. Only treat a capture as representing the checked-out desktop if `status` is `captured` and `desktop_tree_sha` matches `git rev-parse HEAD:apps/desktop` (from the repository root). The source commit may differ after a screenshot-only documentation commit; this tree identity avoids that false stale signal. The initial images are **provisional historical baselines**, not verified renders of the current commit.
+Check [current/manifest.json](current/manifest.json) before using an image. Only treat a capture as representing the checked-out desktop if `status` is `captured` and `desktop_tree_sha` matches `git rev-parse HEAD:apps/desktop` (from the repository root). The source commit may differ after a screenshot-only documentation commit; this tree identity avoids that false stale signal.
 
 To replace them after a reviewed UI change, run from `apps/desktop/`:
 
