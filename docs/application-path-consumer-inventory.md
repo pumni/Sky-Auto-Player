@@ -20,6 +20,7 @@ and release identity remain unchanged.
 | `apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs` schedule contract fixture | Six parent traversals to `tests/fixtures/song_planning/schedule_contract_cases.json` | Seven parent traversals to the same fixture | Relative to the Rust source file |
 | `storage_bootstrap.rs` repository-root app assertion | `desktop/` | `apps/desktop/` | Repository root returned by install-root discovery |
 | Desktop repository-root discovery scripts | `../..` from `desktop/scripts` | `../../..` from `apps/desktop/scripts` | Repository root for profiling and native build-info checks |
+| `apps/desktop/tests/e2e/sheet-compatibility.spec.ts` screenshot evidence output | `../docs/evidence/issue-567-wp-c` | `../../docs/evidence/issue-567-wp-c` | Relative to the desktop Playwright working directory; evidence remains at repository root |
 
 The Tauri `frontendDist`, development URL, resource destination names, icon,
 installer mode, updater key, product identity, and generated calibration
@@ -88,8 +89,8 @@ Neither fixture routes a real old-root path into an application lane.
 | Tracked desktop application files | 348 | 348 |
 | Tracked website application files | 131 | 131 |
 | Active repository-root path-consumer files outside the moved trees | 57 | 58 |
-| App-contained path-consumer files, including root-discovery scripts | 12 | 12 |
-| Total active path-consumer files | 69 | 70 |
+| App-contained path-consumer files, including root-discovery scripts | 12 | 13 |
+| Total active path-consumer files | 69 | 71 |
 | Active executable/config/current-contract consumers of the retired root paths | 65 | 0 |
 
 The baseline counts scan the tracked WP-A tree for desktop and website path
