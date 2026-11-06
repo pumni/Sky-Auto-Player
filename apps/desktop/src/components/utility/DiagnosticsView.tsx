@@ -13,10 +13,7 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
   const exportSenderTrace = useStore((store) => store.exportSenderTrace);
   const [traceExporting, setTraceExporting] = useState(false);
   const [traceExportError, setTraceExportError] = useState<string | null>(null);
-  const [traceExportIdentity, setTraceExportIdentity] = useState<{
-    song: string;
-    session: string;
-  } | null>(null);
+  const [traceExportIdentity, setTraceExportIdentity] = useState<{ session: string } | null>(null);
   const scrollRef = useScrollVisibility<HTMLDivElement>();
   const visibleTraceExportIdentity =
     traceExportIdentity !== null &&
@@ -33,18 +30,11 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
       const trace = JSON.parse(content) as {
         session_id?: unknown;
         song_id?: unknown;
-        song_title?: unknown;
       };
       if (typeof trace.session_id !== 'string' || typeof trace.song_id !== 'string') {
         throw new Error('Sender trace export is missing session identity.');
       }
-      setTraceExportIdentity({
-        song:
-          typeof trace.song_title === 'string' && trace.song_title.length > 0
-            ? trace.song_title
-            : trace.song_id,
-        session: trace.session_id,
-      });
+      setTraceExportIdentity({ session: trace.session_id });
       const objectUrl = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
@@ -84,7 +74,7 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
         </button>
         <span role="status">
           {visibleTraceExportIdentity
-            ? `Trace available: Song ${visibleTraceExportIdentity.song} · Session ${visibleTraceExportIdentity.session}`
+            ? 'Session metadata exported; raw packet trace was not captured in production.'
             : 'Available after a completed physical playback session.'}
         </span>
       </div>

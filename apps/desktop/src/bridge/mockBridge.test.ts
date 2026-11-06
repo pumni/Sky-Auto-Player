@@ -126,6 +126,7 @@ describe('mock bridge timing contracts', () => {
     const bridge = createMockBridge();
     const trace = JSON.parse(await bridge.exportSenderTrace()) as {
       export_schema_version: number;
+      raw_packet_trace_status: string;
       session_id: string;
       song_id: string;
       timing_policy: {
@@ -141,6 +142,7 @@ describe('mock bridge timing contracts', () => {
     };
 
     expect(trace.export_schema_version).toBe(2);
+    expect(trace.raw_packet_trace_status).toBe('not_captured');
     expect(trace).toMatchObject({
       session_id: 'a'.repeat(32),
       song_id: 'fixture-song',

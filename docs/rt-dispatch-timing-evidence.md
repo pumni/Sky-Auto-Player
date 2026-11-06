@@ -17,9 +17,13 @@ mutex acquisition.
 
 Strict/diagnostic trace records are built by the deferred observer. The
 observer queue is bounded and drops new records when full. Both queue drops
-and telemetry-ring drops are exported as counts; truncation is explicit. A
-disabled trace mode exports no trace rows, while production scalar snapshots
-still retain their sample counts and maxima.
+and telemetry-ring drops are exported as counts; truncation is explicit.
+In a production-normal session with no timing observer, the effective native
+collector is Off with zero record capacity. The schema-19 terminal envelope
+therefore has `records: []`, `attempted: 0`, and `accepted: 0`, while always-on
+production scalar snapshots retain their sample counts and maxima. Strict and
+diagnostic sessions, plus explicitly enabled production qualification
+observers, keep the requested ring and bounded deferred observer capture.
 
 Dispatch and observer snapshots have separate owners and are merged only for
 readout. A live snapshot publication that cannot acquire its own slot is

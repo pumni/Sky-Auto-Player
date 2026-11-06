@@ -60,6 +60,101 @@ fn engine_snapshots_project_always_on_timing_with_trace_on_and_off() {
 }
 
 #[test]
+fn production_without_observer_keeps_scalar_timing_and_exports_empty_schema19_trace() {
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::Production;
+    options.telemetry.mode = TelemetryMode::Ring;
+    options.telemetry.capacity = 4_096;
+
+    let session = NativeDispatchSession::new(options).expect("production-normal session");
+    session.arm(0).expect("zero-count-in arm");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !session.poll_state().status.is_terminal() {
+        assert!(Instant::now() < deadline, "prepared session did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.precision_packet_attempts, 2);
+    assert_eq!(snapshot.authored_lateness_samples, 2);
+    assert_eq!(snapshot.physical_floor_displacement_samples, 2);
+    assert_eq!(snapshot.residual_lateness_samples, 2);
+    assert_eq!(snapshot.sendinput_envelope_samples, 2);
+    assert!(!snapshot.recent_latency_samples_available);
+    assert!(snapshot.recent_latencies_us.is_empty());
+    assert_eq!(send_calls.load(Ordering::SeqCst), 2);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    assert_eq!(telemetry["schema_version"], 19);
+    assert_eq!(telemetry["records"].as_array().map(Vec::len), Some(0));
+    assert_eq!(telemetry["attempted"], 0);
+    assert_eq!(telemetry["accepted"], 0);
+    assert_eq!(telemetry["dropped"], 0);
+    assert_eq!(telemetry["observer_queue_dropped"], 0);
+    assert_eq!(telemetry["truncated"], false);
+}
+
+#[test]
+fn production_qualification_observer_keeps_requested_ring_capture() {
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::Production;
+    options.timing_observer_for_qualification = true;
+    options.telemetry.mode = TelemetryMode::Ring;
+    options.telemetry.capacity = 4_096;
+
+    let session = NativeDispatchSession::new(options).expect("qualification session");
+    session.arm(0).expect("zero-count-in arm");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !session.poll_state().status.is_terminal() {
+        assert!(Instant::now() < deadline, "prepared session did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.precision_packet_attempts, 2);
+    assert_eq!(snapshot.authored_lateness_samples, 2);
+    assert_eq!(snapshot.physical_floor_displacement_samples, 2);
+    assert_eq!(snapshot.sendinput_envelope_samples, 2);
+    assert!(snapshot.recent_latency_samples_available);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 2);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    assert_eq!(telemetry["records"].as_array().map(Vec::len), Some(2));
+    assert_eq!(telemetry["attempted"], 2);
+    assert_eq!(telemetry["accepted"], 2);
+}
+
+#[test]
 fn progress_snapshot_advances_during_idle_gap_with_telemetry_off() {
     let mut options = test_session_options(
         progress_idle_gap_schedule(),

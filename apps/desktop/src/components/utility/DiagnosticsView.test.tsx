@@ -587,7 +587,7 @@ describe('DiagnosticsView', () => {
     }
   });
 
-  it('labels an exported trace with its song and owning session', async () => {
+  it('labels exported session metadata without claiming raw trace availability', async () => {
     vi.stubGlobal('URL', {
       createObjectURL: vi.fn(() => 'blob:sender-trace'),
       revokeObjectURL: vi.fn(),
@@ -599,7 +599,9 @@ describe('DiagnosticsView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export last sender trace' }));
 
     expect(
-      await screen.findByText(`Trace available: Song Fixture Song · Session ${'a'.repeat(32)}`),
+      await screen.findByText(
+        'Session metadata exported; raw packet trace was not captured in production.',
+      ),
     ).toBeInTheDocument();
     await act(async () => {
       store.setState({
