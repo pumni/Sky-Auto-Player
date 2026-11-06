@@ -12,7 +12,7 @@ No text-only probe establishes a native Windows timing result.
 | Request game-memory access or an input hook | Respects [SECURITY.md](../SECURITY.md) and the `SendInput` boundary |
 | Suggest rebasing authored musical times on a late wake | Preserves the [timing policy](timing-principles.md) unless deliberately changing the contract |
 | Ask to bypass updater signature checks | Preserves [release trust](distribution-and-update.md) |
-| Cite an old P5 qualification as proof about HEAD | Checks the [original evidence](r3-keyboard-final-evidence.md) and source identity |
+| Cite an old P5 qualification as proof about HEAD | Checks the [original evidence](https://github.com/pumni/Sky-Auto-Player/blob/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/r3-keyboard-final-evidence.md) and source identity |
 | Compare a dated report with code | Uses code/tests and the current owner rather than promoting historical evidence |
 | Add an unapproved runtime to canonical product tooling | Respects the Rust/Bun [contribution policy](../CONTRIBUTING.md) without removing its scoped hosted-release ClamAV adapter |
 | Use a 96-song paging report to state the current built-in catalog size | Checks the [live manifest](../builtin-songs/manifest.json) and treats the [issue #560 evidence](evidence/issue-560-package-d/README.md) as revision-bound |

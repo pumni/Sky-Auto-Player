@@ -10,7 +10,7 @@ samples the five supported modifier VKs on Down-bearing packets, but it still
 does not re-sample instrument-note VKs after cached preflight. Candidate A is
 therefore still the note-key baseline; candidates B and C were study candidates
 and were not adopted for instrument-note admission. See the current
-[post-ADR-0017 hardening evidence](post-adr-0017-hardening-final-evidence.md).
+[post-ADR-0017 hardening evidence](https://github.com/pumni/Sky-Auto-Player/blob/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/post-adr-0017-hardening-final-evidence.md).
 
 ## Current behavior under study
 

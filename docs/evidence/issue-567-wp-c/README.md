@@ -8,8 +8,10 @@ or gameplay input behavior.
 Captured by:
 
 ```powershell
-cd desktop
+cd apps/desktop
+$env:SHEET_COMPATIBILITY_CAPTURE = '1'
 bun run test:e2e -- tests/e2e/sheet-compatibility.spec.ts
+Remove-Item Env:SHEET_COMPATIBILITY_CAPTURE
 ```
 
 | Capture | State shown |
@@ -19,3 +21,6 @@ bun run test:e2e -- tests/e2e/sheet-compatibility.spec.ts
 | `multitrack-loss-accepted.png` | Accepted conversion state and separate offline timing advisory. |
 | `unsupported-v99-blocked.png` | Unsupported Composed v99 error with conversion controls hidden. |
 | `source-pitch-assumption.png` | Source pitch assumption and in-game Sky Piano tuning warning. |
+
+The current capture command writes PNGs to ignored `apps/desktop/test-results/visual-evidence/issue-567-wp-c/`.
+The report is historical browser-mock evidence; its original screenshots, if needed, must be retrieved from the pre-cleanup Git revision.
