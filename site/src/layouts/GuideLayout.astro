@@ -2,9 +2,9 @@
 import BaseLayout from './BaseLayout.astro';
 import GuideBreadcrumb from '../components/guide/GuideBreadcrumb.astro';
 import RelatedGuides from '../components/guide/RelatedGuides.astro';
+import { PRODUCT_RELEASE } from '../data/product-release';
 import { SITE, type Locale } from '../data/site';
 import { withBase } from '../utils/urls';
-import { APP_VERSION } from '../generated/version';
 
 interface RelatedGuide {
   title: string;
@@ -150,8 +150,8 @@ const structuredData = [
           <h2 id="guide-cta-title">{isVi ? 'Sẵn sàng thử chưa?' : 'Ready to try it?'}</h2>
           <p>
             {isVi
-              ? `Tải Sky Auto Player v${APP_VERSION} và bắt đầu phát nhạc trên Windows.`
-              : `Download Sky Auto Player v${APP_VERSION} and start playing on Windows.`}
+              ? `Tải Sky Auto Player v${PRODUCT_RELEASE.version} và bắt đầu phát nhạc trên Windows.`
+              : `Download Sky Auto Player v${PRODUCT_RELEASE.version} and start playing on Windows.`}
           </p>
         </div>
         <div class="guide-page__cta-actions">

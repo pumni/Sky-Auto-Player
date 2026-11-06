@@ -34,6 +34,7 @@ import {
   PRODUCTION_ORIGIN,
   BASE,
 } from './canonical-routes.mjs';
+import { PRODUCT_RELEASE } from '../src/data/product-release.ts';
 
 const scriptDir = fileURLToPath(new URL('.', import.meta.url));
 const dist = resolve(scriptDir, '..', 'dist');
@@ -311,9 +312,10 @@ for (const route of CANONICAL_ROUTES) {
     warn('No JSON-LD structured data found');
   } else {
     let jsonLdOk = true;
+    const parsedBlocks = [];
     for (const script of scripts) {
       try {
-        JSON.parse(script);
+        parsedBlocks.push(JSON.parse(script));
       } catch {
         fail(`JSON-LD parse error: ${script.slice(0, 80)}...`);
         jsonLdOk = false;
@@ -321,6 +323,22 @@ for (const route of CANONICAL_ROUTES) {
     }
     if (jsonLdOk)
       pass(`JSON-LD parseable (${scripts.length} block${scripts.length > 1 ? 's' : ''})`);
+
+    if ((route.path === '/' || route.path === '/vi/') && jsonLdOk) {
+      const softwareApplications = parsedBlocks
+        .flatMap((block) => (Array.isArray(block?.['@graph']) ? block['@graph'] : [block]))
+        .filter((entry) => entry && entry['@type'] === 'SoftwareApplication');
+
+      if (softwareApplications.length !== 1) {
+        fail(`Expected one SoftwareApplication JSON-LD node on ${route.path}`);
+      } else if (softwareApplications[0].softwareVersion !== PRODUCT_RELEASE.version) {
+        fail(
+          `SoftwareApplication version on ${route.path} must match published release ${PRODUCT_RELEASE.version}`,
+        );
+      } else {
+        pass(`SoftwareApplication version: ${PRODUCT_RELEASE.version}`);
+      }
+    }
   }
 }
 

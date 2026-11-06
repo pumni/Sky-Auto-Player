@@ -2,9 +2,9 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import HomePage from '../../components/home/HomePage.astro';
 import { homeVi } from '../../data/home.vi';
+import { PRODUCT_RELEASE } from '../../data/product-release';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
-import { APP_VERSION } from '../../generated/version';
 
 const siteUrlEn = new URL(withBase('/'), SITE.productionOrigin).href;
 const siteUrlVi = new URL(withBase('/vi/'), SITE.productionOrigin).href;
@@ -28,7 +28,7 @@ const structuredData = {
       name: 'Sky Auto Player',
       description:
         'Trình phát sheet nhạc ưu tiên timing cho Sky: Children of the Light trên Windows. Đọc file sheet do người dùng cung cấp và mô phỏng đầu vào bàn phím qua Windows SendInput API. Không có liên kết với thatgamecompany.',
-      softwareVersion: APP_VERSION,
+      softwareVersion: PRODUCT_RELEASE.version,
       applicationCategory: 'MultimediaApplication',
       operatingSystem: 'Windows 10, Windows 11 (64-bit)',
       url: siteUrlEn,

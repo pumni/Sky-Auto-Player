@@ -7,20 +7,16 @@
     "node": "^22.22.3 || ^24.16.0 || >=26.3.0"
   },
   "scripts": {
-    "dev": "bun run sync:version && astro dev",
-    "sync:version": "bun scripts/sync-version.mjs",
-    "precheck": "bun run sync:version",
+    "dev": "astro dev",
     "check": "astro check",
-    "check:ci": "astro check",
-    "prebuild": "bun run sync:version",
     "build": "astro build",
-    "build:ci": "astro build",
     "preview": "astro preview",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify:dist": "bun scripts/verify-dist.mjs",
     "verify:seo": "bun scripts/verify-seo.mjs",
+    "test:unit": "bun test tests/unit",
     "test:e2e": "bun scripts/run-e2e.mjs tests/e2e/accessibility.spec.ts tests/e2e/locale-switch-contrast.spec.ts tests/e2e/navigation.spec.ts tests/e2e/site-contracts.spec.ts",
     "test:functional": "bun scripts/run-e2e.mjs tests/e2e/accessibility.spec.ts tests/e2e/locale-switch-contrast.spec.ts tests/e2e/navigation.spec.ts tests/e2e/site-contracts.spec.ts",
     "astro": "astro"

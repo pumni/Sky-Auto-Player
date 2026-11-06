@@ -1,8 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 const origin = 'http://localhost:4321/Sky-Auto-Player';
 const officialReleasesUrl = 'https://github.com/pumni/Sky-Auto-Player/releases';
 const legacyLatestUrl = `${officialReleasesUrl}/latest`;
+const publishedRelease = JSON.parse(
+  readFileSync(new URL('../../src/data/product-release.json', import.meta.url), 'utf8'),
+) as { version: string };
 
 const canonicalRoutes = [
   { path: '/', lang: 'en', canonical: 'https://pumni.github.io/Sky-Auto-Player/' },
@@ -25,6 +29,27 @@ test.describe('published route and asset contracts', () => {
       expect(html).not.toContain('localhost');
     });
   }
+
+  test('English and Vietnamese homepage JSON-LD uses the published stable release', async ({
+    request,
+  }) => {
+    for (const path of ['/', '/vi/']) {
+      const response = await request.get(origin + path);
+      expect(response.status(), path).toBe(200);
+
+      const html = await response.text();
+      const scripts = Array.from(
+        html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi),
+        (match) => JSON.parse(match[1]),
+      );
+      const softwareApplications = scripts
+        .flatMap((block) => (Array.isArray(block['@graph']) ? block['@graph'] : [block]))
+        .filter((entry) => entry && entry['@type'] === 'SoftwareApplication');
+
+      expect(softwareApplications).toHaveLength(1);
+      expect(softwareApplications[0].softwareVersion).toBe(publishedRelease.version);
+    }
+  });
 
   test('legacy FAQ URLs retain redirect documents', async ({ request }) => {
     const redirects = [

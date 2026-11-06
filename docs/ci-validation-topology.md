@@ -90,10 +90,16 @@ does not suppress a lane required by another changed path.
   directly from that directory, and deployed as the exact validated Pages
   artifact.
 
-Site CI synchronizes the application version once before `check:ci` and
-`build:ci`. Local `bun run check` and `bun run build` remain self-contained
-through their existing pre-hooks, and manual Pages recovery remains
-self-contained.
+The website owns a committed snapshot of the latest verified public stable
+release in `site/src/data/product-release.json`. Its metadata parser rejects
+invalid versions and tags; Astro embeds that snapshot without reading the
+desktop Cargo manifest or calling Cargo, Tauri, or a release API. Site CI,
+local checks/builds, and manual Pages recovery invoke their Bun/Astro commands
+directly, without version synchronization pre-hooks. CI validates the
+metadata, site checks, build, output, SEO, and functional contracts; manual
+Pages recovery verifies the built output and SEO before deployment. Refresh
+the snapshot manually after a stable release is publicly published; see
+[`site/README.md`](../site/README.md#published-application-version).
 
 ## Deliberate non-deduplication
 
