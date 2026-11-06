@@ -161,17 +161,22 @@ fn validate_package_manifest(app: App, source: &str) -> std::result::Result<(), 
         }
     }
 
-    if let Some(scripts) = manifest.get("scripts").and_then(Value::as_object) {
-        if let Some((name, _)) = scripts.iter().find(|(_, command)| {
-            command.as_str().is_some_and(|command| {
-                app.forbidden_build_command(command) || app.references_sibling_app(command)
+    if let Some((name, _)) =
+        manifest
+            .get("scripts")
+            .and_then(Value::as_object)
+            .and_then(|scripts| {
+                scripts.iter().find(|(_, command)| {
+                    command.as_str().is_some_and(|command| {
+                        app.forbidden_build_command(command) || app.references_sibling_app(command)
+                    })
+                })
             })
-        }) {
-            return Err(format!(
-                "{} script {name} crosses the other application's build boundary",
-                app.name()
-            ));
-        }
+    {
+        return Err(format!(
+            "{} script {name} crosses the other application's build boundary",
+            app.name()
+        ));
     }
     Ok(())
 }
@@ -193,10 +198,10 @@ fn imported_specifier(line: &str) -> Option<&str> {
         Some("from ")
     } else if let Some(position) = trimmed.find("import(") {
         Some(&trimmed[position..])
-    } else if let Some(position) = trimmed.find("require(") {
-        Some(&trimmed[position..])
     } else {
-        None
+        trimmed
+            .find("require(")
+            .map(|position| &trimmed[position..])
     }?;
 
     let rest = trimmed
