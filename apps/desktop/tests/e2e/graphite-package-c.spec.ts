@@ -7,7 +7,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 const preferenceKey = 'sky.ui.workbench.v5';
 const evidenceEnabled = process.env.GRAPHITE_PACKAGE_C_EVIDENCE === '1';
 const captureSha = process.env.PACKAGE_C_CAPTURE_SHA ?? '';
-const evidenceDirectory = resolve(process.cwd(), '..', 'docs/evidence/issue-563-package-c');
+const evidenceDirectory = resolve(process.cwd(), 'test-results/visual-evidence/issue-563-package-c');
 
 const previewTokens = {
   accentInk: '#aba6df',

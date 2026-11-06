@@ -20,7 +20,7 @@ and release identity remain unchanged.
 | `apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs` schedule contract fixture | Six parent traversals to `tests/fixtures/song_planning/schedule_contract_cases.json` | Seven parent traversals to the same fixture | Relative to the Rust source file |
 | `storage_bootstrap.rs` repository-root app assertion | `desktop/` | `apps/desktop/` | Repository root returned by install-root discovery |
 | Desktop repository-root discovery scripts | `../..` from `desktop/scripts` | `../../..` from `apps/desktop/scripts` | Repository root for profiling and native build-info checks |
-| `apps/desktop/tests/e2e/sheet-compatibility.spec.ts` screenshot evidence output | `../docs/evidence/issue-567-wp-c` | `../../docs/evidence/issue-567-wp-c` | Relative to the desktop Playwright working directory; evidence remains at repository root |
+| `apps/desktop/tests/e2e/sheet-compatibility.spec.ts` screenshot evidence output | `../docs/evidence/issue-567-wp-c` | `test-results/visual-evidence/issue-567-wp-c` | Screenshot captures are opt-in, transient and ignored by Git; historical evidence remains accessible at its recorded source revision |
 
 The Tauri `frontendDist`, development URL, resource destination names, icon,
 installer mode, updater key, product identity, and generated calibration

@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
-const evidenceDirectory = resolve(process.cwd(), '../../docs/evidence/issue-567-wp-c');
+const evidenceDirectory = resolve(process.cwd(), 'test-results/visual-evidence/issue-567-wp-c');
 
 async function openSongDetails(page: Page, title: string) {
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -33,6 +33,7 @@ async function openSongDetails(page: Page, title: string) {
 }
 
 async function capture(page: Page, name: string) {
+  if (process.env.SHEET_COMPATIBILITY_CAPTURE !== '1') return;
   mkdirSync(evidenceDirectory, { recursive: true });
   await page.screenshot({
     path: resolve(evidenceDirectory, name),

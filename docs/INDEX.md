@@ -14,6 +14,7 @@ invariants that must not be discarded because an implementation differs.
   [timing observation semantics](rt-dispatch-timing-evidence.md)
   (field definitions are current; dated qualification results are historical).
 - **Desktop UI:** [workbench](desktop-workbench.md),
+  [current UI image reference](ui/README.md) when visual inspection is needed,
   [React Aria type boundary](desktop-type-boundary.md),
   [desktop JavaScript tooling](desktop-tooling.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
