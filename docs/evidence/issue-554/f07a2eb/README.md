@@ -42,7 +42,7 @@ and [geometry measurements](browser-mock-geometry.json) with source revision
 | [Compact workbench](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-554/f07a2eb/browser-mock-800x560-compact.png) | 800×560 CSS px | Collapsed navigator, selected track, dry-run playback |
 | [Inspector overlay](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-554/f07a2eb/browser-mock-640x448-overlay.png) | 640×448 CSS px | Selected track, dry-run playback, Inspector overlay |
 
-The new [Settings modal parity test](../../../../desktop/tests/e2e/palette-appearance.spec.ts)
+The new [Settings modal parity test](../../../../apps/desktop/tests/e2e/palette-appearance.spec.ts)
 checks modal and child rectangles, accessible roles/names, six-palette geometry within 0.5 CSS px,
 and the keyboard focus order. Its [recorded matrix](settings-modal-six-palette.json) is tagged with
 the same source SHA and includes one screenshot per palette at 800×560 CSS px. All six palettes had

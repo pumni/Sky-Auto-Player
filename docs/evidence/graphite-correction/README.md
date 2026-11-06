@@ -54,7 +54,7 @@ The menu can cover nearby explanatory copy while it is open, as a popover normal
 
 ## Screenshot and regression-test audit
 
-One opt-in generator remains: [`visual-evidence.spec.ts`](../../../desktop/tests/e2e/visual-evidence.spec.ts). From `desktop/`, run:
+One opt-in generator remains: [`visual-evidence.spec.ts`](../../../apps/desktop/tests/e2e/visual-evidence.spec.ts). From `desktop/`, run:
 
 ```powershell
 $env:GRAPHITE_WORKSPACE_CAPTURE = 'candidate'

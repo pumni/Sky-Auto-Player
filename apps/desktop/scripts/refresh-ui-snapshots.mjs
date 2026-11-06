@@ -21,6 +21,7 @@ function git(args) {
 }
 
 const sha = git(['rev-parse', 'HEAD']);
+const desktopTreeSha = git(['rev-parse', 'HEAD:apps/desktop']);
 const dirty = git(['status', '--porcelain', '--untracked-files=no', '--', 'apps/desktop/src', 'apps/desktop/tests', 'rust']);
 if (dirty) throw new Error('UI source/tests are dirty. Commit changes before refreshing the canonical UI capture.');
 
@@ -59,6 +60,7 @@ for (const [name, captured] of Object.entries(screenshots)) {
 const manifest = {
   status: 'captured',
   source_sha: sha,
+  desktop_tree_sha: desktopTreeSha,
   captured_at_utc: new Date().toISOString(),
   environment: 'Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows',
   generated_by: 'bun run ui:refresh (apps/desktop)',
