@@ -1,2 +1,0 @@
-COMMAND: git diff --check (final repository state)
-EXIT_CODE=0

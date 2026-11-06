@@ -158,7 +158,7 @@ not create separate stores or synchronize state through effects.
   bootstrap is delayed. The effective mode is not stored in browser storage.
   The final A–C integration audit, qualification matrix, and complete changed-path
   inventory are recorded in
-  [issue-565 Package D evidence](evidence/issue-565-package-d/README.md).
+  [issue-565 Package D evidence](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-d/README.md).
 - `librarySlice.ts` owns Library query intent, bounded page caching,
   virtualization hydration, and paging. `librarySelectionActions.ts` owns
   selected-song/detail requests and browser navigation.

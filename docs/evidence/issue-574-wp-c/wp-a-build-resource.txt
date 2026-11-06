@@ -1,5 +1,0 @@
-source=D:\Dev\Sky-Auto-Player\desktop\src-tauri\resources\native_calibration.exe
-source_sha256=13AAB87A7EEE3F2BB98D2F6993266320CC3B0FD5A48854807469FECB1CBF868B
-destination=D:\Dev\Sky-Auto-Player\rust\target\wp-a-readonly\desktop\src-tauri\resources\native_calibration.exe
-destination_sha256=13AAB87A7EEE3F2BB98D2F6993266320CC3B0FD5A48854807469FECB1CBF868B
-git_status_wp_a=

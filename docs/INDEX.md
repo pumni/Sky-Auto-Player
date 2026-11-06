@@ -35,8 +35,7 @@ invariants that must not be discarded because an implementation differs.
   [Authenticode](v4-authenticode-provider-seam.md).
 - **CI and development:** [CI topology](ci-validation-topology.md),
   [Rust toolchain](rust-toolchain-policy.md),
-  [contributing](../CONTRIBUTING.md),
-  [application path-consumer inventory](application-path-consumer-inventory.md).
+  [contributing](../CONTRIBUTING.md).
 - **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),
   [physical-key study method](physical-key-study-method.md),
   [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md).
@@ -50,21 +49,16 @@ not as instructions for current code. Keep recorded SHAs, hardware,
 measurements, and limitations intact.
 
 - **Decisions:** [ADRs](adr/).
-- **Measured / reviewed evidence:** [evidence](evidence/),
-  [WP-C Rust tooling audit and Issue #574 diagnostics](evidence/issue-574-wp-c/README.md),
-  [native playback ownership migration](native-playback-ownership.md),
-  [hosted signing proof](v4-hosted-signing-proof.md),
-  [dispatch forensics qualification](dispatch-forensics-cost-qualification.md),
-  [final Down qualification](final-down-admission-qualification.md),
-  [test-pipeline report](maintenance-test-pipeline-report.md),
-  [PowerShell migration ledger](powershell-dependency-ledger.md), and
-  [Issue #560 Package D qualification](evidence/issue-560-package-d/README.md)
-  (source-bound 96-song paging/Windows profile; not evidence of the current
-  catalog size or installed-upgrade behavior).
+- **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
+  (original reports, run logs, binary traces and screenshot provenance are
+  retrievable at a pinned main commit; not current qualification).
+- **Retained reproduction datasets:** [native test parity baseline](evidence/issue-540-native-playback-test-parity.json)
+  and [wake-calibration checksum-backed projection](evidence/wake-calibration-qualification-20261018.json).
+- **Legacy PowerShell audit:** [migration ledger](powershell-dependency-ledger.md)
+  (dated migration record; current release/CI owners are the Rust sources).
 - **Release-specific records:** [releases](releases/).
-- Other issue- and phase-scoped reports remain in `docs/` (for example,
-  `gate-*-evidence.md`, `r3-*.md`, and `prepared-*-evidence.md`);
-  search by issue, feature, or source SHA when needed.
+- Use [HISTORY.md](HISTORY.md) to retrieve removed issue/phase reports by full
+  source SHA; do not mistake those archived results for current behavior.
 
 If an active contract disagrees with source, inspect both and report the
 discrepancy before changing the relevant owner. Historical test evidence

@@ -91,7 +91,7 @@ Historical path exceptions are deliberately limited to:
 - `CHANGELOG.md`, which records behavior at earlier releases;
 - `docs/adr/`, `docs/releases/`, and `docs/evidence/`, which retain revision-
   bound decisions, release records, and measurements;
-- `docs/maintenance-test-pipeline-report.md`, which records the earlier
+- [archived test-pipeline report](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/maintenance-test-pipeline-report.md), which records the earlier
   fixture rename and validation report as it existed at that revision.
 
 Those files are left unchanged under `docs/AGENTS.md`. The current `SECURITY.md`
