@@ -29,7 +29,7 @@ fn hosted_disposable_tauri_private_key_roundtrip_through_adapter() {
 
     const TEST_PASSWORD: &str = "throwaway-hosted-adapter-only";
     const TEST_VERSION: &str = "4.3.0";
-    let desktop = root.join("desktop");
+    let desktop = root.join("apps/desktop");
     let generation = process::capture_owned_timeout_runtime_only(
         OsStr::new("bun"),
         &[

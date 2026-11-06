@@ -213,7 +213,7 @@ fn build_candidate(
         return Err("build-candidate source SHA differs from clean checked-out HEAD".into());
     }
 
-    let desktop = root.join("desktop");
+    let desktop = root.join("apps/desktop");
     let install_args = vec!["install".to_owned(), "--frozen-lockfile".to_owned()];
     let install = process::capture_owned_timeout_filtered(
         std::ffi::OsStr::new("bun"),

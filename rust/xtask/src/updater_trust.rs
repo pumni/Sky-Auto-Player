@@ -193,7 +193,7 @@ pub fn verify_local_private_key(
     let signature_path = temp_dir.join("nonce.bin.sig");
     fs::write(&payload_path, nonce)?;
 
-    let desktop_dir = root.join("desktop");
+    let desktop_dir = root.join("apps/desktop");
     let canonical_key_path = fs::canonicalize(key_path)?;
 
     let mut env_values = vec![

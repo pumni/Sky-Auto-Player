@@ -32,10 +32,12 @@ The following consumers now resolve the relocated application paths from the
 repository root:
 
 - Rust workspace and binding output: `rust/Cargo.toml`, `.cargo/config.toml`.
-- xtask path ownership, release, bundle, SBOM, tooling, and audits: 25 files
-  under `rust/xtask/src/`, including `ci_classifier.rs`, `ci.rs`, `repo.rs`,
-  `tauri_bundle.rs`, `sbom.rs`, `updater_fixture.rs`,
-  `checks/ci_contracts.rs`, and the current source audits.
+- xtask path ownership, checks, credential, release, bundle, SBOM, updater,
+  tooling, and audits: 29 existing source modules under `rust/xtask/src/`,
+  including `checks.rs`, `credential_cli.rs`, `ci_classifier.rs`, `ci.rs`,
+  `repo.rs`, `release_signing.rs`, `release_v4.rs`, `tauri_bundle.rs`,
+  `sbom.rs`, `updater_fixture.rs`, and `updater_trust.rs`. Website CI and
+  architecture test modules are split into focused files.
 - CI and automation: `.github/actions/site-validate/action.yml`,
   `.github/workflows/ci.yml`, `pages.yml`, `hosted-v4-signing-proof.yml`,
   `release-v4.yml`, `.github/dependabot.yml`, and `.github/CODEOWNERS`.

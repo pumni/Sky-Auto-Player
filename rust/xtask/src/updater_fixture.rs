@@ -1508,7 +1508,7 @@ fn generate_signing_key(repository_root: &Path, key_path: &Path) -> Result<()> {
     crate::process::run_owned_timeout_filtered(
         std::ffi::OsStr::new("bun"),
         &args,
-        &repository_root.join("desktop"),
+        &repository_root.join("apps/desktop"),
         &[],
         &removed_private_environment(),
         Duration::from_secs(120),
@@ -1536,7 +1536,7 @@ fn sign_with_key(repository_root: &Path, key_path: &Path, artifact: &Path) -> Re
     crate::process::run_owned_timeout_filtered(
         std::ffi::OsStr::new("bun"),
         &args,
-        &repository_root.join("desktop"),
+        &repository_root.join("apps/desktop"),
         &[],
         &removed_private_environment(),
         Duration::from_secs(120),
@@ -2134,7 +2134,7 @@ fn build_bridge_internal(
     // prefix produced by `canonicalize`; use the already verified ordinary
     // spelling of the same owned fixture root for Cargo's target directory.
     let target = ordinary_fixture_root.join("target");
-    let desktop = worktree.join("desktop");
+    let desktop = worktree.join("apps/desktop");
     let key_path = fixture_root.join("bridge.key");
     let config_path = fixture_root.join("bridge-updater.json");
     let signer_challenge_path = fixture_root.join("bridge-signer-challenge.bin");

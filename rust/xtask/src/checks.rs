@@ -207,12 +207,12 @@ fn run_with_session(
             process::run(
                 "bun",
                 &["install", "--frozen-lockfile"],
-                &root.join("desktop"),
+                &root.join("apps/desktop"),
                 &[],
             )?;
-            process::run("bun", &["run", "check"], &root.join("desktop"), &[])?;
+            process::run("bun", &["run", "check"], &root.join("apps/desktop"), &[])?;
             if std::env::var_os("SKY_DESKTOP_SKIP_BROWSER").is_none() {
-                process::run("bun", &["run", "test:e2e"], &root.join("desktop"), &[])?;
+                process::run("bun", &["run", "test:e2e"], &root.join("apps/desktop"), &[])?;
             } else {
                 println!("[xtask] desktop browser E2E: SKIP (not required for this validation)");
             }

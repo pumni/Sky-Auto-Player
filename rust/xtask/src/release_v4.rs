@@ -1338,7 +1338,7 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let dist = root.join("rust/target/dist");
     let bundle = dist.join("bundle/nsis");
     purge_build_outputs(root, &dist, &bundle, &source_installer, &source_signature)?;
-    let desktop = root.join("desktop");
+    let desktop = root.join("apps/desktop");
     let remove_env = [
         "TAURI_SIGNING_PRIVATE_KEY",
         "TAURI_SIGNING_PRIVATE_KEY_PATH",
@@ -6481,7 +6481,7 @@ mod tests {
             .arg("run")
             .arg("tauri")
             .args(args)
-            .current_dir(root.join("desktop"));
+            .current_dir(root.join("apps/desktop"));
         for name in [
             "V4_TAURI_UPDATER_PRIVATE_KEY",
             "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
