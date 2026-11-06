@@ -102,8 +102,17 @@ Run these commands from PowerShell on Windows. The signing key is a
 non-production local fixture and must remain outside the repository:
 
 ```powershell
-$keyPath = Join-Path $env:TEMP "sky-auto-player-v4-test.key"
-Push-Location desktop
+$qualificationRoot = Join-Path $env:TEMP ("sky-auto-player-v4-test-" + [guid]::NewGuid().ToString("N"))
+$previousCargoTargetDir = $env:CARGO_TARGET_DIR
+$previousGitHubEnv = $env:GITHUB_ENV
+$cargoTarget = Join-Path $qualificationRoot "cargo-target"
+$distRoot = Join-Path $cargoTarget "dist"
+$bundleDir = Join-Path $distRoot "bundle\nsis"
+$keyPath = Join-Path $qualificationRoot "sky-auto-player-v4-test.key"
+$testConfigPath = Join-Path $qualificationRoot "sky-auto-player-v4-test-updater.json"
+New-Item -ItemType Directory -Path $qualificationRoot | Out-Null
+$env:CARGO_TARGET_DIR = $cargoTarget
+Push-Location apps/desktop
 bun install --frozen-lockfile
 bun run build
 bun run tauri signer generate --ci --password "" --force -w $keyPath
@@ -111,14 +120,13 @@ Pop-Location
 $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyPath -Raw).Trim()
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 $env:SKY_AUTHENTICODE_MODE = "test"
-$testSigningEnv = Join-Path $env:TEMP "sky-v4-test-signing.env"
+$testSigningEnv = Join-Path $qualificationRoot "test-signing.env"
 $env:GITHUB_ENV = $testSigningEnv
 pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $testSigningEnv
 Get-Content $testSigningEnv | ForEach-Object {
   $name, $value = $_ -split "=", 2
   Set-Item -Path "Env:$name" -Value $value
 }
-$testConfigPath = Join-Path $env:TEMP "sky-auto-player-v4-test-updater.json"
 $testPublicKey = (Get-Content "$keyPath.pub" -Raw).Trim()
 @{
   plugins = @{
@@ -129,40 +137,71 @@ $testPublicKey = (Get-Content "$keyPath.pub" -Raw).Trim()
   }
 } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $testConfigPath
 
-Push-Location desktop
+Push-Location apps/desktop
 bun run tauri build --ci --config $testConfigPath -- --profile dist
 Pop-Location
+if ($LASTEXITCODE -ne 0) { throw "Tauri test package build failed with exit code $LASTEXITCODE" }
 
-cargo xtask verify-tauri-bundle `
-  --bundle-dir rust/target/dist/bundle/nsis `
-  --summary rust/target/dist/TAURI_ARTIFACT_SUMMARY.json `
-  --authenticode-evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json `
-  --sbom rust/target/dist/SBOM.spdx.json
-```
-
-The build config invokes `scripts/sign_v4_authenticode.ps1`. The canonical
-production path sets `SKY_AUTHENTICODE_MODE=unsigned-zero-budget`, so the seam
-deliberately performs no signing. The test fixture below uses an ephemeral
-self-signed certificate only for test-mode integrity coverage. See
-`v4-authenticode-provider-seam.md` for the formalized provider seam specification,
-`v4-updater-key-custody.md` for the private key custody and rotation runbook, and
-`v4-release-execution-topology.md` for the single-candidate release orchestrator
-and runner execution topology. To create the evidence used above, run:
-
-```powershell
 cargo xtask authenticode verify `
   --mode test `
-  --artifact (Get-ChildItem rust/target/dist/bundle/nsis/*-setup.exe).FullName `
-  --evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
-cargo xtask sbom generate --artifact-dir rust/target/dist/bundle/nsis --output rust/target/dist/SBOM.spdx.json
-cargo xtask sbom verify --artifact-dir rust/target/dist/bundle/nsis --sbom rust/target/dist/SBOM.spdx.json
+  --artifact (Get-ChildItem -LiteralPath $bundleDir -Filter "*-setup.exe").FullName `
+  --evidence (Join-Path $distRoot "TAURI_AUTHENTICODE_EVIDENCE.json")
+if ($LASTEXITCODE -ne 0) { throw "Authenticode test verification failed with exit code $LASTEXITCODE" }
+cargo xtask sbom generate --artifact-dir $bundleDir --output (Join-Path $distRoot "SBOM.spdx.json")
+if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE" }
+cargo xtask sbom verify --artifact-dir $bundleDir --sbom (Join-Path $distRoot "SBOM.spdx.json")
+if ($LASTEXITCODE -ne 0) { throw "SBOM verification failed with exit code $LASTEXITCODE" }
+cargo xtask verify-tauri-bundle `
+  --bundle-dir $bundleDir `
+  --summary (Join-Path $distRoot "TAURI_ARTIFACT_SUMMARY.json") `
+  --authenticode-evidence (Join-Path $distRoot "TAURI_AUTHENTICODE_EVIDENCE.json") `
+  --sbom (Join-Path $distRoot "SBOM.spdx.json")
+if ($LASTEXITCODE -ne 0) { throw "Tauri artifact verification failed with exit code $LASTEXITCODE" }
+$version = (Select-String -LiteralPath "apps/desktop/src-tauri/Cargo.toml" -Pattern '^version = "([^\"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+$sourceIdentity = cargo xtask ci source-identity --candidate-version $version --require-worktree-version --format json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw "Source identity verification failed with exit code $LASTEXITCODE" }
+$installer = (Get-ChildItem -LiteralPath $bundleDir -Filter "*-setup.exe").FullName
+$installerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+cargo xtask updater-trust verify-test-signature `
+  --installer $installer `
+  --signature "$installer.sig" `
+  --public-key "$keyPath.pub" `
+  --expected-version $version `
+  --expected-sha256 $installerSha256 `
+  --source-sha $sourceIdentity.source_sha `
+  --evidence (Join-Path $distRoot "UPDATER_SIGNATURE_EVIDENCE.json")
+if ($LASTEXITCODE -ne 0) { throw "Updater test signature verification failed with exit code $LASTEXITCODE" }
 pwsh scripts/cleanup_v4_test_signing.ps1
+if ($LASTEXITCODE -ne 0) { throw "Test Authenticode cleanup failed with exit code $LASTEXITCODE" }
+Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+Remove-Item Env:SKY_AUTHENTICODE_MODE -ErrorAction SilentlyContinue
+if ($null -eq $previousCargoTargetDir) {
+  Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+} else {
+  $env:CARGO_TARGET_DIR = $previousCargoTargetDir
+}
+if ($null -eq $previousGitHubEnv) {
+  Remove-Item Env:GITHUB_ENV -ErrorAction SilentlyContinue
+} else {
+  $env:GITHUB_ENV = $previousGitHubEnv
+}
 ```
 
-The expected bundle directory contains exactly:
+The test uses a fresh `$env:TEMP` Cargo target so old installers cannot be
+counted as current bundle outputs. The build config invokes
+`scripts/sign_v4_authenticode.ps1`; the Authenticode test fixture uses an
+ephemeral self-signed certificate, and the updater signature uses the
+ephemeral key generated above. Both private keys remain outside the repository.
+The canonical production path sets `SKY_AUTHENTICODE_MODE=unsigned-zero-budget`
+and deliberately performs no signing. See `v4-authenticode-provider-seam.md`
+for the provider seam, `v4-updater-key-custody.md` for key custody and rotation,
+and `v4-release-execution-topology.md` for the single-candidate orchestrator.
+
+The isolated bundle directory at `$bundleDir` contains exactly:
 
 ```
-rust/target/dist/bundle/nsis/
+$cargoTarget/dist/bundle/nsis/
   Sky Auto Player_<version>_<arch>-setup.exe
   Sky Auto Player_<version>_<arch>-setup.exe.sig
 ```

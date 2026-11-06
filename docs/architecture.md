@@ -4,6 +4,32 @@ The Tauri/React desktop is the only supported user-facing product. Its
 commands are handled by the native Rust composition root; the repository has
 no separate scripting runtime in the packaged application.
 
+## Repository layout
+
+```text
+apps/desktop/       React + Vite frontend and Tauri shell
+apps/website/       independent static Astro site for GitHub Pages
+rust/               Cargo workspace: domain, native adapters, desktop shell, xtask
+songs/              built-in sheet files packaged by the desktop app
+builtin-songs/      immutable built-in catalog manifest and metadata
+scripts/            repository and release qualification helpers
+```
+
+The Rust workspace remains under `rust/` because its Cargo config, lockfile,
+target directory, and workspace membership define one shared native build
+boundary. The Tauri crate joins that workspace through its path at
+`apps/desktop/src-tauri`; package names such as `sky_desktop_shell` and
+`sky_app_core` remain stable responsibility names used by Cargo commands and
+CI. Desktop and website keep their own `package.json` and `bun.lock` so each
+app has a frozen, independently validated dependency graph. There is no root
+Bun workspace or duplicate root JavaScript manifest.
+
+The website builds static Pages output without invoking Cargo or Tauri. The
+desktop Vite bundle is consumed by the Tauri shell, which packages the Rust
+workspace output and the catalog resources. Local command roots and CI lane
+ownership are recorded in [desktop tooling](desktop-tooling.md) and
+[CI validation topology](ci-validation-topology.md).
+
 ## Layers
 
 ```text

@@ -6,7 +6,7 @@ Static Astro site for the Sky Auto Player project, published under the /Sky-Auto
 
 Run from this directory:
 
-    bun install
+    bun install --frozen-lockfile
     bun run dev
 
 ## Quality gates
@@ -18,7 +18,7 @@ Run from this directory:
     bun run build
     bun run verify:dist
     bun run verify:seo
-    bun run test:e2e
+    bun run test:functional
 
 The site is static output. The production build is written to dist/, and the E2E suite checks routing, canonical metadata, accessibility, responsive behavior, the project favicon, and the mobile screenshot crop.
 

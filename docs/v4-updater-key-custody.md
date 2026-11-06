@@ -293,7 +293,7 @@ without accessible backups):
 3. **Post-GA Replacement Root and Out-of-Band Recovery**:
    - Generate a new v4 updater key pair under clean, documented custody:
      ```powershell
-     Push-Location desktop
+     Push-Location apps/desktop
      bun run tauri signer generate -w "E:\secure\v4-updater-replacement.key"
      Pop-Location
      ```
@@ -336,7 +336,7 @@ If the private updater key is suspected or confirmed to be compromised:
 3. **Generate Clean Trust Root**:
    - On an uncompromised, air-gapped machine, generate a new key pair:
      ```powershell
-     Push-Location desktop
+     Push-Location apps/desktop
      bun run tauri signer generate -w "E:\secure\v4-updater-emergency.key"
      Pop-Location
      ```

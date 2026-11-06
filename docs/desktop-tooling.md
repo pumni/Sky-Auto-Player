@@ -15,7 +15,49 @@ bun scripts/verify-bun-pin.mjs
 # From apps/desktop/
 bun install --frozen-lockfile
 bun run check
+bun run dev
+# Run the desktop shell on Windows
+bun run tauri:dev
 ```
+
+The Vite development server is the frontend-only entry point. `tauri:dev`
+starts the native shell and uses the configured Vite server. The Tauri package
+build starts from this same app directory; its Windows `beforeBuildCommand`
+returns to the repository root before running `cargo xtask calibration build`.
+
+## Website setup and checks
+
+The static site has its own frozen install and runs without the Rust workspace:
+
+```powershell
+# From apps/website/
+bun install --frozen-lockfile
+bun run test:unit
+bun run check
+bun run lint
+bun run format:check
+bun run build
+bun run verify:dist
+bun run verify:seo
+# Install the pinned Playwright browser once, then run functional browser tests
+bunx playwright install chromium
+bun run test:functional
+```
+
+## Repository checks
+
+Run the canonical pre-review gate from the repository root on Windows:
+
+```powershell
+cargo xtask check all
+```
+
+It runs Rust static contracts, workspace checks and tests, then the desktop
+frozen install, Vite checks, browser E2E, native feature checks and generated
+TypeScript binding comparison. The website's Astro and Playwright commands
+remain independently runnable from `apps/website/` and are also enforced by
+the site CI lane. `cargo xtask bindings check` checks generated Tauri DTO and
+command-name output from the repository root.
 
 ## Desktop formatter and lint gates
 

@@ -227,3 +227,46 @@ fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn generated_command_metadata_rejects_missing_or_stale_checked_in_output() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-command-bindings-{}-{nonce}",
+            std::process::id()
+        ));
+        let checked_in = root.join("apps/desktop/src/bridge/generated");
+        let exported = root.join("export");
+        fs::create_dir_all(&checked_in).unwrap();
+        fs::create_dir_all(&exported).unwrap();
+        fs::write(
+            checked_in.join("command_names.ts"),
+            "export const READY = 'ready';\n",
+        )
+        .unwrap();
+        fs::write(
+            exported.join("command_names.ts"),
+            "export const READY = 'ready';\n",
+        )
+        .unwrap();
+        assert!(compare_command_names(&root, &exported).is_ok());
+
+        fs::write(
+            exported.join("command_names.ts"),
+            "export const READY = 'ready';\nexport const MISSING = 'missing';\n",
+        )
+        .unwrap();
+        assert!(compare_command_names(&root, &exported).is_err());
+        fs::remove_file(checked_in.join("command_names.ts")).unwrap();
+        assert!(compare_command_names(&root, &exported).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+}

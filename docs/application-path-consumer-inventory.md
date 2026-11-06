@@ -34,11 +34,15 @@ repository root:
 
 - Rust workspace and binding output: `rust/Cargo.toml`, `.cargo/config.toml`.
 - xtask path ownership, checks, credential, release, bundle, SBOM, updater,
-  tooling, and audits: 29 existing source modules under `rust/xtask/src/`,
+  tooling, and audits: 30 source modules under `rust/xtask/src/`,
   including `checks.rs`, `credential_cli.rs`, `ci_classifier.rs`, `ci.rs`,
   `repo.rs`, `release_signing.rs`, `release_v4.rs`, `tauri_bundle.rs`,
   `sbom.rs`, `updater_fixture.rs`, and `updater_trust.rs`. Website CI and
   architecture test modules are split into focused files.
+- WP-C `audits/app_boundaries.rs` locks the app-local manifests and Bun locks,
+  rejects cross-app imports/build dependencies and duplicate retired roots,
+  and resolves Tauri's package resources, signing script, watch folders, and
+  build hook from their documented Windows working directories.
 - CI and automation: `.github/actions/site-validate/action.yml`,
   `.github/workflows/ci.yml`, `pages.yml`, `hosted-v4-signing-proof.yml`,
   `release-v4.yml`, `.github/dependabot.yml`, and `.github/CODEOWNERS`.
@@ -88,9 +92,9 @@ Neither fixture routes a real old-root path into an application lane.
 | --- | ---: | ---: |
 | Tracked desktop application files | 348 | 348 |
 | Tracked website application files | 131 | 131 |
-| Active repository-root path-consumer files outside the moved trees | 57 | 58 |
+| Active repository-root path-consumer files outside the moved trees | 57 | 59 |
 | App-contained path-consumer files, including root-discovery scripts | 12 | 13 |
-| Total active path-consumer files | 69 | 71 |
+| Total active path-consumer files | 69 | 72 |
 | Active executable/config/current-contract consumers of the retired root paths | 65 | 0 |
 
 The baseline counts scan the tracked WP-A tree for desktop and website path

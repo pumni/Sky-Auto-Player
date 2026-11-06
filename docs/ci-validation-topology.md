@@ -59,6 +59,12 @@ checks that these pins and the actionlint invocation remain in CI.
 Unknown paths, classifier failures, and explicit full validation set every
 lane to true. This preserves fail-closed behavior.
 
+The aggregate status remains exactly `Sky Auto Player — required CI gate`.
+It requires every selected validation lane to succeed and permits an unselected
+lane only when its classifier output requires that lane to be skipped. A
+successful workflow with a missing required status is not equivalent to this
+gate.
+
 ## Representative path matrix
 
 | Changed path | Intended major lanes |
@@ -113,6 +119,21 @@ same tool list; lane-specific repository checks remain separate.
 Release-specific, updater, signing, SBOM, NSIS, browser, accessibility, and
 artifact-integrity tests remain in their existing jobs. This topology does not
 trade those checks for shared state.
+
+## Local command roots
+
+- Run `cargo xtask check all` at the repository root for the canonical
+  pre-review static, Rust, and desktop gate. `cargo xtask check desktop-native`
+  runs the native Tauri feature checks and generated binding comparison.
+- Run desktop Bun commands from `apps/desktop/`. `bun run dev` starts Vite;
+  on Windows, `bun run tauri:dev` starts the native shell around Vite.
+- Run website Bun commands from `apps/website/` with its own frozen lockfile.
+  `bun run check`, `lint`, `format:check`, `build`, `verify:dist`,
+  `verify:seo`, and `test:functional` are the standalone site gates.
+- The packaging hook is configured for the `apps/desktop/` working directory:
+  after `bun run build`, `cd ..\\..` returns to the repository root for
+  `cargo xtask calibration build`. CI and local package qualification use that
+  same relocated path.
 
 ## Safe classifier extension procedure
 
