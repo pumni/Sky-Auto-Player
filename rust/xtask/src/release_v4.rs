@@ -1427,7 +1427,7 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let manifest = release_handoff::create_unsigned_handoff(
         &options.state_root,
         &installer,
-        &root.join("desktop/src-tauri/resources/native_calibration.exe"),
+        &root.join("apps/desktop/src-tauri/resources/native_calibration.exe"),
         &release_handoff::ExpectedHandoffIdentity {
             repository: &context.repository,
             source_sha: &context.source_sha,

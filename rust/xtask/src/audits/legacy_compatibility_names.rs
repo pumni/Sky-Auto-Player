@@ -8,9 +8,9 @@ use walkdir::WalkDir;
 const SCAN_ROOTS: &[&str] = &[
     "rust/crates",
     "rust/xtask",
-    "desktop/src",
-    "desktop/src-tauri",
-    "site/src",
+    "apps/desktop/src",
+    "apps/desktop/src-tauri",
+    "apps/website/src",
     "tests",
     ".github/workflows",
     ".github/actions",
@@ -509,13 +509,13 @@ mod tests {
         ));
         assert!(!is_historical_exception("docs/architecture.md"));
         assert!(!is_historical_exception(
-            "site/src/content/guides/en/security.md"
+            "apps/website/src/content/guides/en/security.md"
         ));
     }
 
     #[test]
     fn maintained_source_scan_covers_native_desktop_and_website_code() {
-        assert!(SCAN_ROOTS.contains(&"desktop/src-tauri"));
-        assert!(SCAN_ROOTS.contains(&"site/src"));
+        assert!(SCAN_ROOTS.contains(&"apps/desktop/src-tauri"));
+        assert!(SCAN_ROOTS.contains(&"apps/website/src"));
     }
 }

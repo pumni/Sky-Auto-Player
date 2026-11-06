@@ -173,7 +173,7 @@ fn build_and_stage(root: &Path) -> Result<()> {
         return Err("built calibration binary is not an x86_64 PE executable".into());
     }
 
-    let resources = root.join("desktop/src-tauri/resources");
+    let resources = root.join("apps/desktop/src-tauri/resources");
     checked_directory(&resources, "Tauri resource staging directory")?;
     let destination = resources.join("native_calibration.exe");
     match fs::symlink_metadata(&destination) {

@@ -13,12 +13,16 @@ fn fixture_root() -> PathBuf {
     let path = ci_artifacts::unique_sibling(&std::env::temp_dir().join("sky-bun-pin"), "test");
     fs::create_dir_all(path.join(".github/workflows")).unwrap();
     fs::create_dir_all(path.join(".github/actions/site-validate")).unwrap();
-    fs::create_dir_all(path.join("site")).unwrap();
-    fs::create_dir_all(path.join("desktop")).unwrap();
+    fs::create_dir_all(path.join("apps/website")).unwrap();
+    fs::create_dir_all(path.join("apps/desktop")).unwrap();
     fs::write(path.join(BUN_VERSION_FILE), VERSION).unwrap();
-    fs::write(path.join("desktop/package.json"), r#"{"name":"desktop"}"#).unwrap();
-    fs::write(path.join("desktop/bun.lock"), "{}").unwrap();
-    fs::write(path.join("site/bun.lock"), "{}").unwrap();
+    fs::write(
+        path.join("apps/desktop/package.json"),
+        r#"{"name":"desktop"}"#,
+    )
+    .unwrap();
+    fs::write(path.join("apps/desktop/bun.lock"), "{}").unwrap();
+    fs::write(path.join("apps/website/bun.lock"), "{}").unwrap();
     fs::write(path.join(SITE_PACKAGE), PACKAGE).unwrap();
     path
 }
@@ -70,7 +74,7 @@ fn rejects_missing_app_locks_and_root_workspace_artifacts() {
     write_workflow(&root, ".github/workflows/ci.yml", VALID_STEP);
     assert!(validate_repository(&root).is_ok());
 
-    for path in ["desktop/bun.lock", "site/bun.lock"] {
+    for path in ["apps/desktop/bun.lock", "apps/website/bun.lock"] {
         fs::remove_file(root.join(path)).unwrap();
         assert!(validate_repository(&root).is_err(), "{path}");
         fs::write(root.join(path), "{}").unwrap();
@@ -86,7 +90,7 @@ fn rejects_missing_app_locks_and_root_workspace_artifacts() {
 
     fs::write(
         root.join("package.json"),
-        r#"{"workspaces":["desktop","site"]}"#,
+        r#"{"workspaces":["apps/desktop","apps/website"]}"#,
     )
     .unwrap();
     assert!(validate_repository(&root).is_err());
@@ -117,7 +121,7 @@ fn rejects_missing_wrong_literal_and_implicit_latest_inputs() {
             "wrong.yml",
             VALID_STEP.replace(
                 "bun-version-file: .bun-version",
-                "bun-version-file: site/package.json",
+                "bun-version-file: apps/website/package.json",
             ),
         ),
         (
@@ -203,7 +207,7 @@ fn repository_scan_discovers_new_workflows_and_composite_actions() {
     write_workflow(
         &root,
         ".github/workflows/new-consumer.yml",
-        &VALID_STEP.replace(".bun-version", "site/package.json"),
+        &VALID_STEP.replace(".bun-version", "apps/website/package.json"),
     );
     assert!(validate_repository(&root).is_err());
     fs::remove_dir_all(root).unwrap();

@@ -52,8 +52,8 @@ pub fn inventory_public_trust_roots(root: &Path) -> Result<UpdaterTrustInventory
 
     let mut verified_locations = Vec::new();
 
-    // 1. desktop/src-tauri/tauri.conf.json
-    let config_path = root.join("desktop/src-tauri/tauri.conf.json");
+    // 1. apps/desktop/src-tauri/tauri.conf.json
+    let config_path = root.join("apps/desktop/src-tauri/tauri.conf.json");
     let config_content = fs::read_to_string(&config_path)?;
     let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
     let config_key = config_json
@@ -63,14 +63,14 @@ pub fn inventory_public_trust_roots(root: &Path) -> Result<UpdaterTrustInventory
         .and_then(serde_json::Value::as_object)
         .and_then(|u| u.get("pubkey"))
         .and_then(serde_json::Value::as_str)
-        .ok_or("desktop/src-tauri/tauri.conf.json is missing plugins.updater.pubkey")?;
+        .ok_or("apps/desktop/src-tauri/tauri.conf.json is missing plugins.updater.pubkey")?;
     if config_key != canonical {
         return Err("tauri.conf.json updater pubkey does not match canonical root".into());
     }
-    verified_locations.push("desktop/src-tauri/tauri.conf.json".to_string());
+    verified_locations.push("apps/desktop/src-tauri/tauri.conf.json".to_string());
 
-    // 2. desktop/src-tauri/src/native_update.rs
-    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
+    // 2. apps/desktop/src-tauri/src/native_update.rs
+    let native_path = root.join("apps/desktop/src-tauri/src/native_update.rs");
     let native_content = fs::read_to_string(&native_path)?;
     let native_key = extract_rust_string_constant(&native_content, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
     if native_key != canonical {
@@ -85,7 +85,7 @@ pub fn inventory_public_trust_roots(root: &Path) -> Result<UpdaterTrustInventory
             "native_update.rs does not enforce single V4_TAURI_UPDATER_PUBLIC_KEYS array".into(),
         );
     }
-    verified_locations.push("desktop/src-tauri/src/native_update.rs".to_string());
+    verified_locations.push("apps/desktop/src-tauri/src/native_update.rs".to_string());
 
     // 3. rust/xtask/src/tauri_bundle.rs
     let bundle_path = root.join("rust/xtask/src/tauri_bundle.rs");

@@ -33,7 +33,7 @@ Each state has one owner and each module has a focused invariant:
 - `sky_player` owns session lifecycle, worker admission/control, QPC-based timing, target/focus gates, telemetry publication, and cleanup.
 - `sky_dispatch_core` owns pure schedule and action policy.
 - `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
-- `sky_desktop_shell` (`desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
+- `sky_desktop_shell` (`apps/desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
 
 ## Native desktop ownership
 
@@ -44,7 +44,7 @@ router has no auxiliary process or automatic fallback. `core.ready` remains a
 compatibility wire event name and is produced by the native runtime where the
 frontend contract requires it.
 
-`NativeDesktopRuntime` in `desktop/src-tauri/src/native_runtime.rs` remains the
+`NativeDesktopRuntime` in `apps/desktop/src-tauri/src/native_runtime.rs` remains the
 composition and ownership root for settings, command routing, app coordination,
 the shared `NativeEventHub`, and shutdown. Its child modules own focused
 control-plane work while using the same runtime state:
@@ -115,8 +115,8 @@ The architecture audit enforces the exact direct `.rs` owner inventory and a
 ### Desktop frontend state ownership
 
 The desktop keeps one canonical Zustand store. `DesktopStore` in
-`desktop/src/state/types.ts` is its state and action contract, and
-`createDesktopStore(bridge)` in `desktop/src/state/store.ts` is the composition
+`apps/desktop/src/state/types.ts` is its state and action contract, and
+`createDesktopStore(bridge)` in `apps/desktop/src/state/store.ts` is the composition
 root. The typed bridge remains the frontend boundary; feature controllers do
 not create separate stores or synchronize state through effects.
 
@@ -163,35 +163,35 @@ and native updater authority remain feature invariants.
 The frontend view tree composes the state owners; it does not introduce a
 second domain store or take authority from `DesktopBridge`:
 
-- `desktop/src/components/workbench/Workbench.tsx` composes the Navigator, Track Browser,
-  Inspector, and their resize separators only. `desktop/src/app/App.tsx` owns the
+- `apps/desktop/src/components/workbench/Workbench.tsx` composes the Navigator, Track Browser,
+  Inspector, and their resize separators only. `apps/desktop/src/app/App.tsx` owns the
   `.app-shell` view composition and renders `<Workbench />` and `<PlayerBar />` as sibling
-  children. `desktop/src/components/player/PlayerBar.tsx` owns the fixed 92 px Player Dock,
-  outside the Workbench subtree. `desktop/src/components/workbench/workbenchGeometry.ts`
+  children. `apps/desktop/src/components/player/PlayerBar.tsx` owns the fixed 92 px Player Dock,
+  outside the Workbench subtree. `apps/desktop/src/components/workbench/workbenchGeometry.ts`
   owns the pure geometry calculation and the shared 420 px Track Browser minimum.
-  `desktop/src/components/workbench/useWorkbenchLayout.ts` applies measured viewport geometry and input state;
-  `desktop/src/components/workbench/workbenchDragPolicy.ts` owns transient drag/topology rebasing.
-  `desktop/src/components/workbench/useWorkbenchPreferences.ts` coordinates UI preference updates,
-  while `desktop/src/state/workbenchPreferences.ts` owns v5 validation, normalization, and
+  `apps/desktop/src/components/workbench/useWorkbenchLayout.ts` applies measured viewport geometry and input state;
+  `apps/desktop/src/components/workbench/workbenchDragPolicy.ts` owns transient drag/topology rebasing.
+  `apps/desktop/src/components/workbench/useWorkbenchPreferences.ts` coordinates UI preference updates,
+  while `apps/desktop/src/state/workbenchPreferences.ts` owns v5 validation, normalization, and
   persistence. Only explicit completed preference changes are persisted;
   resize-derived overlay/collapse state remains transient.
-- `desktop/src/components/settings/SettingsPanel.tsx` owns the modal, category navigation,
-  and focus lifecycle. `desktop/src/components/settings/SettingsCategoryContent.tsx` owns the
+- `apps/desktop/src/components/settings/SettingsPanel.tsx` owns the modal, category navigation,
+  and focus lifecycle. `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` owns the
   category content and palette choices. Settings writes continue through the existing store and
   typed bridge; the split does not change the settings schema or native owner.
-- `desktop/src/components/utility/DiagnosticsView.tsx` composes the Diagnostics view.
-  `desktop/src/components/utility/diagnosticsPresentation.ts` owns pure presentation mapping, and the playback
+- `apps/desktop/src/components/utility/DiagnosticsView.tsx` composes the Diagnostics view.
+  `apps/desktop/src/components/utility/diagnosticsPresentation.ts` owns pure presentation mapping, and the playback
   summary, readout, event, timing, and performance components own their bounded
   render surfaces. Reported session, sender, and timing facts remain sourced
   from native state; unavailable and dry-run measurements are not fabricated.
 
-Regression ownership follows those boundaries. `desktop/src/state/store.test.ts` covers
+Regression ownership follows those boundaries. `apps/desktop/src/state/store.test.ts` covers
 request fencing, generation-aware bounded Library caches, selection versus
 playing identity, page hydration, and Playback preparation/session lifecycles.
-`desktop/tests/e2e/library.spec.ts` and `desktop/tests/e2e/playback.spec.ts` cover visible paging,
+`apps/desktop/tests/e2e/library.spec.ts` and `apps/desktop/tests/e2e/playback.spec.ts` cover visible paging,
 full-source traversal, and cross-page selection/playback behavior.
-`desktop/src/components/workbench` unit tests plus
-`desktop/tests/e2e/workbench-layout.spec.ts`, `workbench-resize.spec.ts`, and
+`apps/desktop/src/components/workbench` unit tests plus
+`apps/desktop/tests/e2e/workbench-layout.spec.ts`, `workbench-resize.spec.ts`, and
 `workbench-state-regression.spec.ts` cover geometry, drag, keyboard/ARIA state, and
 v5 persistence. Settings, Diagnostics, palette, and Graphite appearance suites
 cover modal/accessibility behavior and all palette consumers. Browser bridge
@@ -267,7 +267,7 @@ validation, and updater policy remain safe Rust.
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; owned handles are closed by their owner and physical input uses `SendInput` only.     |
 | `rust/crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
-| `desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
+| `apps/desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 
 The scanner reports unsafe code under `cfg(test)` separately from production
 unsafe. `rust/crates/sky_native_adapters/src/paths.rs` uses unsafe environment
@@ -285,7 +285,7 @@ they are not executable tooling. The canonical release/check tooling is
 
 The xtask ownership root in `rust/xtask/src/checks.rs` keeps the check-group
 dispatch order, check-session verification memoization, supply-chain skip
-policy, and desktop/native orchestration. Focused owners contain the validators:
+policy, and apps/desktop/native orchestration. Focused owners contain the validators:
 
 - `audits/security.rs` owns the forbidden API, DLL, and Windows module scanner
   and its baseline behavior.

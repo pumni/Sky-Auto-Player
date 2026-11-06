@@ -19,8 +19,8 @@ const ACTIVE_PIN_CONSUMERS: &[&str] = &[
     RESOLVER,
     SETUP_ACTION,
     "scripts/run_rt_dispatch_evidence.ps1",
-    "desktop/scripts/profile-builtin-library.mjs",
-    "desktop/src-tauri/src/native_runtime/tests/catalog_viewport_benchmark.rs",
+    "apps/desktop/scripts/profile-builtin-library.mjs",
+    "apps/desktop/src-tauri/src/native_runtime/tests/catalog_viewport_benchmark.rs",
     "docs/rust-toolchain-policy.md",
     "docs/v4-hosted-signing-proof.md",
     "rust/xtask/src/checks/ci_contracts.rs",
@@ -760,7 +760,7 @@ mod tests {
         ));
         assert_rejected(
             validate_active_consumer(
-                "desktop/scripts/profile-builtin-library.mjs",
+                "apps/desktop/scripts/profile-builtin-library.mjs",
                 "const rustcVersion = '7.8.8'; // packaged artifact provenance",
             ),
             "stale packaged build compiler provenance",

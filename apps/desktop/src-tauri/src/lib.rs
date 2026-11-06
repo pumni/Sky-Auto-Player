@@ -1,0 +1,1495 @@
+mod app_state;
+mod bindings;
+mod command_ownership;
+mod commands;
+mod ipc_contract;
+mod lifecycle;
+mod native_runtime;
+mod native_update;
+mod power_lifecycle;
+#[cfg(windows)]
+mod single_instance;
+mod startup_telemetry;
+mod startup_window;
+mod ui_events;
+#[cfg(windows)]
+mod windows_caption;
+#[cfg(windows)]
+mod windows_icon;
+
+pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
+
+pub fn startup_process_entry() {
+    startup_telemetry::initialize();
+    startup_telemetry::record("process.entry");
+}
+
+use lifecycle::close_window;
+use native_runtime::TestSeams;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+static UPDATE_SAFETY_LOG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Write packaging-only GUI smoke phase markers when the release harness has
+/// explicitly requested them. The trace is intentionally file-based because
+/// the packaged child is launched with hidden windows and its stdout/stderr
+/// are not a reliable startup diagnostic channel on Windows.
+pub(crate) fn record_gui_smoke_phase(phase: &str) {
+    let Some(path) = std::env::var_os("SKY_GUI_SMOKE_PHASE_LOG") else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    use std::io::Write;
+    let _ = writeln!(file, "{timestamp} {phase}");
+    let _ = file.flush();
+}
+
+/// Write packaging-only updater shutdown evidence when the release harness
+/// has explicitly requested it. This never exposes update internals to the
+/// frontend and is inert for normal launches.
+pub(crate) fn record_update_safety_phase(phase: &str) {
+    let path = UPDATE_SAFETY_LOG
+        .get()
+        .cloned()
+        .or_else(|| std::env::var_os("SKY_UPDATE_SAFETY_PHASE_LOG").map(PathBuf::from));
+    let Some(path) = path else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    use std::io::Write;
+    let _ = writeln!(file, "{phase}");
+    let _ = file.flush();
+}
+
+#[cfg(feature = "desktop-runtime")]
+pub(crate) type ShellRuntime = tauri::Wry;
+#[cfg(all(not(feature = "desktop-runtime"), feature = "tauri-test"))]
+pub(crate) type ShellRuntime = tauri::test::MockRuntime;
+#[cfg(all(not(feature = "desktop-runtime"), not(feature = "tauri-test")))]
+compile_error!(
+    "sky_desktop_shell requires either `desktop-runtime` for the real Tauri shell or `tauri-test` for MockRuntime"
+);
+#[cfg(all(feature = "packaged-assets", not(feature = "desktop-runtime")))]
+compile_error!("`packaged-assets` requires `desktop-runtime`");
+
+fn main_window_state_flags() -> tauri_plugin_window_state::StateFlags {
+    tauri_plugin_window_state::StateFlags::SIZE
+        | tauri_plugin_window_state::StateFlags::POSITION
+        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    exit_on_failure(run_inner(false, false));
+}
+
+/// Run the production shell with a packaging-only WebView smoke hook.
+///
+/// The hook is selected only by the hidden release self-test argument. It
+/// dispatches a DOM event after the real frontend has loaded; React then
+/// exercises the production bridge and closes through the normal controlled
+/// lifecycle. No test command or alternate runtime is exposed to the user.
+pub fn run_gui_smoke() {
+    exit_on_failure(run_inner(true, false));
+}
+
+/// Run the real Tauri shell with an updater fixture-driven previous-v4 to
+/// candidate-v4 workflow. The entry point is hidden from the product UI and
+/// exists only for deterministic packaged qualification.
+pub fn run_update_smoke() {
+    let update_marker = update_smoke_marker("--selftest-update-marker");
+    let expected_version_file = update_smoke_marker("--selftest-update-expected-version-file");
+    if let (Some(marker), Some(expected_path)) = (update_marker.as_ref(), expected_version_file)
+        && let Ok(expected_version) = std::fs::read_to_string(expected_path)
+    {
+        let expected_version = expected_version.trim();
+        if expected_version == env!("CARGO_PKG_VERSION") {
+            let _ = std::fs::write(
+                marker,
+                format!("update-complete:{}\n", env!("CARGO_PKG_VERSION")),
+            );
+            return;
+        }
+    }
+    exit_on_failure(run_inner(false, true));
+}
+
+fn packaged_update_install_ack_result(
+    ack: commands::UpdateInstallAckDto,
+    snapshot: Option<&ui_events::UpdateSnapshotPayload>,
+) -> Result<bool, String> {
+    if ack.accepted {
+        // Accepted means the official updater transaction owns the process
+        // lifecycle now. The current process is expected to exit/restart.
+        return Ok(false);
+    }
+
+    let snapshot = snapshot.ok_or_else(|| {
+        "packaged update install was rejected without an authoritative native snapshot".to_string()
+    })?;
+
+    if snapshot.state != ui_events::UpdateState::Error {
+        return Err(format!(
+            "packaged update install was rejected without Error state: {:?}",
+            snapshot.state
+        ));
+    }
+
+    let code = snapshot.error_code.ok_or_else(|| {
+        "packaged update install was rejected without a typed native error code".to_string()
+    })?;
+
+    let detail = snapshot
+        .error_detail
+        .as_deref()
+        .unwrap_or("no diagnostic detail");
+
+    Err(format!(
+        "packaged update install rejected ({code:?}): {detail}"
+    ))
+}
+
+/// Prove the packaged update admission boundary remains fail-closed while
+/// physical playback owns the activity gate. This is a hidden qualification
+/// seam only; it does not add an updater protocol or install path.
+pub fn selftest_update_install_rejection_during_playback() -> i32 {
+    let activity = app_state::ActivityCoordinator::default();
+    let _playback = match activity.reserve_playback("packaged-qualification") {
+        Ok(lease) => lease,
+        Err(error) => {
+            eprintln!("packaged playback admission self-test could not start: {error}");
+            return 1;
+        }
+    };
+    match activity.reserve_update() {
+        Err(app_state::ActivityReservationError::PhysicalPlaybackActive) => 0,
+        Ok(_) => {
+            eprintln!("packaged update admission self-test accepted installation during playback");
+            1
+        }
+        Err(error) => {
+            eprintln!("packaged update admission self-test returned unexpected error: {error}");
+            1
+        }
+    }
+}
+
+fn exit_on_failure(exit_code: i32) {
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
+    #[cfg(windows)]
+    let _single_instance_guard = match single_instance::SingleInstanceGuard::acquire() {
+        Ok(guard) => guard,
+        Err(single_instance::AcquireError::AlreadyRunning) => {
+            match single_instance::existing_instance_policy(cfg!(debug_assertions)) {
+                single_instance::ExistingInstancePolicy::FocusExisting => {
+                    single_instance::focus_existing_instance();
+                    eprintln!("Sky Auto Player is already running");
+                    return 0;
+                }
+                single_instance::ExistingInstancePolicy::Refuse => {
+                    let details = single_instance::existing_instance_details().unwrap_or_default();
+                    eprintln!(
+                        "Sky Auto Player startup refused: another Sky Auto Player process is active{details}; the newly compiled dev build was not launched"
+                    );
+                    return 1;
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("Sky Auto Player startup refused: {error}");
+            return 1;
+        }
+    };
+
+    let update_marker = update_smoke_marker("--selftest-update-marker");
+    let update_safety_marker = update_smoke_marker("--selftest-update-safety-marker");
+    let expected_version_file = update_smoke_marker("--selftest-update-expected-version-file");
+    if let Some(path) = update_safety_marker {
+        let _ = UPDATE_SAFETY_LOG.set(path);
+    }
+    if gui_smoke {
+        record_gui_smoke_phase("run_inner.enter");
+        record_gui_smoke_phase("command_ownership.check.enter");
+    }
+    if !command_ownership::matrix_is_complete() {
+        if gui_smoke {
+            record_gui_smoke_phase("command_ownership.check.failed");
+        }
+        eprintln!("Sky Auto Player startup refused: incomplete command ownership matrix");
+        return 1;
+    }
+    if gui_smoke {
+        record_gui_smoke_phase("command_ownership.check.pass");
+    }
+    let app_state = if gui_smoke || update_smoke {
+        app_state::AppState::with_test_seams(TestSeams::SafePackage)
+    } else {
+        app_state::AppState::default()
+    };
+    app_state.set_gui_smoke_exit(gui_smoke);
+    let smoke_state = app_state.clone();
+    let setup_state = smoke_state.clone();
+    if gui_smoke {
+        record_gui_smoke_phase("app_state.ready");
+        record_gui_smoke_phase("tauri.builder.create");
+    }
+    startup_telemetry::record("tauri.builder.start");
+    let mut builder = tauri::Builder::<ShellRuntime>::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(main_window_state_flags())
+                .build(),
+        )
+        .manage(app_state)
+        .manage(startup_window::StartupWindowFailsafe::default())
+        .setup(move |app| {
+            use tauri::{Manager, path::BaseDirectory};
+
+            startup_telemetry::record("tauri.setup.start");
+            startup_window::schedule_failsafe(
+                app.handle().clone(),
+                app.state::<startup_window::StartupWindowFailsafe>()
+                    .inner()
+                    .clone(),
+            );
+
+            match app
+                .path()
+                .resolve("builtin-songs", BaseDirectory::Resource)
+            {
+                Ok(root) => setup_state.configure_resources(
+                    sky_native_adapters::AppResources::from_builtin_catalog_root(root),
+                )?,
+                Err(error) => eprintln!(
+                    "built-in catalog resource resolution unavailable; continuing with user sources: {error}"
+                ),
+            }
+            setup_state.configure_update_service(app.handle().clone())?;
+            if update_smoke {
+                let app_handle = app.handle().clone();
+                let update_state = setup_state.clone();
+                let marker = update_marker.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let result = (|| -> Result<bool, String> {
+                        let native = update_state.ensure_native_blocking()?;
+                        let _check: commands::UpdateCheckAckDto = serde_json::from_value(
+                            native.dispatch("update.check", serde_json::json!({"origin": "manual"}))?,
+                        )
+                        .map_err(|error| format!("packaged update check response: {error}"))?;
+                        let snapshot = native.update_snapshot()?;
+                        if let Some(target) = snapshot.available_version {
+                            if let Some(expected_path) = expected_version_file.as_ref() {
+                                std::fs::write(expected_path, format!("{target}\n")).map_err(
+                                    |error| {
+                                        format!(
+                                            "packaged update expected-version handoff failed: {error}"
+                                        )
+                                    },
+                                )?;
+                            }
+                            let install_ack: commands::UpdateInstallAckDto =
+                                serde_json::from_value(native.dispatch(
+                                    "update.begin_handoff",
+                                    serde_json::json!({"targetVersion": target}),
+                                )?)
+                                .map_err(|error| {
+                                    format!("packaged update install response: {error}")
+                                })?;
+
+                            if install_ack.accepted {
+                                packaged_update_install_ack_result(install_ack, None)
+                            } else {
+                                let rejected_snapshot = native.update_snapshot()?;
+                                packaged_update_install_ack_result(
+                                    install_ack,
+                                    Some(&rejected_snapshot),
+                                )
+                            }
+                        } else if snapshot.state == ui_events::UpdateState::Current {
+                            if let Some(marker) = marker.as_ref() {
+                                let _ = std::fs::write(
+                                    marker,
+                                    format!("update-complete:{}\n", env!("CARGO_PKG_VERSION")),
+                                );
+                            }
+                            native.shutdown();
+                            Ok(true)
+                        } else {
+                            Err(snapshot
+                                .error_detail
+                                .unwrap_or_else(|| "packaged update check was inconclusive".into()))
+                        }
+                    })();
+                    match result {
+                        Ok(true) => app_handle.exit(0),
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("packaged update smoke failed: {error}");
+                            if let Some(marker) = marker.as_ref() {
+                                let _ = std::fs::write(marker, format!("update-failed:{error}\n"));
+                            }
+                            app_handle.exit(1);
+                        }
+                    }
+                });
+            }
+            #[cfg(windows)]
+            {
+                use tauri::Manager;
+
+                if let Some(window) = app.get_webview_window("main")
+                    && let Err(error) = windows_icon::apply_native_window_icons(&window)
+                {
+                    eprintln!("failed to apply native Windows icons: {error}");
+                }
+                if let Some(window) = app.get_webview_window("main")
+                    && let Err(error) = windows_caption::install(&window)
+                {
+                    eprintln!("failed to install native maximize hit target: {error}");
+                }
+            }
+            if gui_smoke {
+                record_gui_smoke_phase("tauri.setup.enter");
+                let app_handle = app.handle().clone();
+                let watchdog_state = setup_state.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(45));
+                    record_gui_smoke_phase("watchdog.expired");
+                    watchdog_state.set_gui_smoke_failed();
+                    record_gui_smoke_phase("watchdog.failure_recorded");
+                    eprintln!("packaged GUI smoke watchdog expired");
+                    app_handle.exit(1);
+                    // Tauri's exit request can terminate the event loop while
+                    // the native entrypoint would otherwise return success.
+                    // The packaging harness must observe this watchdog as a
+                    // process failure, never as a false green smoke.
+                    std::process::exit(1);
+                });
+                record_gui_smoke_phase("watchdog.spawned");
+                record_gui_smoke_phase("tauri.setup.complete");
+            }
+            startup_telemetry::record("tauri.setup.end");
+            Ok(())
+        });
+    if startup_telemetry::enabled() || gui_smoke {
+        let telemetry_enabled = startup_telemetry::enabled();
+        builder = builder.on_page_load(move |webview, payload| match payload.event() {
+            tauri::webview::PageLoadEvent::Started => {
+                if telemetry_enabled {
+                    let _ = webview.eval("window.__SKY_STARTUP_TELEMETRY_ENABLED__ = true;");
+                }
+                if gui_smoke {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.started {}",
+                        payload.url()
+                    ));
+                }
+            }
+            tauri::webview::PageLoadEvent::Finished => {
+                if gui_smoke {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.finished {}",
+                        payload.url()
+                    ));
+                    let result = webview.eval(
+                        "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
+                    );
+                    record_gui_smoke_phase(if result.is_ok() {
+                        "webview.smoke_dispatched"
+                    } else {
+                        "webview.smoke_dispatch.failed"
+                    });
+                }
+            }
+        });
+    }
+    let result = builder
+        .invoke_handler(tauri::generate_handler![
+            commands::bootstrap,
+            commands::startup_window_revealed,
+            commands::search_songs,
+            commands::get_song_detail,
+            commands::reload_library,
+            commands::set_library_viewport,
+            commands::set_song_liked,
+            commands::library_list_playlists,
+            commands::library_create_playlist,
+            commands::library_rename_playlist,
+            commands::library_delete_playlist,
+            commands::library_add_songs,
+            commands::library_remove_songs,
+            commands::library_import_local_files_to_playlist,
+            commands::library_import_local_folder_to_playlist,
+            commands::get_settings,
+            commands::patch_settings,
+            commands::check_for_update,
+            commands::get_update_preferences,
+            commands::patch_update_preferences,
+            commands::begin_update_handoff,
+            commands::set_diagnostics_enabled,
+            commands::start_calibration,
+            commands::cancel_calibration,
+            commands::prepare_playback,
+            commands::start_playback,
+            commands::get_playback_status,
+            commands::stop_playback,
+            commands::pause_playback,
+            commands::resume_playback,
+            commands::skip_playback,
+            commands::export_sender_trace,
+            commands::subscribe_ui_events,
+            commands::shutdown,
+        ])
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                close_window(window.clone());
+            }
+            #[cfg(windows)]
+            tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                if let Err(error) = windows_icon::apply_native_window_icons(window) {
+                    eprintln!("failed to refresh native Windows icons: {error}");
+                }
+            }
+            _ => {}
+        })
+        .run(tauri::generate_context!());
+    if gui_smoke {
+        record_gui_smoke_phase("tauri.run.return");
+    }
+    if gui_smoke && smoke_state.gui_smoke_exit_code() != 0 {
+        record_gui_smoke_phase("tauri.run.return.failed");
+        return smoke_state.gui_smoke_exit_code();
+    }
+    result.expect("error while running Sky Auto Player desktop shell");
+    0
+}
+
+fn update_smoke_marker(flag: &str) -> Option<PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == flag {
+            let value = args.next()?;
+            if value.len() <= 4096 && !value.contains('\0') {
+                return Some(PathBuf::from(value));
+            }
+            return None;
+        }
+    }
+    None
+}
+
+/// Validate the packaged native desktop composition without constructing a WebView.
+///
+/// This hidden, packaging-only entrypoint uses the same native composition
+/// root as the production shell and exercises safe, non-physical command
+/// seams before shutdown.
+pub fn selftest_packaged_shell() -> i32 {
+    let paths = match sky_native_adapters::AppPaths::resolve() {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("packaged shell selftest path resolution failed: {error}");
+            std::process::exit(2);
+        }
+    };
+    let resources = sky_native_adapters::AppResources::from_resource_dir(paths.install_root());
+    let selftest_paths = paths.clone();
+    let runtime = match native_runtime::NativeDesktopRuntime::from_paths_with_activity_and_seams(
+        paths,
+        resources,
+        app_state::ActivityCoordinator::default(),
+        TestSeams::SafePackage,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("packaged native selftest could not start runtime: {error}");
+            return 2;
+        }
+    };
+    if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
+        let result = match runtime.bootstrap() {
+            Ok(bootstrap) if !bootstrap.native_build.native_build_commit.is_empty() => 0,
+            Ok(_) => {
+                eprintln!("packaged restart selftest omitted native build identity");
+                1
+            }
+            Err(error) => {
+                eprintln!("packaged restart selftest bootstrap failed: {error}");
+                1
+            }
+        };
+        runtime.shutdown();
+        if result == 0 {
+            if let Some(marker) = std::env::var_os("SKY_DESKTOP_RESTART_MARKER") {
+                let _ = std::fs::write(marker, b"bootstrap-ready\n");
+            }
+            println!("Packaged restart bootstrap selftest: PASS");
+        }
+        return result;
+    }
+    let result = (|| -> Result<(), String> {
+        let bootstrap = runtime.bootstrap()?;
+        if bootstrap.native_build.native_build_commit.is_empty() {
+            return Err("bootstrap omitted native build identity".into());
+        }
+        let builtin_count = match runtime.builtin_catalog_status()? {
+            sky_native_adapters::BuiltinCatalogStatus::Available { song_count }
+                if song_count > 0 =>
+            {
+                song_count
+            }
+            sky_native_adapters::BuiltinCatalogStatus::Available { .. } => {
+                return Err("packaged built-in catalog is empty".into());
+            }
+            sky_native_adapters::BuiltinCatalogStatus::Unavailable { code } => {
+                return Err(format!("packaged built-in catalog unavailable: {code:?}"));
+            }
+        };
+        let initial_catalog: commands::CatalogSearchDto =
+            serde_json::from_value(runtime.dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":200}),
+            )?)
+            .map_err(|error| format!("packaged catalog search response: {error}"))?;
+        if initial_catalog.total as usize != builtin_count {
+            return Err(format!(
+                "packaged All Songs count {} does not match built-in manifest count {builtin_count}",
+                initial_catalog.total
+            ));
+        }
+        let mut catalog_generation = Some(initial_catalog.generation);
+        if std::env::var_os("SKY_BUILTIN_CATALOG_FRESH_SELFTEST").is_some() {
+            selftest_paths
+                .ensure_mutable_directories()
+                .map_err(|error| format!("fresh packaged app-data setup failed: {error}"))?;
+            if !sky_native_adapters::snapshot_directory(selftest_paths.user_music_root())
+                .map_err(|error| format!("fresh user songs snapshot failed: {error}"))?
+                .is_empty()
+            {
+                return Err("fresh packaged app-data songs directory is not empty".into());
+            }
+            let user_song = selftest_paths.user_music_root().join("packaged-user.json");
+            std::fs::write(
+                &user_song,
+                br#"{"name":"Packaged user","songNotes":[{"time":0,"key":"1Key0"}]}"#,
+            )
+            .map_err(|error| format!("fresh user song write failed: {error}"))?;
+            let reloaded: commands::CatalogReloadDto =
+                serde_json::from_value(runtime.dispatch("catalog.reload", serde_json::json!({}))?)
+                    .map_err(|error| format!("packaged catalog reload response: {error}"))?;
+            let composed: commands::CatalogSearchDto = serde_json::from_value(runtime.dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query":"",
+                    "offset":0,
+                    "limit":200,
+                    "generation":reloaded.generation
+                }),
+            )?)
+            .map_err(|error| format!("composed catalog search response: {error}"))?;
+            if composed.total as usize != builtin_count + 1 {
+                return Err(format!(
+                    "All Songs did not compose one user song with built-ins: {}",
+                    composed.total
+                ));
+            }
+            catalog_generation = Some(reloaded.generation);
+            std::fs::remove_file(&user_song)
+                .map_err(|error| format!("fresh user song cleanup failed: {error}"))?;
+        }
+        let settings: commands::SettingsDto =
+            serde_json::from_value(runtime.dispatch("settings.get", serde_json::json!({}))?)
+                .map_err(|error| format!("settings.get response: {error}"))?;
+        let _patched: commands::SettingsDto = serde_json::from_value(runtime.dispatch(
+            "settings.patch",
+            serde_json::json!({"verboseHud": settings.verbose_hud}),
+        )?)
+        .map_err(|error| format!("settings.patch response: {error}"))?;
+        let _update_preferences: commands::UpdatePreferencesDto = serde_json::from_value(
+            runtime.dispatch("update.preferences.get", serde_json::json!({}))?,
+        )
+        .map_err(|error| format!("update.preferences.get response: {error}"))?;
+        let _patched_update_preferences: commands::UpdatePreferencesDto =
+            serde_json::from_value(runtime.dispatch(
+                "update.preferences.patch",
+                serde_json::json!({"autoCheck": settings.update_preferences.auto_check}),
+            )?)
+            .map_err(|error| format!("update.preferences.patch response: {error}"))?;
+        match runtime.dispatch("update.check", serde_json::json!({"origin": "background"})) {
+            Ok(value) => {
+                let _update_check: commands::UpdateCheckAckDto = serde_json::from_value(value)
+                    .map_err(|error| format!("update.check response: {error}"))?;
+            }
+            Err(error) if error.starts_with("update_service_unavailable") => {}
+            Err(error) => return Err(format!("unexpected update.check failure: {error}")),
+        }
+        match runtime.dispatch(
+            "update.begin_handoff",
+            serde_json::json!({"targetVersion": "9.9.9"}),
+        ) {
+            Ok(value) => {
+                let _update_install: commands::UpdateInstallAckDto = serde_json::from_value(value)
+                    .map_err(|error| format!("update.begin_handoff response: {error}"))?;
+            }
+            Err(error) if error.starts_with("update_service_unavailable") => {}
+            Err(error) => return Err(format!("unexpected update.begin_handoff failure: {error}")),
+        }
+        let _diagnostics: commands::DiagnosticsEnabledDto =
+            serde_json::from_value(runtime.dispatch(
+                "diagnostics.set_enabled",
+                serde_json::json!({"enabled": true}),
+            )?)
+            .map_err(|error| format!("diagnostics response: {error}"))?;
+        let _diagnostics: commands::DiagnosticsEnabledDto =
+            serde_json::from_value(runtime.dispatch(
+                "diagnostics.set_enabled",
+                serde_json::json!({"enabled": false}),
+            )?)
+            .map_err(|error| format!("diagnostics disable response: {error}"))?;
+        let search: commands::CatalogSearchDto = serde_json::from_value(runtime.dispatch(
+            "catalog.search",
+            serde_json::json!({
+                "query": "",
+                "offset": 0,
+                "limit": 1,
+                "generation": catalog_generation
+            }),
+        )?)
+        .map_err(|error| format!("catalog.search response: {error}"))?;
+        if let Some(row) = search.items.first() {
+            let prepared: commands::PreparedPlaybackDto =
+                serde_json::from_value(runtime.dispatch(
+                    "playback.prepare",
+                    serde_json::json!({
+                        "songId": row.song_id,
+                        "generation": search.generation,
+                        "config": {
+                            "hold_frames": settings.playback_defaults.hold_frames,
+                            "timing_margin_us": settings.playback_defaults.timing_margin_us,
+                            "tempo_scale": settings.playback_defaults.tempo_scale,
+                            "fps": settings.playback_defaults.fps,
+                            "dry_run": true
+                        }
+                    }),
+                )?)
+                .map_err(|error| format!("playback.prepare response: {error}"))?;
+            if prepared.admission == commands::PlaybackAdmission::Ready {
+                let prepared_id = prepared
+                    .prepared_id
+                    .ok_or("dry-run prepare omitted prepared_id")?;
+                let _session: commands::PlaybackSessionDto =
+                    serde_json::from_value(runtime.dispatch(
+                        "playback.start",
+                        serde_json::json!({"preparedId": prepared_id, "decisions": []}),
+                    )?)
+                    .map_err(|error| format!("playback.start response: {error}"))?;
+            }
+        }
+        let calibration: commands::CalibrationStartAckDto = serde_json::from_value(
+            runtime.dispatch("calibration.start", serde_json::json!({"mode": "quick"}))?,
+        )
+        .map_err(|error| format!("calibration.start response: {error}"))?;
+        let state = runtime.wait_for_calibration_terminal(std::time::Duration::from_secs(5))?;
+        if !matches!(
+            state,
+            ui_events::CalibrationState::Succeeded | ui_events::CalibrationState::Cancelled
+        ) {
+            return Err(format!("safe calibration ended in {state:?}"));
+        }
+        if calibration.operation_id.is_empty() {
+            return Err("calibration.start omitted operation_id".into());
+        }
+        Ok(())
+    })();
+    runtime.shutdown();
+    let result = match result {
+        Ok(()) => {
+            if let Some(marker) = std::env::var_os("SKY_DESKTOP_RESTART_MARKER") {
+                let _ = std::fs::write(marker, b"bootstrap-ready\n");
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("packaged native selftest failed: {error}");
+            1
+        }
+    };
+    if result == 0 {
+        println!("Packaged Tauri/Native Desktop selftest: PASS");
+    }
+    result
+}
+
+/// Emit only compile-time native build metadata for release qualification.
+/// This path has no application composition, I/O, playback, calibration, or
+/// update side effects.
+pub fn selftest_build_info() -> i32 {
+    let dto = native_runtime::native_build_dto();
+    let payload = serde_json::json!({
+        "schema_version": 1,
+        "native_build_commit": dto.native_build_commit,
+        "native_version": dto.native_version,
+        "rustc_version": dto.rustc_version,
+        "win32_backend": dto.win32_backend,
+    });
+    match serde_json::to_string(&payload) {
+        Ok(value) => {
+            println!("{value}");
+            0
+        }
+        Err(error) => {
+            eprintln!("failed to serialize native build metadata: {error}");
+            1
+        }
+    }
+}
+
+// The mock runtime is intentionally exercised in a no-default-features test
+// build. Keeping the production Wry runtime out of that test binary avoids
+// loading the native desktop webview during command-decoder unit tests.
+#[cfg(all(test, feature = "tauri-test", not(feature = "desktop-runtime")))]
+mod ipc_tests {
+    use super::app_state::AppState;
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn startup_window_is_hidden_and_retains_geometry_restore_flags() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("Tauri configuration must remain valid JSON");
+        let windows = config["app"]["windows"]
+            .as_array()
+            .expect("Tauri app windows must remain an array");
+        assert_eq!(windows.len(), 1, "startup must retain one native window");
+        let main = &windows[0];
+        assert_eq!(main["label"], "main");
+        assert_eq!(main["visible"], false);
+        assert_eq!(main["backgroundColor"], json!([18, 19, 20, 255]));
+
+        let flags = super::main_window_state_flags();
+        assert!(flags.contains(tauri_plugin_window_state::StateFlags::SIZE));
+        assert!(flags.contains(tauri_plugin_window_state::StateFlags::POSITION));
+        assert!(flags.contains(tauri_plugin_window_state::StateFlags::MAXIMIZED));
+        assert!(!flags.contains(tauri_plugin_window_state::StateFlags::VISIBLE));
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json"))
+                .expect("main capability must remain valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("main capability permissions must remain an array");
+        assert_eq!(
+            permissions
+                .iter()
+                .filter(|permission| permission.as_str() == Some("core:window:allow-show"))
+                .count(),
+            1,
+            "startup reveal must use only the narrow window show permission"
+        );
+    }
+
+    struct TestInstallRoot(PathBuf);
+
+    impl Drop for TestInstallRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_install_root() -> (sky_native_adapters::AppPaths, TestInstallRoot) {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-desktop-ipc-{suffix}"));
+        let paths = sky_native_adapters::AppPaths::from_test_sandbox(&root);
+        paths.ensure_mutable_directories().expect("test dirs");
+        fs::write(paths.settings_path(), "{\"schema_version\":3}\n").expect("test config");
+        let source_song =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..\\..\\..\\songs\\blue.json");
+        fs::copy(source_song, paths.user_music_root().join("blue.json")).expect("test song");
+        (paths, TestInstallRoot(root))
+    }
+
+    fn request(
+        command: &str,
+        body: serde_json::Value,
+        callback: u32,
+    ) -> tauri::webview::InvokeRequest {
+        request_from_url(
+            command,
+            body,
+            callback,
+            if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            },
+        )
+    }
+
+    fn request_from_url(
+        command: &str,
+        body: serde_json::Value,
+        callback: u32,
+        url: &str,
+    ) -> tauri::webview::InvokeRequest {
+        tauri::webview::InvokeRequest {
+            cmd: command.into(),
+            callback: tauri::ipc::CallbackFn(callback),
+            error: tauri::ipc::CallbackFn(callback + 1),
+            url: url.parse().expect("test URL"),
+            body: tauri::ipc::InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_string(),
+        }
+    }
+
+    #[test]
+    fn bootstrap_reports_native_gui_smoke_authorization() {
+        let (paths, _cleanup) = test_install_root();
+        let state = AppState::with_test_paths(paths);
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .invoke_handler(tauri::generate_handler![super::commands::bootstrap])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let ordinary = tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 0))
+            .expect("ordinary bootstrap should succeed");
+        let ordinary: serde_json::Value = ordinary.deserialize().expect("bootstrap JSON");
+        assert_eq!(ordinary["gui_smoke"], false);
+
+        let mut legacy = ordinary.clone();
+        legacy
+            .as_object_mut()
+            .expect("bootstrap response object")
+            .remove("gui_smoke");
+        let legacy: super::commands::BootstrapDto =
+            serde_json::from_value(legacy).expect("legacy bootstrap without gui_smoke");
+        assert!(!legacy.gui_smoke);
+
+        state.set_gui_smoke_exit(true);
+        let authorized =
+            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 2))
+                .expect("authorized bootstrap should succeed");
+        let authorized: serde_json::Value = authorized.deserialize().expect("bootstrap JSON");
+        assert_eq!(authorized["gui_smoke"], true);
+    }
+
+    #[test]
+    fn generated_tauri_handler_decodes_params_envelope() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![super::commands::search_songs])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let valid = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"Aurora","offset":0,"limit":200}}),
+                0,
+            ),
+        )
+        .expect("params envelope should reach command");
+        let value: serde_json::Value = valid.deserialize().expect("search response JSON");
+        assert_eq!(value["offset"], 0);
+        assert_eq!(value["limit"], 200);
+        assert!(value["generation"].as_u64().is_some_and(|value| value > 0));
+        let wrong = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"request":{"query":"Aurora","offset":0,"limit":200}}),
+                2,
+            ),
+        );
+        assert!(wrong.is_err(), "legacy request envelope must fail");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generated_capability_allows_local_main_and_rejects_unlisted_or_remote_commands() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![super::commands::search_songs])
+            .build(tauri::generate_context!())
+            .expect("mock Tauri app with generated capability manifest");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let local = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"Aurora","offset":0,"limit":200}}),
+                30,
+            ),
+        );
+        assert!(local.is_ok(), "local main command should be authorized");
+
+        let unlisted =
+            tauri::test::get_ipc_response(&webview, request("not_registered", json!({}), 32));
+        assert!(unlisted.is_err(), "unregistered commands must fail closed");
+
+        let remote = tauri::test::get_ipc_response(
+            &webview,
+            request_from_url(
+                "search_songs",
+                json!({"params":{"query":"Aurora","offset":0,"limit":200}}),
+                34,
+                "https://evil.example/",
+            ),
+        );
+        assert!(
+            remote.is_err(),
+            "remote origins must not reach custom commands"
+        );
+    }
+
+    #[test]
+    fn generated_tauri_handler_decodes_native_playback_payloads() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![
+                super::commands::bootstrap,
+                super::commands::search_songs,
+                super::commands::reload_library,
+                super::commands::prepare_playback,
+                super::commands::start_playback,
+                super::commands::get_playback_status,
+                super::commands::stop_playback,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let reload =
+            tauri::test::get_ipc_response(&webview, request("reload_library", json!({}), 3))
+                .expect("native catalog reload should succeed");
+        let reload: serde_json::Value = reload.deserialize().expect("reload JSON");
+        let generation = reload["generation"].as_u64().expect("generation");
+        let idle_status =
+            tauri::test::get_ipc_response(&webview, request("get_playback_status", json!({}), 6))
+                .expect("playback status command should succeed before start");
+        let idle_status: serde_json::Value = idle_status.deserialize().expect("status JSON");
+        assert!(idle_status["active"].is_null());
+        let search = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"blue","offset":0,"limit":1,"generation":generation}}),
+                2,
+            ),
+        )
+        .expect("native catalog search should succeed");
+        let search_value: serde_json::Value = search.deserialize().expect("search JSON");
+        let song_id = search_value["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID");
+        let prepared = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                10,
+            ),
+        )
+        .expect("playback params envelope should reach command");
+        let prepared_value: serde_json::Value = prepared.deserialize().expect("prepared JSON");
+        let prepared_id = prepared_value["prepared_id"].as_str().expect("prepared ID");
+        let started = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "start_playback",
+                json!({"params":{"preparedId":prepared_id,"decisions":[]}}),
+                12,
+            ),
+        )
+        .expect("playback start params envelope should decode");
+        let started_value: serde_json::Value = started.deserialize().expect("session JSON");
+        assert_eq!(started_value["state"], "starting");
+        let session_id = started_value["session_id"].as_str().expect("session ID");
+        let active_status =
+            tauri::test::get_ipc_response(&webview, request("get_playback_status", json!({}), 14))
+                .expect("playback status command should report the active session");
+        let active_status: serde_json::Value = active_status.deserialize().expect("status JSON");
+        assert_eq!(active_status["active"]["session_id"], session_id);
+        tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "stop_playback",
+                json!({"params":{"sessionId":session_id}}),
+                16,
+            ),
+        )
+        .expect("native stop params should decode");
+        let wrong = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({"request":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                14,
+            ),
+        );
+        assert!(wrong.is_err(), "legacy request envelope must fail");
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 18));
+    }
+
+    #[test]
+    fn native_settings_patch_invalidates_prepared_plan() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![
+                super::commands::bootstrap,
+                super::commands::search_songs,
+                super::commands::reload_library,
+                super::commands::prepare_playback,
+                super::commands::patch_settings,
+                super::commands::start_playback,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let reload =
+            tauri::test::get_ipc_response(&webview, request("reload_library", json!({}), 61))
+                .expect("native catalog reload");
+        let reload: serde_json::Value = reload.deserialize().expect("reload JSON");
+        let generation = reload["generation"].as_u64().expect("generation");
+        let search = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"blue","offset":0,"limit":1,"generation":generation}}),
+                62,
+            ),
+        )
+        .expect("native search");
+        let search: serde_json::Value = search.deserialize().expect("search JSON");
+        let song_id = search["items"][0]["song_id"].as_str().expect("song ID");
+        let prepared = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "prepare_playback",
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                64,
+            ),
+        )
+        .expect("native prepare");
+        let prepared: serde_json::Value = prepared.deserialize().expect("prepare JSON");
+        let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
+        tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"playbackDefaults":{"tempo_scale":0.95}}}),
+                66,
+            ),
+        )
+        .expect("native settings patch");
+        let start = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "start_playback",
+                json!({"params":{"preparedId":prepared_id,"decisions":[]}}),
+                68,
+            ),
+        );
+        assert!(
+            start.is_err(),
+            "settings patch must stale native prepared ID"
+        );
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 70));
+    }
+
+    #[test]
+    fn native_settings_patch_auto_check_only_does_not_require_update_service() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![
+                super::commands::patch_settings,
+                super::commands::patch_update_preferences,
+                super::commands::get_update_preferences,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        // Patch auto_check only via patch_settings
+        let res = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"updatePreferences":{"autoCheck":false}}}),
+                80,
+            ),
+        )
+        .expect("patch settings auto_check");
+        let res: serde_json::Value = res.deserialize().expect("deserialize");
+        assert_eq!(res["update_preferences"]["auto_check"], false);
+
+        // Patch auto_check only via patch_update_preferences
+        let res2 = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_update_preferences",
+                json!({"params":{"autoCheck":true}}),
+                82,
+            ),
+        )
+        .expect("patch update_preferences auto_check");
+        let res2: serde_json::Value = res2.deserialize().expect("deserialize");
+        assert_eq!(res2["auto_check"], true);
+
+        // Patch skip_version via patch_settings
+        let res3 = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"updatePreferences":{"skipVersion":"4.1.0"}}}),
+                84,
+            ),
+        )
+        .expect("patch settings skip_version");
+        let res3: serde_json::Value = res3.deserialize().expect("deserialize");
+        assert_eq!(res3["update_preferences"]["skip_version"], "4.1.0");
+
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 86));
+    }
+
+    #[test]
+    fn candidate_invalidation_matrix_for_settings_and_update_preferences_patches() {
+        use crate::native_update::NativeUpdateCandidate;
+        use crate::ui_events::{UpdateChannel, UpdateState};
+
+        let (paths, _cleanup) = test_install_root();
+        let state = AppState::with_test_paths(paths);
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::patch_settings,
+                super::commands::patch_update_preferences,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+
+        state
+            .configure_update_service(app.handle().clone())
+            .expect("configure update service");
+        let update_service = state
+            .update_service()
+            .expect("lock")
+            .expect("update service");
+        let runtime = state.ensure_native_blocking().expect("runtime");
+
+        let set_available = |version: &str| {
+            let mut s = update_service.state.lock().unwrap();
+            s.channel = UpdateChannel::Stable;
+            s.candidate = Some(NativeUpdateCandidate {
+                version: version.to_string(),
+                channel: UpdateChannel::Stable,
+                release_notes: Some("Release notes".to_string()),
+                published_at: None,
+            });
+            s.state = UpdateState::Available;
+        };
+
+        // --- 1. Generic patch_settings path ---
+
+        // 1a. Available + auto_check-only mutation => candidate/snapshot remains Available
+        set_available("4.2.0");
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
+                palette: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: Some(false),
+                    channel: None,
+                    skip_version: None,
+                }),
+            })
+            .expect("patch auto_check false");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1b. Available + Stable->Stable no-op => candidate remains Available
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
+                palette: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: Some(UpdateChannel::Stable),
+                    skip_version: None,
+                }),
+            })
+            .expect("patch stable->stable");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1c. Available + skip X->X no-op => candidate remains Available
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
+                palette: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.1.0".to_string()),
+                }),
+            })
+            .expect("set skip_version");
+        set_available("4.2.0");
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
+                palette: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.1.0".to_string()),
+                }),
+            })
+            .expect("patch skip 4.1.0->4.1.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1d. Available + actual skip change => Idle and candidate cleared
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                appearance_mode: None,
+                palette: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.2.0".to_string()),
+                }),
+            })
+            .expect("patch skip 4.1.0->4.2.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Idle);
+        assert!(snap.available_version.is_none());
+
+        // --- 2. Dedicated patch_update_preferences path ---
+
+        // 2a. Available + auto_check-only mutation => candidate/snapshot remains Available
+        set_available("4.3.0");
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: Some(true),
+                channel: None,
+                skip_version: None,
+            })
+            .expect("patch auto_check true");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2b. Available + Stable->Stable no-op => candidate remains Available
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: Some(UpdateChannel::Stable),
+                skip_version: None,
+            })
+            .expect("patch stable->stable");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2c. Available + skip X->X no-op => candidate remains Available
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: None,
+                skip_version: Some("4.2.0".to_string()),
+            })
+            .expect("patch skip 4.2.0->4.2.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2d. Available + actual skip change => Idle and candidate cleared
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: None,
+                skip_version: Some("4.3.0".to_string()),
+            })
+            .expect("patch skip 4.2.0->4.3.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Idle);
+        assert!(snap.available_version.is_none());
+    }
+}
+
+#[cfg(test)]
+mod update_smoke_tests {
+    use super::*;
+    use crate::commands::UpdateInstallAckDto;
+    use crate::ui_events::{
+        UpdateChannel, UpdateErrorCode, UpdateRetryAction, UpdateSnapshotPayload, UpdateState,
+    };
+
+    fn test_snapshot(
+        state: UpdateState,
+        error_code: Option<UpdateErrorCode>,
+        error_detail: Option<&str>,
+        retry_action: UpdateRetryAction,
+    ) -> UpdateSnapshotPayload {
+        UpdateSnapshotPayload {
+            revision: 1,
+            state,
+            current_version: "4.0.0-alpha.1".to_string(),
+            available_version: Some("4.0.0-alpha.2".to_string()),
+            channel: UpdateChannel::Stable,
+            release_notes: None,
+            published_at: None,
+            error_code,
+            error_detail: error_detail.map(|s| s.to_string()),
+            retry_action,
+            operation_id: None,
+            progress: None,
+        }
+    }
+
+    #[test]
+    fn accepted_install_waits_for_updater_lifecycle() {
+        let ack = UpdateInstallAckDto { accepted: true };
+        let result = packaged_update_install_ack_result(ack, None);
+        assert_eq!(result, Ok(false));
+    }
+
+    #[test]
+    fn rejected_install_becomes_packaged_selftest_failure() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let snapshot = test_snapshot(
+            UpdateState::Error,
+            Some(UpdateErrorCode::DownloadFailed),
+            Some("update download failed: signature verification failed"),
+            UpdateRetryAction::Install,
+        );
+        let result = packaged_update_install_ack_result(ack, Some(&snapshot));
+        let err = result.expect_err("rejected install must return Err");
+        assert!(
+            err.contains("DownloadFailed"),
+            "error message should contain 'DownloadFailed': {err}"
+        );
+        assert!(
+            err.contains("signature verification failed"),
+            "error message should contain 'signature verification failed': {err}"
+        );
+    }
+
+    #[test]
+    fn rejected_install_requires_error_state() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let snapshot = test_snapshot(UpdateState::Available, None, None, UpdateRetryAction::None);
+        let result = packaged_update_install_ack_result(ack, Some(&snapshot));
+        let err = result.expect_err("rejected install without Error state must return Err");
+        assert!(
+            err.contains("rejected without Error state"),
+            "error message should contain 'rejected without Error state': {err}"
+        );
+    }
+
+    #[test]
+    fn rejected_install_requires_typed_error() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let snapshot = test_snapshot(
+            UpdateState::Error,
+            None,
+            Some("untyped error"),
+            UpdateRetryAction::Check,
+        );
+        let result = packaged_update_install_ack_result(ack, Some(&snapshot));
+        let err = result.expect_err("rejected install without typed error code must return Err");
+        assert!(
+            err.contains("without a typed native error code"),
+            "error message should contain 'without a typed native error code': {err}"
+        );
+    }
+
+    #[test]
+    fn rejected_install_without_snapshot_fails_closed() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let result = packaged_update_install_ack_result(ack, None);
+        let err = result.expect_err("rejected install without snapshot must return Err");
+        assert!(
+            err.contains("without an authoritative native snapshot"),
+            "error message should contain 'without an authoritative native snapshot': {err}"
+        );
+    }
+}

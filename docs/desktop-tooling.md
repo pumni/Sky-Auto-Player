@@ -1,10 +1,10 @@
 # Desktop JavaScript tooling
 
 The repository-root `.bun-version` is the canonical Bun pin (`1.4.4`). The
-`site/package.json` `packageManager` value is a checked mirror used by site
+`apps/website/package.json` `packageManager` value is a checked mirror used by site
 tooling. Desktop and site retain separate manifests and lockfiles:
-`desktop/package.json` with `desktop/bun.lock`, and `site/package.json` with
-`site/bun.lock`. There is no root Bun workspace manifest or root lockfile.
+`apps/desktop/package.json` with `apps/desktop/bun.lock`, and `apps/website/package.json` with
+`apps/website/bun.lock`. There is no root Bun workspace manifest or root lockfile.
 
 Run Bun commands from the owning app directory and keep installs frozen:
 
@@ -12,7 +12,7 @@ Run Bun commands from the owning app directory and keep installs frozen:
 # From the repository root
 bun scripts/verify-bun-pin.mjs
 
-# From desktop/
+# From apps/desktop/
 bun install --frozen-lockfile
 bun run check
 ```
@@ -23,7 +23,7 @@ Biome 2.6.5 is the desktop formatter and general JavaScript, TypeScript, and
 React linter. Its formatter matches the prior Prettier settings: two spaces,
 100 columns, single quotes in JavaScript/CSS, double quotes in JSX, semicolons,
 all trailing commas, and LF endings. Existing generated/build/report ignores
-are explicit in `desktop/biome.json`; Rust/Tauri implementation files under
+are explicit in `apps/desktop/biome.json`; Rust/Tauri implementation files under
 `src-tauri/` stay outside the JS tool surface.
 
 | Existing behavior | Current gate | Coverage decision |

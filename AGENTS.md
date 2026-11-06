@@ -5,6 +5,9 @@ music-sheet player for Sky: Children of the Light.
 
 ## Project boundaries
 
+- The desktop UI and website live in `apps/desktop/` and `apps/website/`;
+  each keeps its independent Bun manifest and lockfile. The Rust workspace
+  remains under `rust/`.
 - Gameplay input uses Windows `SendInput` only. No game-memory access,
   file tampering, process hooks, DLL injection, debugger attachment, or
   anti-cheat bypass. See [SECURITY.md](SECURITY.md).

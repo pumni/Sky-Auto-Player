@@ -334,6 +334,19 @@ fn display_source_path(root: &Path, source: &Path) -> String {
     relative_display_path(source.strip_prefix(root).unwrap_or(source))
 }
 
+fn is_historical_retired_application_link(root: &Path, source: &Path, target: &Path) -> bool {
+    let source = display_source_path(root, source);
+    let historical_source = ["docs/adr/", "docs/evidence/", "docs/releases/"]
+        .iter()
+        .any(|prefix| source.starts_with(prefix));
+    if !historical_source {
+        return false;
+    }
+
+    let target = relative_display_path(target.strip_prefix(root).unwrap_or(target));
+    matches!(target.split('/').next(), Some("desktop" | "site"))
+}
+
 /// Checks local, one-line inline links in root and docs Markdown files.
 /// Fenced/inline code, reference links, HTML links, external URLs, and fragment targets are out of scope.
 pub(crate) fn check_markdown_links(root: &Path) -> Result<()> {
@@ -344,7 +357,10 @@ pub(crate) fn check_markdown_links(root: &Path) -> Result<()> {
         let content = fs::read_to_string(&source)?;
         for (line_number, link) in extract_markdown_links(&content) {
             match resolve_local_link(&root, &source, &link) {
-                Ok(Some(resolved)) if !resolved.exists() => {
+                Ok(Some(resolved))
+                    if !resolved.exists()
+                        && !is_historical_retired_application_link(&root, &source, &resolved) =>
+                {
                     broken_links.push(format!(
                         "{}:{line_number}: `{link}` resolves to missing `{}`",
                         display_source_path(&root, &source),
@@ -390,6 +406,37 @@ mod tests {
     fn current_repository_docs_integrity_passes() {
         let root = crate::repo::root();
         run(&root).expect("repository docs integrity check must pass");
+    }
+
+    #[test]
+    fn only_historical_documents_may_retain_retired_application_paths() {
+        let root = Path::new("repository");
+        let historical = root.join("docs/evidence/old-run/README.md");
+        let active = root.join("docs/architecture.md");
+        let desktop_source = root.join("desktop/tests/e2e/example.spec.ts");
+        let website_source = root.join("site/src/pages/index.astro");
+        let unrelated_missing = root.join("missing/fixture.json");
+
+        assert!(is_historical_retired_application_link(
+            root,
+            &historical,
+            &desktop_source
+        ));
+        assert!(is_historical_retired_application_link(
+            root,
+            &historical,
+            &website_source
+        ));
+        assert!(!is_historical_retired_application_link(
+            root,
+            &active,
+            &desktop_source
+        ));
+        assert!(!is_historical_retired_application_link(
+            root,
+            &historical,
+            &unrelated_missing
+        ));
     }
 
     #[test]

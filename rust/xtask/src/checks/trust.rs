@@ -31,7 +31,7 @@ fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
         .count()
         != 1
         || qualification.contains("staged_calibration_root")
-        || qualification.contains("desktop/src-tauri/resources")
+        || qualification.contains("apps/desktop/src-tauri/resources")
         || install_position >= installed_gate
         || installed_gate >= launch_position
     {
@@ -67,7 +67,7 @@ fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
 }
 
 pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
-    let config_path = root.join("desktop/src-tauri/tauri.conf.json");
+    let config_path = root.join("apps/desktop/src-tauri/tauri.conf.json");
     let config = fs::read_to_string(&config_path)?;
     for marker in ["sign_v4_authenticode.ps1", "plugins", "updater", "pubkey"] {
         if !config.contains(marker) {
@@ -89,7 +89,7 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         .and_then(|updater| updater.get("pubkey"))
         .and_then(Value::as_str)
         .ok_or("v4 Tauri config public trust root is not a string")?;
-    let native_path = root.join("desktop/src-tauri/src/native_update.rs");
+    let native_path = root.join("apps/desktop/src-tauri/src/native_update.rs");
     let native = fs::read_to_string(&native_path)?;
     let native_key = extract_rust_string_constant(&native, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
     if config_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
@@ -221,7 +221,7 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     {
         return Err("CI must run exactly one pinned OSV-Scanner action".into());
     }
-    if !ci.contains("--lockfile=./desktop/bun.lock") {
+    if !ci.contains("--lockfile=./apps/desktop/bun.lock") {
         return Err("CI OSV-Scanner must audit the desktop Bun lockfile".into());
     }
 
@@ -680,7 +680,7 @@ mod tests {
 
         let staged_dependency = source.replace(
             "    let install_root = scope.root.join(\"install\");",
-            "    let staged_calibration_root = repository_root.join(\"desktop/src-tauri/resources\");\n    let install_root = scope.root.join(\"install\");\n    verify_calibration_artifact(repository_root, &staged_calibration_root, candidate, None)?;",
+            "    let staged_calibration_root = repository_root.join(\"apps/desktop/src-tauri/resources\");\n    let install_root = scope.root.join(\"install\");\n    verify_calibration_artifact(repository_root, &staged_calibration_root, candidate, None)?;",
         );
         assert_ne!(staged_dependency, source, "qualification insertion point");
         assert!(

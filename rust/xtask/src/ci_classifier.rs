@@ -112,7 +112,7 @@ fn classify_path(
         return;
     }
 
-    if path == ".bun-version" || path == "site/package.json" {
+    if path == ".bun-version" || path == "apps/website/package.json" {
         classification.add_many(&LANES);
         return;
     }
@@ -127,7 +127,7 @@ fn classify_path(
         return;
     }
 
-    if path.starts_with("site/")
+    if path.starts_with("apps/website/")
         || path.starts_with(".github/actions/site-validate/")
         || path == ".github/workflows/pages.yml"
     {
@@ -163,7 +163,7 @@ fn classify_path(
         return;
     }
 
-    if path == "desktop/src-tauri/Cargo.toml" {
+    if path == "apps/desktop/src-tauri/Cargo.toml" {
         classification.add_many(&[
             "rust_required",
             "desktop_required",
@@ -176,7 +176,7 @@ fn classify_path(
         ]);
         return;
     }
-    if path == "desktop/src-tauri/src/native_update.rs" {
+    if path == "apps/desktop/src-tauri/src/native_update.rs" {
         classification.add_many(&[
             "rust_required",
             "desktop_required",
@@ -186,8 +186,8 @@ fn classify_path(
         return;
     }
     if [
-        "desktop/src-tauri/src/main.rs",
-        "desktop/src-tauri/src/lib.rs",
+        "apps/desktop/src-tauri/src/main.rs",
+        "apps/desktop/src-tauri/src/lib.rs",
     ]
     .contains(&path)
     {
@@ -199,7 +199,7 @@ fn classify_path(
         ]);
         return;
     }
-    if path == "desktop/src-tauri/build.rs" {
+    if path == "apps/desktop/src-tauri/build.rs" {
         classification.add_many(&[
             "rust_required",
             "desktop_required",
@@ -209,7 +209,7 @@ fn classify_path(
         ]);
         return;
     }
-    if path == "desktop/src-tauri/tauri.conf.json" {
+    if path == "apps/desktop/src-tauri/tauri.conf.json" {
         classification.add_many(&[
             "desktop_required",
             "desktop_native_required",
@@ -218,7 +218,7 @@ fn classify_path(
         ]);
         return;
     }
-    if path.starts_with("desktop/src-tauri/capabilities/") {
+    if path.starts_with("apps/desktop/src-tauri/capabilities/") {
         classification.add_many(&[
             "desktop_required",
             "desktop_native_required",
@@ -226,11 +226,11 @@ fn classify_path(
         ]);
         return;
     }
-    if path.starts_with("desktop/src-tauri/icons/") {
+    if path.starts_with("apps/desktop/src-tauri/icons/") {
         classification.add("package_required");
         return;
     }
-    if path.starts_with("desktop/src-tauri/src/") {
+    if path.starts_with("apps/desktop/src-tauri/src/") {
         classification.add_many(&[
             "rust_required",
             "desktop_required",
@@ -238,7 +238,7 @@ fn classify_path(
         ]);
         return;
     }
-    if ["desktop/package.json", "desktop/bun.lock"].contains(&path) {
+    if ["apps/desktop/package.json", "apps/desktop/bun.lock"].contains(&path) {
         classification.add_many(&[
             "desktop_required",
             "desktop_e2e_required",
@@ -248,7 +248,7 @@ fn classify_path(
         ]);
         return;
     }
-    if path.starts_with("desktop/") {
+    if path.starts_with("apps/desktop/") {
         classification.add_many(&["desktop_required", "desktop_e2e_required"]);
         return;
     }
@@ -759,10 +759,10 @@ mod tests {
 
     #[test]
     fn preserves_exact_lane_output_shape_and_reason_golden() {
-        let classification = classify_paths(["desktop/src/App.tsx".to_owned()]);
+        let classification = classify_paths(["apps/desktop/src/App.tsx".to_owned()]);
         assert_eq!(
             classification.render(),
-            "rust_required=false\ndesktop_required=true\ndesktop_native_required=false\ndesktop_e2e_required=true\npackage_required=false\nupdater_required=false\nrelease_required=false\nsupply_chain_required=false\nsite_required=false\nclassification_reason=required lanes (desktop_required, desktop_e2e_required): desktop/src/App.tsx"
+            "rust_required=false\ndesktop_required=true\ndesktop_native_required=false\ndesktop_e2e_required=true\npackage_required=false\nupdater_required=false\nrelease_required=false\nsupply_chain_required=false\nsite_required=false\nclassification_reason=required lanes (desktop_required, desktop_e2e_required): apps/desktop/src/App.tsx"
         );
     }
 
@@ -772,14 +772,24 @@ mod tests {
             assert_lanes(&classify_paths([path.to_owned()]), &[]);
         }
         assert_lanes(&classify_paths(["docs/releases/v4.0.2.md".to_owned()]), &[]);
-        assert_lanes(&classify_paths(["site/package.json".to_owned()]), &LANES);
         assert_lanes(
-            &classify_paths(["site/src/pages/index.astro".to_owned()]),
+            &classify_paths(["apps/website/package.json".to_owned()]),
+            &LANES,
+        );
+        assert_lanes(
+            &classify_paths(["apps/website/src/pages/index.astro".to_owned()]),
             &["site_required"],
+        );
+        assert_lanes(
+            &classify_paths([
+                "apps/desktop/src/App.tsx".to_owned(),
+                "apps/website/src/pages/index.astro".to_owned(),
+            ]),
+            &["desktop_required", "desktop_e2e_required", "site_required"],
         );
         let static_site = classify_paths([
             ".config/rust_architecture_allowlist.json".to_owned(),
-            "site/src/pages/index.astro".to_owned(),
+            "apps/website/src/pages/index.astro".to_owned(),
         ]);
         assert_lanes(&static_site, &["site_required"]);
         assert!(
@@ -790,7 +800,7 @@ mod tests {
 
         let desktop = classify_paths([
             "docs/releases/v4.0.2.md".to_owned(),
-            "desktop/src/App.tsx".to_owned(),
+            "apps/desktop/src/App.tsx".to_owned(),
         ]);
         assert_lanes(&desktop, &["desktop_required", "desktop_e2e_required"]);
         assert!(
@@ -800,7 +810,7 @@ mod tests {
         );
 
         let lanes = classify_paths([
-            "desktop/src-tauri/tauri.conf.json".to_owned(),
+            "apps/desktop/src-tauri/tauri.conf.json".to_owned(),
             "rust/xtask/src/ci_candidate.rs".to_owned(),
             "scripts/ci_build_updater_bridge.ps1".to_owned(),
         ]);
@@ -871,16 +881,16 @@ mod tests {
     }
 
     #[test]
-    fn preserves_legacy_positive_path_matrix_and_script_categories() {
+    fn preserves_current_positive_path_matrix_and_script_categories() {
         let cases: &[(&str, &[&str])] = &[
             (
                 ".github/actions/site-validate/action.yml",
                 &["site_required"],
             ),
             (".github/workflows/pages.yml", &["site_required"]),
-            ("site/package.json", &LANES),
+            ("apps/website/package.json", &LANES),
             (".bun-version", &LANES),
-            ("site/src/pages/index.astro", &["site_required"]),
+            ("apps/website/src/pages/index.astro", &["site_required"]),
             (".github/workflows/release-v4.yml", &["release_required"]),
             (".github/workflows/ci.yml", &LANES),
             (
@@ -889,7 +899,7 @@ mod tests {
             ),
             (".config/rust_architecture_allowlist.json", &[]),
             (
-                "desktop/src-tauri/Cargo.toml",
+                "apps/desktop/src-tauri/Cargo.toml",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -902,7 +912,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/build.rs",
+                "apps/desktop/src-tauri/build.rs",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -912,7 +922,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/src/commands.rs",
+                "apps/desktop/src-tauri/src/commands.rs",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -920,7 +930,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/src/native_runtime.rs",
+                "apps/desktop/src-tauri/src/native_runtime.rs",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -928,7 +938,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/src/native_update.rs",
+                "apps/desktop/src-tauri/src/native_update.rs",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -937,7 +947,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/src/main.rs",
+                "apps/desktop/src-tauri/src/main.rs",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -946,7 +956,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/src/lib.rs",
+                "apps/desktop/src-tauri/src/lib.rs",
                 &[
                     "rust_required",
                     "desktop_required",
@@ -955,7 +965,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/tauri.conf.json",
+                "apps/desktop/src-tauri/tauri.conf.json",
                 &[
                     "desktop_required",
                     "desktop_native_required",
@@ -964,24 +974,27 @@ mod tests {
                 ],
             ),
             (
-                "desktop/src-tauri/capabilities/main.json",
+                "apps/desktop/src-tauri/capabilities/main.json",
                 &[
                     "desktop_required",
                     "desktop_native_required",
                     "package_required",
                 ],
             ),
-            ("desktop/src-tauri/icons/icon.ico", &["package_required"]),
             (
-                "desktop/tests/e2e/library.spec.ts",
+                "apps/desktop/src-tauri/icons/icon.ico",
+                &["package_required"],
+            ),
+            (
+                "apps/desktop/tests/e2e/library.spec.ts",
                 &["desktop_required", "desktop_e2e_required"],
             ),
             (
-                "desktop/src/bridge/tauriBridge.ts",
+                "apps/desktop/src/bridge/tauriBridge.ts",
                 &["desktop_required", "desktop_e2e_required"],
             ),
             (
-                "desktop/package.json",
+                "apps/desktop/package.json",
                 &[
                     "desktop_required",
                     "desktop_e2e_required",
@@ -991,7 +1004,7 @@ mod tests {
                 ],
             ),
             (
-                "desktop/bun.lock",
+                "apps/desktop/bun.lock",
                 &[
                     "desktop_required",
                     "desktop_e2e_required",
@@ -1239,7 +1252,7 @@ mod tests {
             ],
         );
         assert_lanes(
-            &classify_paths(["site/src/pages/index.astro".to_owned()]),
+            &classify_paths(["apps/website/src/pages/index.astro".to_owned()]),
             &["site_required"],
         );
     }
@@ -1270,7 +1283,7 @@ mod tests {
     fn normalizes_slashes_whitespace_and_repeated_dot_prefixes() {
         assert_lanes(&classify_paths(["  .\\./README.md  ".to_owned()]), &[]);
         assert_lanes(
-            &classify_paths([".\\desktop\\src\\App.tsx".to_owned()]),
+            &classify_paths([".\\apps\\desktop\\src\\App.tsx".to_owned()]),
             &["desktop_required", "desktop_e2e_required"],
         );
     }
@@ -1280,7 +1293,7 @@ mod tests {
         for path in [
             "README.md ",
             "README.md\n",
-            "desktop\\src\\App.tsx",
+            "apps\\desktop\\src\\App.tsx",
             " README.md",
         ] {
             let classification = classify_git_paths(vec![path.to_owned()]);
@@ -1293,20 +1306,20 @@ mod tests {
         }
 
         assert_lanes(
-            &classify_git_paths(vec!["desktop/src/App.tsx".to_owned()]),
+            &classify_git_paths(vec!["apps/desktop/src/App.tsx".to_owned()]),
             &["desktop_required", "desktop_e2e_required"],
         );
         // Manual paths-file input deliberately retains its historical normalization contract.
         assert_lanes(
-            &classify_paths([" .\\desktop\\src\\App.tsx ".to_owned()]),
+            &classify_paths([" .\\apps\\desktop\\src\\App.tsx ".to_owned()]),
             &["desktop_required", "desktop_e2e_required"],
         );
     }
 
     #[test]
     fn git_path_decoding_preserves_trailing_space_and_rejects_invalid_utf8() {
-        let paths = decode_git_paths(b"README.md \0desktop/src/App.tsx\0").unwrap();
-        assert_eq!(paths, ["README.md ", "desktop/src/App.tsx"]);
+        let paths = decode_git_paths(b"README.md \0apps/desktop/src/App.tsx\0").unwrap();
+        assert_eq!(paths, ["README.md ", "apps/desktop/src/App.tsx"]);
         assert!(decode_git_paths(b"README.md\xff\0").is_err());
     }
 
@@ -1314,6 +1327,10 @@ mod tests {
     fn unknown_or_malformed_paths_fail_closed_and_workflow_dispatch_is_full() {
         for path in [
             "unclassified/file.txt",
+            "desktop/src/App.tsx",
+            "desktop/src-tauri/Cargo.toml",
+            "site/package.json",
+            "site/src/pages/index.astro",
             ".github/workflows/unknown.yml",
             ".github/actions/unknown/action.yml",
             "rust/xtask/src/ci_classifier.rs",
@@ -1330,7 +1347,7 @@ mod tests {
                     .starts_with("unknown path")
             );
         }
-        let malformed = classify_paths(["desktop/src/a\nfile.tsx".to_owned()]);
+        let malformed = classify_paths(["apps/desktop/src/a\nfile.tsx".to_owned()]);
         assert_lanes(&malformed, &LANES);
         assert!(
             malformed
@@ -1484,12 +1501,12 @@ mod tests {
             classify_paths(Vec::<String>::new()).classification_reason,
             "no changed paths"
         );
-        let normalized = classify_paths([" ./desktop\\src\\App.tsx ".to_owned()]);
+        let normalized = classify_paths([" ./apps\\desktop\\src\\App.tsx ".to_owned()]);
         assert_lanes(&normalized, &["desktop_required", "desktop_e2e_required"]);
         assert!(
             normalized
                 .classification_reason
-                .ends_with("desktop/src/App.tsx")
+                .ends_with("apps/desktop/src/App.tsx")
         );
     }
 }

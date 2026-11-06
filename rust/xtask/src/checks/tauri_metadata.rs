@@ -152,7 +152,7 @@ fn tauri_feature_contract_manifest(
 }
 
 pub(super) fn tauri_feature_contract(root: &Path) -> Result<()> {
-    let manifest_path = root.join("desktop/src-tauri/Cargo.toml");
+    let manifest_path = root.join("apps/desktop/src-tauri/Cargo.toml");
     let resolution = tauri_feature_contract_manifest(&fs::read_to_string(&manifest_path)?)
         .map_err(|error| format!("{}: {error}", manifest_path.display()))?;
     println!(
@@ -170,9 +170,9 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
         .and_then(Value::as_object)
         .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
     let before_build = build.get("beforeBuildCommand").and_then(Value::as_str);
-    if !before_build
-        .is_some_and(|command| command == "bun run build && cd .. && cargo xtask calibration build")
-    {
+    if !before_build.is_some_and(|command| {
+        command == "bun run build && cd ..\\.. && cargo xtask calibration build"
+    }) {
         return Err(
             "Tauri packaging must run the Rust calibration builder after the frontend build"
                 .to_owned(),
@@ -191,9 +191,9 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
     for required in [
-        "../../rust/crates",
-        "../../rust/Cargo.toml",
-        "../../rust/Cargo.lock",
+        "../../../rust/crates",
+        "../../../rust/Cargo.toml",
+        "../../../rust/Cargo.lock",
     ] {
         if !watch_folders.iter().any(|path| path == required) {
             return Err(format!(
@@ -203,7 +203,7 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
     }
     if watch_folders
         .iter()
-        .any(|path| path == "../../rust" || path == "../../rust/")
+        .any(|path| path == "../../../rust" || path == "../../../rust/")
     {
         return Err(
             "Tauri additionalWatchFolders must not watch all of rust (including target)".to_owned(),
@@ -213,10 +213,10 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
 }
 
 pub(super) fn tauri_build_freshness_contract(root: &Path) -> Result<()> {
-    let path = root.join("desktop/src-tauri/tauri.conf.json");
+    let path = root.join("apps/desktop/src-tauri/tauri.conf.json");
     tauri_build_freshness_contract_manifest(&fs::read_to_string(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
-    let diagnostic_path = root.join("desktop/scripts/dev-build-info.mjs");
+    let diagnostic_path = root.join("apps/desktop/scripts/dev-build-info.mjs");
     let diagnostic = fs::read_to_string(&diagnostic_path)?;
     for marker in [
         "git",
@@ -296,9 +296,9 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     ".github/workflows/release-v4.yml",
     ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/v4-metadata-recovery.yml",
-    "desktop/src-tauri/src/native_update.rs",
-    "desktop/src-tauri/tauri.conf.json",
-    "desktop/src-tauri/Cargo.toml",
+    "apps/desktop/src-tauri/src/native_update.rs",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src-tauri/Cargo.toml",
 ];
 
 fn active_release_surface_source<'a>(path: &Path, source: &'a str) -> &'a str {
@@ -322,7 +322,7 @@ fn validate_active_release_surface(relative: &str, source: &str) -> Result<()> {
 }
 
 pub(super) fn release_metadata_contract(root: &Path) -> Result<()> {
-    let native = fs::read_to_string(root.join("desktop/src-tauri/src/native_update.rs"))?;
+    let native = fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update.rs"))?;
     for marker in [
         "V4_STABLE_METADATA_ENDPOINT",
         "V4_BETA_METADATA_ENDPOINT",
@@ -425,7 +425,7 @@ fn is_xtask_contract_source(root: &Path, source_path: &Path) -> bool {
 }
 
 pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
-    let desktop_manifest = root.join("desktop/src-tauri/Cargo.toml");
+    let desktop_manifest = root.join("apps/desktop/src-tauri/Cargo.toml");
     v4_legacy_updater_source_contract(
         &fs::read_to_string(&desktop_manifest)?,
         desktop_manifest.to_string_lossy().as_ref(),
@@ -449,7 +449,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
         }
     }
 
-    let startup_guard = root.join("desktop/src-tauri/src/startup_guard.rs");
+    let startup_guard = root.join("apps/desktop/src-tauri/src/startup_guard.rs");
     if startup_guard.exists() {
         return Err(format!(
             "retired custom updater startup admission path remains: {} (retired in #324)",
@@ -459,8 +459,8 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     }
 
     let current_v4_surfaces = [
-        "desktop/src-tauri/src",
-        "desktop/src",
+        "apps/desktop/src-tauri/src",
+        "apps/desktop/src",
         "rust/crates/sky_app_core/src",
         "rust/crates/sky_player/src",
         "rust/crates/sky_dispatch_core/src",
@@ -574,11 +574,11 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_accepts_scoped_watchers_and_build_hook() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build",
+                "beforeBuildCommand": "bun run build && cd ..\\.. && cargo xtask calibration build",
                 "additionalWatchFolders": [
-                    "../../rust/crates",
-                    "../../rust/Cargo.toml",
-                    "../../rust/Cargo.lock"
+                    "../../../rust/crates",
+                    "../../../rust/Cargo.toml",
+                    "../../../rust/Cargo.lock"
                 ]
             }
         }"#;
@@ -590,15 +590,15 @@ tauri-test = ["tauri/test"]
         let source = r#"{
             "build": {
                 "beforeBuildCommand": "bun run build && cd .. && pwsh scripts/build_native_calibration.ps1",
-                "additionalWatchFolders": ["../../rust/crates", "../../rust/Cargo.toml", "../../rust/Cargo.lock"]
+                "additionalWatchFolders": ["../../../rust/crates", "../../../rust/Cargo.toml", "../../../rust/Cargo.lock"]
             }
         }"#;
         assert!(tauri_build_freshness_contract_manifest(source).is_err());
 
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build && cargo tauri build",
-                "additionalWatchFolders": ["../../rust/crates", "../../rust/Cargo.toml", "../../rust/Cargo.lock"]
+                "beforeBuildCommand": "bun run build && cd ..\\.. && cargo xtask calibration build && cargo tauri build",
+                "additionalWatchFolders": ["../../../rust/crates", "../../../rust/Cargo.toml", "../../../rust/Cargo.lock"]
             }
         }"#;
         assert!(tauri_build_freshness_contract_manifest(source).is_err());
@@ -608,12 +608,12 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_rejects_the_workspace_root_watch() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build && cd .. && cargo xtask calibration build",
+                "beforeBuildCommand": "bun run build && cd ..\\.. && cargo xtask calibration build",
                 "additionalWatchFolders": [
-                    "../../rust",
-                    "../../rust/crates",
-                    "../../rust/Cargo.toml",
-                    "../../rust/Cargo.lock"
+                    "../../../rust",
+                    "../../../rust/crates",
+                    "../../../rust/Cargo.toml",
+                    "../../../rust/Cargo.lock"
                 ]
             }
         }"#;
@@ -782,22 +782,22 @@ releases/latest
     #[test]
     fn release_metadata_negative_guard_covers_runtime_and_release_surfaces() {
         for surface in [
-            "desktop/src-tauri/src/native_update.rs",
-            "desktop/src-tauri/tauri.conf.json",
+            "apps/desktop/src-tauri/src/native_update.rs",
+            "apps/desktop/src-tauri/tauri.conf.json",
             ".github/workflows/release-v4.yml",
         ] {
             assert!(ACTIVE_RELEASE_SURFACES.contains(&surface));
         }
 
         let runtime_error = validate_active_release_surface(
-            "desktop/src-tauri/src/native_update.rs",
+            "apps/desktop/src-tauri/src/native_update.rs",
             "const ENDPOINT = \"https://github.com/pumni/Sky-Auto-Player-Releases/releases\";",
         )
         .expect_err("legacy repository marker must be rejected in the updater runtime surface");
         assert!(runtime_error.to_string().contains("native_update.rs"));
 
         let config_error = validate_active_release_surface(
-            "desktop/src-tauri/tauri.conf.json",
+            "apps/desktop/src-tauri/tauri.conf.json",
             "V4_RELEASE_AUTHORITY_REPOSITORY",
         )
         .expect_err("legacy authority marker must be rejected in updater configuration");

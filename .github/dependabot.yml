@@ -34,7 +34,7 @@ updates:
           - major
 
   - package-ecosystem: bun
-    directory: /desktop
+    directory: /apps/desktop
     schedule:
       interval: weekly
     groups:
@@ -54,7 +54,7 @@ updates:
           - patch
 
   - package-ecosystem: bun
-    directory: /site
+    directory: /apps/website
     schedule:
       interval: weekly
     groups:

@@ -241,7 +241,7 @@ jobs:
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx
 
       - name: Install pinned desktop dependencies
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Test Tauri signer key pair interoperability
@@ -356,7 +356,7 @@ jobs:
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,signtool.exe
 
       - name: Install pinned desktop dependencies for release contract tests
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: V4 Rust release state-machine mock self-test
@@ -562,7 +562,7 @@ jobs:
         uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347 # v2.7.0
         with:
           scan-args: |-
-            --lockfile=./desktop/bun.lock
+            --lockfile=./apps/desktop/bun.lock
 
       - name: Cargo-vet dependency policy
         env:
@@ -713,16 +713,16 @@ jobs:
         run: bun scripts/verify-bun-pin.mjs
 
       - name: Install pinned desktop web dependencies
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Repository verification — desktop web
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun run check
 
       - name: Verify local Playwright CLI
         if: needs.changes.outputs.desktop_e2e_required == 'true'
-        working-directory: desktop
+        working-directory: apps/desktop
         run: |
           expected=$(node -p "require('./package.json').devDependencies.playwright")
           actual=$(bun node_modules/playwright/cli.js --version | sed -E 's/^Version[[:space:]]+//')
@@ -730,17 +730,17 @@ jobs:
 
       - name: Install Chromium through pinned local Playwright CLI
         if: needs.changes.outputs.desktop_e2e_required == 'true'
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun node_modules/playwright/cli.js install chromium
 
       - name: Run desktop browser E2E
         if: needs.changes.outputs.desktop_e2e_required == 'true'
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun run test:e2e
 
       - name: Run production-bundle browser smoke
         if: needs.changes.outputs.desktop_e2e_required == 'true'
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun run test:e2e:bundle:existing
 
       - name: Report CI timing
@@ -821,7 +821,7 @@ jobs:
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
 
       - name: Install pinned desktop dependencies
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Build exactly one current Tauri candidate
@@ -834,7 +834,7 @@ jobs:
             Remove-Item -LiteralPath $bundleDir -Recurse -Force
           }
           try {
-            Push-Location desktop
+            Push-Location apps/desktop
             try {
               bun run tauri signer generate --ci --password "" --force -w $keyPath
               if ($LASTEXITCODE -ne 0) { throw "Tauri updater signer generation failed with exit code $LASTEXITCODE" }
@@ -867,8 +867,8 @@ jobs:
           "SKY_CANDIDATE_PUBLIC_KEY=$publicKeyPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify current native build provenance
-        working-directory: desktop
-        run: bun run dev:build-info -- --exe ..\rust\target\dist\sky_desktop_shell.exe
+        working-directory: apps/desktop
+        run: bun run dev:build-info -- --exe ..\..\rust\target\dist\sky_desktop_shell.exe
 
       - name: Create exact current-candidate contract
         run: |
@@ -876,7 +876,7 @@ jobs:
           cargo xtask ci candidate create `
             --bundle-dir $env:SKY_CANDIDATE_BUNDLE `
             --public-key $env:SKY_CANDIDATE_PUBLIC_KEY `
-            --calibration-binary desktop/src-tauri/resources/native_calibration.exe `
+            --calibration-binary apps/desktop/src-tauri/resources/native_calibration.exe `
             --output-root $candidateRoot `
             --source-sha $env:SKY_CI_SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw "Current-candidate contract creation failed with exit code $LASTEXITCODE" }
@@ -1007,7 +1007,7 @@ jobs:
           "SKY_BRIDGE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Install pinned desktop dependencies
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Prepare bounded ephemeral Authenticode test certificate
@@ -1288,7 +1288,7 @@ jobs:
       - name: Upload validated Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: site/dist
+          path: apps/website/dist
 
   status:
     name: Sky Auto Player — required CI gate

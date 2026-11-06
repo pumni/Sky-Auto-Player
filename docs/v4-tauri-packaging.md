@@ -18,7 +18,7 @@ policy, but it does not block this project's release.
 - Package metadata publisher: `pumni` (Tauri bundle metadata only; it does not
   create an Authenticode signer identity)
 - Application identifier: `io.github.pumni.skyautoplayer`
-- Version source: `desktop/src-tauri/Cargo.toml`
+- Version source: `apps/desktop/src-tauri/Cargo.toml`
 - Windows target: NSIS only
 - Installer scope: `currentUser` under `%LOCALAPPDATA%`
 - Updater output: the NSIS setup executable and its `.exe.sig` sidecar
@@ -79,7 +79,7 @@ frontend build. The Rust command builds `sky_dispatch_win32`'s
 `native_calibration` binary with the locked workspace, the
 `x86_64-pc-windows-msvc` target, and the `dist` profile. It discovers Cargo's
 active target directory, validates the output as an x86_64 PE executable, and
-stages the exact bytes at `desktop/src-tauri/resources/native_calibration.exe`
+stages the exact bytes at `apps/desktop/src-tauri/resources/native_calibration.exe`
 with rollback if replacement fails. Tauri bundles that resource at the install
 root, where `AppPaths::calibration_binary_path()` looks for it. Tauri runs this
 hook before starting its application Cargo build; the Rust builder owns its
@@ -192,7 +192,7 @@ the bundle verifier separately binds the final installer evidence to the exact
 NSIS candidate. The SPDX generator
 records SHA-256 for the exact two-file NSIS artifact set and binds it to the
 current commit. The SBOM covers the reachable Rust production graph from
-`rust/Cargo.lock` and the frontend production graph from `desktop/bun.lock`,
+`rust/Cargo.lock` and the frontend production graph from `apps/desktop/bun.lock`,
 and binds both lockfile hashes to the same artifact set. After the
 install/launch/uninstall smoke, the packaged
 qualification path emits `V4_QUALIFICATION_EVIDENCE.json` with artifact,
@@ -237,7 +237,7 @@ The packaged CI fixture additionally builds an actual bridge client with
 Tauri `Update::download()` for each trust context, so a bridge can apply a
 candidate signed only by the new root; after cutover, an old-root-only
 candidate is rejected. The production list is kept in
-`desktop/src-tauri/src/native_update.rs`; add the next public root there for a
+`apps/desktop/src-tauri/src/native_update.rs`; add the next public root there for a
 bridge, publish the bridge, then remove the old root after the cutover release.
 The private halves are never read into repository files or logs.
 

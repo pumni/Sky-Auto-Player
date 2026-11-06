@@ -67,7 +67,7 @@ pub fn generate(root: &Path, artifact_dir: &Path, output: &Path) -> Result<()> {
     let head = repo::git_head(root, false)?;
     let version = repo::project_version(root)?;
     let cargo_lockfile_sha256 = hash::sha256(&root.join("rust/Cargo.lock"))?;
-    let bun_lockfile_sha256 = hash::sha256(&root.join("desktop/bun.lock"))?;
+    let bun_lockfile_sha256 = hash::sha256(&root.join("apps/desktop/bun.lock"))?;
     let locked_packages = locked_packages(root)?;
     let frontend = frontend_graph(root)?;
     let files = artifacts
@@ -288,12 +288,12 @@ fn validate_document(
     }
     let head = repo::git_head(root, false)?;
     let cargo_lockfile_sha256 = hash::sha256(&root.join("rust/Cargo.lock"))?;
-    let bun_lockfile_sha256 = hash::sha256(&root.join("desktop/bun.lock"))?;
+    let bun_lockfile_sha256 = hash::sha256(&root.join("apps/desktop/bun.lock"))?;
     if !comment.contains(&format!("cargo-lockfile-sha256:{cargo_lockfile_sha256}")) {
         return Err("SBOM is not bound to the current Cargo.lock".into());
     }
     if !comment.contains(&format!("bun-lockfile-sha256:{bun_lockfile_sha256}")) {
-        return Err("SBOM is not bound to the current desktop/bun.lock".into());
+        return Err("SBOM is not bound to the current apps/desktop/bun.lock".into());
     }
     let namespace = payload
         .get("documentNamespace")
@@ -451,15 +451,15 @@ fn locked_packages(root: &Path) -> Result<Vec<LockedPackage>> {
 }
 
 fn frontend_graph(root: &Path) -> Result<FrontendGraph> {
-    let source = fs::read_to_string(root.join("desktop/bun.lock"))?;
+    let source = fs::read_to_string(root.join("apps/desktop/bun.lock"))?;
     let payload: Value = serde_json::from_str(&strip_trailing_commas(&source)?)?;
     if payload.get("lockfileVersion").and_then(Value::as_u64) != Some(2) {
-        return Err("desktop/bun.lock must use Bun lockfile version 2".into());
+        return Err("apps/desktop/bun.lock must use Bun lockfile version 2".into());
     }
     let package_values = payload
         .get("packages")
         .and_then(Value::as_object)
-        .ok_or("desktop/bun.lock package map is missing")?;
+        .ok_or("apps/desktop/bun.lock package map is missing")?;
     let mut packages = BTreeMap::new();
     for (key, value) in package_values {
         let tuple = value
@@ -498,11 +498,11 @@ fn frontend_graph(root: &Path) -> Result<FrontendGraph> {
         .and_then(Value::as_object)
         .and_then(|workspaces| workspaces.get(""))
         .and_then(Value::as_object)
-        .ok_or("desktop/bun.lock root workspace is missing")?;
+        .ok_or("apps/desktop/bun.lock root workspace is missing")?;
     let root_dependencies = workspace
         .get("dependencies")
         .and_then(Value::as_object)
-        .ok_or("desktop/bun.lock production dependencies are missing")?;
+        .ok_or("apps/desktop/bun.lock production dependencies are missing")?;
     let mut root_packages = Vec::new();
     for (name, requirement) in root_dependencies {
         let requirement = requirement

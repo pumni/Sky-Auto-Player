@@ -1,6 +1,6 @@
 # Desktop UI Type Boundary
 
-`desktop/` consumes `react-aria-components` through that package's published declarations. There is
+`apps/desktop/` consumes `react-aria-components` through that package's published declarations. There is
 no repository-local module declaration or `tsconfig` path alias for the package. Type checking uses
 the pinned desktop toolchain and the existing strict compiler options, including
 `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noUnusedLocals`, and `skipLibCheck`.
@@ -11,7 +11,7 @@ the pinned desktop toolchain and the existing strict compiler options, including
 - `typescript` 7.0.2
 - React and React DOM 19.3.1 with `@types/react` 19.3.0
 
-These are the versions in `desktop/package.json` and `desktop/bun.lock`. The type boundary does not
+These are the versions in `apps/desktop/package.json` and `apps/desktop/bun.lock`. The type boundary does not
 require a dependency upgrade.
 
 ## React Aria surface
@@ -30,14 +30,14 @@ Desktop source and tests import these published exports:
 | Tabs and panels | `UtilityPane`, `UtilityHeader`, `DiagnosticsView`, `DiagnosticsEventsPanel`, `DiagnosticsPerformancePanel`, `DiagnosticsTimingPlot`, plus `DiagnosticsEventsPanel.test` |
 | Tooltips | `LibraryNavigator` |
 
-Files are under `desktop/src/components/` unless the name ends in `.test`. `TabPanel` is used by the
+Files are under `apps/desktop/src/components/` unless the name ends in `.test`. `TabPanel` is used by the
 Diagnostics sub-panels, `Tabs` owns the Utility and Diagnostics tab collections, and
 `Dialog`/`ModalOverlay`/`Modal` own the modal dialogs. `Tooltip` is used only by the collapsed
 library navigator.
 
 ## Audit baseline
 
-The removed shim was `desktop/src/types/react-aria-components.d.ts`, selected through
+The removed shim was `apps/desktop/src/types/react-aria-components.d.ts`, selected through
 `tsconfig.json#compilerOptions.paths`. It declared a hand-written subset of `Button`,
 `DialogTrigger`, `MenuTrigger`, `Menu`, `MenuItem`, `Popover`, `ModalOverlay`, `Modal`, `Dialog`,
 `Tabs`, `TabList`, `Tab`, and `TabPanel`.
@@ -76,14 +76,14 @@ focus through dock and overlay changes. Removing non-rendered `title` props and 
 `id` does not change the rendered DOM because React Aria filters those attributes.
 
 Utility regression coverage lives in
-`desktop/src/components/utility/UtilityPane.test.tsx` and the workbench Playwright specifications.
+`apps/desktop/src/components/utility/UtilityPane.test.tsx` and the workbench Playwright specifications.
 The unit test covers tab selection, keyboard tab movement, lazy Diagnostics mount, and close focus
-restoration. `desktop/tests/e2e/workbench.spec.ts` covers dock/overlay transitions, tab keyboard
+restoration. `apps/desktop/tests/e2e/workbench.spec.ts` covers dock/overlay transitions, tab keyboard
 navigation, focus retention, and Inspector geometry.
 
 ## Qualification commands
 
-Run from `desktop/` with the pinned Bun version:
+Run from `apps/desktop/` with the pinned Bun version:
 
 ```powershell
 bun install --frozen-lockfile

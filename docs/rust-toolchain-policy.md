@@ -20,8 +20,8 @@ not define the current build contract.
 
 Rustup searches for a toolchain file from the process's current directory upward through
 its parents. It does not search child directories. Commands started inside `rust/` find
-`rust/rust-toolchain.toml`; commands started at the repository root, `desktop/`, or
-`site/` do not. The repository resolver reads the nested pin and supplies the corresponding
+`rust/rust-toolchain.toml`; commands started at the repository root, `apps/desktop/`, or
+`apps/website/` do not. The repository resolver reads the nested pin and supplies the corresponding
 `RUSTUP_TOOLCHAIN` for root-level Cargo commands. The `setup-rust-pinned` composite action
 uses the same source for CI installation and exports that value to later steps.
 

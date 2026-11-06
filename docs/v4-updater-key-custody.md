@@ -28,8 +28,8 @@ dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldT
 ### Verified repository locations
 
 The canonical public root is committed in exactly three authoritative locations:
-1. `desktop/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`)
-2. `desktop/src-tauri/src/native_update.rs` (`V4_TAURI_UPDATER_PUBLIC_KEY`)
+1. `apps/desktop/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`)
+2. `apps/desktop/src-tauri/src/native_update.rs` (`V4_TAURI_UPDATER_PUBLIC_KEY`)
 3. `rust/xtask/src/tauri_bundle.rs` (`V4_TAURI_UPDATER_PUBLIC_KEY`)
 
 To inventory and verify that all three locations match byte-for-byte and that no
@@ -280,7 +280,7 @@ without accessible backups):
 
 1. **Pre-GA Key Loss**:
    - An unrecoverable pre-GA key requires replacing the committed public root across
-     `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/src/native_update.rs`, and
+     `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/src/native_update.rs`, and
      `rust/xtask/src/tauri_bundle.rs`, followed by full re-qualification of the release
      trust chain before the first production v4 release.
 

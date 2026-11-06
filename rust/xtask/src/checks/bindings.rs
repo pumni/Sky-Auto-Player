@@ -20,7 +20,7 @@ pub(super) fn bindings_with_env(extra_env: &[(&str, &str)]) -> Result<()> {
 
 pub(crate) fn bindings_generate() -> Result<()> {
     let root = repo::root();
-    let export_dir = root.join("desktop/src/bridge/generated");
+    let export_dir = root.join("apps/desktop/src/bridge/generated");
     fs::create_dir_all(&export_dir)?;
     generate_bindings(&root, &export_dir)?;
     write_command_names(&root, &export_dir)?;
@@ -49,7 +49,7 @@ fn ipc_contract_command_name(source: &str, constant: &str) -> Result<String> {
 }
 
 fn command_names_source(root: &Path) -> Result<String> {
-    let source = fs::read_to_string(root.join("desktop/src-tauri/src/ipc_contract.rs"))?;
+    let source = fs::read_to_string(root.join("apps/desktop/src-tauri/src/ipc_contract.rs"))?;
     let source = source.split("#[cfg(test)]").next().unwrap_or(&source);
     let mut commands = Vec::new();
     for line in source.lines() {
@@ -110,7 +110,8 @@ fn write_command_names(root: &Path, directory: &Path) -> Result<()> {
 }
 
 fn compare_command_names(root: &Path, export_dir: &Path) -> Result<()> {
-    let expected = fs::read_to_string(root.join("desktop/src/bridge/generated/command_names.ts"))?;
+    let expected =
+        fs::read_to_string(root.join("apps/desktop/src/bridge/generated/command_names.ts"))?;
     let actual = fs::read_to_string(export_dir.join("command_names.ts"))?;
     if normalized_text_bytes(expected.into_bytes()) != normalized_text_bytes(actual.into_bytes()) {
         return Err("generated IPC command metadata differs from ipc_contract.rs".into());
@@ -199,7 +200,7 @@ fn normalized_text_bytes(bytes: Vec<u8>) -> Vec<u8> {
 }
 
 fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
-    let checked_in_dir = root.join("desktop/src/bridge/generated");
+    let checked_in_dir = root.join("apps/desktop/src/bridge/generated");
     let mut expected = collect_binding_files(&checked_in_dir)?;
     // These are maintained frontend support files rather than ts-rs exports.
     expected.remove("index.ts");

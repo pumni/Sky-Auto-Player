@@ -1,0 +1,67 @@
+[package]
+name = "sky_desktop_shell"
+version = "4.3.0"
+workspace = "../../../rust"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+build = "build.rs"
+
+[features]
+default = ["desktop-runtime", "packaged-assets"]
+desktop-runtime = [
+    "tauri/wry",
+]
+packaged-assets = [
+    "tauri/custom-protocol",
+    "tauri/compression",
+]
+# Local, signed updater fixture used only by the packaged previous-v4 to
+# candidate-v4 qualification. Release policy owns the production metadata and
+# updater trust contracts.
+tauri-update-fixture = []
+tauri-test = ["tauri/test", "sky_player/test-support"]
+
+[[bin]]
+name = "sky_desktop_shell"
+path = "src/main.rs"
+required-features = ["desktop-runtime"]
+
+[lib]
+name = "sky_desktop_shell_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "=2.12.4", default-features = false, features = [] }
+tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-process = "=2.4.0"
+tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
+tauri-plugin-window-state = "=2.5.0"
+sky_dispatch_win32 = { path = "../../../rust/crates/sky_dispatch_win32" }
+sky_player = { path = "../../../rust/crates/sky_player" }
+sha2 = "0.11"
+smallvec = "1"
+sky_app_core = { path = "../../../rust/crates/sky_app_core" }
+sky_native_adapters = { path = "../../../rust/crates/sky_native_adapters" }
+ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
+thiserror = "2"
+getrandom = "0.4"
+url = "2.5.8"
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Power",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

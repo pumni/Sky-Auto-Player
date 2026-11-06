@@ -34,7 +34,8 @@ invariants that must not be discarded because an implementation differs.
   [Authenticode](v4-authenticode-provider-seam.md).
 - **CI and development:** [CI topology](ci-validation-topology.md),
   [Rust toolchain](rust-toolchain-policy.md),
-  [contributing](../CONTRIBUTING.md).
+  [contributing](../CONTRIBUTING.md),
+  [application path-consumer inventory](application-path-consumer-inventory.md).
 - **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),
   [physical-key study method](physical-key-study-method.md),
   [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md).

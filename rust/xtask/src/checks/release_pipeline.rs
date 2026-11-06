@@ -408,7 +408,7 @@ fn rust_release_state_machine_contract(
     let qualification_compact = qualification.split_whitespace().collect::<String>();
     if !qualification_compact.contains("incoming.join(&handoff.calibration_binary)")
         || qualification_compact
-            .contains("root.join(\"desktop/src-tauri/resources/native_calibration.exe\")")
+            .contains("root.join(\"apps/desktop/src-tauri/resources/native_calibration.exe\")")
     {
         return Err(
             "candidate creation must use the validated cross-runner calibration bytes".into(),

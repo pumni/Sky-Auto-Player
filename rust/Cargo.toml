@@ -8,7 +8,7 @@ members = [
     "crates/sky_windows_security",
     "crates/sky_player",
     "xtask",
-    "../desktop/src-tauri",
+    "../apps/desktop/src-tauri",
 ]
 
 [workspace.package]

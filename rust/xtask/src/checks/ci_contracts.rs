@@ -4,6 +4,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "ci_contracts/website_tests.rs"]
+mod website_tests;
+
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
     if source.replace("\r\n", "\n").contains("\n  candidate:\n") {
         return packaged_ci_build_once_contract_source(source);
@@ -425,6 +429,294 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+    Ok(())
+}
+
+fn website_action_step<'a>(action: &'a str, name: &str) -> Result<&'a str> {
+    let marker = format!("    - name: {name}");
+    if action.matches(&marker).count() != 1 {
+        return Err(
+            format!("website validation action must contain exactly one `{name}` step").into(),
+        );
+    }
+    let start = action
+        .find(&marker)
+        .ok_or_else(|| format!("website validation action is missing `{name}`"))?;
+    let end = action[start + marker.len()..]
+        .find("\n    - name:")
+        .map_or(action.len(), |offset| start + marker.len() + offset);
+    Ok(&action[start..end])
+}
+
+fn website_validation_contract(action: &str, package: &str) -> Result<()> {
+    let forbidden_action_markers = [
+        "sync:version",
+        "precheck",
+        "prebuild",
+        "check:ci",
+        "build:ci",
+        "cargo ",
+        "tauri build",
+    ];
+    for marker in forbidden_action_markers {
+        if action.contains(marker) {
+            return Err(format!(
+                "website validation action must not synchronize versions or invoke Cargo/Tauri: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let required_steps = [
+        (
+            "Install dependencies",
+            "apps/website",
+            "bun install --frozen-lockfile",
+        ),
+        (
+            "Validate published release metadata",
+            "apps/website",
+            "bun run test:unit",
+        ),
+        ("Type and Astro checks", "apps/website", "bun run check"),
+        ("Lint", "apps/website", "bun run lint"),
+        ("Formatting", "apps/website", "bun run format:check"),
+        ("Build static site", "apps/website", "bun run build"),
+        (
+            "Verify required output",
+            "apps/website",
+            "bun run verify:dist",
+        ),
+        ("Verify SEO contracts", "apps/website", "bun run verify:seo"),
+        (
+            "Install Playwright Chromium",
+            "apps/website",
+            "bunx playwright install chromium --with-deps",
+        ),
+        (
+            "Run Functional E2E and accessibility tests",
+            "apps/website",
+            "bun run test:functional",
+        ),
+    ];
+    let mut previous_position = None;
+    for (name, working_directory, command) in required_steps {
+        let step = website_action_step(action, name)?;
+        let position = action
+            .find(&format!("    - name: {name}"))
+            .ok_or_else(|| format!("website validation action is missing `{name}`"))?;
+        if previous_position.is_some_and(|previous| previous >= position) {
+            return Err("website validation action steps are out of order".into());
+        }
+        previous_position = Some(position);
+
+        if !step
+            .lines()
+            .any(|line| line.trim() == format!("working-directory: {working_directory}"))
+        {
+            return Err(format!(
+                "website validation step `{name}` must run from {working_directory}"
+            )
+            .into());
+        }
+        let run_commands = step
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("run:"))
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        if run_commands.len() != 1 || run_commands[0] != command {
+            return Err(
+                format!("website validation step `{name}` must run only `{command}`").into(),
+            );
+        }
+        if [
+            "if:",
+            "continue-on-error: true",
+            "|| true",
+            "exit 0",
+            "echo ",
+            "printf ",
+        ]
+        .iter()
+        .any(|marker| step.contains(marker))
+        {
+            return Err(format!(
+                "website validation step `{name}` must not be conditional, ignored, or faked"
+            )
+            .into());
+        }
+    }
+    if action.matches("run: bun run test:unit").count() != 1
+        || action.matches("run: bun run build").count() != 1
+    {
+        return Err(
+            "website metadata validation and static build must each run exactly once".into(),
+        );
+    }
+
+    let package: serde_json::Value = serde_json::from_str(package)
+        .map_err(|error| format!("website package manifest must be valid JSON: {error}"))?;
+    let scripts = package
+        .get("scripts")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("website package manifest must declare scripts")?;
+    for (name, command) in [
+        ("check", "astro check"),
+        ("lint", "eslint ."),
+        ("format:check", "prettier --check ."),
+        ("build", "astro build"),
+        ("verify:dist", "bun scripts/verify-dist.mjs"),
+        ("verify:seo", "bun scripts/verify-seo.mjs"),
+        ("test:unit", "bun test tests/unit"),
+        (
+            "test:functional",
+            "bun scripts/run-e2e.mjs tests/e2e/accessibility.spec.ts tests/e2e/locale-switch-contrast.spec.ts tests/e2e/navigation.spec.ts tests/e2e/site-contracts.spec.ts",
+        ),
+    ] {
+        if scripts.get(name).and_then(serde_json::Value::as_str) != Some(command) {
+            return Err(format!(
+                "website package script `{name}` must remain the direct command `{command}`"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "precheck",
+        "prebuild",
+        "sync:version",
+        "check:ci",
+        "build:ci",
+    ] {
+        if scripts.contains_key(forbidden) {
+            return Err(format!(
+                "website package must not restore version-sync or CI-only hooks: {forbidden}"
+            )
+            .into());
+        }
+    }
+    if scripts
+        .values()
+        .filter_map(serde_json::Value::as_str)
+        .any(|script| {
+            let script = script.to_ascii_lowercase();
+            script.contains("cargo ")
+                || script.contains("sync:version")
+                || script.contains("tauri build")
+        })
+    {
+        return Err(
+            "website package scripts must not invoke Cargo, Tauri, or version synchronization"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn website_artifact_upload_contract(source: &str, owner: &str) -> Result<()> {
+    if source.matches("actions/upload-pages-artifact@").count() != 1 {
+        return Err(format!(
+            "{owner} must upload exactly one Pages artifact from its built website"
+        )
+        .into());
+    }
+    if source.matches("path: apps/website/dist").count() != 1 {
+        return Err(
+            format!("{owner} must upload exactly apps/website/dist as its Pages artifact").into(),
+        );
+    }
+    let upload = source
+        .find("actions/upload-pages-artifact@")
+        .ok_or_else(|| format!("{owner} is missing its Pages artifact upload"))?;
+    let path = source
+        .find("path: apps/website/dist")
+        .ok_or_else(|| format!("{owner} is missing the built website artifact path"))?;
+    if upload >= path || source.contains("path: site/dist") {
+        return Err(format!(
+            "{owner} must place the relocated website output under its Pages artifact upload"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn website_recovery_workflow_contract(pages: &str) -> Result<()> {
+    website_artifact_upload_contract(pages, "manual Pages recovery")?;
+    let build = pages
+        .find("run: bun run build")
+        .ok_or("manual Pages recovery must build the website")?;
+    let output = pages
+        .find("run: bun run verify:dist")
+        .ok_or("manual Pages recovery must verify built website output")?;
+    let seo = pages
+        .find("run: bun run verify:seo")
+        .ok_or("manual Pages recovery must verify website SEO")?;
+    let upload = pages
+        .find("actions/upload-pages-artifact@")
+        .ok_or("manual Pages recovery must upload the validated Pages artifact")?;
+    let deploy = pages
+        .find("\n  deploy:")
+        .ok_or("manual Pages recovery must keep deployment in a gated job")?;
+    if !(build < output && output < seo && seo < upload && upload < deploy) {
+        return Err(
+            "manual Pages recovery must build, verify output and SEO, upload one artifact, then deploy".into(),
+        );
+    }
+    let deploy_job = &pages[deploy..];
+    for marker in [
+        "needs: build",
+        "pages: write",
+        "id-token: write",
+        "actions/deploy-pages@",
+    ] {
+        if !deploy_job.contains(marker) {
+            return Err(
+                format!("manual Pages deployment gate is missing its marker: {marker}").into(),
+            );
+        }
+    }
+    if deploy_job.contains("bun run build")
+        || deploy_job.contains("actions/upload-pages-artifact@")
+        || deploy_job.contains("actions/download-artifact@")
+    {
+        return Err(
+            "manual Pages deployment must consume the single validated artifact without rebuilding"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn website_required_status_contract(status: &str) -> Result<()> {
+    for marker in [
+        "SITE_REQUIRED: ${{ needs.changes.outputs.site_required }}",
+        "SITE_RESULT: ${{ needs.site.result }}",
+    ] {
+        if !status.lines().any(|line| line.trim() == marker) {
+            return Err(format!(
+                "required CI aggregate must fail closed on website validation: missing {marker}"
+            )
+            .into());
+        }
+    }
+    let step_marker = "      - name: Require relevant gates to pass";
+    let start = status
+        .find(step_marker)
+        .ok_or("required CI aggregate is missing its gate step")?;
+    let end = status[start + step_marker.len()..]
+        .find("\n      - name:")
+        .map_or(status.len(), |offset| start + step_marker.len() + offset);
+    let gate = &status[start..end];
+    let website_result_check = "if [[ \"$SITE_REQUIRED\" == \"true\" ]]; then [[ \"$SITE_RESULT\" == \"success\" ]]; else [[ \"$SITE_RESULT\" == \"skipped\" ]]; fi";
+    if !gate.lines().any(|line| line.trim() == website_result_check)
+        || gate.contains("continue-on-error: true")
+        || gate.contains("if: false")
+        || gate.contains("|| true")
+    {
+        return Err(
+            "required CI aggregate must execute the website success-or-skipped gate without bypasses"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -1045,6 +1337,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         return Err("CI site validation, status, and Pages deployment must remain ordered".into());
     }
     let status = &ci[status_start..deploy_start];
+    website_required_status_contract(status)?;
     for marker in [
         "UPDATER_BRIDGE_REQUIRED",
         "UPDATER_BRIDGE_RESULT",
@@ -1078,12 +1371,13 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         return Err("required CI status gate must not depend on deploy_pages".into());
     }
     let site = &ci[desktop_web_end..status_start];
+    website_artifact_upload_contract(site, "CI website validation job")?;
     for marker in [
         "name: Website validation",
         "uses: ./.github/actions/site-validate",
         "name: Upload validated Pages artifact",
         "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
-        "path: site/dist",
+        "path: apps/website/dist",
     ] {
         if !site.contains(marker) {
             return Err(
@@ -1143,56 +1437,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         }
     }
     let site_action = fs::read_to_string(root.join(".github/actions/site-validate/action.yml"))?;
-    if site_action.matches("run: bun run sync:version").count() != 1
-        || site_action
-            .lines()
-            .any(|line| line.trim() == "run: bun run check")
-        || site_action
-            .lines()
-            .any(|line| line.trim() == "run: bun run build")
-    {
-        return Err(
-            "CI site validation must synchronize the site version exactly once and use CI-only scripts".into(),
-        );
-    }
-    let action_steps = [
-        "name: Install dependencies",
-        "name: Sync site application version",
-        "name: Type and Astro checks",
-        "name: Lint",
-        "name: Formatting",
-        "name: Build static site",
-        "name: Verify required output",
-        "name: Verify SEO contracts",
-        "name: Install Playwright Chromium",
-        "name: Run Functional E2E and accessibility tests",
-    ];
-    let mut previous_position = None;
-    for step in action_steps {
-        let position = site_action
-            .find(step)
-            .ok_or_else(|| format!("site validation action is missing its step: {step}"))?;
-        if previous_position.is_some_and(|previous| previous >= position) {
-            return Err("site validation action steps are out of order".into());
-        }
-        previous_position = Some(position);
-    }
-    let site_package = fs::read_to_string(root.join("site/package.json"))?;
-    for marker in [
-        "\"precheck\": \"bun run sync:version\"",
-        "\"check\": \"astro check\"",
-        "\"check:ci\": \"astro check\"",
-        "\"prebuild\": \"bun run sync:version\"",
-        "\"build\": \"astro build\"",
-        "\"build:ci\": \"astro build\"",
-    ] {
-        if !site_package.contains(marker) {
-            return Err(format!(
-                "site package scripts must preserve local self-contained commands and CI-only variants: {marker}"
-            )
-            .into());
-        }
-    }
+    let site_package = fs::read_to_string(root.join("apps/website/package.json"))?;
+    website_validation_contract(&site_action, &site_package)?;
     let topology = fs::read_to_string(root.join("docs/ci-validation-topology.md"))?;
     for marker in [
         "# CI validation topology",
@@ -1203,7 +1449,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "## Deliberate non-deduplication",
         "## Safe classifier extension procedure",
         "docs/releases/**",
-        "site/dist",
+        "apps/website/dist",
         "workflow_dispatch",
         "Unknown paths",
     ] {
@@ -1232,20 +1478,13 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         || native_branch.contains("bun")
         || native_branch.contains("test:e2e")
     {
-        return Err("xtask desktop/full and desktop-native check ownership is not locked".into());
+        return Err(
+            "xtask apps/desktop/full and desktop-native check ownership is not locked".into(),
+        );
     }
 
     let pages = fs::read_to_string(root.join(".github/workflows/pages.yml"))?;
-    for marker in [
-        "bun run build",
-        "bun run verify:dist",
-        "actions/upload-pages-artifact@",
-        "actions/deploy-pages@",
-    ] {
-        if !pages.contains(marker) {
-            return Err(format!("Pages deploy contract is missing its marker: {marker}").into());
-        }
-    }
+    website_recovery_workflow_contract(&pages)?;
     if !workflow_declares_only_dispatch(&pages) {
         return Err(
             "Pages recovery workflow must retain workflow_dispatch as its only trigger".into(),

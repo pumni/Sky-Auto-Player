@@ -4,13 +4,14 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CONFIG_PATH: &str = "desktop/src-tauri/tauri.conf.json";
+const CONFIG_PATH: &str = "apps/desktop/src-tauri/tauri.conf.json";
 const V4_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
 const V4_BUNDLE_PUBLISHER: &str = "pumni";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
-const CALIBRATION_BUILD_COMMAND: &str = "bun run build && cd .. && cargo xtask calibration build";
+const CALIBRATION_BUILD_COMMAND: &str =
+    "bun run build && cd ..\\.. && cargo xtask calibration build";
 const WINDOWS_ARCH: &str = "x64";
 const UNSIGNED_ZERO_BUDGET_MODE: &str = "unsigned-zero-budget";
 // Public Tauri updater trust material. The matching private key is generated
@@ -64,7 +65,7 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
     }
     if config.get("version").is_some() {
         return Err(
-            "Tauri config must omit version; desktop/src-tauri/Cargo.toml is the canonical v4 version source".into(),
+            "Tauri config must omit version; apps/desktop/src-tauri/Cargo.toml is the canonical v4 version source".into(),
         );
     }
     if string_field(config, "productName")? != PRODUCT_NAME {
@@ -102,9 +103,9 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         .and_then(Value::as_object)
         .ok_or("Tauri bundle.resources must map the immutable built-in catalog")?;
     if resources.len() != 3
-        || resources.get("../../songs/*").and_then(Value::as_str) != Some("builtin-songs/sheets")
+        || resources.get("../../../songs/*").and_then(Value::as_str) != Some("builtin-songs/sheets")
         || resources
-            .get("../../builtin-songs/manifest.json")
+            .get("../../../builtin-songs/manifest.json")
             .and_then(Value::as_str)
             != Some("builtin-songs/manifest.json")
         || resources
@@ -125,12 +126,12 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         .and_then(Value::as_str)
         .ok_or("Tauri bundle.windows.signCommand must be configured")?;
     if !sign_command.starts_with("pwsh ")
-        || !sign_command.contains("sign_v4_authenticode.ps1")
+        || !sign_command.contains("../../../scripts/sign_v4_authenticode.ps1")
         || !sign_command.contains("%1")
         || sign_command.contains(['&', '|', ';', '`'])
     {
         return Err(
-            "Tauri Windows Authenticode must use the bounded v4 signCommand policy seam".into(),
+            "Tauri Windows Authenticode must use the bounded v4 signCommand policy seam and repository signing script".into(),
         );
     }
     let nsis = windows
@@ -560,12 +561,12 @@ mod tests {
                 "targets": [NSIS_TARGET],
                 "createUpdaterArtifacts": true,
                 "resources": {
-                    "../../songs/*": "builtin-songs/sheets",
-                    "../../builtin-songs/manifest.json": "builtin-songs/manifest.json",
+                    "../../../songs/*": "builtin-songs/sheets",
+                    "../../../builtin-songs/manifest.json": "builtin-songs/manifest.json",
                     "resources/native_calibration.exe": "native_calibration.exe"
                 },
                 "windows": {
-                    "signCommand": "pwsh -File ../../scripts/sign_v4_authenticode.ps1 %1",
+                    "signCommand": "pwsh -File ../../../scripts/sign_v4_authenticode.ps1 %1",
                     "nsis": {"installMode": CURRENT_USER_INSTALL_MODE}
                 }
             },
@@ -641,6 +642,11 @@ mod tests {
 
         let mut config = valid_config();
         config["bundle"]["windows"]["signCommand"] = json!("true %1");
+        assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
+
+        let mut config = valid_config();
+        config["bundle"]["windows"]["signCommand"] =
+            json!("pwsh -File ../../scripts/sign_v4_authenticode.ps1 %1");
         assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
     }
 

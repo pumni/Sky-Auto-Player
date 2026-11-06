@@ -35,7 +35,7 @@ configuration.
 - New or improved supported sheet-format handling.
 - Documentation improvements that make current behavior easier to navigate.
 - Windows/native improvements that preserve the documented security and platform boundaries.
-- Translation improvements for the site source under `site/src/content/` and `site/src/data/`.
+- Translation improvements for the site source under `apps/website/src/content/` and `apps/website/src/data/`.
 
 ## Out of scope
 

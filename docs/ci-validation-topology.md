@@ -12,7 +12,7 @@ reason.
 - `.github/workflows/ci.yml` runs for pushes to `main`, pull requests, and
   explicit `workflow_dispatch` requests.
 - A website-affecting `main` push runs the `site` job, packages the validated
-  `site/dist` directory as the Pages artifact, and then runs the automatic
+  `apps/website/dist` directory as the Pages artifact, and then runs the automatic
   Pages deployment after the required status gate succeeds.
 - `.github/workflows/pages.yml` is the manual Pages recovery workflow. It is
   `workflow_dispatch`-only and retains its self-contained checkout, install,
@@ -65,13 +65,14 @@ lane to true. This preserves fail-closed behavior.
 | --- | --- |
 | `README.md` or general `docs/**` | No specialized lane; aggregate status only |
 | `docs/releases/**` | Static validation only; no release contract |
-| `desktop/src/**` | Desktop web/browser and Desktop E2E; no native lane |
-| `desktop/tests/e2e/**` | Desktop web/browser and Desktop E2E; no native lane |
-| `desktop/src-tauri/src/**` | Rust and Windows native Desktop validation |
-| `desktop/src-tauri/tauri.conf.json` | Desktop web, native, package, and updater qualification |
+| `apps/desktop/src/**` | Desktop web/browser and Desktop E2E; no native lane |
+| `apps/desktop/tests/e2e/**` | Desktop web/browser and Desktop E2E; no native lane |
+| `apps/desktop/src-tauri/src/**` | Rust and Windows native Desktop validation |
+| `apps/desktop/src-tauri/tauri.conf.json` | Desktop web, native, package, and updater qualification |
 | Cargo manifests, lockfiles, or toolchain configuration | Rust plus the affected package/updater/release/security lanes |
-| `.bun-version` or `site/package.json` Bun mirror | Every Bun-consuming lane |
-| `site/**` | Site validation and exact Pages artifact packaging |
+| `.bun-version` or `apps/website/package.json` Bun mirror | Every Bun-consuming lane |
+| `apps/website/**` | Site validation and exact Pages artifact packaging |
+| Retired root `desktop/**` or `site/**` | Unknown path; fail-closed full validation |
 | Release workflow or executable release script | Release contract and its required static/security lanes |
 | Classifier or CI workflow | Fail-closed/full validation |
 | Unknown path | Full validation across all lanes |
@@ -91,15 +92,16 @@ does not suppress a lane required by another changed path.
   artifact.
 
 The website owns a committed snapshot of the latest verified public stable
-release in `site/src/data/product-release.json`. Its metadata parser rejects
-invalid versions and tags; Astro embeds that snapshot without reading the
+release in `apps/website/src/data/product-release.json`. Its metadata parser requires
+exact `MAJOR.MINOR.PATCH` with no prerelease or build metadata, plus the matching
+`v`-prefixed tag; Astro embeds that snapshot without reading the
 desktop Cargo manifest or calling Cargo, Tauri, or a release API. Site CI,
 local checks/builds, and manual Pages recovery invoke their Bun/Astro commands
 directly, without version synchronization pre-hooks. CI validates the
 metadata, site checks, build, output, SEO, and functional contracts; manual
 Pages recovery verifies the built output and SEO before deployment. Refresh
 the snapshot manually after a stable release is publicly published; see
-[`site/README.md`](../site/README.md#published-application-version).
+[`apps/website/README.md`](../apps/website/README.md#published-application-version).
 
 ## Deliberate non-deduplication
 

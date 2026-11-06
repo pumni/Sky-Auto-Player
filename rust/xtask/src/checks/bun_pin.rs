@@ -7,7 +7,7 @@ use walkdir::WalkDir;
 
 const BUN_ACTION: &str = "oven-sh/setup-bun";
 const BUN_VERSION_FILE: &str = ".bun-version";
-const SITE_PACKAGE: &str = "site/package.json";
+const SITE_PACKAGE: &str = "apps/website/package.json";
 const BUN_VERIFIER_STEP: &str = "bun scripts/verify-bun-pin.mjs";
 
 fn canonical_bun_version(source: &str) -> Result<Version> {
@@ -28,21 +28,25 @@ fn canonical_bun_version(source: &str) -> Result<Version> {
 
 fn mirrored_bun_version(source: &str) -> Result<Version> {
     if source.matches("\"packageManager\"").count() != 1 {
-        return Err("site/package.json must contain exactly one packageManager field".into());
+        return Err(
+            "apps/website/package.json must contain exactly one packageManager field".into(),
+        );
     }
     let manifest: Value = serde_json::from_str(source)?;
     let package_manager = manifest
         .get("packageManager")
         .and_then(Value::as_str)
-        .ok_or("site/package.json packageManager must be a string")?;
+        .ok_or("apps/website/package.json packageManager must be a string")?;
     let raw_version = package_manager
         .strip_prefix("bun@")
-        .ok_or("site/package.json packageManager must use bun@<exact-version>")?;
-    let version = Version::parse(raw_version)
-        .map_err(|error| format!("site/package.json has an invalid Bun version: {error}"))?;
+        .ok_or("apps/website/package.json packageManager must use bun@<exact-version>")?;
+    let version = Version::parse(raw_version).map_err(|error| {
+        format!("apps/website/package.json has an invalid Bun version: {error}")
+    })?;
     if !version.pre.is_empty() || !version.build.is_empty() || version.to_string() != raw_version {
         return Err(
-            "site/package.json packageManager must contain an exact numeric Bun version".into(),
+            "apps/website/package.json packageManager must contain an exact numeric Bun version"
+                .into(),
         );
     }
     Ok(version)
@@ -54,12 +58,16 @@ fn validate_application_lockfiles(root: &Path) -> Result<()> {
             return Err(format!("root Bun workspace artifacts are not allowed: {path}").into());
         }
     }
-    for path in ["desktop/bun.lockb", "site/bun.lockb"] {
+    for path in ["apps/desktop/bun.lockb", "apps/website/bun.lockb"] {
         if root.join(path).exists() {
             return Err(format!("legacy or extra app lockfile is not allowed: {path}").into());
         }
     }
-    for path in ["desktop/package.json", "desktop/bun.lock", "site/bun.lock"] {
+    for path in [
+        "apps/desktop/package.json",
+        "apps/desktop/bun.lock",
+        "apps/website/bun.lock",
+    ] {
         if !root.join(path).is_file() {
             return Err(
                 format!("required independent app manifest/lockfile is missing: {path}").into(),
@@ -406,7 +414,7 @@ fn validate_repository(root: &Path) -> Result<usize> {
     let mirror = mirrored_bun_version(&site_package)?;
     if mirror != version {
         return Err(format!(
-            "site/package.json packageManager ({mirror}) must mirror .bun-version ({version})"
+            "apps/website/package.json packageManager ({mirror}) must mirror .bun-version ({version})"
         )
         .into());
     }

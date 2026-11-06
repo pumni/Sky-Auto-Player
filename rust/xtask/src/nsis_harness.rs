@@ -1356,7 +1356,7 @@ mod tests {
         let install = runner_temp.join("consumer-install");
         std::fs::create_dir(&repository).expect("create synthetic consumer checkout");
         std::fs::create_dir(&install).expect("create synthetic install root");
-        let staged_resources = repository.join("desktop/src-tauri/resources");
+        let staged_resources = repository.join("apps/desktop/src-tauri/resources");
         assert!(!staged_resources.exists());
 
         let expected_bytes = synthetic_x64_pe();

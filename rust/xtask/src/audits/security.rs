@@ -144,7 +144,7 @@ fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
 
 fn security_findings(root: &Path) -> Result<Vec<Finding>> {
     let mut findings = Vec::new();
-    for prefix in ["rust/crates", "desktop/src-tauri"] {
+    for prefix in ["rust/crates", "apps/desktop/src-tauri"] {
         for path in walk_source(root, prefix)? {
             if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
                 continue;

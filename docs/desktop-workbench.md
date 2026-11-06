@@ -1,35 +1,35 @@
 # Desktop Workbench
 
 The app shell presents the Library Navigator, Track Browser, Inspector, and fixed Player Dock.
-`desktop/src/app/App.tsx` renders `<Workbench />` and `<PlayerBar />` as siblings inside
+`apps/desktop/src/app/App.tsx` renders `<Workbench />` and `<PlayerBar />` as siblings inside
 `.app-shell`. `Workbench.tsx` contains the Library Navigator, Track Browser, Inspector, and their
 separators only. `PlayerBar.tsx` owns the fixed 92 px Player Dock outside the Workbench subtree.
 The Inspector presents Song Details and Runtime Diagnostics in both docked and compact layouts.
 
 ## Frontend ownership
 
-`desktop/src/app/App.tsx` owns the app-shell composition: it renders `AppTitleBar`, `<Workbench />`,
+`apps/desktop/src/app/App.tsx` owns the app-shell composition: it renders `AppTitleBar`, `<Workbench />`,
 and `<PlayerBar />` as sibling children inside `.app-shell`.
-`desktop/src/components/workbench/Workbench.tsx` composes the Library Navigator, Track Browser,
-Inspector, and their separators only. `desktop/src/components/player/PlayerBar.tsx` owns the fixed
+`apps/desktop/src/components/workbench/Workbench.tsx` composes the Library Navigator, Track Browser,
+Inspector, and their separators only. `apps/desktop/src/components/player/PlayerBar.tsx` owns the fixed
 92 px Player Dock and is outside the Workbench subtree.
-`desktop/src/components/workbench/workbenchGeometry.ts` is the pure geometry owner;
+`apps/desktop/src/components/workbench/workbenchGeometry.ts` is the pure geometry owner;
 `MIN_TRACK_BROWSER_WIDTH` is the single 420 px source passed to the workbench as
-`--min-track-browser-width`. `desktop/src/components/workbench/useWorkbenchLayout.ts` connects
+`--min-track-browser-width`. `apps/desktop/src/components/workbench/useWorkbenchLayout.ts` connects
 measured viewport changes and separator input to the geometry policy.
-`desktop/src/components/workbench/workbenchDragPolicy.ts` keeps resize rebasing and in-session
-topology decisions transient. `desktop/src/components/workbench/useWorkbenchPreferences.ts`
-loads and updates the UI layout, while `desktop/src/state/workbenchPreferences.ts` validates and
+`apps/desktop/src/components/workbench/workbenchDragPolicy.ts` keeps resize rebasing and in-session
+topology decisions transient. `apps/desktop/src/components/workbench/useWorkbenchPreferences.ts`
+loads and updates the UI layout, while `apps/desktop/src/state/workbenchPreferences.ts` validates and
 persists the existing v5 preference contract.
 
 Pointer moves update live geometry without writing preferences. Pointer release and explicit
 keyboard resize commits persist the final bounded widths. Viewport-driven collapse, overlay
 presentation, and temporary widths do not become saved preferences.
 
-`desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
-and focus ownership; `desktop/src/components/settings/SettingsCategoryContent.tsx` renders the
-selected category and palette selector. `desktop/src/components/utility/DiagnosticsView.tsx`
-composes Diagnostics, with `desktop/src/components/utility/diagnosticsPresentation.ts` and the
+`apps/desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
+and focus ownership; `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` renders the
+selected category and palette selector. `apps/desktop/src/components/utility/DiagnosticsView.tsx`
+composes Diagnostics, with `apps/desktop/src/components/utility/diagnosticsPresentation.ts` and the
 focused playback, readout, event, timing, and performance components owning presentation of their
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
@@ -134,7 +134,7 @@ background remains fixed at RGB `(18, 19, 20)` and may show through before WebVi
 
 Graphite remains the default dark palette with persisted ID `graphite`; Settings calls it
 **Graphite (Default)**. The five other persisted palette IDs remain selectable and their
-palette-specific dark colors stay in `desktop/src/styles/themes.css`. Light uses a separate
+palette-specific dark colors stay in `apps/desktop/src/styles/themes.css`. Light uses a separate
 semantic token override and does not introduce a palette ID.
 
 Production Graphite is the existing A palette: accent ink and focus `#B2A5E9`, primary fill
@@ -159,9 +159,9 @@ utility-overlay PNGs are explicitly loading-state captures: Diagnostics Runtime 
 `Loading diagnostics…`; they are not described as settled runtime evidence.
 
 Soft Graphite B is a review preview only. Its override exists in the opt-in
-`desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and
+`apps/desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and
 `docs/evidence/issue-563-package-c/`; it is not a production selector or shipped
-`desktop/src/styles/themes.css` palette. Graphite A stays selected unless the owner and Agent Lead
+`apps/desktop/src/styles/themes.css` palette. Graphite A stays selected unless the owner and Agent Lead
 explicitly approve a future visual decision.
 
 The automated contrast gates use 4.5:1 for text and 3:1 for essential non-text/focus indicators.
@@ -171,35 +171,35 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
 
 ## Regression and evidence contract
 
-- `desktop/src/state/store.test.ts` covers latest-intent request fencing, catalog generation changes, bounded
+- `apps/desktop/src/state/store.test.ts` covers latest-intent request fencing, catalog generation changes, bounded
   page caching, Like/membership invalidation, selected-song identity, full-source playback, and
-  session retirement races. `desktop/tests/e2e/library.spec.ts` covers 100-result page boundaries,
+  session retirement races. `apps/desktop/tests/e2e/library.spec.ts` covers 100-result page boundaries,
   page 101 navigation, virtualization, and playback across pages.
-- `desktop/src/components/utility/SongDetailsView.test.tsx`,
-  `desktop/src/state/store.test.ts`, and
-  `desktop/tests/e2e/sheet-compatibility.spec.ts` cover source pitch assumptions, supported and
+- `apps/desktop/src/components/utility/SongDetailsView.test.tsx`,
+  `apps/desktop/src/state/store.test.ts`, and
+  `apps/desktop/tests/e2e/sheet-compatibility.spec.ts` cover source pitch assumptions, supported and
   unsupported schemas, track selection, exact loss consent, stale detail fencing, and invalidation.
   Native detail/prepare parity, loss consent, source rewrite rejection, and the independent physical
   risk gate are covered by
-  `desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs`.
+  `apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs`.
 - Current browser captures for legacy ready, multitrack loss proposal and acceptance, unsupported
   schema, and source pitch assumption are recorded in
   [`Issue #567 WP-C UI evidence`](evidence/issue-567-wp-c/README.md). Browser mock screenshots do
   not establish native Windows focus or gameplay-input behavior.
-- `desktop/tests/e2e/playback.spec.ts` and
-  `desktop/tests/e2e/playback-recovery.spec.ts` cover transport geometry, start and retirement
+- `apps/desktop/tests/e2e/playback.spec.ts` and
+  `apps/desktop/tests/e2e/playback-recovery.spec.ts` cover transport geometry, start and retirement
   races, recovery, and dry-run versus physical labels.
-- `desktop/src/components/utility/UtilityPane.test.tsx` covers utility tab selection, keyboard tab
+- `apps/desktop/src/components/utility/UtilityPane.test.tsx` covers utility tab selection, keyboard tab
   movement, the lazy Diagnostics mount, and close focus restoration.
-- `desktop/src/components/workbench` unit tests plus `desktop/tests/e2e/workbench-layout.spec.ts`,
-  `desktop/tests/e2e/workbench-resize.spec.ts`, and
-  `desktop/tests/e2e/workbench-state-regression.spec.ts` cover pane geometry, pointer/keyboard
+- `apps/desktop/src/components/workbench` unit tests plus `apps/desktop/tests/e2e/workbench-layout.spec.ts`,
+  `apps/desktop/tests/e2e/workbench-resize.spec.ts`, and
+  `apps/desktop/tests/e2e/workbench-state-regression.spec.ts` cover pane geometry, pointer/keyboard
   resize, focus/ARIA state, responsive topology, and preference v5 persistence.
-- `desktop/tests/e2e/settings-diagnostics.spec.ts`,
-  `desktop/tests/e2e/palette-appearance.spec.ts`,
-  `desktop/tests/e2e/light-appearance.spec.ts`,
-  `desktop/tests/e2e/graphite-final-ui-polish.spec.ts`, and
-  `desktop/tests/e2e/graphite-package-c.spec.ts` cover modal/accessibility, Diagnostics
+- `apps/desktop/tests/e2e/settings-diagnostics.spec.ts`,
+  `apps/desktop/tests/e2e/palette-appearance.spec.ts`,
+  `apps/desktop/tests/e2e/light-appearance.spec.ts`,
+  `apps/desktop/tests/e2e/graphite-final-ui-polish.spec.ts`, and
+  `apps/desktop/tests/e2e/graphite-package-c.spec.ts` cover modal/accessibility, Diagnostics
   truthfulness, all six palettes, Light and Graphite Dark rendering, focus and semantic color roles,
   forced-colors, and reduced-motion behavior.
 

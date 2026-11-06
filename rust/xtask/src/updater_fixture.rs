@@ -1815,7 +1815,7 @@ fn assert_migration_registry_roots_absent() -> Result<()> {
 
 #[cfg(windows)]
 fn current_tauri_bundle_identity(repository_root: &Path) -> Result<(String, String)> {
-    let path = repository_root.join("desktop/src-tauri/tauri.conf.json");
+    let path = repository_root.join("apps/desktop/src-tauri/tauri.conf.json");
     let bytes = read_bounded_file(&path, 1024 * 1024)?;
     let config: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("canonical Tauri config is invalid JSON: {error}"))?;
@@ -2202,9 +2202,9 @@ fn build_bridge_internal(
         .into());
     }
     let operation: Result<()> = (|| {
-        let cargo_path = worktree.join("desktop/src-tauri/Cargo.toml");
+        let cargo_path = worktree.join("apps/desktop/src-tauri/Cargo.toml");
         let lock_path = worktree.join("rust/Cargo.lock");
-        let config_source_path = worktree.join("desktop/src-tauri/tauri.conf.json");
+        let config_source_path = worktree.join("apps/desktop/src-tauri/tauri.conf.json");
         let catalog_path = worktree.join("builtin-songs/manifest.json");
         let cargo =
             replace_one_unindented_version(&std::fs::read_to_string(&cargo_path)?, bridge_version)?;
@@ -2990,7 +2990,7 @@ mod tests {
         let root = temporary_config_root();
         let _root = TestRoot(root.clone());
         let source_root = root.join("source");
-        let config_path = source_root.join("desktop/src-tauri/tauri.conf.json");
+        let config_path = source_root.join("apps/desktop/src-tauri/tauri.conf.json");
         std::fs::create_dir_all(config_path.parent().expect("config parent"))
             .expect("create disposable worktree config path");
         let mut config = bridge_tauri_config();

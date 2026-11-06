@@ -40,7 +40,7 @@ pub(crate) struct CandidateContract {
 }
 
 fn project_version(root: &Path) -> Result<String> {
-    let manifest_path = root.join("desktop/src-tauri/Cargo.toml");
+    let manifest_path = root.join("apps/desktop/src-tauri/Cargo.toml");
     let source = fs::read_to_string(&manifest_path).map_err(|error| {
         format!(
             "canonical desktop manifest is missing or unreadable: {}: {error}",

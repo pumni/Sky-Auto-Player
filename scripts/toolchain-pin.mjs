@@ -8,7 +8,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exactVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const rustToolchainPath = 'rust/rust-toolchain.toml';
 const bunVersionPath = '.bun-version';
-const bunManifestPath = 'site/package.json';
+const bunManifestPath = 'apps/website/package.json';
 
 function invalid(message) {
   throw new Error(message);
@@ -81,18 +81,18 @@ export function parseRustToolchain(source) {
 
 export function parseBunPackageManager(source) {
   if ([...source.matchAll(/"packageManager"\s*:/g)].length !== 1) {
-    invalid('site/package.json must contain exactly one packageManager field');
+    invalid('apps/website/package.json must contain exactly one packageManager field');
   }
   const manifest = JSON.parse(source);
   if (!manifest || Array.isArray(manifest) || typeof manifest !== 'object') {
-    invalid('site/package.json must contain a JSON object');
+    invalid('apps/website/package.json must contain a JSON object');
   }
   const packageManager = manifest.packageManager;
   if (typeof packageManager !== 'string' || !packageManager.startsWith('bun@')) {
-    invalid('site/package.json packageManager must use bun@<exact-version>');
+    invalid('apps/website/package.json packageManager must use bun@<exact-version>');
   }
   const version = packageManager.slice('bun@'.length);
-  if (!exactVersion.test(version)) invalid('site/package.json packageManager must be an exact numeric version');
+  if (!exactVersion.test(version)) invalid('apps/website/package.json packageManager must be an exact numeric version');
   return version;
 }
 
@@ -106,7 +106,7 @@ export function readBunPin(root = repositoryRoot) {
   const version = parseBunVersionFile(readFileSync(resolve(root, bunVersionPath), 'utf8'));
   const mirror = parseBunPackageManager(readFileSync(resolve(root, bunManifestPath), 'utf8'));
   if (mirror !== version) {
-    invalid(`site/package.json packageManager must mirror .bun-version (${version})`);
+    invalid(`apps/website/package.json packageManager must mirror .bun-version (${version})`);
   }
   return version;
 }
