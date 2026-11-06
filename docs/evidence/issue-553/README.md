@@ -1,5 +1,7 @@
 # Inspector resize correctness evidence
 
+> Archived screenshots below are linked to the immutable 2026-11-06 pre-cleanup commit. These are revision-specific evidence, not current UI. For fresh UI captures see [UI images](../../ui/README.md).
+
 The CHANGES REQUESTED follow-up adds a session-owned CSS visual path, stable
 frame lifecycle, retained release geometry, robust reload polling, and
 [native continuous-drag measurements](native/README.md). The historical 200-to-1
@@ -39,7 +41,7 @@ across Inspector close/reopen until a genuine later viewport change or explicit
 navigator action. Independent DOM tests also cover 915/916/917px release thresholds.
 Temporary window shrink never rewrites saved navigator preference/expanded width.
 
-![Graphite Inspector clamped at 1024](inspector-clamped-1024.png)
+![Graphite Inspector clamped at 1024](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-553/inspector-clamped-1024.png)
 
 ## Update-count proxy
 

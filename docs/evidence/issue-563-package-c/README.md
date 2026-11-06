@@ -1,5 +1,7 @@
 # Issue #563 Package C: Graphite A/B evidence
 
+> Archived screenshots below are linked to the immutable 2026-11-06 pre-cleanup commit. These are revision-specific evidence, not current UI. For fresh UI captures see [UI images](../../ui/README.md).
+
 ## Decision boundary
 
 **B / Soft Graphite is a review preview only.** Production continues to use Graphite A. No palette ID, persisted value, or shipped color has been changed pending Agent Lead and owner visual approval.
@@ -19,17 +21,17 @@ The Settings label is **Graphite (Default)**. Its persisted palette ID remains `
 
 | Scene | Graphite A | Soft Graphite B preview |
 | --- | --- | --- |
-| Populated, selected Blue Bird / playing Candle Run, 1366×768 | [PNG](A-current/populated-1366x768.png) | [PNG](B-preview/populated-1366x768.png) |
-| Compact, 800×560 | [PNG](A-current/compact-800x560.png) | [PNG](B-preview/compact-800x560.png) |
-| Inspector overlay fallback, 640×448 | [PNG](A-current/inspector-overlay-640x448-browser-fallback.png) | [PNG](B-preview/inspector-overlay-640x448-browser-fallback.png) |
-| Settings / Appearance | [PNG](A-current/settings-1366x768.png) | [PNG](B-preview/settings-1366x768.png) |
-| Playback confirmation | [PNG](A-current/playback-confirmation-1366x768.png) | [PNG](B-preview/playback-confirmation-1366x768.png) |
-| Playback error, 800×560 | [PNG](A-current/playback-error-800x560.png) | [PNG](B-preview/playback-error-800x560.png) |
-| Diagnostics / Runtime, 1366×768 | [PNG](A-current/diagnostics-1366x768.png) | [PNG](B-preview/diagnostics-1366x768.png) |
-| Populated, 1920×1080 | [PNG](A-current/populated-1920x1080.png) | [PNG](B-preview/populated-1920x1080.png) |
-| Diagnostics / Runtime, 1920×1080 | [PNG](A-current/diagnostics-1920x1080.png) | [PNG](B-preview/diagnostics-1920x1080.png) |
-| Browser forced-colors emulation | [PNG](A-current/forced-colors-1366x768.png) | [PNG](B-preview/forced-colors-1366x768.png) |
-| Browser reduced-motion emulation | [PNG](A-current/reduced-motion-1366x768.png) | [PNG](B-preview/reduced-motion-1366x768.png) |
+| Populated, selected Blue Bird / playing Candle Run, 1366×768 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/populated-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/populated-1366x768.png) |
+| Compact, 800×560 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/compact-800x560.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/compact-800x560.png) |
+| Inspector overlay fallback, 640×448 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/inspector-overlay-640x448-browser-fallback.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/inspector-overlay-640x448-browser-fallback.png) |
+| Settings / Appearance | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/settings-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/settings-1366x768.png) |
+| Playback confirmation | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/playback-confirmation-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/playback-confirmation-1366x768.png) |
+| Playback error, 800×560 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/playback-error-800x560.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/playback-error-800x560.png) |
+| Diagnostics / Runtime, 1366×768 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/diagnostics-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/diagnostics-1366x768.png) |
+| Populated, 1920×1080 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/populated-1920x1080.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/populated-1920x1080.png) |
+| Diagnostics / Runtime, 1920×1080 | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/diagnostics-1920x1080.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/diagnostics-1920x1080.png) |
+| Browser forced-colors emulation | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/forced-colors-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/forced-colors-1366x768.png) |
+| Browser reduced-motion emulation | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/reduced-motion-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/reduced-motion-1366x768.png) |
 
 The populated pair preserves a distinct selected row (`Blue Bird`, `aria-selected=true`) and playing row (`Candle Run`, `aria-current=true`) in a dry run. The error pair displays the target-not-found recovery banner. The forced-colors and reduced-motion modes are recorded per scene in the JSON.
 
@@ -37,10 +39,10 @@ The populated pair preserves a distinct selected row (`Blue Bird`, `aria-selecte
 
 | State | Graphite A | Soft Graphite B preview |
 | --- | --- | --- |
-| Primary action hover | [PNG](A-current/roles/primary-hover-1366x768.png) | [PNG](B-preview/roles/primary-hover-1366x768.png) |
-| Primary action pressed | [PNG](A-current/roles/primary-pressed-1366x768.png) | [PNG](B-preview/roles/primary-pressed-1366x768.png) |
-| Keyboard-visible focus | [PNG](A-current/roles/primary-focus-1366x768.png) | [PNG](B-preview/roles/primary-focus-1366x768.png) |
-| Window close / danger hover | [PNG](A-current/roles/danger-hover-1366x768.png) | [PNG](B-preview/roles/danger-hover-1366x768.png) |
+| Primary action hover | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/roles/primary-hover-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/roles/primary-hover-1366x768.png) |
+| Primary action pressed | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/roles/primary-pressed-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/roles/primary-pressed-1366x768.png) |
+| Keyboard-visible focus | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/roles/primary-focus-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/roles/primary-focus-1366x768.png) |
+| Window close / danger hover | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/A-current/roles/danger-hover-1366x768.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-563-package-c/B-preview/roles/danger-hover-1366x768.png) |
 
 ## Token comparison
 

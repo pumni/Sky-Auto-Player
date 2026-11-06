@@ -39,7 +39,7 @@ const exe = resolve(
   ),
 );
 const outputDir = resolve(
-  String(options.output ?? join(repoRoot, "docs/evidence/issue-565-package-c")),
+  String(options.output ?? join(repoRoot, "apps/desktop/test-results/visual-evidence/issue-565-package-c")),
 );
 if (!existsSync(exe)) throw new Error(`Packaged executable not found: ${exe}`);
 mkdirSync(outputDir, { recursive: true });
