@@ -8,7 +8,7 @@ $newSignaturePath = Join-Path $fixtureRoot "new.sig"
 New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 try {
     [IO.File]::WriteAllBytes($payloadPath, [Text.Encoding]::UTF8.GetBytes("Sky Auto Player v4 updater rotation fixture"))
-    Push-Location (Join-Path $PSScriptRoot "..\desktop")
+    Push-Location (Join-Path $PSScriptRoot "..\apps\desktop")
     try {
         bun run tauri signer generate --ci --password "" --force -w $oldKeyPath | Out-Null
         bun run tauri signer generate --ci --password "" --force -w $newKeyPath | Out-Null

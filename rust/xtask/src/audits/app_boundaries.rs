@@ -323,6 +323,50 @@ fn normalize(path: &Path) -> PathBuf {
     normalized
 }
 
+fn resolve_command_relative_path(base: &Path, relative: &str) -> PathBuf {
+    let host_independent = PathBuf::from(relative.replace('\\', "/"));
+    normalize(&base.join(host_independent))
+}
+
+fn validate_script_desktop_root(
+    script_path: &str,
+    source: &str,
+    expected: &str,
+    retired: &str,
+) -> std::result::Result<(), String> {
+    if !source.contains(expected) {
+        return Err(format!(
+            "{script_path} must resolve its desktop tool working directory to apps/desktop"
+        ));
+    }
+    if source.contains(retired) {
+        return Err(format!(
+            "{script_path} still references the retired root desktop directory"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_root_tool_script_paths(root: &Path) -> Result<()> {
+    for (path, expected, retired) in [
+        (
+            "scripts/test_v4_updater_key_rotation.ps1",
+            r#"Push-Location (Join-Path $PSScriptRoot "..\apps\desktop")"#,
+            r#"Join-Path $PSScriptRoot "..\desktop""#,
+        ),
+        (
+            "scripts/test_v4_updater_private_key.ps1",
+            r#"Push-Location (Join-Path $repoRoot 'apps/desktop')"#,
+            r#"Join-Path $repoRoot 'desktop'"#,
+        ),
+    ] {
+        let source = fs::read_to_string(root.join(path))?;
+        validate_script_desktop_root(path, &source, expected, retired)
+            .map_err(|error| format!("root tooling script path contract: {error}"))?;
+    }
+    Ok(())
+}
+
 fn canonical(path: PathBuf, label: &str) -> std::result::Result<PathBuf, String> {
     path.canonicalize().map_err(|error| {
         format!(
@@ -349,7 +393,7 @@ fn validate_relative_packaging_paths(root: &Path, source: &str) -> std::result::
             "Tauri beforeBuildCommand must return from apps/desktop to the repository root".into(),
         );
     }
-    if normalize(&desktop_root.join("..\\..")) != repo_root {
+    if resolve_command_relative_path(&desktop_root, r"..\..") != repo_root {
         return Err(
             "Tauri beforeBuildCommand relative root does not resolve to the repository".into(),
         );
@@ -481,6 +525,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         validate_source_imports(app, &root.join(app.name()))?;
     }
     validate_website_build_sources(&root.join("apps/website"))?;
+    validate_root_tool_script_paths(root)?;
     let tauri_config = fs::read_to_string(root.join("apps/desktop/src-tauri/tauri.conf.json"))?;
     validate_relative_packaging_paths(root, &tauri_config)
         .map_err(|error| format!("relocated package path contract: {error}"))?;
@@ -589,6 +634,17 @@ mod tests {
 
     #[test]
     fn relocated_tauri_paths_resolve_from_their_documented_windows_working_directories() {
+        let desktop_root = Path::new("repository/apps/desktop");
+        let repository_root = Path::new("repository");
+        assert_eq!(
+            resolve_command_relative_path(desktop_root, r"..\.."),
+            repository_root
+        );
+        assert_eq!(
+            resolve_command_relative_path(desktop_root, "../.."),
+            repository_root
+        );
+
         let root = crate::repo::root();
         let config_path = root.join("apps/desktop/src-tauri/tauri.conf.json");
         let source = fs::read_to_string(&config_path).unwrap();
@@ -600,5 +656,29 @@ mod tests {
         assert!(validate_relative_packaging_paths(&root, &stale_signer).is_err());
         let stale_song_root = source.replace("../../../songs/*", "../../songs/*");
         assert!(validate_relative_packaging_paths(&root, &stale_song_root).is_err());
+    }
+
+    #[test]
+    fn root_updater_scripts_use_apps_desktop_and_reject_retired_paths() {
+        for (script_path, expected, retired) in [
+            (
+                "scripts/test_v4_updater_key_rotation.ps1",
+                r#"Push-Location (Join-Path $PSScriptRoot "..\apps\desktop")"#,
+                r#"Join-Path $PSScriptRoot "..\desktop""#,
+            ),
+            (
+                "scripts/test_v4_updater_private_key.ps1",
+                r#"Push-Location (Join-Path $repoRoot 'apps/desktop')"#,
+                r#"Join-Path $repoRoot 'desktop'"#,
+            ),
+        ] {
+            let source = fs::read_to_string(crate::repo::root().join(script_path)).unwrap();
+            assert!(validate_script_desktop_root(script_path, &source, expected, retired).is_ok());
+            let regressed = source.replace(expected, retired);
+            assert!(
+                validate_script_desktop_root(script_path, &regressed, expected, retired).is_err(),
+                "{script_path} accepted a retired desktop path"
+            );
+        }
     }
 }
