@@ -1,5 +1,7 @@
 # Graphite Workbench: V1 visual approval
 
+> Archived screenshots below are linked to the immutable 2026-11-06 pre-cleanup commit. These are revision-specific evidence, not current UI. For fresh UI captures see [UI images](../../ui/README.md).
+
 This file preserves the review request prepared for PR #502. PR #502 has since merged; the request
 below records the review state at that time, not a current open decision. Screenshot source-SHA
 provenance remains as recorded below.
@@ -16,19 +18,19 @@ Baseline source: `36422ad2ea524269cc524b9642a65655290e9284`. Preview implementat
 
 | CSS viewport | Before: workbench                     | Graphite: workbench                     | Before: Runtime                     | Graphite: Runtime                     |
 | ------------ | ------------------------------------- | --------------------------------------- | ----------------------------------- | ------------------------------------- |
-| 640×448      | [PNG](before/workbench-640x448.png)   | [PNG](graphite/workbench-640x448.png)   | [PNG](before/runtime-640x448.png)   | [PNG](graphite/runtime-640x448.png)   |
-| 800×560      | [PNG](before/workbench-800x560.png)   | [PNG](graphite/workbench-800x560.png)   | [PNG](before/runtime-800x560.png)   | [PNG](graphite/runtime-800x560.png)   |
-| 1366×768     | [PNG](before/workbench-1366x768.png)  | [PNG](graphite/workbench-1366x768.png)  | [PNG](before/runtime-1366x768.png)  | [PNG](graphite/runtime-1366x768.png)  |
-| 1920×1080    | [PNG](before/workbench-1920x1080.png) | [PNG](graphite/workbench-1920x1080.png) | [PNG](before/runtime-1920x1080.png) | [PNG](graphite/runtime-1920x1080.png) |
+| 640×448      | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/workbench-640x448.png)   | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/workbench-640x448.png)   | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/runtime-640x448.png)   | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/runtime-640x448.png)   |
+| 800×560      | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/workbench-800x560.png)   | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/workbench-800x560.png)   | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/runtime-800x560.png)   | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/runtime-800x560.png)   |
+| 1366×768     | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/workbench-1366x768.png)  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/workbench-1366x768.png)  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/runtime-1366x768.png)  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/runtime-1366x768.png)  |
+| 1920×1080    | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/workbench-1920x1080.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/workbench-1920x1080.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/runtime-1920x1080.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/runtime-1920x1080.png) |
 
 The 640 px titlebar close-up shows the original Search/Update collision and its repair. The 800 px and wider close-ups show the centered Search track.
 
 | Viewport         | Before                             | Graphite                             |
 | ---------------- | ---------------------------------- | ------------------------------------ |
-| 640×48 titlebar  | [PNG](before/titlebar-640x48.png)  | [PNG](graphite/titlebar-640x48.png)  |
-| 800×48 titlebar  | [PNG](before/titlebar-800x48.png)  | [PNG](graphite/titlebar-800x48.png)  |
-| 1366×48 titlebar | [PNG](before/titlebar-1366x48.png) | [PNG](graphite/titlebar-1366x48.png) |
-| 1920×48 titlebar | [PNG](before/titlebar-1920x48.png) | [PNG](graphite/titlebar-1920x48.png) |
+| 640×48 titlebar  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/titlebar-640x48.png)  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/titlebar-640x48.png)  |
+| 800×48 titlebar  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/titlebar-800x48.png)  | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/titlebar-800x48.png)  |
+| 1366×48 titlebar | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/titlebar-1366x48.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/titlebar-1366x48.png) |
+| 1920×48 titlebar | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/before/titlebar-1920x48.png) | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-approval/graphite/titlebar-1920x48.png) |
 
 ## Palette and hierarchy
 

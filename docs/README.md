@@ -1,6 +1,7 @@
 # Technical Documentation
 
 Start at [INDEX.md](INDEX.md) when a task requires a technical contract.
+For a visual desktop UI reference, use [ui/README.md](ui/README.md) and verify its capture SHA.
 It distinguishes active references from revision-bound records.
 
 Current behavior comes from source, tests, and configuration at the

@@ -5,7 +5,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 const captureStage = process.env.GRAPHITE_FINAL_UI_CAPTURE;
 const evidenceDirectory =
   process.env.GRAPHITE_FINAL_UI_EVIDENCE_DIR ??
-  resolve(process.cwd(), '..', 'docs/evidence/graphite-final-ui-polish/after');
+  resolve(process.cwd(), 'test-results/visual-evidence/graphite-final-ui-polish/after');
 const workbenchPreferenceKey = 'sky.ui.workbench.v5';
 
 async function openApp(

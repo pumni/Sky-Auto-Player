@@ -1,0 +1,14 @@
+{
+  "status": "captured",
+  "source_sha": "bc8e8df117411e2a2539c14144b3322016f81381",
+  "desktop_tree_sha": "e60faf763eb4bf70ac6992663d3dd44c01942abe",
+  "captured_at_utc": "2026-11-06T15:58:18.910Z",
+  "environment": "Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows",
+  "generated_by": "bun run ui:refresh (apps/desktop)",
+  "scenes": {
+    "workbench.png": "Graphite workbench, 1366x768 CSS viewport; selected and dry-run playing rows",
+    "compact.png": "Graphite compact workbench, 800x560 CSS viewport",
+    "overlay.png": "Browser-only responsive inspector overlay, 640x448; not supported native window minimum",
+    "diagnostics.png": "Runtime diagnostics, dry run without physical keyboard input, 1366x768"
+  }
+}

@@ -1,5 +1,7 @@
 # Issue #565 — Package C Windows and system-theme qualification
 
+> Archived screenshots below are linked to the immutable 2026-11-06 pre-cleanup commit. These are revision-specific evidence, not current UI. For fresh UI captures see [UI images](../../ui/README.md).
+
 This evidence separates a real Windows Tauri/WebView2 run from browser media emulation. The
 machine-readable report records the immutable source/build SHA, executable SHA-256, runtime, OS
 preference snapshot, observed computed styles, contrast results, restart checks, and restoration
@@ -44,10 +46,10 @@ compositor captures.
 
 | Scene                                                        | Screenshot                                    |
 | ------------------------------------------------------------ | --------------------------------------------- |
-| Fresh profile · System Light · Appearance Settings           | [PNG](fresh-system-light-webview2.png)        |
-| Fresh profile · Light · Global Search keyboard focus         | [PNG](fresh-light-search-focus-webview2.png)  |
-| Fresh profile · Graphite Dark · Global Search keyboard focus | [PNG](fresh-system-dark-focus-webview2.png)   |
-| Legacy Dark / Slate while Windows Apps mode is Light         | [PNG](legacy-dark-windows-light-webview2.png) |
+| Fresh profile · System Light · Appearance Settings           | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-565-package-c/fresh-system-light-webview2.png)        |
+| Fresh profile · Light · Global Search keyboard focus         | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-565-package-c/fresh-light-search-focus-webview2.png)  |
+| Fresh profile · Graphite Dark · Global Search keyboard focus | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-565-package-c/fresh-system-dark-focus-webview2.png)   |
+| Legacy Dark / Slate while Windows Apps mode is Light         | [PNG](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/issue-565-package-c/legacy-dark-windows-light-webview2.png) |
 
 ## Rendered contrast and geometry
 

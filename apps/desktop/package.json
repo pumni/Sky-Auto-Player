@@ -16,6 +16,7 @@
     "test:tooling": "node --test scripts/tooling-policy.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "node scripts/run-e2e.mjs",
+    "ui:refresh": "node scripts/refresh-ui-snapshots.mjs",
     "test:e2e:bundle": "node scripts/run-bundle-e2e.mjs",
     "test:e2e:bundle:existing": "node scripts/run-bundle-e2e.mjs --reuse-existing-build",
     "benchmark:startup": "node scripts/benchmark-startup.mjs",

@@ -35,13 +35,13 @@ is recorded in `raster-sources.json` and is checked by `cargo xtask check static
 repository root after installing the pinned desktop dependencies:
 
 ```powershell
-cd desktop
+cd apps/desktop
 bun install --frozen-lockfile
-bun run tauri icon ../branding/sky-auto-player-app-icon-16.svg --output ../branding/exports/windows/raster --png 16
-bun run tauri icon ../branding/sky-auto-player-app-icon-small.svg --output ../branding/exports/windows/raster --png 20,24
-bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output ../branding/exports/windows/raster --png 32,40,48,64,96,128,256
-bun run tauri icon ../branding/sky-auto-player-app-icon.svg --output src/assets/brand --png 32,40,48,64
-cd ..
+bun run tauri icon ../../branding/sky-auto-player-app-icon-16.svg --output ../../branding/exports/windows/raster --png 16
+bun run tauri icon ../../branding/sky-auto-player-app-icon-small.svg --output ../../branding/exports/windows/raster --png 20,24
+bun run tauri icon ../../branding/sky-auto-player-app-icon.svg --output ../../branding/exports/windows/raster --png 32,40,48,64,96,128,256
+bun run tauri icon ../../branding/sky-auto-player-app-icon.svg --output src/assets/brand --png 32,40,48,64
+cd ../..
 cargo xtask branding build-ico --layers-dir branding/exports/windows/raster --output branding/exports/windows/sky-auto-player.ico
 ```
 

@@ -7249,11 +7249,16 @@ fn main() {{
                     Ok((stream, _)) => break stream,
                     Err(error)
                         if error.kind() == std::io::ErrorKind::WouldBlock
-                            && started.elapsed() < Duration::from_secs(7) =>
+                            // curl's configured connect timeout is 20 seconds; leave room for
+                            // Windows process startup and runner scheduling.
+                            && started.elapsed() < Duration::from_secs(30) =>
                     {
                         std::thread::sleep(Duration::from_millis(20));
                     }
-                    Err(error) => panic!("local upload fixture never received curl: {error}"),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        panic!("local upload fixture timed out waiting for curl: {error}")
+                    }
+                    Err(error) => panic!("local upload fixture accept failed: {error}"),
                 }
             };
             stream
@@ -7301,9 +7306,20 @@ fn main() {{
 
         let result = execute_release_upload_curl(&args, &auth_path, &auth_config);
         let cleanup_binary = fs::remove_file(&binary_path);
-        let request = server.join().expect("local fixture thread");
+        let server_result = server.join();
         cleanup_binary.unwrap();
-        assert!(result.is_ok(), "fixture curl returned failure: {result:?}");
+        let request = match (result, server_result) {
+            (Ok(()), Ok(request)) => request,
+            (Err(curl_error), Err(_)) => {
+                panic!("fixture curl failed: {curl_error:?}; local fixture thread also failed")
+            }
+            (Err(curl_error), Ok(_)) => {
+                panic!(
+                    "fixture curl failed after the local fixture received a request: {curl_error:?}"
+                )
+            }
+            (Ok(()), Err(_)) => panic!("local fixture thread failed after curl returned success"),
+        };
         assert!(
             !auth_path.exists(),
             "auth config must be removed deterministically"
@@ -7349,11 +7365,15 @@ fn main() {{
                     Ok((stream, _)) => break stream,
                     Err(error)
                         if error.kind() == std::io::ErrorKind::WouldBlock
-                            && started.elapsed() < Duration::from_secs(7) =>
+                            // Match the production curl connect budget with scheduling slack.
+                            && started.elapsed() < Duration::from_secs(30) =>
                     {
                         std::thread::sleep(Duration::from_millis(20));
                     }
-                    Err(error) => panic!("local upload fixture never received curl: {error}"),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        panic!("local upload fixture timed out waiting for curl: {error}")
+                    }
+                    Err(error) => panic!("local upload fixture accept failed: {error}"),
                 }
             };
             stream

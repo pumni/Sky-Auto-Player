@@ -8,7 +8,10 @@ import { expectNoSeriousAccessibilityViolations } from './testHelpers';
 
 const evidenceEnabled = process.env.PACKAGE_B_VISUAL_EVIDENCE === '1';
 const captureSha = process.env.PACKAGE_B_CAPTURE_SHA ?? '';
-const evidenceDirectory = resolve(process.cwd(), '..', 'docs/evidence/issue-565-package-b');
+const evidenceDirectory = resolve(
+  process.cwd(),
+  'test-results/visual-evidence/issue-565-package-b',
+);
 const viewports = [
   { width: 1366, height: 768 },
   { width: 1200, height: 760 },

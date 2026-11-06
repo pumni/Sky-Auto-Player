@@ -1,5 +1,7 @@
 # Graphite hierarchy-first UI evidence
 
+> Archived screenshots below are linked to the immutable 2026-11-06 pre-cleanup commit. These are revision-specific evidence, not current UI. For fresh UI captures see [UI images](../../ui/README.md).
+
 This evidence package follows the corrected issue #549 direction: primary actions stay filled and
 prominent, selected states persist, and secondary actions remain quiet until hover or focus.
 
@@ -34,9 +36,9 @@ The caption image is a 46×40 Close-control crop from the 1366×768 viewport.
 
 | State                                                 | Before                                                      | After                                                     |
 | ----------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
-| Playing track with a different selected row, 1366×768 | [Before](before/player-playing-selected-track-1366x768.png) | [After](after/player-playing-selected-track-1366x768.png) |
-| Settings category selection, 1366×768                 | [Before](before/settings-1366x768.png)                      | [After](after/settings-1366x768.png)                      |
-| Caption Close danger hover, 46×40 crop                | [Before](before/titlebar-close-hover-1366x768.png)          | [After](after/titlebar-close-hover-1366x768.png)          |
+| Playing track with a different selected row, 1366×768 | [Before](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-final-ui-polish/before/player-playing-selected-track-1366x768.png) | [After](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-final-ui-polish/after/player-playing-selected-track-1366x768.png) |
+| Settings category selection, 1366×768                 | [Before](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-final-ui-polish/before/settings-1366x768.png)                      | [After](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-final-ui-polish/after/settings-1366x768.png)                      |
+| Caption Close danger hover, 46×40 crop                | [Before](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-final-ui-polish/before/titlebar-close-hover-1366x768.png)          | [After](https://raw.githubusercontent.com/pumni/Sky-Auto-Player/69cdb8598a2a60c6a6854c1cafe4546dea83fdbe/docs/evidence/graphite-final-ui-polish/after/titlebar-close-hover-1366x768.png)          |
 
 ## Contrast measurements
 
