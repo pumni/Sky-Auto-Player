@@ -62,9 +62,11 @@ measurements, and limitations intact.
   (source-bound 96-song paging/Windows profile; not evidence of the current
   catalog size or installed-upgrade behavior).
 - **Release-specific records:** [releases](releases/).
-- Other issue- and phase-scoped reports remain in `docs/` (for example,
-  `gate-*-evidence.md`, `r3-*.md`, and `prepared-*-evidence.md`);
-  search by issue, feature, or source SHA when needed.
+- **Archived superseded checkpoint reports:** [immutable history index](HISTORY.md)
+  (Issue #312 gates, Issue #300, and R3/P8 snapshots). Search the exact source
+  revision before applying an older conclusion to current code.
+- Other issue- and phase-scoped evidence remains in `docs/`; search by issue,
+  feature, or source SHA when needed.
 
 If an active contract disagrees with source, inspect both and report the
 discrepancy before changing the relevant owner. Historical test evidence
