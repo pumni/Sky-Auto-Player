@@ -1,5 +1,20 @@
 use super::*;
 
+fn line_ending_variants(source: &str) -> Vec<(&'static str, String)> {
+    let lf = super::super::normalize_source_line_endings(source);
+    let crlf = lf.replace('\n', "\r\n");
+    let mut mixed = String::with_capacity(lf.len());
+    for (index, line) in lf.split_inclusive('\n').enumerate() {
+        if let Some(contents) = line.strip_suffix('\n') {
+            mixed.push_str(contents);
+            mixed.push_str(if index % 2 == 0 { "\r\n" } else { "\n" });
+        } else {
+            mixed.push_str(line);
+        }
+    }
+    vec![("LF", lf), ("CRLF", crlf), ("mixed", mixed)]
+}
+
 #[test]
 fn website_validation_contract_requires_direct_checks_and_rejects_removed_guards() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -57,63 +72,72 @@ fn website_validation_contract_requires_direct_checks_and_rejects_removed_guards
 #[test]
 fn website_artifact_and_required_status_contracts_fail_closed() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))
+    let ci_source = fs::read_to_string(root.join(".github/workflows/ci.yml"))
         .expect("CI workflow fixture must exist");
-    let site_start = ci.find("\n  site:\n").expect("site job must exist");
-    let status_start = ci.find("\n  status:\n").expect("status gate must exist");
-    let site = &ci[site_start..status_start];
-    website_artifact_upload_contract(site, "CI fixture")
-        .expect("CI must upload one correctly placed website artifact");
+    for (line_endings, fixture) in line_ending_variants(&ci_source) {
+        let ci = super::super::normalize_source_line_endings(&fixture);
+        let site_start = ci.find("\n  site:\n").expect("site job must exist");
+        let status_start = ci.find("\n  status:\n").expect("status gate must exist");
+        let site = &ci[site_start..status_start];
+        website_artifact_upload_contract(site, "CI fixture")
+            .unwrap_or_else(|error| panic!("{line_endings} CI artifact contract: {error}"));
 
-    let misplaced_path = site.replace("path: apps/website/dist", "path: site/dist");
-    assert_ne!(misplaced_path, site);
-    assert!(website_artifact_upload_contract(&misplaced_path, "CI fixture").is_err());
+        let misplaced_path = site.replace("path: apps/website/dist", "path: site/dist");
+        assert_ne!(misplaced_path, site, "{line_endings}");
+        assert!(website_artifact_upload_contract(&misplaced_path, "CI fixture").is_err());
 
-    let missing_upload = site.replace(
-        "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
-        "actions/upload-artifact@fixture",
-    );
-    assert_ne!(missing_upload, site);
-    assert!(website_artifact_upload_contract(&missing_upload, "CI fixture").is_err());
+        let missing_upload = site.replace(
+            "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
+            "actions/upload-artifact@fixture",
+        );
+        assert_ne!(missing_upload, site, "{line_endings}");
+        assert!(website_artifact_upload_contract(&missing_upload, "CI fixture").is_err());
 
-    let duplicated_upload = site.replace(
-        "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
-        "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9\n        # actions/upload-pages-artifact@duplicate",
-    );
-    assert_ne!(duplicated_upload, site);
-    assert!(website_artifact_upload_contract(&duplicated_upload, "CI fixture").is_err());
+        let duplicated_upload = site.replace(
+            "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
+            "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9\n        # actions/upload-pages-artifact@duplicate",
+        );
+        assert_ne!(duplicated_upload, site, "{line_endings}");
+        assert!(website_artifact_upload_contract(&duplicated_upload, "CI fixture").is_err());
 
-    let misplaced_upload = "path: apps/website/dist\nuses: actions/upload-pages-artifact@fixture";
-    assert!(website_artifact_upload_contract(misplaced_upload, "fixture").is_err());
+        let misplaced_upload =
+            "path: apps/website/dist\nuses: actions/upload-pages-artifact@fixture";
+        assert!(website_artifact_upload_contract(misplaced_upload, "fixture").is_err());
 
-    let status = &ci[status_start..ci.find("\n  deploy_pages:\n").unwrap()];
-    website_required_status_contract(status).expect("website result must gate required CI status");
-    let disabled_gate = status.replace("[[ \"$SITE_RESULT\" == \"success\" ]]", "echo skipped");
-    assert_ne!(disabled_gate, status);
-    assert!(website_required_status_contract(&disabled_gate).is_err());
+        let status_end = ci.find("\n  deploy_pages:\n").unwrap();
+        let status = &ci[status_start..status_end];
+        website_required_status_contract(status)
+            .unwrap_or_else(|error| panic!("{line_endings} required status contract: {error}"));
+        let disabled_gate = status.replace("[[ \"$SITE_RESULT\" == \"success\" ]]", "echo skipped");
+        assert_ne!(disabled_gate, status, "{line_endings}");
+        assert!(website_required_status_contract(&disabled_gate).is_err());
+    }
 }
 
 #[test]
 fn pages_recovery_contract_rejects_missing_seo_duplicate_build_and_bad_artifact() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pages = fs::read_to_string(root.join(".github/workflows/pages.yml"))
+    let pages_source = fs::read_to_string(root.join(".github/workflows/pages.yml"))
         .expect("Pages recovery workflow fixture must exist");
-    website_recovery_workflow_contract(&pages)
-        .expect("manual Pages recovery must deploy the validated built artifact");
+    for (line_endings, fixture) in line_ending_variants(&pages_source) {
+        let pages = super::super::normalize_source_line_endings(&fixture);
+        website_recovery_workflow_contract(&pages)
+            .unwrap_or_else(|error| panic!("{line_endings} Pages contract: {error}"));
 
-    let missing_seo = pages.replace("run: bun run verify:seo", "run: bun run verify:dist");
-    assert_ne!(missing_seo, pages);
-    assert!(website_recovery_workflow_contract(&missing_seo).is_err());
+        let missing_seo = pages.replace("run: bun run verify:seo", "run: bun run verify:dist");
+        assert_ne!(missing_seo, pages, "{line_endings}");
+        assert!(website_recovery_workflow_contract(&missing_seo).is_err());
 
-    let duplicate_build = pages.replace("  deploy:\n", "  deploy:\n    run: bun run build\n");
-    assert_ne!(duplicate_build, pages);
-    assert!(website_recovery_workflow_contract(&duplicate_build).is_err());
+        let duplicate_build = pages.replace("  deploy:\n", "  deploy:\n    run: bun run build\n");
+        assert_ne!(duplicate_build, pages, "{line_endings}");
+        assert!(website_recovery_workflow_contract(&duplicate_build).is_err());
 
-    let bad_artifact = pages.replace("path: apps/website/dist", "path: apps/desktop/dist");
-    assert_ne!(bad_artifact, pages);
-    assert!(website_recovery_workflow_contract(&bad_artifact).is_err());
+        let bad_artifact = pages.replace("path: apps/website/dist", "path: apps/desktop/dist");
+        assert_ne!(bad_artifact, pages, "{line_endings}");
+        assert!(website_recovery_workflow_contract(&bad_artifact).is_err());
 
-    let missing_gate = pages.replace("needs: build", "needs: []");
-    assert_ne!(missing_gate, pages);
-    assert!(website_recovery_workflow_contract(&missing_gate).is_err());
+        let missing_gate = pages.replace("needs: build", "needs: []");
+        assert_ne!(missing_gate, pages, "{line_endings}");
+        assert!(website_recovery_workflow_contract(&missing_gate).is_err());
+    }
 }

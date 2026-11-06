@@ -735,11 +735,11 @@ mod tests {
     fn installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe() {
         let root = temp_dir("sky-xtask-installed-calibration-negative");
         let digest = "0".repeat(64);
-        assert!(
+        assert_eq!(
             verify_installed(&root, 1, &digest, None)
                 .unwrap_err()
-                .to_string()
-                .contains("missing")
+                .to_string(),
+            "installed native_calibration.exe is missing or not a regular file"
         );
         let binary = root.join("native_calibration.exe");
         fs::write(&binary, pe(0x8664)).unwrap();

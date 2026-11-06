@@ -7257,6 +7257,9 @@ fn main() {{
                 }
             };
             stream
+                .set_nonblocking(false)
+                .expect("set accepted upload fixture stream blocking");
+            stream
                 .set_read_timeout(Some(Duration::from_secs(7)))
                 .unwrap();
             let mut request = Vec::new();
