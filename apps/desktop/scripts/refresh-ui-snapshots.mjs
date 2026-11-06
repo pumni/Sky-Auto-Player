@@ -22,8 +22,19 @@ function git(args) {
 
 const sha = git(['rev-parse', 'HEAD']);
 const desktopTreeSha = git(['rev-parse', 'HEAD:apps/desktop']);
-const dirty = git(['status', '--porcelain', '--untracked-files=no', '--', 'apps/desktop/src', 'apps/desktop/tests', 'rust']);
-if (dirty) throw new Error('UI source/tests are dirty. Commit changes before refreshing the canonical UI capture.');
+const dirty = git([
+  'status',
+  '--porcelain',
+  '--untracked-files=no',
+  '--',
+  'apps/desktop/src',
+  'apps/desktop/tests',
+  'rust',
+]);
+if (dirty)
+  throw new Error(
+    'UI source/tests are dirty. Commit changes before refreshing the canonical UI capture.',
+  );
 
 await rm(captureDir, { recursive: true, force: true });
 const run = spawnSync(
@@ -62,14 +73,18 @@ const manifest = {
   source_sha: sha,
   desktop_tree_sha: desktopTreeSha,
   captured_at_utc: new Date().toISOString(),
-  environment: 'Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows',
+  environment:
+    'Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows',
   generated_by: 'bun run ui:refresh (apps/desktop)',
   scenes: {
     'workbench.png': 'Graphite workbench, 1366x768 CSS viewport; selected and dry-run playing rows',
     'compact.png': 'Graphite compact workbench, 800x560 CSS viewport',
-    'overlay.png': 'Browser-only responsive inspector overlay, 640x448; not supported native window minimum',
+    'overlay.png':
+      'Browser-only responsive inspector overlay, 640x448; not supported native window minimum',
     'diagnostics.png': 'Runtime diagnostics, dry run without physical keyboard input, 1366x768',
   },
 };
 await writeFile(resolve(destination, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-console.log('Updated canonical UI screenshots at ' + sha + ': ' + Object.keys(screenshots).join(', '));
+console.log(
+  'Updated canonical UI screenshots at ' + sha + ': ' + Object.keys(screenshots).join(', '),
+);
