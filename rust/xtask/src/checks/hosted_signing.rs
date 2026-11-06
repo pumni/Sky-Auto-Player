@@ -34,7 +34,7 @@ fn validate_workflow_source(source: &str) -> Result<()> {
         "persist-credentials: false",
         "SKY_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
         "      - \".bun-version\"",
-        "      - \"site/package.json\"",
+        "      - \"apps/website/package.json\"",
         "      - \".github/actions/setup-rust-pinned/action.yml\"",
         "uses: ./.github/actions/setup-rust-pinned",
         "bun-version-file: .bun-version",

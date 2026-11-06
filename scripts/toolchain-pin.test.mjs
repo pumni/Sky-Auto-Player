@@ -19,10 +19,11 @@ const validBun = '{"name":"fixture","packageManager":"bun@7.8.9"}';
 function fixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), 'toolchain pin fixture with spaces-'));
   mkdirSync(join(root, 'rust'));
-  mkdirSync(join(root, 'site'));
+  mkdirSync(join(root, 'apps/desktop'), { recursive: true });
+  mkdirSync(join(root, 'apps/website'), { recursive: true });
   writeFileSync(join(root, 'rust/rust-toolchain.toml'), validRust);
   writeFileSync(join(root, '.bun-version'), '7.8.9\n');
-  writeFileSync(join(root, 'site/package.json'), validBun);
+  writeFileSync(join(root, 'apps/website/package.json'), validBun);
   return root;
 }
 
@@ -44,12 +45,12 @@ test('rejects malformed canonical Bun pin files and stale site mirrors', () => {
   const root = fixtureRoot();
   try {
     assert.equal(readBunPin(root), '7.8.9');
-    writeFileSync(join(root, 'site/package.json'), '{"packageManager":"bun@7.8.8"}');
+    writeFileSync(join(root, 'apps/website/package.json'), '{"packageManager":"bun@7.8.8"}');
     assert.throws(() => readBunPin(root), /must mirror \.bun-version/);
-    writeFileSync(join(root, 'site/package.json'), '{"packageManager":"bun@latest"}');
+    writeFileSync(join(root, 'apps/website/package.json'), '{"packageManager":"bun@latest"}');
     assert.throws(() => readBunPin(root), /exact numeric version/);
     writeFileSync(join(root, '.bun-version'), '7.8.8\n');
-    writeFileSync(join(root, 'site/package.json'), validBun);
+    writeFileSync(join(root, 'apps/website/package.json'), validBun);
     assert.throws(() => readBunPin(root), /must mirror \.bun-version/);
   } finally {
     rmSync(root, { recursive: true, force: true });

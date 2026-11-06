@@ -219,7 +219,7 @@ jobs:
         run: bun scripts/verify-bun-pin.mjs
 
       - name: Install locked signer dependencies without building the installer
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Build the pinned Rust release control executable before secrets

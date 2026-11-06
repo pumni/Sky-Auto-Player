@@ -20,7 +20,7 @@ pub(super) fn bindings_with_env(extra_env: &[(&str, &str)]) -> Result<()> {
 
 pub(crate) fn bindings_generate() -> Result<()> {
     let root = repo::root();
-    let export_dir = root.join("desktop/src/bridge/generated");
+    let export_dir = root.join("apps/desktop/src/bridge/generated");
     fs::create_dir_all(&export_dir)?;
     generate_bindings(&root, &export_dir)?;
     write_command_names(&root, &export_dir)?;
@@ -49,7 +49,7 @@ fn ipc_contract_command_name(source: &str, constant: &str) -> Result<String> {
 }
 
 fn command_names_source(root: &Path) -> Result<String> {
-    let source = fs::read_to_string(root.join("desktop/src-tauri/src/ipc_contract.rs"))?;
+    let source = fs::read_to_string(root.join("apps/desktop/src-tauri/src/ipc_contract.rs"))?;
     let source = source.split("#[cfg(test)]").next().unwrap_or(&source);
     let mut commands = Vec::new();
     for line in source.lines() {
@@ -110,7 +110,8 @@ fn write_command_names(root: &Path, directory: &Path) -> Result<()> {
 }
 
 fn compare_command_names(root: &Path, export_dir: &Path) -> Result<()> {
-    let expected = fs::read_to_string(root.join("desktop/src/bridge/generated/command_names.ts"))?;
+    let expected =
+        fs::read_to_string(root.join("apps/desktop/src/bridge/generated/command_names.ts"))?;
     let actual = fs::read_to_string(export_dir.join("command_names.ts"))?;
     if normalized_text_bytes(expected.into_bytes()) != normalized_text_bytes(actual.into_bytes()) {
         return Err("generated IPC command metadata differs from ipc_contract.rs".into());
@@ -199,7 +200,7 @@ fn normalized_text_bytes(bytes: Vec<u8>) -> Vec<u8> {
 }
 
 fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
-    let checked_in_dir = root.join("desktop/src/bridge/generated");
+    let checked_in_dir = root.join("apps/desktop/src/bridge/generated");
     let mut expected = collect_binding_files(&checked_in_dir)?;
     // These are maintained frontend support files rather than ts-rs exports.
     expected.remove("index.ts");
@@ -225,4 +226,47 @@ fn compare_generated_bindings(root: &Path, export_dir: &Path) -> Result<()> {
         .into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn generated_command_metadata_rejects_missing_or_stale_checked_in_output() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-command-bindings-{}-{nonce}",
+            std::process::id()
+        ));
+        let checked_in = root.join("apps/desktop/src/bridge/generated");
+        let exported = root.join("export");
+        fs::create_dir_all(&checked_in).unwrap();
+        fs::create_dir_all(&exported).unwrap();
+        fs::write(
+            checked_in.join("command_names.ts"),
+            "export const READY = 'ready';\n",
+        )
+        .unwrap();
+        fs::write(
+            exported.join("command_names.ts"),
+            "export const READY = 'ready';\n",
+        )
+        .unwrap();
+        assert!(compare_command_names(&root, &exported).is_ok());
+
+        fs::write(
+            exported.join("command_names.ts"),
+            "export const READY = 'ready';\nexport const MISSING = 'missing';\n",
+        )
+        .unwrap();
+        assert!(compare_command_names(&root, &exported).is_err());
+        fs::remove_file(checked_in.join("command_names.ts")).unwrap();
+        assert!(compare_command_names(&root, &exported).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -214,7 +214,7 @@ pub(crate) fn sign_installer(
     let output = process::capture_owned_timeout_runtime_only(
         std::ffi::OsStr::new("bun"),
         &args,
-        &root.join("desktop"),
+        &root.join("apps/desktop"),
         &env_values,
         SIGN_TIMEOUT,
     );
@@ -249,7 +249,7 @@ fn verify_tauri_cli(root: &Path) -> Result<()> {
     let output = process::capture_owned_timeout_runtime_only(
         std::ffi::OsStr::new("bun"),
         &["run".to_owned(), "tauri".to_owned(), "--version".to_owned()],
-        &root.join("desktop"),
+        &root.join("apps/desktop"),
         &[],
         Duration::from_secs(60),
     )?;

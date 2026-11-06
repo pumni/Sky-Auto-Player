@@ -343,7 +343,8 @@ pub fn validate(root: &Path) -> Result<()> {
     }) {
         return Err("canonical branding plate color changed".into());
     }
-    let titlebar = fs::read_to_string(root.join("desktop/src/components/chrome/AppTitleBar.tsx"))?;
+    let titlebar =
+        fs::read_to_string(root.join("apps/desktop/src/components/chrome/AppTitleBar.tsx"))?;
     for asset in [
         "app-icon-32.png",
         "app-icon-40.png",
@@ -360,7 +361,7 @@ pub fn validate(root: &Path) -> Result<()> {
         ("app-icon-48.png", 48),
         ("app-icon-64.png", 64),
     ] {
-        let toolbar_bytes = fs::read(root.join("desktop/src/assets/brand").join(name))?;
+        let toolbar_bytes = fs::read(root.join("apps/desktop/src/assets/brand").join(name))?;
         if png_dimensions(&toolbar_bytes)? != (size, size) {
             return Err(format!("desktop toolbar asset {name} dimensions changed").into());
         }
@@ -422,8 +423,8 @@ pub fn validate(root: &Path) -> Result<()> {
     validate_ico(root)?;
     let ico = fs::read(branding.join("exports/windows/sky-auto-player.ico"))?;
     for consumer in [
-        "site/public/favicon.ico",
-        "desktop/src-tauri/icons/icon.ico",
+        "apps/website/public/favicon.ico",
+        "apps/desktop/src-tauri/icons/icon.ico",
     ] {
         if fs::read(root.join(consumer))? != ico {
             return Err(format!("branding ICO consumer drift: {consumer}").into());
@@ -451,19 +452,19 @@ pub fn validate(root: &Path) -> Result<()> {
     }
     for (left, right) in [
         (
-            "site/public/favicon.svg",
+            "apps/website/public/favicon.svg",
             "branding/sky-auto-player-app-icon-small.svg",
         ),
         (
-            "site/public/assets/sky-auto-player-mark.svg",
+            "apps/website/public/assets/sky-auto-player-mark.svg",
             "branding/sky-auto-player-app-icon.svg",
         ),
         (
-            "site/public/assets/sky-auto-player-mark-mono.svg",
+            "apps/website/public/assets/sky-auto-player-mark-mono.svg",
             "branding/sky-auto-player-mark-mono.svg",
         ),
         (
-            "site/public/assets/sky-auto-player-mark-no-bg.svg",
+            "apps/website/public/assets/sky-auto-player-mark-no-bg.svg",
             "branding/sky-auto-player-mark-no-bg.svg",
         ),
     ] {

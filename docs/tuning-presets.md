@@ -10,7 +10,7 @@ runtime or terminal UI preset to select.
 Use the current settings UI for supported playback and telemetry preferences.
 For development-only investigations, use the focused native tests and
 fixtures under `rust/crates/sky_player`, `rust/crates/sky_dispatch_*`, and
-`desktop/src-tauri`. Keep changes to realtime timing behind the existing
+`apps/desktop/src-tauri`. Keep changes to realtime timing behind the existing
 no-allocation, assembly, focus, release-all, and player qualification gates.
 
 The production invariants remain fixed:

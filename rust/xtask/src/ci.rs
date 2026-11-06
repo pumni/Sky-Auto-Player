@@ -114,7 +114,7 @@ pub(crate) fn candidate_source_identity(
     } else {
         head_sha
     };
-    let revision_path = format!("{source_sha}:desktop/src-tauri/Cargo.toml");
+    let revision_path = format!("{source_sha}:apps/desktop/src-tauri/Cargo.toml");
     let manifest_source = capture_git_text(repository_root, &["show", revision_path.as_str()])
         .map_err(
             |_| "Candidate source identity could not read the desktop manifest from Git HEAD",

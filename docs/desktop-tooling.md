@@ -1,10 +1,10 @@
 # Desktop JavaScript tooling
 
 The repository-root `.bun-version` is the canonical Bun pin (`1.4.4`). The
-`site/package.json` `packageManager` value is a checked mirror used by site
+`apps/website/package.json` `packageManager` value is a checked mirror used by site
 tooling. Desktop and site retain separate manifests and lockfiles:
-`desktop/package.json` with `desktop/bun.lock`, and `site/package.json` with
-`site/bun.lock`. There is no root Bun workspace manifest or root lockfile.
+`apps/desktop/package.json` with `apps/desktop/bun.lock`, and `apps/website/package.json` with
+`apps/website/bun.lock`. There is no root Bun workspace manifest or root lockfile.
 
 Run Bun commands from the owning app directory and keep installs frozen:
 
@@ -12,10 +12,52 @@ Run Bun commands from the owning app directory and keep installs frozen:
 # From the repository root
 bun scripts/verify-bun-pin.mjs
 
-# From desktop/
+# From apps/desktop/
 bun install --frozen-lockfile
 bun run check
+bun run dev
+# Run the desktop shell on Windows
+bun run tauri:dev
 ```
+
+The Vite development server is the frontend-only entry point. `tauri:dev`
+starts the native shell and uses the configured Vite server. The Tauri package
+build starts from this same app directory; its Windows `beforeBuildCommand`
+returns to the repository root before running `cargo xtask calibration build`.
+
+## Website setup and checks
+
+The static site has its own frozen install and runs without the Rust workspace:
+
+```powershell
+# From apps/website/
+bun install --frozen-lockfile
+bun run test:unit
+bun run check
+bun run lint
+bun run format:check
+bun run build
+bun run verify:dist
+bun run verify:seo
+# Install the pinned Playwright browser once, then run functional browser tests
+bunx playwright install chromium
+bun run test:functional
+```
+
+## Repository checks
+
+Run the canonical pre-review gate from the repository root on Windows:
+
+```powershell
+cargo xtask check all
+```
+
+It runs Rust static contracts, workspace checks and tests, then the desktop
+frozen install, Vite checks, browser E2E, native feature checks and generated
+TypeScript binding comparison. The website's Astro and Playwright commands
+remain independently runnable from `apps/website/` and are also enforced by
+the site CI lane. `cargo xtask bindings check` checks generated Tauri DTO and
+command-name output from the repository root.
 
 ## Desktop formatter and lint gates
 
@@ -23,7 +65,7 @@ Biome 2.6.5 is the desktop formatter and general JavaScript, TypeScript, and
 React linter. Its formatter matches the prior Prettier settings: two spaces,
 100 columns, single quotes in JavaScript/CSS, double quotes in JSX, semicolons,
 all trailing commas, and LF endings. Existing generated/build/report ignores
-are explicit in `desktop/biome.json`; Rust/Tauri implementation files under
+are explicit in `apps/desktop/biome.json`; Rust/Tauri implementation files under
 `src-tauri/` stay outside the JS tool surface.
 
 | Existing behavior | Current gate | Coverage decision |

@@ -505,8 +505,8 @@ try {
             [ordered]@{ label = 'player-test-support-lib'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--lib') },
             [ordered]@{ label = 'player-no-allocation'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--test', 'rt_dispatch_no_alloc') },
             [ordered]@{ label = 'native-acceptance-unit-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'real-input-acceptance,test-support', '--bin', 'rt-native-acceptance') },
-            [ordered]@{ label = 'desktop-native-runtime-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'desktop/src-tauri/Cargo.toml', '--no-default-features', '--features', 'tauri-test', 'native_runtime') },
-            [ordered]@{ label = 'desktop-power-lifecycle-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'desktop/src-tauri/Cargo.toml', '--no-default-features', '--features', 'tauri-test', 'power_lifecycle') },
+            [ordered]@{ label = 'desktop-native-runtime-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml', '--no-default-features', '--features', 'tauri-test', 'native_runtime') },
+            [ordered]@{ label = 'desktop-power-lifecycle-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml', '--no-default-features', '--features', 'tauri-test', 'power_lifecycle') },
             [ordered]@{ label = 'canonical-static'; executable = 'cargo.exe'; arguments = @('xtask', 'check', 'static') },
             [ordered]@{ label = 'canonical-all'; executable = 'cargo.exe'; arguments = @('xtask', 'check', 'all') },
             [ordered]@{ label = 'git-diff-check'; executable = 'git.exe'; arguments = @('-C', $repoRoot, 'diff', '--check') }

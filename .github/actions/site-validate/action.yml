@@ -1,7 +1,7 @@
 name: Site validate
 description: >
-  Install site dependencies with Bun, synchronize the version once, and run check, lint, format, build,
-  dist verify, and Playwright e2e/accessibility tests under site/.
+  Install site dependencies with Bun, validate the published-release snapshot, and run check, lint,
+  format, build, SEO/dist verification, and Playwright e2e/accessibility tests under apps/website/.
 
 runs:
   using: composite
@@ -17,52 +17,52 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       run: bun install --frozen-lockfile
 
-    - name: Sync site application version
+    - name: Validate published release metadata
       shell: bash
-      working-directory: site
-      run: bun run sync:version
+      working-directory: apps/website
+      run: bun run test:unit
 
     - name: Type and Astro checks
       shell: bash
-      working-directory: site
-      run: bun run check:ci
+      working-directory: apps/website
+      run: bun run check
 
     - name: Lint
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       run: bun run lint
 
     - name: Formatting
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       run: bun run format:check
 
     - name: Build static site
       shell: bash
-      working-directory: site
-      run: bun run build:ci
+      working-directory: apps/website
+      run: bun run build
 
     - name: Verify required output
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       run: bun run verify:dist
 
     - name: Verify SEO contracts
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       run: bun run verify:seo
 
     - name: Install Playwright Chromium
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       run: bunx playwright install chromium --with-deps
 
     - name: Run Functional E2E and accessibility tests
       shell: bash
-      working-directory: site
+      working-directory: apps/website
       env:
         CI: true
       run: bun run test:functional
@@ -73,7 +73,7 @@ runs:
       with:
         name: playwright-failure-${{ github.run_id }}
         path: |
-          site/test-results/
-          site/playwright-report/
+          apps/website/test-results/
+          apps/website/playwright-report/
         if-no-files-found: ignore
         retention-days: 7

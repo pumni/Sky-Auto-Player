@@ -12,7 +12,7 @@ reason.
 - `.github/workflows/ci.yml` runs for pushes to `main`, pull requests, and
   explicit `workflow_dispatch` requests.
 - A website-affecting `main` push runs the `site` job, packages the validated
-  `site/dist` directory as the Pages artifact, and then runs the automatic
+  `apps/website/dist` directory as the Pages artifact, and then runs the automatic
   Pages deployment after the required status gate succeeds.
 - `.github/workflows/pages.yml` is the manual Pages recovery workflow. It is
   `workflow_dispatch`-only and retains its self-contained checkout, install,
@@ -59,19 +59,26 @@ checks that these pins and the actionlint invocation remain in CI.
 Unknown paths, classifier failures, and explicit full validation set every
 lane to true. This preserves fail-closed behavior.
 
+The aggregate status remains exactly `Sky Auto Player — required CI gate`.
+It requires every selected validation lane to succeed and permits an unselected
+lane only when its classifier output requires that lane to be skipped. A
+successful workflow with a missing required status is not equivalent to this
+gate.
+
 ## Representative path matrix
 
 | Changed path | Intended major lanes |
 | --- | --- |
 | `README.md` or general `docs/**` | No specialized lane; aggregate status only |
 | `docs/releases/**` | Static validation only; no release contract |
-| `desktop/src/**` | Desktop web/browser and Desktop E2E; no native lane |
-| `desktop/tests/e2e/**` | Desktop web/browser and Desktop E2E; no native lane |
-| `desktop/src-tauri/src/**` | Rust and Windows native Desktop validation |
-| `desktop/src-tauri/tauri.conf.json` | Desktop web, native, package, and updater qualification |
+| `apps/desktop/src/**` | Desktop web/browser and Desktop E2E; no native lane |
+| `apps/desktop/tests/e2e/**` | Desktop web/browser and Desktop E2E; no native lane |
+| `apps/desktop/src-tauri/src/**` | Rust and Windows native Desktop validation |
+| `apps/desktop/src-tauri/tauri.conf.json` | Desktop web, native, package, and updater qualification |
 | Cargo manifests, lockfiles, or toolchain configuration | Rust plus the affected package/updater/release/security lanes |
-| `.bun-version` or `site/package.json` Bun mirror | Every Bun-consuming lane |
-| `site/**` | Site validation and exact Pages artifact packaging |
+| `.bun-version` or `apps/website/package.json` Bun mirror | Every Bun-consuming lane |
+| `apps/website/**` | Site validation and exact Pages artifact packaging |
+| Retired root `desktop/**` or `site/**` | Unknown path; fail-closed full validation |
 | Release workflow or executable release script | Release contract and its required static/security lanes |
 | Classifier or CI workflow | Fail-closed/full validation |
 | Unknown path | Full validation across all lanes |
@@ -90,10 +97,17 @@ does not suppress a lane required by another changed path.
   directly from that directory, and deployed as the exact validated Pages
   artifact.
 
-Site CI synchronizes the application version once before `check:ci` and
-`build:ci`. Local `bun run check` and `bun run build` remain self-contained
-through their existing pre-hooks, and manual Pages recovery remains
-self-contained.
+The website owns a committed snapshot of the latest verified public stable
+release in `apps/website/src/data/product-release.json`. Its metadata parser requires
+exact `MAJOR.MINOR.PATCH` with no prerelease or build metadata, plus the matching
+`v`-prefixed tag; Astro embeds that snapshot without reading the
+desktop Cargo manifest or calling Cargo, Tauri, or a release API. Site CI,
+local checks/builds, and manual Pages recovery invoke their Bun/Astro commands
+directly, without version synchronization pre-hooks. CI validates the
+metadata, site checks, build, output, SEO, and functional contracts; manual
+Pages recovery verifies the built output and SEO before deployment. Refresh
+the snapshot manually after a stable release is publicly published; see
+[`apps/website/README.md`](../apps/website/README.md#published-application-version).
 
 ## Deliberate non-deduplication
 
@@ -105,6 +119,21 @@ same tool list; lane-specific repository checks remain separate.
 Release-specific, updater, signing, SBOM, NSIS, browser, accessibility, and
 artifact-integrity tests remain in their existing jobs. This topology does not
 trade those checks for shared state.
+
+## Local command roots
+
+- Run `cargo xtask check all` at the repository root for the canonical
+  pre-review static, Rust, and desktop gate. `cargo xtask check desktop-native`
+  runs the native Tauri feature checks and generated binding comparison.
+- Run desktop Bun commands from `apps/desktop/`. `bun run dev` starts Vite;
+  on Windows, `bun run tauri:dev` starts the native shell around Vite.
+- Run website Bun commands from `apps/website/` with its own frozen lockfile.
+  `bun run check`, `lint`, `format:check`, `build`, `verify:dist`,
+  `verify:seo`, and `test:functional` are the standalone site gates.
+- The packaging hook is configured for the `apps/desktop/` working directory:
+  after `bun run build`, `cd ..\\..` returns to the repository root for
+  `cargo xtask calibration build`. CI and local package qualification use that
+  same relocated path.
 
 ## Safe classifier extension procedure
 

@@ -10,7 +10,7 @@ const ROOTS: &[&str] = &[
     "scripts",
     ".github/workflows",
     ".github/actions",
-    "site/src",
+    "apps/website/src",
     "tests",
     ".config",
 ];
@@ -92,11 +92,11 @@ const RETAINED_EXTERNAL_REFERENCES: &[(&str, &str)] = &[
 // Keep these exceptions tied to its three canonical declarations.
 const RETAINED_VERSIONED_LITERALS: &[(&str, &str)] = &[
     (
-        "desktop/src-tauri/src/native_update.rs",
+        "apps/desktop/src-tauri/src/native_update.rs",
         "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldTTWdUaDRMcjJxR2JxeE5kTUx5VlIxS1dhOHRrSTEzY2FMeE8wYldtckM2TjV2KzRwQUNaTEUK",
     ),
     (
-        "desktop/src-tauri/tauri.conf.json",
+        "apps/desktop/src-tauri/tauri.conf.json",
         "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldTTWdUaDRMcjJxR2JxeE5kTUx5VlIxS1dhOHRrSTEzY2FMeE8wYldtckM2TjV2KzRwQUNaTEUK",
     ),
     (
@@ -559,15 +559,15 @@ mod tests {
     fn retained_versioned_key_material_is_path_scoped() {
         let public_key = RETAINED_VERSIONED_LITERALS[0].1;
         assert!(!line_has_unretained_history_name(
-            "desktop/src-tauri/src/native_update.rs",
+            "apps/desktop/src-tauri/src/native_update.rs",
             public_key
         ));
         assert!(line_has_unretained_history_name(
-            "desktop/src-tauri/src/native_update.rs",
+            "apps/desktop/src-tauri/src/native_update.rs",
             &format!("{public_key} r3_future_probe")
         ));
         assert!(line_has_unretained_history_name(
-            "desktop/src-tauri/src/native_runtime.rs",
+            "apps/desktop/src-tauri/src/native_runtime.rs",
             public_key
         ));
     }

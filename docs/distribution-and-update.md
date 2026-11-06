@@ -9,7 +9,7 @@ discovery, signature verification, download, and installer execution.
 ## 1. Active V4 package contract
 
 - **Application Identifier:** `io.github.pumni.skyautoplayer`
-- **Version Source:** `desktop/src-tauri/Cargo.toml`
+- **Version Source:** `apps/desktop/src-tauri/Cargo.toml`
 - **Windows Target:** NSIS only (v4 NSIS installer)
 - **Installer Scope:** `currentUser` per-user installation (strictly isolated from the mutable application-data root `%LOCALAPPDATA%\io.github.pumni.skyautoplayer`)
 - **Updater Output:** The NSIS setup executable and its `.exe.sig` sidecar
@@ -42,7 +42,7 @@ and final public endpoint verification.
 
 ## 3. Trust root and Authenticode governance
 
-- **Tauri Updater Trust:** Public root embedded in `desktop/src-tauri/tauri.conf.json`.
+- **Tauri Updater Trust:** Public root embedded in `apps/desktop/src-tauri/tauri.conf.json`.
   The private updater key is held exclusively outside the repository/workspace,
   encrypted at rest with an independent encrypted backup (see [`v4-updater-key-custody.md`](v4-updater-key-custody.md)).
 - **Authenticode Policy:** Governed `unsigned-zero-budget` policy. The installer and

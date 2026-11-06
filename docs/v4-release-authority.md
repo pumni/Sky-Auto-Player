@@ -388,8 +388,8 @@ React          = presentation
 | **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Hosted job lifecycle, exact source checkout, scoped permissions, protected environment references, artifact handoff, and OIDC attestations. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
 | **cargo xtask (Rust)** | `rust/xtask/src/release_v4.rs`, `release_handoff.rs`, `release_signing.rs`, and related release modules | Single transaction authority for Preflight, BuildUnsigned, SignCandidate, QualifyCandidate, VerifyCandidate, VerifyAttestations, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform adapters; does not mint GitHub workflow tokens or select the release runner. |
 | **PowerShell / Python** | Windows Authenticode scripts, `scripts/scan_v4_malware_exact.py` (Ubuntu-hosted ClamAV only), local Credential Manager helpers | Narrow Windows Authenticode / independent exact-byte malware-scanner adapters with real EICAR-positive proof. Previous `scan_v4_defender_exact.ps1` is retained for standalone self-hosted compatibility, **not accepted as hosted-release evidence**. | Neither adapter owns release policy, publication, metadata state transitions or SemVer; Rust validates evidence and OIDC attestation. |
-| **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
-| **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
+| **Tauri Rust** | `apps/desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
+| **React / TypeScript** | `apps/desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 
 ### Concrete domain authority enforcement
 
@@ -398,7 +398,7 @@ React          = presentation
      - Canonical SemVer parsing without build metadata
      - Channel prerelease classification (`stable` rejects prerelease versions; `beta` requires prerelease versions)
      - Release tag exactness (`v<version>`)
-     - Cargo project version matching (`desktop/src-tauri/Cargo.toml`)
+     - Cargo project version matching (`apps/desktop/src-tauri/Cargo.toml`)
    - cargo xtask release-v4 uses the canonical cargo xtask version owner; PowerShell does not implement release policy.
 
 2. **Isolated NSIS and Updater Qualification**:

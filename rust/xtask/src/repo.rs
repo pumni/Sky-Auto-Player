@@ -31,7 +31,7 @@ pub fn git_head(root: &Path, require_clean: bool) -> Result<String> {
 }
 
 pub fn project_version(root: &Path) -> Result<String> {
-    let path = root.join("desktop/src-tauri/Cargo.toml");
+    let path = root.join("apps/desktop/src-tauri/Cargo.toml");
     let value: Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
     value
         .get("package")

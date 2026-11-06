@@ -26,7 +26,7 @@ try {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 
     # Generate only throwaway key material outside the repository.
-    Push-Location (Join-Path $repoRoot 'desktop')
+    Push-Location (Join-Path $repoRoot 'apps/desktop')
     try {
         & bun run tauri signer generate --ci --password '' --force -w $throwawayKeyPath *> $null
         if ($LASTEXITCODE -ne 0) {

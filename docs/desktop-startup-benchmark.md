@@ -29,7 +29,7 @@ position, and maximized state before the frontend can reveal it; visibility is n
 applies the bootstrapped palette in a layout effect and then requests one native show. A 2.5-second
 frontend timer reveals the existing branded loading screen during slow bootstrap. If frontend
 JavaScript never starts, a one-shot 10-second native fallback shows the static loading markup from
-`desktop/index.html`. The successful frontend show is acknowledged by a main-window-only native
+`apps/desktop/index.html`. The successful frontend show is acknowledged by a main-window-only native
 command, which ends the fallback's pending state so a later hide does not trigger another show.
 Fallback expiry and accepted close use the same locked state transition; close acceptance follows
 fallback cancellation. When startup telemetry is enabled, `window.startup_failsafe.normal_success`,

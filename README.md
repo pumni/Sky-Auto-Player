@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="site/public/assets/sky-auto-player-mark.svg" alt="Sky Auto Player logo" width="96">
+<img src="apps/website/public/assets/sky-auto-player-mark.svg" alt="Sky Auto Player logo" width="96">
 
 # Sky Auto Player
 

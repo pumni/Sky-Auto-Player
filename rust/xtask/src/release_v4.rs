@@ -1338,7 +1338,7 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let dist = root.join("rust/target/dist");
     let bundle = dist.join("bundle/nsis");
     purge_build_outputs(root, &dist, &bundle, &source_installer, &source_signature)?;
-    let desktop = root.join("desktop");
+    let desktop = root.join("apps/desktop");
     let remove_env = [
         "TAURI_SIGNING_PRIVATE_KEY",
         "TAURI_SIGNING_PRIVATE_KEY_PATH",
@@ -1427,7 +1427,7 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let manifest = release_handoff::create_unsigned_handoff(
         &options.state_root,
         &installer,
-        &root.join("desktop/src-tauri/resources/native_calibration.exe"),
+        &root.join("apps/desktop/src-tauri/resources/native_calibration.exe"),
         &release_handoff::ExpectedHandoffIdentity {
             repository: &context.repository,
             source_sha: &context.source_sha,
@@ -6481,7 +6481,7 @@ mod tests {
             .arg("run")
             .arg("tauri")
             .args(args)
-            .current_dir(root.join("desktop"));
+            .current_dir(root.join("apps/desktop"));
         for name in [
             "V4_TAURI_UPDATER_PRIVATE_KEY",
             "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
@@ -7256,6 +7256,9 @@ fn main() {{
                     Err(error) => panic!("local upload fixture never received curl: {error}"),
                 }
             };
+            stream
+                .set_nonblocking(false)
+                .expect("set accepted upload fixture stream blocking");
             stream
                 .set_read_timeout(Some(Duration::from_secs(7)))
                 .unwrap();

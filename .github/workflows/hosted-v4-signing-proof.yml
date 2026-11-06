@@ -8,8 +8,8 @@ on:
       - ".github/workflows/release-v4.yml"
       - ".github/actions/setup-rust-pinned/action.yml"
       - ".bun-version"
-      - "site/package.json"
-      - "desktop/**"
+      - "apps/website/package.json"
+      - "apps/desktop/**"
       - "rust/**"
       - "scripts/**"
       - "docs/v4-hosted-signing-proof.md"
@@ -69,7 +69,7 @@ jobs:
         run: bun scripts/verify-bun-pin.mjs
 
       - name: Install locked desktop dependencies
-        working-directory: desktop
+        working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
       - name: Run ignored draft readback publication proof
@@ -77,7 +77,7 @@ jobs:
 
       - name: Verify source identity and pinned Tauri CLI
         run: |
-          $manifest = Get-Content -LiteralPath desktop/src-tauri/Cargo.toml -Raw
+          $manifest = Get-Content -LiteralPath apps/desktop/src-tauri/Cargo.toml -Raw
           $package = [regex]::Match($manifest, '(?s)\[package\]\s*(.*?)(?=\r?\n\[|$)').Groups[1].Value
           $versionMatch = [regex]::Match($package, '(?m)^version\s*=\s*"([^"]+)"\s*$')
           if (-not $versionMatch.Success) { throw "Could not read the canonical desktop package version" }
@@ -87,7 +87,7 @@ jobs:
             --source-sha $env:SKY_PROOF_SOURCE_SHA `
             --require-worktree-version
           if ($LASTEXITCODE -ne 0) { throw "Hosted proof source identity check failed with exit code $LASTEXITCODE" }
-          Push-Location desktop
+          Push-Location apps/desktop
           try { $tauriVersion = (& bun run tauri --version 2>&1 | Select-Object -Last 1).ToString().Trim() } finally { Pop-Location }
           if ($LASTEXITCODE -ne 0) { throw "Tauri CLI version check failed with exit code $LASTEXITCODE" }
           if ($tauriVersion -cne "tauri-cli 2.12.3") { throw "Expected pinned Tauri CLI 2.12.3, got $tauriVersion" }
@@ -102,7 +102,7 @@ jobs:
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_trust::tests::hosted_signature_proof -- --test-threads=1
 
       - name: Build one unsigned NSIS installer without signing credentials
-        working-directory: desktop
+        working-directory: apps/desktop
         run: |
           foreach ($name in @("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PATH", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) {
             Remove-Item "Env:$name" -ErrorAction SilentlyContinue
@@ -129,7 +129,7 @@ jobs:
           "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
 
       - name: Sign the unchanged installer in an isolated test-key step
-        working-directory: desktop
+        working-directory: apps/desktop
         run: |
           $signerRoot = Join-Path $env:SKY_HOSTED_PROOF_ROOT "signer"
           New-Item -ItemType Directory -Path $signerRoot | Out-Null
