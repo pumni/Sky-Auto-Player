@@ -104,9 +104,7 @@ impl PreparedPhysicalPacket {
         }
         #[cfg(not(windows))]
         {
-            PreparedPacketView {
-                packet: self.packet,
-            }
+            PreparedPacketView { packet: self.packet }
         }
     }
 
