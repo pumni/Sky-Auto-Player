@@ -111,7 +111,7 @@ impl PreparedPhysicalPacket {
     }
 
     #[cfg(windows)]
-    fn initialized_inputs(&self) -> &[windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT] {
+    pub(super) fn initialized_inputs(&self) -> &[windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT] {
         let length = usize::from(self.length);
         // SAFETY: `try_new` sets `length` only from `build_inputs`, which
         // writes every element in the prefix. The length is bounded by the
