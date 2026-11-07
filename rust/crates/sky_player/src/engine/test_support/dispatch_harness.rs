@@ -93,6 +93,8 @@ pub struct PreparedStartupEvidence {
     pub metadata_entry_count: usize,
     pub prepared_entry_type_size_bytes: usize,
     pub prepared_entry_array_bytes: usize,
+    pub prepared_entry_capacity: usize,
+    pub prepared_entry_reserved_bytes: usize,
     pub cancellation_ledger_bytes: usize,
     pub rebuilt_coordinator_heap_payload_bytes: usize,
 }
@@ -121,12 +123,16 @@ impl PreparedStartupBuilder {
             metadata_entry_count,
             prepared_entry_array_bytes,
         ) = stream.prepared_storage_evidence_for_test();
+        let (prepared_entry_capacity, prepared_entry_reserved_bytes) =
+            stream.prepared_entry_allocation_for_test();
         Ok(PreparedStartupEvidence {
             prepared_entry_count,
             physical_entry_count,
             metadata_entry_count,
             prepared_entry_type_size_bytes: std::mem::size_of::<PreparedDispatchEntry>(),
             prepared_entry_array_bytes,
+            prepared_entry_capacity,
+            prepared_entry_reserved_bytes,
             cancellation_ledger_bytes: stream.cancellation_ledger_bytes_for_test(),
             rebuilt_coordinator_heap_payload_bytes: coordinator
                 .heap_payload_bytes_for_test_support(),
