@@ -269,6 +269,24 @@ impl PreparedDispatchStream {
         )
     }
 
+    /// Count real Win32 INPUT events by prepared physical-packet length.
+    /// Metadata is excluded. This traverses the frozen stream only in
+    /// test-support/characterization, never at the live dispatch boundary.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn physical_input_event_histogram_for_test(
+        &self,
+    ) -> [usize; sky_dispatch_win32::input::MAX_PACKET_EVENTS + 1] {
+        let mut bins = [0usize; sky_dispatch_win32::input::MAX_PACKET_EVENTS + 1];
+        for entry in &self.entries {
+            if let PreparedDispatchEntry::Physical(frame) = entry {
+                let count = usize::from(frame.view.prepared_packet.event_count());
+                debug_assert!(count > 0 && count < bins.len());
+                bins[count] += 1;
+            }
+        }
+        bins
+    }
+
     /// Record the actual reserved Vec buffer, which can exceed the number of
     /// initialized entries. This is characterization evidence only and does
     /// not add work to production preparation or dispatch.
