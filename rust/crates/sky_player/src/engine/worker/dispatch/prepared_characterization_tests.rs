@@ -93,6 +93,29 @@ fn complete_transport_outcome(
 }
 
 #[test]
+fn prepared_stream_storage_reports_allocated_capacity_separately_from_used_entries() {
+    let stream = build_stream(
+        &[
+            action(0, ActionKind::Down, 0, &[0x15]),
+            action(1, ActionKind::Up, 20_000, &[0x15]),
+            action(2, ActionKind::Up, 40_000, &[0x15]),
+        ],
+        &[0x15],
+    );
+    let used_entries = stream.entries().len();
+    let physical_entries = stream.physical_count();
+    let metadata_entries = used_entries - physical_entries;
+    let entry_bytes = std::mem::size_of::<PreparedDispatchEntry>();
+    let (capacity, reserved_bytes) = stream.prepared_entry_allocation_for_test();
+
+    assert!(physical_entries > 0);
+    assert!(metadata_entries > 0);
+    assert!(capacity >= used_entries);
+    assert_eq!(reserved_bytes, capacity * entry_bytes);
+    assert!(reserved_bytes >= std::mem::size_of_val(stream.entries()));
+}
+
+#[test]
 fn prepared_stream_contains_only_materialized_physical_boundaries() {
     let stream = build_stream(
         &[

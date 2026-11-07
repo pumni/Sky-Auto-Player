@@ -93,6 +93,7 @@ pub struct PreparedStartupEvidence {
     pub metadata_entry_count: usize,
     pub prepared_entry_type_size_bytes: usize,
     pub prepared_entry_array_bytes: usize,
+    pub prepared_entry_allocation: (usize, usize),
     pub cancellation_ledger_bytes: usize,
     pub rebuilt_coordinator_heap_payload_bytes: usize,
 }
@@ -115,18 +116,15 @@ impl PreparedStartupBuilder {
         let profile = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
         let (stream, coordinator) =
             PreparedDispatchStream::build(self.coordinator, self.qpc_clock, &probe, &profile)?;
-        let (
-            prepared_entry_count,
-            physical_entry_count,
-            metadata_entry_count,
-            prepared_entry_array_bytes,
-        ) = stream.prepared_storage_evidence_for_test();
+        let (entry_count, physical_count, metadata_count, used_bytes) =
+            stream.prepared_storage_evidence_for_test();
         Ok(PreparedStartupEvidence {
-            prepared_entry_count,
-            physical_entry_count,
-            metadata_entry_count,
+            prepared_entry_count: entry_count,
+            physical_entry_count: physical_count,
+            metadata_entry_count: metadata_count,
             prepared_entry_type_size_bytes: std::mem::size_of::<PreparedDispatchEntry>(),
-            prepared_entry_array_bytes,
+            prepared_entry_array_bytes: used_bytes,
+            prepared_entry_allocation: stream.prepared_entry_allocation_for_test(),
             cancellation_ledger_bytes: stream.cancellation_ledger_bytes_for_test(),
             rebuilt_coordinator_heap_payload_bytes: coordinator
                 .heap_payload_bytes_for_test_support(),
