@@ -71,11 +71,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let effective_policy = EffectiveRuntimePolicy::for_worker(config);
     #[cfg(any(test, feature = "test-support"))]
     let startup_hook = core.runtime.startup_ordering_hook.as_deref();
-    let backend_is_production = matches!(&config.backend, &BackendConfig::Production);
     let production_wait = effective_policy.production_wait;
     let requested_wait_policy = config
         .wait
-        .requested_wait_policy_label(backend_is_production);
+        .requested_wait_policy_label(matches!(&config.backend, &BackendConfig::Production));
     let effective_wait_policy = if production_wait {
         "production_calibrated"
     } else {
