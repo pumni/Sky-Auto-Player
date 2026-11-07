@@ -1860,7 +1860,7 @@ impl ProductionDispatchTestHarness {
             .as_ref()
             .and_then(PreparedDispatchStream::current)
             .and_then(|entry| match entry {
-                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks.as_u64()),
+                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks().as_u64()),
                 PreparedDispatchEntry::Metadata { .. } => None,
             })
             .ok_or_else(|| "prepared benchmark alignment requires a physical frame".to_string())?;
@@ -2753,7 +2753,7 @@ impl ProductionDispatchTestHarness {
             .entries()
             .iter()
             .filter_map(|entry| match entry {
-                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks.as_u64()),
+                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks().as_u64()),
                 PreparedDispatchEntry::Metadata { .. } => None,
             })
             .collect()
@@ -2819,7 +2819,7 @@ impl ProductionDispatchTestHarness {
             .resources
             .playback
             .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
             .expect("prepared target arithmetic");
         let stalled_target_qpc = physical_target_qpc
             .checked_add_duration(stall_ticks)
@@ -2908,7 +2908,7 @@ impl ProductionDispatchTestHarness {
             self.resources
                 .playback
                 .epoch
-                .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+                .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
                 .expect("prepared synthetic target arithmetic")
         };
         let wall_now = physical_target_qpc
@@ -2953,7 +2953,7 @@ impl ProductionDispatchTestHarness {
             .resources
             .playback
             .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
             .map_err(|error| format!("dispatch physical target overflow: {error}"))?;
         let window = self
             .runtime
@@ -3014,7 +3014,7 @@ impl ProductionDispatchTestHarness {
             .resources
             .playback
             .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
             .expect("prepared synthetic target arithmetic");
         let effective_now_ticks = TimelineTicks::from_raw(
             wall_now
@@ -3090,7 +3090,7 @@ impl ProductionDispatchTestHarness {
         self.resources
             .playback
             .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
             .ok()
     }
 
@@ -3147,7 +3147,7 @@ impl ProductionDispatchTestHarness {
             .resources
             .playback
             .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
             .map_err(|error| format!("prepared wait target arithmetic: {error}"))?;
         let preflight_target = if frame.view.packet_masks.down_mask == 0 {
             None
@@ -3315,7 +3315,7 @@ impl ProductionDispatchTestHarness {
         let epoch = QpcTicks::from_raw(
             physical_target_qpc
                 .as_u64()
-                .checked_sub(frame.offset_ticks.as_u64())
+                .checked_sub(frame.offset_ticks().as_u64())
                 .expect("prepared stream epoch underflow"),
         );
         self.resources.playback.epoch = epoch;

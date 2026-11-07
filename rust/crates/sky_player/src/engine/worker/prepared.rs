@@ -17,8 +17,16 @@ use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
 
 #[derive(Debug)]
 pub(crate) struct PreparedDispatchFrame {
-    pub(crate) offset_ticks: TimelineTicks,
     pub(crate) view: AuthoredBatchView,
+}
+
+impl PreparedDispatchFrame {
+    /// The prepared batch already carries the immutable authored target.
+    /// Do not duplicate that timestamp in every physical stream entry.
+    #[inline]
+    pub(crate) fn offset_ticks(&self) -> TimelineTicks {
+        self.view.prepared_batch.effective_scheduled_ticks
+    }
 }
 
 #[derive(Debug)]
@@ -172,7 +180,6 @@ impl PreparedDispatchStream {
                     }
                     let offset_ticks = view.prepared_batch.effective_scheduled_ticks;
                     entries.push(PreparedDispatchEntry::Physical(PreparedDispatchFrame {
-                        offset_ticks,
                         view,
                     }));
                     simulator
