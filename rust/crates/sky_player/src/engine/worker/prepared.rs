@@ -262,6 +262,18 @@ impl PreparedDispatchStream {
         )
     }
 
+    /// Record the actual reserved Vec buffer, which can exceed the number of
+    /// initialized entries. This is characterization evidence only and does
+    /// not add work to production preparation or dispatch.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn prepared_entry_allocation_for_test(&self) -> (usize, usize) {
+        let capacity = self.entries.capacity();
+        (
+            capacity,
+            capacity * std::mem::size_of::<PreparedDispatchEntry>(),
+        )
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn physical_count(&self) -> usize {
         self.entries
