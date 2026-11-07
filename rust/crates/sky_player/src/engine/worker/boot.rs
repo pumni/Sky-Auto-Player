@@ -9,7 +9,7 @@ use startup_admission::{
 mod startup_calibration;
 mod telemetry_admission;
 mod timing_admission;
-use super::super::config::StartupCheckpoint;
+use super::super::config::{EffectiveRuntimePolicy, StartupCheckpoint};
 use super::super::shared::StartupAbortReason;
 use super::super::{
     BackendConfig, CoordinatorError, DurationTicks, PlaybackClockState, QpcClock, QpcTicks,
@@ -68,13 +68,13 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
 
     let core = &mut worker.core;
     let config = &worker.config;
+    let effective_policy = EffectiveRuntimePolicy::for_worker(config);
     #[cfg(any(test, feature = "test-support"))]
     let startup_hook = core.runtime.startup_ordering_hook.as_deref();
-    let backend_is_production = matches!(&config.backend, &BackendConfig::Production);
-    let production_wait = config.wait.production_wait_policy(backend_is_production);
+    let production_wait = effective_policy.production_wait;
     let requested_wait_policy = config
         .wait
-        .requested_wait_policy_label(backend_is_production);
+        .requested_wait_policy_label(matches!(&config.backend, &BackendConfig::Production));
     let effective_wait_policy = if production_wait {
         "production_calibrated"
     } else {
@@ -237,7 +237,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         min_hold_ticks,
         frame_ticks,
         mut worker_timing,
-    } = match convert_timing(config, qpc_clock) {
+    } = match convert_timing(config, qpc_clock, &effective_policy) {
         Ok(timing) => timing,
         Err(error) => return admission_failure(&mut backend, metrics, error),
     };
@@ -278,7 +278,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let prepared_stream = if !config.profile.strict_timing() && !config.timing.strict_timing {
+    let prepared_stream = if effective_policy.prepared_normal {
         match PreparedDispatchStream::build_with_checkpoints(
             coordinator,
             qpc_clock,
@@ -339,7 +339,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let telemetry = match try_new_worker_telemetry(config) {
+    let telemetry = match try_new_worker_telemetry(&effective_policy) {
         Ok(telemetry) => std::sync::Arc::new(parking_lot::Mutex::new(telemetry)),
         Err(error) => {
             return admission_failure(
@@ -488,7 +488,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     worker_timing.start_process_cpu_us = start_process_cpu_us;
     worker_timing.last_cpu_metrics_sample_us = initial_now_us;
     core.timing = Some(worker_timing);
-    if config.observer_enabled() {
+    if effective_policy.observer_enabled {
         #[cfg(any(test, feature = "test-support"))]
         if startup_hook.is_some_and(|hook| hook.take_observer_spawn_failure()) {
             return admission_failure(

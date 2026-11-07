@@ -3,6 +3,9 @@ use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
 
+mod effective_policy;
+pub(crate) use effective_policy::EffectiveRuntimePolicy;
+
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
 pub(crate) const MIN_CALIBRATED_SPIN_US: u64 = 250;
@@ -610,14 +613,17 @@ pub(crate) struct WorkerConfig {
 
 impl WorkerConfig {
     pub(crate) fn observer_enabled(&self) -> bool {
-        if self.profile.observer_enabled() {
-            return true;
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        if self.timing_observer_for_qualification {
-            return true;
-        }
-        false
+        let qualification_observer = {
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                self.timing_observer_for_qualification
+            }
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                false
+            }
+        };
+        effective_policy::observer_enabled_from_inputs(self.profile, qualification_observer)
     }
 }
 

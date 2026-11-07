@@ -1,4 +1,4 @@
-use super::config::{AdmittedNativeSessionOptions, NativeSessionOptions};
+use super::config::{AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -317,9 +317,7 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
-        let observer_enabled = options.profile.observer_enabled();
-        #[cfg(any(test, feature = "test-support"))]
-        let observer_enabled = observer_enabled || options.timing_observer_for_qualification;
+        let observer_enabled = EffectiveRuntimePolicy::for_native(&options).observer_enabled;
         let require_owner_identity =
             options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);
         let target = SessionTarget::new(0, 0);
