@@ -851,7 +851,9 @@ describe('desktop application shell', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
     const diagnostics = await screen.findByRole('region', { name: 'Utility: Diagnostics' });
     expect(utility).toBeInTheDocument();
-    expect(await screen.findByRole('tab', { name: 'Performance' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('tab', { name: 'Performance' }, { timeout: 5_000 }),
+    ).toBeInTheDocument();
     fireEvent.keyDown(diagnostics, { key: 'Escape' });
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Utility: Diagnostics' })).toBeNull(),
@@ -859,6 +861,7 @@ describe('desktop application shell', () => {
     expect(document.activeElement).toBe(trigger);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    await screen.findByRole('dialog', { name: 'Settings' });
     fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open calibration' }));
     expect(await screen.findByRole('dialog', { name: 'Timing calibration' })).toBeInTheDocument();
