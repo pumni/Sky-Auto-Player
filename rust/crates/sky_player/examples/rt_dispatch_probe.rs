@@ -137,13 +137,14 @@ struct Arguments {
     seed: u64,
     run_index: usize,
     generation_count: usize,
+    chord_width: usize,
 }
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--help") {
         println!(
             "Usage: rt_dispatch_probe --mode <contracts|precision|hol|startup|polling> --output <path> [options]\n\
-             Diagnostics modes: hol; startup --generation-count <100|1000|10000|100000>; polling.\n\
+             Diagnostics modes: hol; startup --generation-count <100|1000|10000|100000> [--chord-width <1..15>]; polling.\n\
              Polling includes the fixed 17167us short-hold reference.\n\
              Other options: --load-mode <quiet|cpu_contention>, --workload <all|id>, --warmup <n>, --measured <n>, --seed <u64>, --run-index <n>.\n\
              All diagnostics use test-support prepared paths or offline models; no real keyboard input is emitted."
@@ -250,7 +251,11 @@ fn run() -> Result<(), String> {
                 )
             }
             "startup" => {
-                let startup = run_startup_case(arguments.generation_count, arguments.seed)?;
+                let startup = run_startup_case(
+                    arguments.generation_count,
+                    arguments.seed,
+                    arguments.chord_width,
+                )?;
                 (
                     format!("startup-{}-generations", arguments.generation_count),
                     0,
@@ -352,6 +357,7 @@ fn parse_args() -> Result<Arguments, String> {
     let mut seed = 0x5233_u64;
     let mut run_index = 1usize;
     let mut generation_count = 100usize;
+    let mut chord_width = 1usize;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let value = args
@@ -371,6 +377,7 @@ fn parse_args() -> Result<Arguments, String> {
             }
             "--run-index" => run_index = parse_usize(&value, "run-index")?,
             "--generation-count" => generation_count = parse_usize(&value, "generation-count")?,
+            "--chord-width" => chord_width = parse_usize(&value, "chord-width")?,
             _ => return Err(format!("unknown argument {flag}")),
         }
     }
@@ -389,6 +396,12 @@ fn parse_args() -> Result<Arguments, String> {
     if load_mode != "quiet" && load_mode != "cpu_contention" {
         return Err("--load-mode must be quiet or cpu_contention".into());
     }
+    if chord_width == 0 || chord_width > PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
+        return Err("--chord-width must be between 1 and 15".into());
+    }
+    if mode != "startup" && chord_width != 1 {
+        return Err("--chord-width is supported only for startup mode".into());
+    }
     let output = output.ok_or_else(|| "--output is required".to_string())?;
     Ok(Arguments {
         mode,
@@ -400,6 +413,7 @@ fn parse_args() -> Result<Arguments, String> {
         seed,
         run_index,
         generation_count,
+        chord_width,
     })
 }
 
@@ -1447,7 +1461,14 @@ fn measure_allocations_and_time<T>(operation: impl FnOnce() -> T) -> (T, u64, u6
     (value, elapsed_us, allocation_calls, allocated_bytes)
 }
 
-fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String> {
+fn run_startup_case(
+    generation_count: usize,
+    seed: u64,
+    chord_width: usize,
+) -> Result<Value, String> {
+    if chord_width == 0 || chord_width > PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
+        return Err("startup chord width must be in 1..=15".into());
+    }
     if !SUPPORTED_DIAGNOSTIC_GENERATION_COUNTS.contains(&generation_count) {
         return Err(format!(
             "unsupported startup generation_count {generation_count}; fixed dataset is {SUPPORTED_DIAGNOSTIC_GENERATION_COUNTS:?}"
@@ -1460,7 +1481,14 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
     let first_slot = (seed % PHYSICAL_INSTRUMENT_SCAN_CODES.len() as u64) as usize;
     for generation in 0..generation_count {
         let slot = (first_slot + generation * 7) % PHYSICAL_INSTRUMENT_SCAN_CODES.len();
-        let scan_code = PHYSICAL_INSTRUMENT_SCAN_CODES[slot];
+        // Stack-only fixture generation; the two authored actions share one
+        // immutable canonical chord. The normal width=1 schedule is unchanged.
+        let mut chord = [0u16; sky_dispatch_core::model::MAX_KEYS];
+        for (index, code) in chord.iter_mut().take(chord_width).enumerate() {
+            *code = PHYSICAL_INSTRUMENT_SCAN_CODES
+                [(slot + index) % PHYSICAL_INSTRUMENT_SCAN_CODES.len()];
+        }
+        let chord = &chord[..chord_width];
         let down_us = (generation as u64)
             .checked_mul(STARTUP_DIAGNOSTIC_HOLD_US.saturating_mul(2))
             .ok_or_else(|| "startup fixture timestamp overflow".to_string())?;
@@ -1476,14 +1504,14 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
             down_index,
             ActionKind::Down,
             down_us,
-            &[scan_code],
+            chord,
             "prepared-startup-down",
         ));
         actions.push(make_diagnostic_action(
             up_index,
             ActionKind::Up,
             up_us,
-            &[scan_code],
+            chord,
             "prepared-startup-up",
         ));
     }
@@ -1547,11 +1575,20 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
 
     Ok(json!({
         "status":"CHARACTERIZATION_ONLY",
-        "dataset_id":"startup-synthetic-v1",
+        "dataset_id":if chord_width == 1 {
+            "startup-synthetic-v1"
+        } else {
+            "startup-synthetic-polyphony-v1"
+        },
         "seed":seed,
         "generation_count":generation_count,
+        "chord_width":chord_width,
         "action_count":actions.len(),
-        "authored_schedule":"one Down/Up generation per row; H=17167us; start=i*34334us; Up=start+17167us; one of 15 canonical scan codes selected by (seed%15 + i*7)%15",
+        "authored_schedule":if chord_width == 1 {
+            "one Down/Up generation per row; H=17167us; start=i*34334us; Up=start+17167us; one of 15 canonical scan codes selected by (seed%15 + i*7)%15".to_string()
+        } else {
+            format!("one {chord_width}-key Down/Up chord pair per authored row; H=17167us; start=i*34334us; Up=start+17167us; canonical scan codes selected from rotated distinct slots")
+        },
         "below_existing_action_limit":actions.len() < sky_dispatch_core::compile::MAX_ACTIONS,
         "action_limit":sky_dispatch_core::compile::MAX_ACTIONS,
         "schedule_compile_and_materialize":{
