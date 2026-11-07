@@ -69,14 +69,12 @@ fn all_chord_widths_and_max_mixed_packet_preserve_inputs() {
         originals.push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, mask)).unwrap());
         originals.push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(mask, 0)).unwrap());
     }
-    originals
-        .push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x007f, 0x7f80)).unwrap());
+    originals.push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x007f, 0x7f80)).unwrap());
     let events: usize = originals
         .iter()
         .map(|packet| usize::from(packet.event_count()))
         .sum();
-    let mut builder =
-        CompactInputArenaBuilder::try_with_capacity(originals.len(), events).unwrap();
+    let mut builder = CompactInputArenaBuilder::try_with_capacity(originals.len(), events).unwrap();
     for packet in &originals {
         builder.append_prepared(packet).unwrap();
     }
