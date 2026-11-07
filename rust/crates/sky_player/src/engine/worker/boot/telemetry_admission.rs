@@ -49,8 +49,10 @@ mod tests {
 
     #[test]
     fn enabled_observers_keep_the_requested_telemetry_mode_and_capacity() {
-        let mut diagnostic = WorkerConfig::default();
-        diagnostic.profile = DispatchProfile::StrictTimingDiagnostic;
+        let mut diagnostic = WorkerConfig {
+            profile: DispatchProfile::StrictTimingDiagnostic,
+            ..Default::default()
+        };
         diagnostic.telemetry.mode = TelemetryMode::Ring;
         diagnostic.telemetry.capacity = REQUESTED_RING_CAPACITY;
 
@@ -60,8 +62,10 @@ mod tests {
         assert_eq!(diagnostic_collector.capacity, REQUESTED_RING_CAPACITY);
         assert!(diagnostic_collector.output.records.capacity() >= REQUESTED_RING_CAPACITY);
 
-        let mut qualification = WorkerConfig::default();
-        qualification.timing_observer_for_qualification = true;
+        let mut qualification = WorkerConfig {
+            timing_observer_for_qualification: true,
+            ..Default::default()
+        };
         qualification.telemetry.mode = TelemetryMode::Ring;
         qualification.telemetry.capacity = REQUESTED_RING_CAPACITY;
 
