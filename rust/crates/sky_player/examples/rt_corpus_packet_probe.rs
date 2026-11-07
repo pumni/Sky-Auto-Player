@@ -93,9 +93,7 @@ fn characterize(bytes: &[u8], fallback: &str, policy: &MaterializedTimingPolicy)
         Err(error) => return rejected("planner_rejected", error.to_string(), "error"),
     };
     let (plan_status, schedule) = match plan {
-        SongPlan::LegacyCompatibility(legacy) => {
-            ("ready_legacy_compatibility", legacy.schedule)
-        }
+        SongPlan::LegacyCompatibility(legacy) => ("ready_legacy_compatibility", legacy.schedule),
         SongPlan::PianoConversion(piano) => {
             let status = match piano.status {
                 PlanStatus::Ready => "ready",
@@ -114,7 +112,11 @@ fn characterize(bytes: &[u8], fallback: &str, policy: &MaterializedTimingPolicy)
                 );
             }
             let Some(schedule) = piano.schedule else {
-                return rejected("planner_rejected", "ready plan has no schedule".into(), status);
+                return rejected(
+                    "planner_rejected",
+                    "ready plan has no schedule".into(),
+                    status,
+                );
             };
             (status, schedule)
         }
@@ -268,7 +270,9 @@ fn run() -> Result<(), String> {
                 return Err(format!("invalid histogram length for {}", song.path));
             }
             for (bin, count) in aggregate_histogram.iter_mut().zip(histogram) {
-                *bin += count.as_u64().ok_or_else(|| "invalid histogram count".to_string())?;
+                *bin += count
+                    .as_u64()
+                    .ok_or_else(|| "invalid histogram count".to_string())?;
             }
             prepared_input_events += evidence["input_events"]
                 .as_u64()
@@ -314,11 +318,10 @@ fn run() -> Result<(), String> {
         "limitations":"Offline built-in corpus, only successfully prepared songs aggregated. Source/planner/compiler/preparation exclusions are individually reported. No SendInput, receiver, CPU, RSS or latency measurements."
     });
     if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("create output directory: {error}"))?;
+        fs::create_dir_all(parent).map_err(|error| format!("create output directory: {error}"))?;
     }
-    let mut text = serde_json::to_string_pretty(&report)
-        .map_err(|error| format!("encode report: {error}"))?;
+    let mut text =
+        serde_json::to_string_pretty(&report).map_err(|error| format!("encode report: {error}"))?;
     text.push('\n');
     fs::write(&output, text).map_err(|error| format!("write output: {error}"))?;
     println!(
@@ -357,18 +360,34 @@ mod tests {
     #[test]
     fn native_action_mapping_retains_canonical_mixed_boundary() {
         let actions = vec![
-            KeyAction { at_us: 0, kind: SongActionKind::Down, scan_codes: vec![0x15],
-                reason: "onset".into() },
-            KeyAction { at_us: 20_000, kind: SongActionKind::Up, scan_codes: vec![0x15],
-                reason: "release".into() },
-            KeyAction { at_us: 20_000, kind: SongActionKind::Down, scan_codes: vec![0x16],
-                reason: "onset".into() },
-            KeyAction { at_us: 40_000, kind: SongActionKind::Up, scan_codes: vec![0x16],
-                reason: "release".into() },
+            KeyAction {
+                at_us: 0,
+                kind: SongActionKind::Down,
+                scan_codes: vec![0x15],
+                reason: "onset".into(),
+            },
+            KeyAction {
+                at_us: 20_000,
+                kind: SongActionKind::Up,
+                scan_codes: vec![0x15],
+                reason: "release".into(),
+            },
+            KeyAction {
+                at_us: 20_000,
+                kind: SongActionKind::Down,
+                scan_codes: vec![0x16],
+                reason: "onset".into(),
+            },
+            KeyAction {
+                at_us: 40_000,
+                kind: SongActionKind::Up,
+                scan_codes: vec![0x16],
+                reason: "release".into(),
+            },
         ];
         let inputs = runtime_actions(&actions).expect("native action mapping");
-        let compiled = compile_runtime_intents(&inputs, &SKY_SCAN_CODES)
-            .expect("valid mixed schedule");
+        let compiled =
+            compile_runtime_intents(&inputs, &SKY_SCAN_CODES).expect("valid mixed schedule");
         assert_eq!(compiled.packets.len(), 3);
         assert_eq!(compiled.packets[1].up_mask, 1);
         assert_eq!(compiled.packets[1].down_mask, 2);
