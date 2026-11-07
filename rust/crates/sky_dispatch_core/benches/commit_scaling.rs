@@ -145,7 +145,7 @@ fn measure_scan_code_representation(samples: usize) -> serde_json::Value {
         let mut checksum = 0u16;
         for _ in 0..REPRESENTATION_INNER_ITERATIONS {
             for down in &commit.down_intents {
-                checksum = checksum.wrapping_add(black_box(down.scan_code));
+                checksum = checksum.wrapping_add(black_box(down.scan_code()));
             }
         }
         black_box(checksum);
@@ -155,7 +155,7 @@ fn measure_scan_code_representation(samples: usize) -> serde_json::Value {
         let mut checksum = 0u16;
         for _ in 0..REPRESENTATION_INNER_ITERATIONS {
             for down in &commit.down_intents {
-                let slot = black_box(down.intent.key_slot());
+                let slot = black_box(down.key_slot());
                 let scan_code = coordinator
                     .schedule
                     .key_registry
