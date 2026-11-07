@@ -112,7 +112,7 @@ fn prepared_stream_storage_reports_allocated_capacity_separately_from_used_entri
     assert!(metadata_entries > 0);
     assert!(capacity >= used_entries);
     assert_eq!(reserved_bytes, capacity * entry_bytes);
-    assert!(reserved_bytes >= used_entries * entry_bytes);
+    assert!(reserved_bytes >= std::mem::size_of_val(stream.entries()));
 }
 
 #[test]
