@@ -111,6 +111,68 @@ fn prepared_input_occupancy_histogram_excludes_metadata_and_counts_chords() {
 }
 
 #[test]
+fn prepared_input_histogram_covers_all_canonical_chord_widths() {
+    let canonical = sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
+    for width in 1..=canonical.len() {
+        let chord = &canonical[..width];
+        let stream = build_stream(
+            &[
+                action(0, ActionKind::Down, 0, chord),
+                action(1, ActionKind::Up, 20_000, chord),
+                // A stale Up is metadata, not another physical INPUT.
+                action(2, ActionKind::Up, 40_000, &canonical[..1]),
+            ],
+            &canonical,
+        );
+        let bins = stream.physical_input_event_histogram_for_test();
+        let packets = physical_packets(&stream);
+        assert_eq!(stream.entries().len(), 3, "width={width}");
+        assert_eq!(packets.len(), 2, "width={width}");
+        assert_eq!(bins[0], 0, "width={width}");
+        assert_eq!(bins.iter().sum::<usize>(), 2, "width={width}");
+        assert_eq!(bins[width], 2, "width={width}");
+        assert_eq!(
+            bins.iter().enumerate().map(|(size, count)| size * count).sum::<usize>(),
+            2 * width,
+            "width={width}"
+        );
+        println!("CHORD_OCCUPANCY width={width} physical_packets=2 input_events={}", 2 * width);
+    }
+}
+
+#[test]
+fn prepared_input_histogram_counts_maximum_mixed_up_down_packet_once() {
+    let canonical = sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
+    let left = &canonical[..7];
+    let right = &canonical[7..];
+    let stream = build_stream(
+        &[
+            action(0, ActionKind::Down, 0, left),
+            // Disjoint directions at the same authored boundary compile to one
+            // 15-event mixed packet: seven Up followed by eight Down.
+            action(1, ActionKind::Up, 20_000, left),
+            action(2, ActionKind::Down, 20_000, right),
+            action(3, ActionKind::Up, 40_000, right),
+            action(4, ActionKind::Up, 60_000, &canonical[..1]),
+        ],
+        &canonical,
+    );
+    let packets = physical_packets(&stream);
+    let bins = stream.physical_input_event_histogram_for_test();
+    assert_eq!(stream.entries().len(), 4);
+    assert_eq!(packets.len(), 3);
+    assert_eq!(packets[0], (0, 0x007f));
+    assert_eq!(packets[1], (0x007f, 0x7f80));
+    assert_eq!(packets[2], (0x7f80, 0));
+    assert_eq!(bins[0], 0);
+    assert_eq!(bins[7], 1);
+    assert_eq!(bins[8], 1);
+    assert_eq!(bins[15], 1);
+    assert_eq!(bins.iter().sum::<usize>(), 3);
+    println!("MIXED_OCCUPANCY up=7 down=8 events=15 physical_packets=3 metadata=1");
+}
+
+#[test]
 fn prepared_stream_storage_reports_allocated_capacity_separately_from_used_entries() {
     let stream = build_stream(
         &[
