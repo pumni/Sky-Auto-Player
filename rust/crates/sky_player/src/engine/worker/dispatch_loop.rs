@@ -979,7 +979,7 @@ pub(super) fn dispatch(
                         .as_ref()
                         .expect("prepared stream is present");
                     match stream.current().expect("prepared stream cursor is valid") {
-                        PreparedDispatchEntry::Physical(frame) => (frame.offset_ticks, true),
+                        PreparedDispatchEntry::Physical(frame) => (frame.offset_ticks(), true),
                         PreparedDispatchEntry::Metadata { offset_ticks, .. } => {
                             (*offset_ticks, false)
                         }

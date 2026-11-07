@@ -116,6 +116,38 @@ fn prepared_stream_storage_reports_allocated_capacity_separately_from_used_entri
 }
 
 #[test]
+fn prepared_physical_frames_reuse_the_materialized_target_without_extra_storage() {
+    let stream = build_stream(
+        &[
+            action(0, ActionKind::Down, 0, &[0x15]),
+            action(1, ActionKind::Up, 20_000, &[0x15]),
+            action(2, ActionKind::Down, 40_000, &[0x15]),
+            action(3, ActionKind::Up, 60_000, &[0x15]),
+            action(4, ActionKind::Up, 80_000, &[0x15]),
+        ],
+        &[0x15],
+    );
+    let mut targets = Vec::new();
+    let mut metadata = Vec::new();
+    for entry in stream.entries() {
+        match entry {
+            PreparedDispatchEntry::Physical(frame) => {
+                assert_eq!(
+                    std::mem::size_of_val(frame),
+                    std::mem::size_of_val(&frame.view),
+                );
+                targets.push(frame.offset_ticks().as_u64());
+            }
+            PreparedDispatchEntry::Metadata { offset_ticks, .. } => {
+                metadata.push(offset_ticks.as_u64());
+            }
+        }
+    }
+    assert_eq!(targets, [0, 20_000, 40_000, 60_000]);
+    assert_eq!(metadata, [80_000]);
+}
+
+#[test]
 fn prepared_stream_contains_only_materialized_physical_boundaries() {
     let stream = build_stream(
         &[

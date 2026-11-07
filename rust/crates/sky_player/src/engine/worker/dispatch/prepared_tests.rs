@@ -313,7 +313,7 @@ fn normal_stream_materializes_only_physical_boundaries_and_keeps_authored_order(
                     panic!("healthy same-key schedule must use authored commits");
                 };
                 assert_eq!(commit.frame.deferred_up_mask, 0);
-                offsets.push(frame.offset_ticks);
+                offsets.push(frame.offset_ticks());
             }
             PreparedDispatchEntry::Metadata {
                 offset_ticks,
@@ -413,7 +413,7 @@ fn prepared_stream_payload_and_offsets_are_immutable_across_builds() {
         .0;
     let entries_before = stream.entries().iter().map(|entry| match entry {
         PreparedDispatchEntry::Physical(frame) => (
-            frame.offset_ticks,
+            frame.offset_ticks(),
             frame.view.packet_masks,
             frame.view.prepared_packet.packet(),
             frame.view.prepared_packet.event_count(),
@@ -433,7 +433,7 @@ fn prepared_stream_payload_and_offsets_are_immutable_across_builds() {
         .iter()
         .map(|entry| match entry {
             PreparedDispatchEntry::Physical(frame) => (
-                frame.offset_ticks,
+                frame.offset_ticks(),
                 frame.view.packet_masks,
                 frame.view.prepared_packet.packet(),
                 frame.view.prepared_packet.event_count(),
