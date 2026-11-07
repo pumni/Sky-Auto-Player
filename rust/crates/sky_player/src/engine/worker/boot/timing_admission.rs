@@ -1,4 +1,4 @@
-use crate::engine::config::WorkerConfig;
+use crate::engine::config::{EffectiveRuntimePolicy, WorkerConfig};
 use crate::engine::worker::WorkerTimingState;
 use crate::engine::{DurationTicks, PAUSED_POLL_US, QpcClock};
 
@@ -14,6 +14,7 @@ pub(super) struct ConvertedTiming {
 pub(super) fn convert(
     config: &WorkerConfig,
     qpc_clock: QpcClock,
+    effective_policy: &EffectiveRuntimePolicy,
 ) -> Result<ConvertedTiming, String> {
     let effective_min_hold_us = config.timing.min_hold_us;
     let min_hold_ticks = qpc_clock
@@ -76,7 +77,7 @@ pub(super) fn convert(
         min_hold_ticks,
         frame_ticks,
         worker_timing: WorkerTimingState {
-            strict_timing: config.timing.strict_timing,
+            strict_timing: effective_policy.strict_failure_policy,
             timing_margin_ticks,
             strict_down_completion_late_ticks,
             strict_up_completion_late_ticks,
