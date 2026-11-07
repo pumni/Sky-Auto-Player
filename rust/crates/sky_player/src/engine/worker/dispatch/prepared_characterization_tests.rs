@@ -132,11 +132,17 @@ fn prepared_input_histogram_covers_all_canonical_chord_widths() {
         assert_eq!(bins.iter().sum::<usize>(), 2, "width={width}");
         assert_eq!(bins[width], 2, "width={width}");
         assert_eq!(
-            bins.iter().enumerate().map(|(size, count)| size * count).sum::<usize>(),
+            bins.iter()
+                .enumerate()
+                .map(|(size, count)| size * count)
+                .sum::<usize>(),
             2 * width,
             "width={width}"
         );
-        println!("CHORD_OCCUPANCY width={width} physical_packets=2 input_events={}", 2 * width);
+        println!(
+            "CHORD_OCCUPANCY width={width} physical_packets=2 input_events={}",
+            2 * width
+        );
     }
 }
 

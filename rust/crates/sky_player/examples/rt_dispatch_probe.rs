@@ -1461,7 +1461,11 @@ fn measure_allocations_and_time<T>(operation: impl FnOnce() -> T) -> (T, u64, u6
     (value, elapsed_us, allocation_calls, allocated_bytes)
 }
 
-fn run_startup_case(generation_count: usize, seed: u64, chord_width: usize) -> Result<Value, String> {
+fn run_startup_case(
+    generation_count: usize,
+    seed: u64,
+    chord_width: usize,
+) -> Result<Value, String> {
     if chord_width == 0 || chord_width > PHYSICAL_INSTRUMENT_SCAN_CODES.len() {
         return Err("startup chord width must be in 1..=15".into());
     }
