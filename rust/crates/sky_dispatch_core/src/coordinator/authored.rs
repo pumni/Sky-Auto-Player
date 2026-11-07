@@ -271,12 +271,12 @@ impl RuntimeDispatchCoordinator {
                     ),
                 ));
             }
-            let identity = AuthoredUpIdentity {
+            let identity = AuthoredUpIdentity::try_new(
                 generation_id,
-                key_slot: slot,
-                packet_index: packet.packet_index,
+                slot,
+                packet.packet_index,
                 intent_index,
-            };
+            )?;
             if self
                 .up_intent_locations
                 .get(generation_id as usize)
@@ -740,12 +740,12 @@ impl RuntimeDispatchCoordinator {
                 }
                 continue;
             }
-            let identity = AuthoredUpIdentity {
-                generation_id: intent.generation_id(),
-                key_slot: intent.key_slot(),
-                packet_index: prepared.packet_index,
+            let identity = AuthoredUpIdentity::try_new(
+                intent.generation_id(),
+                intent.key_slot(),
+                prepared.packet_index,
                 intent_index,
-            };
+            )?;
             if self
                 .up_intent_locations
                 .get(intent.generation_id() as usize)

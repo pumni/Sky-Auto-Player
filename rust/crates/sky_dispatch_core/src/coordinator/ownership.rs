@@ -322,12 +322,7 @@ impl RuntimeDispatchCoordinator {
                 ),
             ));
         }
-        Ok(AuthoredUpIdentity {
-            generation_id,
-            key_slot,
-            packet_index,
-            intent_index,
-        })
+        AuthoredUpIdentity::try_new(generation_id, key_slot, packet_index, intent_index)
     }
 
     pub(super) fn invalidate_authored_up_for_resumable_cancellation(
