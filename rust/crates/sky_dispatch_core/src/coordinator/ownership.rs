@@ -251,7 +251,7 @@ impl RuntimeDispatchCoordinator {
             }
         }
         for down in &commit.down_intents {
-            let slot = down.intent.key_slot();
+            let slot = down.key_slot();
             if usize::from(slot) >= MAX_KEYS
                 || self.cancelled_up_by_slot[usize::from(slot)].is_some()
             {

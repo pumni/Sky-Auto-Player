@@ -1,8 +1,11 @@
 use super::super::{
-    AuthoredUpIdentity, GenerationAccounting, GenerationStatus, RuntimeDispatchCoordinator,
+    AuthoredUpIdentity, GenerationAccounting, GenerationStatus, PreparedDownIntent,
+    RuntimeDispatchCoordinator,
 };
 use crate::compile::compile_runtime_intents;
-use crate::model::{ActionKind, KeyActionInput, MAX_KEYS, NO_GENERATION_ID, RuntimeSchedule};
+use crate::model::{
+    ActionKind, CompactIntent, KeyActionInput, MAX_KEYS, NO_GENERATION_ID, RuntimeSchedule,
+};
 use crate::time::TimelineTicks;
 
 #[test]
@@ -29,6 +32,29 @@ fn compact_frozen_up_identity_roundtrips_and_rejects_lossy_indices() {
     if cfg!(target_pointer_width = "64") {
         assert_eq!(std::mem::size_of::<super::super::PreparedUpIntent>(), 32);
     }
+}
+
+#[test]
+fn compact_frozen_down_intent_preserves_generation_slot_scan_and_sentinel() {
+    let slot = (MAX_KEYS - 1) as u8;
+    let down = PreparedDownIntent::try_new(CompactIntent::new(999_999, slot), 0xE01D)
+        .expect("valid high-generation Down");
+    assert_eq!(down.generation_id(), 999_999);
+    assert_eq!(down.key_slot(), slot);
+    assert_eq!(down.scan_code(), 0xE01D);
+
+    let sentinel = PreparedDownIntent::try_new(CompactIntent::new(NO_GENERATION_ID, 0), 0x15)
+        .expect("preserve canonical unmatched-generation sentinel");
+    assert_eq!(sentinel.generation_id(), NO_GENERATION_ID);
+    assert_eq!(sentinel.key_slot(), 0);
+    assert_eq!(sentinel.scan_code(), 0x15);
+
+    assert!(PreparedDownIntent::try_new(CompactIntent::new(7, MAX_KEYS as u8), 0x15).is_err());
+    assert!(PreparedDownIntent::try_new(CompactIntent::new(u64::from(u32::MAX), 0), 0x15).is_err());
+    assert!(
+        PreparedDownIntent::try_new(CompactIntent::new(u64::from(u32::MAX) + 1, 0), 0x15).is_err()
+    );
+    assert_eq!(std::mem::size_of::<PreparedDownIntent>(), 8);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -373,10 +373,58 @@ impl AuthoredUpIdentity {
     }
 }
 
+/// Frozen Down evidence retains the generation, slot and full scan code.
+/// The compiler caps actions below u32::MAX, reserved here for NO_GENERATION_ID.
+#[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedDownIntent {
-    pub intent: CompactIntent,
-    pub scan_code: u16,
+    generation: u32,
+    scan_code: u16,
+    key_slot: KeySlot,
+}
+
+impl PreparedDownIntent {
+    pub(crate) fn try_new(intent: CompactIntent, scan_code: u16) -> Result<Self, CoordinatorError> {
+        let key_slot = intent.key_slot();
+        if usize::from(key_slot) >= MAX_KEYS {
+            return Err(CoordinatorError::InvalidKeySlot { slot: key_slot });
+        }
+        let generation = match intent.generation_id() {
+            NO_GENERATION_ID => u32::MAX,
+            generation_id => u32::try_from(generation_id)
+                .ok()
+                .filter(|&generation| generation != u32::MAX)
+                .ok_or_else(|| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                        "frozen authored Down generation exceeds compiler u32 range".into(),
+                    ))
+                })?,
+        };
+        Ok(Self {
+            generation,
+            scan_code,
+            key_slot,
+        })
+    }
+
+    #[inline]
+    pub fn generation_id(&self) -> GenerationId {
+        if self.generation == u32::MAX {
+            NO_GENERATION_ID
+        } else {
+            u64::from(self.generation)
+        }
+    }
+
+    #[inline]
+    pub fn key_slot(&self) -> KeySlot {
+        self.key_slot
+    }
+
+    #[inline]
+    pub fn scan_code(&self) -> u16 {
+        self.scan_code
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

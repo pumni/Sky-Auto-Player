@@ -353,7 +353,7 @@ impl RuntimeDispatchCoordinator {
                 .registry
                 .scan_code_for(slot)
                 .ok_or(CoordinatorError::InvalidKeySlot { slot })?;
-            down_intents.push(PreparedDownIntent { intent, scan_code });
+            down_intents.push(PreparedDownIntent::try_new(intent, scan_code)?);
         }
 
         let pending_blocked_mask = self
@@ -809,7 +809,7 @@ impl RuntimeDispatchCoordinator {
                 .ok_or(CoordinatorError::InvalidKeySlot {
                     slot: intent.key_slot(),
                 })?;
-            down_intents.push(PreparedDownIntent { intent, scan_code });
+            down_intents.push(PreparedDownIntent::try_new(intent, scan_code)?);
         }
         Ok(PreparedAuthoredCommit {
             frame: prepared,
@@ -949,11 +949,11 @@ impl RuntimeDispatchCoordinator {
         self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
 
         for down in &commit.down_intents {
-            let generation_id = down.intent.generation_id();
+            let generation_id = down.generation_id();
             if generation_id == NO_GENERATION_ID {
                 continue;
             }
-            let slot = down.intent.key_slot();
+            let slot = down.key_slot();
             let bit = Self::bit_for_slot(slot);
             if self.active_by_slot[usize::from(slot)].is_some()
                 || self.active_mask & bit != 0
@@ -972,7 +972,7 @@ impl RuntimeDispatchCoordinator {
             )?;
             self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
                 generation_id,
-                scan_code: down.scan_code,
+                scan_code: down.scan_code(),
                 key_slot: slot,
                 source_action_index: commit.down_source_action_index.unwrap_or(0),
                 release_not_before_ticks,
@@ -1027,11 +1027,11 @@ impl RuntimeDispatchCoordinator {
 
         let mut observed_down_mask = 0u16;
         for down in &commit.down_intents {
-            let generation_id = down.intent.generation_id();
+            let generation_id = down.generation_id();
             if generation_id == NO_GENERATION_ID {
                 continue;
             }
-            let slot = down.intent.key_slot();
+            let slot = down.key_slot();
             let bit = Self::bit_for_slot(slot);
             observed_down_mask |= bit;
             if self.active_by_slot[usize::from(slot)].is_some()
