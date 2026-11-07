@@ -91,8 +91,7 @@ impl CompactInputArenaBuilder {
         for descriptor in &self.descriptors {
             if descriptor.offset as usize != next
                 || descriptor.length == 0
-                || usize::from(descriptor.length)
-                    != usize::from(descriptor.packet.event_count())
+                || usize::from(descriptor.length) != usize::from(descriptor.packet.event_count())
             {
                 return Err("invalid compact packet descriptor".into());
             }
@@ -228,9 +227,8 @@ mod tests {
             originals.push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, mask)).unwrap());
             originals.push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(mask, 0)).unwrap());
         }
-        originals.push(
-            PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x007f, 0x7f80)).unwrap(),
-        );
+        originals
+            .push(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x007f, 0x7f80)).unwrap());
         let events: usize = originals
             .iter()
             .map(|packet| usize::from(packet.event_count()))
@@ -247,9 +245,10 @@ mod tests {
         let (mask, up) = frozen.mixed_up_prefix(originals.len() - 1).unwrap();
         assert_eq!(mask, PhysicalPacket::new(0x007f, 0));
         assert_eq!(up.len(), 7);
-        assert!(up.iter().all(|event| unsafe {
-            event.Anonymous.ki.dwFlags & KEYEVENTF_KEYUP != 0
-        }));
+        assert!(
+            up.iter()
+                .all(|event| unsafe { event.Anonymous.ki.dwFlags & KEYEVENTF_KEYUP != 0 })
+        );
         assert_eq!(frozen.sizes().event_count, events);
         assert_eq!(frozen.sizes().packet_count, 31);
     }

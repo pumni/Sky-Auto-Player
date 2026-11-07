@@ -1,11 +1,11 @@
 //! Windows SendInput API wrappers, input packet prewarming, and tracked key backend.
 
+#[cfg(all(windows, feature = "test-support"))]
+pub mod compact_study;
 mod down_transaction;
 mod modifier_guard;
 mod outcome;
 mod packet;
-#[cfg(all(windows, feature = "test-support"))]
-pub mod compact_study;
 mod physical;
 pub mod profile;
 mod raw;
