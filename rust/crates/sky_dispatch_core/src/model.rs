@@ -110,7 +110,7 @@ pub struct RuntimeKeyIntent {
 /// by the coordinator and worker, so the million-action schedule does not
 /// inline fifteen copies of those fields for every action.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompactIntent(u64);
 
 impl CompactIntent {

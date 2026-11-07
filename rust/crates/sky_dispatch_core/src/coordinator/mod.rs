@@ -311,29 +311,65 @@ pub struct PreparedUpIntent {
 /// Exact authored identity for a paired Up. A generation ID alone is not
 /// sufficient to reconcile a cancellation: the key slot and immutable
 /// compiler location must also match.
+///
+/// The canonical CompactIntent encodes generation and slot in eight bytes.
+/// Compiler packet and intent locations are u32-indexed, so storing them as
+/// u32 preserves full identity while keeping the frozen token to 16 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthoredUpIdentity {
-    generation_id: GenerationId,
-    key_slot: KeySlot,
-    packet_index: usize,
-    intent_index: usize,
+    generation_slot: CompactIntent,
+    packet_index: u32,
+    intent_index: u32,
 }
 
 impl AuthoredUpIdentity {
+    pub(crate) fn try_new(
+        generation_id: GenerationId,
+        key_slot: KeySlot,
+        packet_index: usize,
+        intent_index: usize,
+    ) -> Result<Self, CoordinatorError> {
+        if generation_id == NO_GENERATION_ID
+            || generation_id > MAX_COMPACT_GENERATION_ID
+            || usize::from(key_slot) >= MAX_KEYS
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "frozen authored Up identity has an invalid generation or slot".into(),
+                ),
+            ));
+        }
+        let packet_index = u32::try_from(packet_index).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "frozen authored Up packet index exceeds compiler u32 range".into(),
+            ))
+        })?;
+        let intent_index = u32::try_from(intent_index).map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "frozen authored Up intent index exceeds compiler u32 range".into(),
+            ))
+        })?;
+        Ok(Self {
+            generation_slot: CompactIntent::new(generation_id, key_slot),
+            packet_index,
+            intent_index,
+        })
+    }
+
     pub fn generation_id(self) -> GenerationId {
-        self.generation_id
+        self.generation_slot.generation_id()
     }
 
     pub fn key_slot(self) -> KeySlot {
-        self.key_slot
+        self.generation_slot.key_slot()
     }
 
     pub fn packet_index(self) -> usize {
-        self.packet_index
+        self.packet_index as usize
     }
 
     pub fn intent_index(self) -> usize {
-        self.intent_index
+        self.intent_index as usize
     }
 }
 

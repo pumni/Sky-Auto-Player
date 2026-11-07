@@ -5,6 +5,32 @@ use crate::compile::compile_runtime_intents;
 use crate::model::{ActionKind, KeyActionInput, MAX_KEYS, NO_GENERATION_ID, RuntimeSchedule};
 use crate::time::TimelineTicks;
 
+#[test]
+fn compact_frozen_up_identity_roundtrips_and_rejects_lossy_indices() {
+    let identity = AuthoredUpIdentity::try_new(
+        123_456,
+        (MAX_KEYS - 1) as u8,
+        u32::MAX as usize,
+        u32::MAX as usize,
+    )
+    .expect("compiler-range identity");
+    assert_eq!(identity.generation_id(), 123_456);
+    assert_eq!(identity.key_slot(), (MAX_KEYS - 1) as u8);
+    assert_eq!(identity.packet_index(), u32::MAX as usize);
+    assert_eq!(identity.intent_index(), u32::MAX as usize);
+    assert!(AuthoredUpIdentity::try_new(NO_GENERATION_ID, 0, 0, 0).is_err());
+    assert!(AuthoredUpIdentity::try_new(0, MAX_KEYS as u8, 0, 0).is_err());
+    if usize::BITS > 32 {
+        let past_u32 = (u64::from(u32::MAX) + 1) as usize;
+        assert!(AuthoredUpIdentity::try_new(42, 0, past_u32, 0).is_err());
+        assert!(AuthoredUpIdentity::try_new(42, 0, 0, past_u32).is_err());
+    }
+    assert_eq!(std::mem::size_of::<AuthoredUpIdentity>(), 16);
+    if cfg!(target_pointer_width = "64") {
+        assert_eq!(std::mem::size_of::<super::super::PreparedUpIntent>(), 32);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReferenceUpIdentity {
     generation_id: u64,
