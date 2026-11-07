@@ -94,15 +94,14 @@ pub struct PreparedStartupEvidence {
     pub prepared_entry_type_size_bytes: usize,
     pub prepared_entry_array_bytes: usize,
     pub prepared_entry_allocation: (usize, usize),
+    pub physical_input_event_histogram: [usize; sky_dispatch_win32::input::MAX_PACKET_EVENTS + 1],
     pub cancellation_ledger_bytes: usize,
     pub rebuilt_coordinator_heap_payload_bytes: usize,
 }
-
 pub struct PreparedStartupBuilder {
     coordinator: RuntimeDispatchCoordinator,
     qpc_clock: QpcClock,
 }
-
 impl PreparedStartupBuilder {
     pub fn clone_coordinator_for_test(&self) -> Self {
         Self {
@@ -125,6 +124,7 @@ impl PreparedStartupBuilder {
             prepared_entry_type_size_bytes: std::mem::size_of::<PreparedDispatchEntry>(),
             prepared_entry_array_bytes: used_bytes,
             prepared_entry_allocation: stream.prepared_entry_allocation_for_test(),
+            physical_input_event_histogram: stream.physical_input_event_histogram_for_test(),
             cancellation_ledger_bytes: stream.cancellation_ledger_bytes_for_test(),
             rebuilt_coordinator_heap_payload_bytes: coordinator
                 .heap_payload_bytes_for_test_support(),

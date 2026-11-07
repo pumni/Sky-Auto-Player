@@ -1592,6 +1592,8 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
             "prepared_entry_array_bytes":prepared.prepared_entry_array_bytes,
             "prepared_entry_capacity":prepared.prepared_entry_allocation.0,
             "prepared_entry_reserved_bytes":prepared.prepared_entry_allocation.1,
+            "physical_input_event_histogram":prepared.physical_input_event_histogram,
+            "physical_input_slots_per_packet":sky_dispatch_win32::input::MAX_PACKET_EVENTS,
             "cancellation_ledger_bytes":prepared.cancellation_ledger_bytes,
             "rebuilt_coordinator_heap_payload_bytes":prepared.rebuilt_coordinator_heap_payload_bytes
         },
