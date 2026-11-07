@@ -93,6 +93,24 @@ fn complete_transport_outcome(
 }
 
 #[test]
+fn prepared_input_occupancy_histogram_excludes_metadata_and_counts_chords() {
+    let stream = build_stream(
+        &[
+            action(0, ActionKind::Down, 0, &[0x15, 0x16, 0x17]),
+            action(1, ActionKind::Up, 20_000, &[0x15, 0x16, 0x17]),
+            action(2, ActionKind::Up, 40_000, &[0x15]),
+        ],
+        &[0x15, 0x16, 0x17],
+    );
+    let histogram = stream.physical_input_event_histogram_for_test();
+    assert_eq!(histogram.iter().sum::<usize>(), stream.physical_count());
+    assert_eq!(histogram[3], 2);
+    assert_eq!(histogram[0], 0);
+    assert_eq!(histogram[1], 0);
+    assert_eq!(stream.entries().len(), 3); // two physical chords and one stale-Up metadata
+}
+
+#[test]
 fn prepared_stream_storage_reports_allocated_capacity_separately_from_used_entries() {
     let stream = build_stream(
         &[
