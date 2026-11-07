@@ -1590,8 +1590,8 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
             "metadata_entry_count":prepared.metadata_entry_count,
             "prepared_entry_type_size_bytes":prepared.prepared_entry_type_size_bytes,
             "prepared_entry_array_bytes":prepared.prepared_entry_array_bytes,
-            "prepared_entry_capacity":prepared.prepared_entry_capacity,
-            "prepared_entry_reserved_bytes":prepared.prepared_entry_reserved_bytes,
+            "prepared_entry_capacity":prepared.prepared_entry_allocation.0,
+            "prepared_entry_reserved_bytes":prepared.prepared_entry_allocation.1,
             "cancellation_ledger_bytes":prepared.cancellation_ledger_bytes,
             "rebuilt_coordinator_heap_payload_bytes":prepared.rebuilt_coordinator_heap_payload_bytes
         },
