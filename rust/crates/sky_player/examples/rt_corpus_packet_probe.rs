@@ -176,7 +176,11 @@ fn characterize_schedule(
         .sum::<usize>();
     let possible_slots = prepared.physical_entry_count * PHYSICAL_PACKET_SLOTS;
     if input_events > possible_slots {
-        return rejected("invariant_rejected", "INPUT events exceed packet slots".into(), plan_status);
+        return rejected(
+            "invariant_rejected",
+            "INPUT events exceed packet slots".into(),
+            plan_status,
+        );
     }
     json!({
         "outcome":"prepared",
@@ -340,7 +344,12 @@ mod tests {
             verified_source_path(root, "sheets/piano.json").unwrap(),
             root.join("songs/piano.json")
         );
-        for source in ["../piano.json", "sheets/../piano.json", "sheets/folder/x.json", "songs/x.json"] {
+        for source in [
+            "../piano.json",
+            "sheets/../piano.json",
+            "sheets/folder/x.json",
+            "songs/x.json",
+        ] {
             assert!(verified_source_path(root, source).is_err(), "{source}");
         }
     }
