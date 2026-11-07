@@ -216,6 +216,7 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     let document: Value = serde_json::from_str(&export).expect("valid sender trace JSON");
 
     assert_eq!(document["export_schema_version"], 2);
+    assert_eq!(document["raw_packet_trace_status"], "not_captured");
     assert_eq!(document["session_id"], "a".repeat(32));
     assert_eq!(document["song_id"], "c".repeat(32));
     assert_eq!(document["song_title"], "Fixture");

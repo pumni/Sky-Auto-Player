@@ -1558,6 +1558,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     async exportSenderTrace(): Promise<string> {
       return JSON.stringify({
         export_schema_version: 2,
+        raw_packet_trace_status: 'not_captured',
         session_id: 'a'.repeat(32),
         song_id: 'fixture-song',
         song_title: 'Fixture Song',

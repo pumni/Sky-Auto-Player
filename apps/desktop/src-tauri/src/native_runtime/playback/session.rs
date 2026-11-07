@@ -2122,6 +2122,7 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
 ) -> Result<String, serde_json::Error> {
     serde_json::to_string(&serde_json::json!({
         "export_schema_version": 2,
+        "raw_packet_trace_status": "not_captured",
         "session_id": active.session_id,
         "song_id": active.song_id,
         "song_title": active.title,

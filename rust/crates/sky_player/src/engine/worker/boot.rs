@@ -7,13 +7,14 @@ use startup_admission::{
     validate_production_wait_backend,
 };
 mod startup_calibration;
+mod telemetry_admission;
 mod timing_admission;
 use super::super::config::StartupCheckpoint;
 use super::super::shared::StartupAbortReason;
 use super::super::{
     BackendConfig, CoordinatorError, DurationTicks, PlaybackClockState, QpcClock, QpcTicks,
-    RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector, TrackedKeyState,
-    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
+    RuntimeDispatchCoordinator, SharedMetrics, TrackedKeyState, current_process_cpu_time_us,
+    current_thread_cpu_time_us, qpc_frequency_checked,
 };
 use super::admission::focus_matches_hwnd;
 use super::{
@@ -26,6 +27,7 @@ use startup_calibration::{
     StartupCalibrationMeasurement, measure_startup_calibration, select_startup_spin_threshold,
 };
 use std::sync::atomic::Ordering;
+use telemetry_admission::try_new_worker_telemetry;
 use timing_admission::{ConvertedTiming, convert as convert_timing};
 
 /// Assembles the worker's admission state: backend, coordinator,
@@ -337,17 +339,16 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let telemetry =
-        match TelemetryCollector::try_new(config.telemetry.mode, config.telemetry.capacity) {
-            Ok(telemetry) => std::sync::Arc::new(parking_lot::Mutex::new(telemetry)),
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("telemetry admission failed: {error}"),
-                );
-            }
-        };
+    let telemetry = match try_new_worker_telemetry(config) {
+        Ok(telemetry) => std::sync::Arc::new(parking_lot::Mutex::new(telemetry)),
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("telemetry admission failed: {error}"),
+            );
+        }
+    };
     if let Err(error) = core.errors.abort_counts.try_reserve(6) {
         return admission_failure(
             &mut backend,
