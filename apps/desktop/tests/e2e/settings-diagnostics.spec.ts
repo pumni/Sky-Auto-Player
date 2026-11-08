@@ -227,6 +227,85 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test('Donate provider cards align their text and Open actions at desktop width', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Donate' }).click();
+
+  const cards = dialog.locator('.donate-provider-card');
+  await expect(cards).toHaveCount(2);
+  const layout = await cards.evaluateAll((elements) =>
+    elements.map((card) => {
+      const title = card.querySelector<HTMLElement>('h4');
+      const subtitle = card.querySelector<HTMLElement>('p');
+      const icon = card.querySelector<SVGElement>('.donate-provider-heading svg');
+      const action = card.querySelector<HTMLAnchorElement>('.donate-external-link');
+      if (!title || !subtitle || !icon || !action) return null;
+
+      const cardRect = card.getBoundingClientRect();
+      const titleRect = title.getBoundingClientRect();
+      const subtitleRect = subtitle.getBoundingClientRect();
+      const iconRect = icon.getBoundingClientRect();
+      const actionRect = action.getBoundingClientRect();
+      const copyMid = (titleRect.top + subtitleRect.bottom) / 2;
+      return {
+        top: cardRect.top,
+        height: cardRect.height,
+        subtitleGap: subtitleRect.top - titleRect.bottom,
+        iconOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - copyMid),
+        actionOffset: Math.abs((actionRect.top + actionRect.bottom) / 2 - copyMid),
+        actionInside: actionRect.right <= cardRect.right - 4,
+      };
+    }),
+  );
+  expect(layout).toHaveLength(2);
+  for (const item of layout) {
+    expect(item).not.toBeNull();
+    if (!item) continue;
+    expect(item.subtitleGap).toBeGreaterThanOrEqual(0);
+    expect(item.subtitleGap).toBeLessThanOrEqual(8);
+    expect(item.iconOffset).toBeLessThanOrEqual(5);
+    expect(item.actionOffset).toBeLessThanOrEqual(5);
+    expect(item.actionInside).toBe(true);
+  }
+  const first = layout[0];
+  const second = layout[1];
+  if (first && second) {
+    expect(Math.abs(first.top - second.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(first.height - second.height)).toBeLessThanOrEqual(1);
+  }
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  const compact = await cards.evaluateAll((elements) =>
+    elements.map((card) => {
+      const rect = card.getBoundingClientRect();
+      const action = card.querySelector<HTMLAnchorElement>('.donate-external-link');
+      const actionRect = action?.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.top,
+        bottom: rect.bottom,
+        right: rect.right,
+        actionRight: actionRect?.right ?? Infinity,
+      };
+    }),
+  );
+  const [compactFirst, compactSecond] = compact;
+  expect(compactFirst).toBeDefined();
+  expect(compactSecond).toBeDefined();
+  if (compactFirst && compactSecond) {
+    expect(Math.abs(compactFirst.left - compactSecond.left)).toBeLessThanOrEqual(1);
+    expect(compactSecond.top).toBeGreaterThan(compactFirst.bottom);
+  }
+  for (const item of compact) {
+    expect(item.actionRight).toBeLessThanOrEqual(item.right - 4);
+  }
+});
+
 test('Playback Behavior stays usable in a compact Settings viewport', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 448 });
   await page.goto('/');

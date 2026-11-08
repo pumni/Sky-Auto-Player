@@ -509,26 +509,27 @@
 }
 
 .donate-provider-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 65px;
+  column-gap: 14px;
+  min-height: 72px;
   padding: 10px 12px;
 }
 
 .donate-provider-heading {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
   min-width: 0;
   color: var(--text-primary);
 }
 
 .donate-provider-heading > div {
   display: grid;
-  gap: 2px;
+  align-content: center;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -538,13 +539,17 @@
 }
 
 .donate-provider-heading h4 {
+  margin: 0;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.25;
 }
 
 .donate-provider-heading p {
+  margin: 0;
   color: var(--text-secondary);
   font-size: 11px;
+  line-height: 1.35;
 }
 
 .donate-external-link,
@@ -558,9 +563,11 @@
 }
 
 .donate-external-link {
-  flex: 0 0 auto;
+  justify-self: end;
+  min-width: 68px;
   min-height: 30px;
   padding: 0 10px;
+  white-space: nowrap;
 }
 
 .donate-bank-card {
@@ -671,6 +678,7 @@
 }
 
 @media (max-width: 760px) {
+  .donate-provider-grid,
   .donate-bank-content {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -681,7 +689,6 @@
 }
 
 @media (max-width: 560px) {
-  .donate-provider-grid,
   .donate-bank-details {
     grid-template-columns: minmax(0, 1fr);
   }
