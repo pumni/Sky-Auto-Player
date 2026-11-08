@@ -1,3 +1,5 @@
+#![cfg(any(test, feature = "test-support"))]
+
 //! Test-support adapter for the real-song prepared-stream arena comparison.
 //! The original prepared stream remains the only production representation.
 
@@ -17,8 +19,7 @@ impl PreparedStartupBuilder {
         let profile = MaterializedInstrumentKeyProfile::canonical();
         let (stream, coordinator) =
             PreparedDispatchStream::build(self.coordinator, self.qpc_clock, &probe, &profile)?;
-        let (arena_sizes, copy_ns, verify_ns) =
-            stream.compact_arena_measurement_for_test()?;
+        let (arena_sizes, copy_ns, verify_ns) = stream.compact_arena_measurement_for_test()?;
         let (entry_count, physical_count, metadata_count, used_bytes) =
             stream.prepared_storage_evidence_for_test();
         let evidence = PreparedStartupEvidence {

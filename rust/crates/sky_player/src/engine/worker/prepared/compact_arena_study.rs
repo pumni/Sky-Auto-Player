@@ -2,9 +2,7 @@
 //! No allocations or arena lookups are added to the production dispatch path.
 
 use super::{PreparedDispatchEntry, PreparedDispatchStream};
-use sky_dispatch_win32::input::compact_study::{
-    CompactArenaSizes, CompactInputArenaBuilder,
-};
+use sky_dispatch_win32::input::compact_study::{CompactArenaSizes, CompactInputArenaBuilder};
 use std::time::Instant;
 
 impl PreparedDispatchStream {
@@ -12,22 +10,22 @@ impl PreparedDispatchStream {
         &self,
     ) -> Result<(CompactArenaSizes, u64, u64), String> {
         let histogram = self.physical_input_event_histogram_for_test();
-        let event_count = histogram
-            .iter()
-            .enumerate()
-            .try_fold(0usize, |sum, (width, count)| {
-                sum.checked_add(
-                    width
-                        .checked_mul(*count)
-                        .ok_or_else(|| "event count multiplication overflow".to_string())?,
-                )
-                .ok_or_else(|| "event count aggregation overflow".to_string())
-            })?;
+        let event_count =
+            histogram
+                .iter()
+                .enumerate()
+                .try_fold(0usize, |sum, (width, count)| {
+                    sum.checked_add(
+                        width
+                            .checked_mul(*count)
+                            .ok_or_else(|| "event count multiplication overflow".to_string())?,
+                    )
+                    .ok_or_else(|| "event count aggregation overflow".to_string())
+                })?;
         let physical_count = self.physical_count();
 
         let start = Instant::now();
-        let mut builder =
-            CompactInputArenaBuilder::try_with_capacity(physical_count, event_count)?;
+        let mut builder = CompactInputArenaBuilder::try_with_capacity(physical_count, event_count)?;
         for entry in &self.entries {
             if let PreparedDispatchEntry::Physical(frame) = entry {
                 builder.append_prepared(&frame.view.prepared_packet)?;
@@ -51,11 +49,13 @@ impl PreparedDispatchStream {
             {
                 return Err("compact packet identity or event count mismatch".into());
             }
-            match (packet.up_recovery_view(), arena.mixed_up_prefix(packet_index)) {
+            match (
+                packet.up_recovery_view(),
+                arena.mixed_up_prefix(packet_index),
+            ) {
                 (None, None) => {}
                 (Some(up), Some((mask, prefix))) => {
-                    if mask != up.packet()
-                        || prefix.len() != usize::from(up.packet().event_count())
+                    if mask != up.packet() || prefix.len() != usize::from(up.packet().event_count())
                     {
                         return Err("compact mixed Up-prefix identity mismatch".into());
                     }

@@ -321,7 +321,9 @@ fn run() -> Result<(), String> {
                         .ok_or_else(|| format!("missing arena {field} for {}", song.path))
                 };
                 if read("packet_count")?
-                    != evidence["physical_packet_count"].as_u64().unwrap_or(u64::MAX)
+                    != evidence["physical_packet_count"]
+                        .as_u64()
+                        .unwrap_or(u64::MAX)
                     || read("input_event_count")?
                         != evidence["input_events"].as_u64().unwrap_or(u64::MAX)
                 {
