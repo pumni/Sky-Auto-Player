@@ -260,8 +260,7 @@ mod tests {
 
     #[test]
     fn offline_process_memory_exception_is_file_scoped() {
-        let usage =
-            "use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo};";
+        let usage = "use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo};";
         assert!(scan_rust_text(Path::new(OFFLINE_PROCESS_MEMORY_EXAMPLE), usage).is_empty());
         assert!(
             scan_rust_text(Path::new("rust/crates/sky_player/src/lib.rs"), usage)
