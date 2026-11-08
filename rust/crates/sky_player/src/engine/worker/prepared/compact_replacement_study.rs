@@ -5,16 +5,12 @@
 //! This prototype is NOT an alternate dispatch path or a startup A/B result.
 
 use super::{PreparedDispatchEntry, PreparedDispatchStream};
-use crate::engine::worker::dispatch::{
-    AuthoredBatchView, PhysicalCommit, RecoveryDescriptor,
-};
+use crate::engine::worker::dispatch::{AuthoredBatchView, PhysicalCommit, RecoveryDescriptor};
 use crate::engine::worker::DispatchPath;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::TimelineTicks;
-use sky_dispatch_win32::input::compact_study::{
-    CompactInputArenaBuilder, FrozenCompactInputArena,
-};
+use sky_dispatch_win32::input::compact_study::{CompactInputArenaBuilder, FrozenCompactInputArena};
 use sky_dispatch_win32::input::PhysicalPacket;
 use std::mem::size_of;
 
@@ -83,15 +79,16 @@ impl PreparedDispatchStream {
         }
         let original_entry_reserved_bytes = self.prepared_entry_allocation_for_test().1;
         let histogram = self.physical_input_event_histogram_for_test();
-        let event_count = histogram
-            .iter()
-            .enumerate()
-            .try_fold(0usize, |sum, (width, count)| {
-                width
-                    .checked_mul(*count)
-                    .and_then(|events| sum.checked_add(events))
-                    .ok_or_else(|| "compact replacement event count overflow".to_string())
-            })?;
+        let event_count =
+            histogram
+                .iter()
+                .enumerate()
+                .try_fold(0usize, |sum, (width, count)| {
+                    width
+                        .checked_mul(*count)
+                        .and_then(|events| sum.checked_add(events))
+                        .ok_or_else(|| "compact replacement event count overflow".to_string())
+                })?;
         let physical_count = self.physical_count();
         let mut arena_builder =
             CompactInputArenaBuilder::try_with_capacity(physical_count, event_count)?;
