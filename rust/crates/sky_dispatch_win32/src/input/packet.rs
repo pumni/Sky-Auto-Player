@@ -111,7 +111,9 @@ impl PreparedPhysicalPacket {
     }
 
     #[cfg(windows)]
-    fn initialized_inputs(&self) -> &[windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT] {
+    pub(super) fn initialized_inputs(
+        &self,
+    ) -> &[windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT] {
         let length = usize::from(self.length);
         // SAFETY: `try_new` sets `length` only from `build_inputs`, which
         // writes every element in the prefix. The length is bounded by the
@@ -1128,7 +1130,6 @@ mod tests {
             .split("#[cfg(windows)]\nconst MAX_SCAN_CODE")
             .next()
             .expect("prepared tagged sender body");
-
         assert!(constructor.contains("INPUT {"));
         assert!(constructor.contains("std::mem::zeroed"));
         assert!(!sender.contains("inputs[index] = INPUT {"));
@@ -1302,7 +1303,6 @@ mod tests {
         let recovery = prepared
             .up_recovery_view()
             .expect("mixed packet has Up prefix");
-
         assert_eq!(recovery.packet(), PhysicalPacket::new(0b101, 0));
         assert_eq!(recovery.packet().event_count(), 2);
         assert_eq!(prepared.event_count(), 4);
