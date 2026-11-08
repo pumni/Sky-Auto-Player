@@ -65,8 +65,8 @@ Nothing is compared in a single process's memory measurement.
 - **Smoke:** three corpus songs + synthetic generations 100 and 1,000 at
   widths **1, 7, 14, 15**: **11 workloads × 2 stages × 5 pairs × 2 child
   processes = 220 children, 110 pairs**.
-- **Full only after smoke and CI:** all 110 prepared songs + 100, 1,000 and
-  10,000 generations at widths **1, 7, 14, 15**:
+- **Full after native smoke PASS:** all 110 prepared songs + 100, 1,000
+  and 10,000 generations at widths **1, 7, 14, 15**:
   **122 workloads, 2,440 children, 1,220 pairs**.
 
 Mandatory summary per workload/stage: median/min/max paired
@@ -85,6 +85,9 @@ means all workloads and all five pairs; do not cherry-pick results.
   `[0,63324,23810,14698,4958,284,42,2,0,0,0,0,0,0,0,0]` must match.
 - If any pair fails packet/metadata/INPUT histogram/reset identity, or a
   child aborts, **BLOCKED**, no performance conclusion.
+- **Hosted CI is non-blocking for native research measurements.** Record
+  CI/signing statuses, but they must both complete successfully **before
+  merging** the study, not before running smoke or full.
 - Do **not** merge a performance-claim PR based only on synthetic dimensions.
   Distinguish structural reserved capacity, process private committed bytes,
   total working set (shared pages may be included), lifetime process peak,

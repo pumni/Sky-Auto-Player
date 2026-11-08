@@ -577,6 +577,55 @@ mod tests {
     }
 
     #[test]
+    fn compiled_mask_reservation_keeps_mixed_up_prefix_and_reset_metadata() {
+        let keys = sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
+        let actions = [
+            action(0, ActionKind::Down, 0, &keys[..7]),
+            action(1, ActionKind::Up, 20_000, &keys[..7]),
+            action(2, ActionKind::Down, 20_000, &keys[7..]),
+            action(3, ActionKind::Up, 40_000, &keys[7..]),
+            action(4, ActionKind::Up, 60_000, &keys[..1]),
+        ];
+        let (base_sim, clock) = coordinator(&actions, &keys);
+        let (baseline, base_reset) = PreparedDispatchStream::build_compact_direct_for_test(
+            base_sim,
+            clock,
+            &DispatchPreparationProbe::default(),
+            &MaterializedInstrumentKeyProfile::canonical(),
+        )
+        .unwrap();
+        let (hint_sim, _) = coordinator(&actions, &keys);
+        let (hinted, hint_reset) =
+            PreparedDispatchStream::build_compact_direct_mask_reserved_for_test(
+                hint_sim,
+                clock,
+                &DispatchPreparationProbe::default(),
+                &MaterializedInstrumentKeyProfile::canonical(),
+            )
+            .unwrap();
+        let a = baseline.sizes().unwrap();
+        let b = hinted.sizes().unwrap();
+        assert_eq!(a.physical_packet_count, 3);
+        assert_eq!(a.metadata_entry_count, 1);
+        assert_eq!(a.input_event_count, 30);
+        assert_eq!(a.input_event_histogram, b.input_event_histogram);
+        assert_eq!(
+            baseline.packet_summaries_for_test(),
+            hinted.packet_summaries_for_test()
+        );
+        let summaries = hinted.packet_summaries_for_test();
+        let mixed = summaries[1];
+        assert_eq!(mixed.0.up_mask.count_ones(), 7);
+        assert_eq!(mixed.0.down_mask.count_ones(), 8);
+        assert_eq!(mixed.1, 15);
+        assert_eq!(mixed.2, 7);
+        assert_eq!(
+            base_reset.heap_payload_bytes_for_test_support(),
+            hint_reset.heap_payload_bytes_for_test_support()
+        );
+    }
+
+    #[test]
     fn direct_compact_stream_and_reset_checkpoint_errors_fail_closed() {
         let keys = [0x15];
         let actions = [
