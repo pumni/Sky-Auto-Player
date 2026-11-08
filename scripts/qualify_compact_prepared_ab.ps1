@@ -12,10 +12,30 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $rust = Join-Path $repo 'rust'
-if ((git -C $repo rev-parse HEAD).Trim() -ne $ExpectedHead -or
-    (git -C $repo branch --show-current).Trim() -ne '' -or
-    @(git -C $repo status --porcelain=v1).Count -ne 0) {
-    throw 'Must run in exact clean detached validation worktree'
+
+# On a detached worktree, 'git branch --show-current' outputs no line.
+# Calling .Trim() on its PowerShell $null result incorrectly rejected the
+# required validation configuration before any corpus/trial could run.
+# 'rev-parse --abbrev-ref HEAD' produces literal HEAD when detached.
+# Capture command output as arrays and check native exits before indexing.
+$observedHead = @(git -C $repo rev-parse --verify HEAD)
+$headExit = $LASTEXITCODE
+if ($headExit -ne 0 -or $observedHead.Count -ne 1 -or
+    $observedHead[0].Trim() -ne $ExpectedHead) {
+    throw 'Candidate HEAD mismatch or git rev-parse failed'
+}
+
+$observedRef = @(git -C $repo rev-parse --abbrev-ref HEAD)
+$refExit = $LASTEXITCODE
+if ($refExit -ne 0 -or $observedRef.Count -ne 1 -or
+    $observedRef[0].Trim() -ne 'HEAD') {
+    throw 'Validation worktree must be detached at HEAD'
+}
+
+$trackedChanges = @(git -C $repo status --porcelain=v1)
+$statusExit = $LASTEXITCODE
+if ($statusExit -ne 0 -or $trackedChanges.Count -ne 0) {
+    throw 'Validation worktree must be clean'
 }
 $temp = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
 $out = [IO.Path]::GetFullPath($EvidenceDirectory)
