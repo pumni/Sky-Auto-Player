@@ -54,7 +54,7 @@ pub mod dispatch_primitives {
     //! Do not use in production code.
     pub use super::target::SessionTarget;
     #[cfg(windows)]
-    pub use super::test_support::CompactDirectPreparedEvidence;
+    pub use super::test_support::{CompactDirectPreparedEvidence, HeldPreparedStudyEvidence};
     pub use super::test_support::{
         CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PhysicalFloorEvidence,
         PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,

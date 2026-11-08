@@ -97,3 +97,90 @@ impl PreparedStartupBuilder {
         })
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeldPreparedStudyEvidence {
+    pub entry_count: usize,
+    pub physical_count: usize,
+    pub metadata_count: usize,
+    pub reserved_stream_bytes: usize,
+    pub input_events: usize,
+    pub histogram: [usize; sky_dispatch_win32::input::MAX_PACKET_EVENTS + 1],
+    pub reset_coordinator_heap_bytes: usize,
+    /// Elapsed preparation + coordinator reset + arena freeze; neither
+    /// source decoding nor compilation is included.
+    pub prepare_reset_ns: u64,
+}
+
+impl PreparedStartupBuilder {
+    /// The callback executes while exactly ONE prepared representation and
+    /// its rebuilt coordinator remain alive. Never constructs the other
+    /// variant in this process: this is a process-memory measurement seam,
+    /// not an alternate dispatch path.
+    pub fn with_held_prepared_owner_for_study<R>(
+        self,
+        direct_compact: bool,
+        observe: impl FnOnce(HeldPreparedStudyEvidence) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let probe = DispatchPreparationProbe::default();
+        let profile = MaterializedInstrumentKeyProfile::canonical();
+        if direct_compact {
+            let start = Instant::now();
+            let (stream, reset) = PreparedDispatchStream::build_compact_direct_for_test(
+                self.coordinator,
+                self.qpc_clock,
+                &probe,
+                &profile,
+            )?;
+            let prepare_reset_ns =
+                u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let sizes = stream.sizes()?;
+            let evidence = HeldPreparedStudyEvidence {
+                entry_count: sizes.entry_count,
+                physical_count: sizes.physical_packet_count,
+                metadata_count: sizes.metadata_entry_count,
+                reserved_stream_bytes: sizes.total_reserved_bytes,
+                input_events: sizes.input_event_count,
+                histogram: sizes.input_event_histogram,
+                reset_coordinator_heap_bytes: reset.heap_payload_bytes_for_test_support(),
+                prepare_reset_ns,
+            };
+            let result = observe(evidence);
+            // Retain both owners through the observation. The alternate
+            // compact sender is intentionally NOT invoked.
+            std::hint::black_box((&stream, &reset));
+            result
+        } else {
+            let start = Instant::now();
+            let (stream, reset) =
+                PreparedDispatchStream::build(self.coordinator, self.qpc_clock, &probe, &profile)?;
+            let prepare_reset_ns =
+                u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let (_, physical_count, metadata_count, _) =
+                stream.prepared_storage_evidence_for_test();
+            let histogram = stream.physical_input_event_histogram_for_test();
+            let input_events = histogram
+                .iter()
+                .enumerate()
+                .try_fold(0usize, |sum, (width, count)| {
+                    width
+                        .checked_mul(*count)
+                        .and_then(|value| sum.checked_add(value))
+                        .ok_or_else(|| "inline INPUT count overflow".to_string())
+                })?;
+            let evidence = HeldPreparedStudyEvidence {
+                entry_count: stream.len(),
+                physical_count,
+                metadata_count,
+                reserved_stream_bytes: stream.prepared_entry_allocation_for_test().1,
+                input_events,
+                histogram,
+                reset_coordinator_heap_bytes: reset.heap_payload_bytes_for_test_support(),
+                prepare_reset_ns,
+            };
+            let result = observe(evidence);
+            std::hint::black_box((&stream, &reset));
+            result
+        }
+    }
+}
