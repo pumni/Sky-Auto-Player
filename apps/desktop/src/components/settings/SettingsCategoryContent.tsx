@@ -6,6 +6,7 @@ import type {
 } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { AutoPlaySwitch } from './AutoPlaySwitch';
+import { DonateSettings } from './DonateSettings';
 import { TimingMarginControl } from './TimingMarginControl';
 
 export type SettingsCategory =
@@ -14,6 +15,7 @@ export type SettingsCategory =
   | 'diagnostics'
   | 'updates'
   | 'advanced'
+  | 'donate'
   | 'about';
 
 export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }> = [
@@ -22,6 +24,7 @@ export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }>
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'updates', label: 'Updates' },
   { id: 'advanced', label: 'Advanced' },
+  { id: 'donate', label: 'Donate' },
   { id: 'about', label: 'About' },
 ];
 
@@ -282,6 +285,8 @@ export function SettingsCategoryContent({
           </div>
         </section>
       )}
+
+      {category === 'donate' && <DonateSettings />}
 
       {category === 'about' && (
         <section className="settings-section" aria-labelledby="about-settings-title">

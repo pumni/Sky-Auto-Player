@@ -34,6 +34,21 @@ focused playback, readout, event, timing, and performance components owning pres
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
 
+The Donate Settings category is informational and intentionally omits the native settings
+persistence footer. Ko-fi, PayPal, and GitHub links open in the system browser via the
+scope-limited Tauri opener capability.
+
+The MBBank VietQR is an offline PNG at
+`apps/desktop/public/donate-vietqr-mbbank.png`, generated with NAPAS QRIBFTTA account-transfer
+payload: bank BIN `970422`, account `0857288363`, currency VND, and memo
+`Sky Auto Player Donate`. It has **no fixed amount**. The code was successfully decoded after
+resizing to its displayed 200px size, and the CRC-16 was validated. This is not proof that the
+bank account belongs to the displayed recipient; the user must verify `Nguyen Duc Hoa`
+with a real bank app before releasing the change. The QR is purely static; there is no
+external QR API request, backend payment tracking, or new persisted setting.
+Only Copy account and Copy note actions are present. The previous MoMo QR asset and PSP
+information are removed from the current branch tree.
+
 ## Inspector presentation
 
 The Inspector remains docked when the measured workbench width can retain the Navigator rail

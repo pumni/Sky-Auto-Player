@@ -465,6 +465,235 @@
   margin-top: var(--space-4);
 }
 
+/* Donate follows the active palette and never embeds a payment checkout. */
+.donate-settings {
+  gap: 10px;
+  padding-top: 11px;
+}
+
+.donate-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.donate-heading > div:last-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.donate-heading-icon {
+  display: grid;
+  flex: 0 0 34px;
+  place-items: center;
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--accent-ink);
+  background: var(--surface-raised);
+}
+
+.donate-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.donate-provider-card,
+.donate-bank-card {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.donate-provider-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 14px;
+  min-height: 72px;
+  padding: 10px 12px;
+}
+
+.donate-provider-heading {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.donate-provider-heading > div {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.donate-provider-heading svg {
+  flex: 0 0 auto;
+  color: var(--accent-ink);
+}
+
+.donate-provider-heading h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.donate-provider-heading p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.donate-external-link,
+.donate-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.donate-external-link {
+  justify-self: end;
+  min-width: 68px;
+  min-height: 30px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.donate-bank-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.donate-bank-content {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.donate-qr-card {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: 200px;
+  margin: 0;
+}
+
+.donate-qr-frame {
+  display: grid;
+  place-items: center;
+  width: 200px;
+  height: 200px;
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background: #fff;
+  forced-color-adjust: none;
+}
+
+.donate-qr-frame img {
+  display: block;
+  width: 200px;
+  height: 200px;
+  image-rendering: pixelated;
+}
+
+.donate-qr-card figcaption {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
+}
+
+.donate-bank-information {
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+}
+
+.donate-bank-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.donate-bank-details div {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.donate-bank-details dt {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.donate-bank-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 12px;
+  user-select: text;
+}
+
+.donate-bank-account {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.donate-copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.donate-copy-button {
+  min-height: 30px;
+  padding-inline: 10px;
+}
+
+.donate-disclaimer a {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .donate-provider-grid,
+  .donate-bank-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .donate-bank-details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .donate-bank-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .calibration-copy {
   display: grid;
   justify-items: start;

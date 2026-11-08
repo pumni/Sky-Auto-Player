@@ -13,6 +13,14 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://ko-fi.com/pumni" },
+        { "url": "https://www.paypal.com/paypalme/pe4ce28" },
+        { "url": "https://github.com/pumni/Sky-Auto-Player" }
+      ]
+    },
     "allow-bootstrap",
     "allow-shutdown",
     "allow-search-songs",
