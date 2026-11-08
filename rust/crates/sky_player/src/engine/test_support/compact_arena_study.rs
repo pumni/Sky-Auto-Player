@@ -104,6 +104,11 @@ pub struct HeldPreparedStudyEvidence {
     pub physical_count: usize,
     pub metadata_count: usize,
     pub reserved_stream_bytes: usize,
+    pub entry_reserved_bytes: usize,
+    pub descriptor_reserved_bytes: usize,
+    pub input_arena_reserved_bytes: usize,
+    pub input_arena_used_bytes: usize,
+    pub input_arena_capacity_events: usize,
     pub input_events: usize,
     pub histogram: [usize; sky_dispatch_win32::input::MAX_PACKET_EVENTS + 1],
     pub reset_coordinator_heap_bytes: usize,
@@ -122,16 +127,39 @@ impl PreparedStartupBuilder {
         direct_compact: bool,
         observe: impl FnOnce(HeldPreparedStudyEvidence) -> Result<R, String>,
     ) -> Result<R, String> {
+        self.with_held_prepared_owner_for_study_with_input_hint(direct_compact, false, observe)
+    }
+
+    /// The compiled-mask hint applies only to the offline direct compact
+    /// owner. This never activates a production dispatch path.
+    pub fn with_held_prepared_owner_for_study_with_input_hint<R>(
+        self,
+        direct_compact: bool,
+        mask_reserved: bool,
+        observe: impl FnOnce(HeldPreparedStudyEvidence) -> Result<R, String>,
+    ) -> Result<R, String> {
+        if mask_reserved && !direct_compact {
+            return Err("compiled-mask INPUT hint requires compact study owner".into());
+        }
         let probe = DispatchPreparationProbe::default();
         let profile = MaterializedInstrumentKeyProfile::canonical();
         if direct_compact {
             let start = Instant::now();
-            let (stream, reset) = PreparedDispatchStream::build_compact_direct_for_test(
-                self.coordinator,
-                self.qpc_clock,
-                &probe,
-                &profile,
-            )?;
+            let (stream, reset) = if mask_reserved {
+                PreparedDispatchStream::build_compact_direct_mask_reserved_for_test(
+                    self.coordinator,
+                    self.qpc_clock,
+                    &probe,
+                    &profile,
+                )?
+            } else {
+                PreparedDispatchStream::build_compact_direct_for_test(
+                    self.coordinator,
+                    self.qpc_clock,
+                    &probe,
+                    &profile,
+                )?
+            };
             let prepare_reset_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
             let sizes = stream.sizes()?;
             let evidence = HeldPreparedStudyEvidence {
@@ -139,6 +167,14 @@ impl PreparedStartupBuilder {
                 physical_count: sizes.physical_packet_count,
                 metadata_count: sizes.metadata_entry_count,
                 reserved_stream_bytes: sizes.total_reserved_bytes,
+                entry_reserved_bytes: sizes.entry_reserved_bytes,
+                descriptor_reserved_bytes: sizes.descriptor_reserved_bytes,
+                input_arena_reserved_bytes: sizes.input_reserved_bytes,
+                input_arena_used_bytes: sizes
+                    .input_event_count
+                    .checked_mul(sizes.input_size_bytes)
+                    .ok_or_else(|| "compact input used bytes overflow".to_string())?,
+                input_arena_capacity_events: sizes.input_capacity_events,
                 input_events: sizes.input_event_count,
                 histogram: sizes.input_event_histogram,
                 reset_coordinator_heap_bytes: reset.heap_payload_bytes_for_test_support(),
@@ -172,6 +208,11 @@ impl PreparedStartupBuilder {
                 physical_count,
                 metadata_count,
                 reserved_stream_bytes: stream.prepared_entry_allocation_for_test().1,
+                entry_reserved_bytes: stream.prepared_entry_allocation_for_test().1,
+                descriptor_reserved_bytes: 0,
+                input_arena_reserved_bytes: 0,
+                input_arena_used_bytes: 0,
+                input_arena_capacity_events: 0,
                 input_events,
                 histogram,
                 reset_coordinator_heap_bytes: reset.heap_payload_bytes_for_test_support(),

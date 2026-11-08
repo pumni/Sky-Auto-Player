@@ -32,6 +32,8 @@ pub(crate) struct CompactDirectSizes {
     pub entry_reserved_bytes: usize,
     pub descriptor_reserved_bytes: usize,
     pub input_reserved_bytes: usize,
+    pub input_capacity_events: usize,
+    pub input_size_bytes: usize,
     pub total_reserved_bytes: usize,
     pub physical_packet_count: usize,
     pub metadata_entry_count: usize,
@@ -69,6 +71,8 @@ impl CompactDirectPreparedStream {
             entry_reserved_bytes,
             descriptor_reserved_bytes: arena.descriptor_reserved_bytes,
             input_reserved_bytes: arena.input_reserved_bytes,
+            input_capacity_events: arena.input_reserved_bytes / arena.input_size,
+            input_size_bytes: arena.input_size,
             total_reserved_bytes,
             physical_packet_count: self.physical_count,
             metadata_entry_count: self.metadata_count,
@@ -95,6 +99,15 @@ impl CompactDirectPreparedStream {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompactInputReserveHint {
+    // Preserve the previously measured #638 baseline exactly.
+    TwoPerAuthoredBatch,
+    // Offline experiment: use canonical compiled packet masks only as
+    // a storage hint. The planner remains authoritative for real INPUTs.
+    CompiledPhysicalEvents,
+}
+
 impl PreparedDispatchStream {
     /// Builds only compact *stored* entries. Each NextDispatchPlan temporarily
     /// contains its existing 608B PreparedPhysicalPacket on the stack;
@@ -111,6 +124,25 @@ impl PreparedDispatchStream {
             qpc_clock,
             preparation_probe,
             instrument_key_profile,
+            CompactInputReserveHint::TwoPerAuthoredBatch,
+            || Ok(()),
+            || Ok(()),
+        )
+    }
+
+    /// Offline-only alternative, never called from the realtime sender.
+    pub(crate) fn build_compact_direct_mask_reserved_for_test(
+        simulator: RuntimeDispatchCoordinator,
+        qpc_clock: QpcClock,
+        preparation_probe: &DispatchPreparationProbe,
+        instrument_key_profile: &MaterializedInstrumentKeyProfile,
+    ) -> Result<(CompactDirectPreparedStream, RuntimeDispatchCoordinator), String> {
+        Self::build_compact_direct_with_checkpoints_for_test(
+            simulator,
+            qpc_clock,
+            preparation_probe,
+            instrument_key_profile,
+            CompactInputReserveHint::CompiledPhysicalEvents,
             || Ok(()),
             || Ok(()),
         )
@@ -121,6 +153,7 @@ impl PreparedDispatchStream {
         qpc_clock: QpcClock,
         preparation_probe: &DispatchPreparationProbe,
         instrument_key_profile: &MaterializedInstrumentKeyProfile,
+        input_reserve_hint: CompactInputReserveHint,
         mut stream_checkpoint: C,
         mut coordinator_checkpoint: R,
     ) -> Result<(CompactDirectPreparedStream, RuntimeDispatchCoordinator), String>
@@ -160,11 +193,20 @@ impl PreparedDispatchStream {
         entries
             .try_reserve_exact(entry_capacity)
             .map_err(|error| format!("reserve compact direct entries: {error}"))?;
-        // Reserve hint only; all 1..15 widths are supported. The arena can
-        // reallocate during *preparation*, before any frozen reference exists.
-        let input_hint = entry_capacity
-            .checked_mul(2)
-            .ok_or_else(|| "compact direct INPUT reserve hint overflow".to_string())?;
+        // A hint is never a correctness gate. Compiled masks exclude stale
+        // releases; any planner-produced extra INPUTs can still grow the
+        // arena before freeze. No alternate sender or SendInput path.
+        let input_hint = match input_reserve_hint {
+            CompactInputReserveHint::TwoPerAuthoredBatch => entry_capacity.checked_mul(2),
+            CompactInputReserveHint::CompiledPhysicalEvents => simulator
+                .schedule
+                .packets
+                .iter()
+                .try_fold(0usize, |sum, packet| {
+                    sum.checked_add((packet.up_mask | packet.down_mask).count_ones() as usize)
+                }),
+        }
+        .ok_or_else(|| "compact direct INPUT reserve hint overflow".to_string())?;
         let mut builder = CompactInputArenaBuilder::try_with_capacity(entry_capacity, input_hint)?;
 
         let mut visited_batches = 0usize;
@@ -477,6 +519,113 @@ mod tests {
     }
 
     #[test]
+    fn compiled_mask_reservation_preserves_all_widths_and_stale_metadata() {
+        let canonical = sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
+        for width in 1..=canonical.len() {
+            let keys = &canonical[..width];
+            let actions = [
+                action(0, ActionKind::Down, 0, keys),
+                action(1, ActionKind::Up, 20_000, keys),
+                action(2, ActionKind::Up, 40_000, keys),
+            ];
+            let (base_sim, clock) = coordinator(&actions, &canonical);
+            let (baseline, reset_base) = PreparedDispatchStream::build_compact_direct_for_test(
+                base_sim,
+                clock,
+                &DispatchPreparationProbe::default(),
+                &MaterializedInstrumentKeyProfile::canonical(),
+            )
+            .unwrap();
+            let (hint_sim, _) = coordinator(&actions, &canonical);
+            let (hinted, reset_hinted) =
+                PreparedDispatchStream::build_compact_direct_mask_reserved_for_test(
+                    hint_sim,
+                    clock,
+                    &DispatchPreparationProbe::default(),
+                    &MaterializedInstrumentKeyProfile::canonical(),
+                )
+                .unwrap();
+            let a = baseline.sizes().unwrap();
+            let b = hinted.sizes().unwrap();
+            assert_eq!(
+                baseline.packet_summaries_for_test(),
+                hinted.packet_summaries_for_test()
+            );
+            assert_eq!(
+                baseline
+                    .entries
+                    .iter()
+                    .map(|x| format!("{x:?}"))
+                    .collect::<Vec<_>>(),
+                hinted
+                    .entries
+                    .iter()
+                    .map(|x| format!("{x:?}"))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(a.input_event_count, width * 2, "width={width}");
+            assert_eq!(a.input_event_histogram, b.input_event_histogram);
+            assert_eq!(a.physical_packet_count, b.physical_packet_count);
+            assert_eq!(a.metadata_entry_count, b.metadata_entry_count);
+            assert!(b.input_capacity_events >= b.input_event_count);
+            assert_eq!(b.input_size_bytes, 40);
+            assert_eq!(
+                reset_base.heap_payload_bytes_for_test_support(),
+                reset_hinted.heap_payload_bytes_for_test_support()
+            );
+        }
+    }
+
+    #[test]
+    fn compiled_mask_reservation_keeps_mixed_up_prefix_and_reset_metadata() {
+        let keys = sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
+        let actions = [
+            action(0, ActionKind::Down, 0, &keys[..7]),
+            action(1, ActionKind::Up, 20_000, &keys[..7]),
+            action(2, ActionKind::Down, 20_000, &keys[7..]),
+            action(3, ActionKind::Up, 40_000, &keys[7..]),
+            action(4, ActionKind::Up, 60_000, &keys[..1]),
+        ];
+        let (base_sim, clock) = coordinator(&actions, &keys);
+        let (baseline, base_reset) = PreparedDispatchStream::build_compact_direct_for_test(
+            base_sim,
+            clock,
+            &DispatchPreparationProbe::default(),
+            &MaterializedInstrumentKeyProfile::canonical(),
+        )
+        .unwrap();
+        let (hint_sim, _) = coordinator(&actions, &keys);
+        let (hinted, hint_reset) =
+            PreparedDispatchStream::build_compact_direct_mask_reserved_for_test(
+                hint_sim,
+                clock,
+                &DispatchPreparationProbe::default(),
+                &MaterializedInstrumentKeyProfile::canonical(),
+            )
+            .unwrap();
+        let a = baseline.sizes().unwrap();
+        let b = hinted.sizes().unwrap();
+        assert_eq!(a.physical_packet_count, 3);
+        assert_eq!(a.metadata_entry_count, 1);
+        assert_eq!(a.input_event_count, 30);
+        assert_eq!(a.input_event_histogram, b.input_event_histogram);
+        assert_eq!(
+            baseline.packet_summaries_for_test(),
+            hinted.packet_summaries_for_test()
+        );
+        let summaries = hinted.packet_summaries_for_test();
+        let mixed = summaries[1];
+        assert_eq!(mixed.0.up_mask.count_ones(), 7);
+        assert_eq!(mixed.0.down_mask.count_ones(), 8);
+        assert_eq!(mixed.1, 15);
+        assert_eq!(mixed.2, 7);
+        assert_eq!(
+            base_reset.heap_payload_bytes_for_test_support(),
+            hint_reset.heap_payload_bytes_for_test_support()
+        );
+    }
+
+    #[test]
     fn direct_compact_stream_and_reset_checkpoint_errors_fail_closed() {
         let keys = [0x15];
         let actions = [
@@ -489,6 +638,7 @@ mod tests {
             clock,
             &DispatchPreparationProbe::default(),
             &MaterializedInstrumentKeyProfile::canonical(),
+            CompactInputReserveHint::TwoPerAuthoredBatch,
             || Err("stream_cancelled".into()),
             || Ok(()),
         );
@@ -500,6 +650,7 @@ mod tests {
             clock,
             &DispatchPreparationProbe::default(),
             &MaterializedInstrumentKeyProfile::canonical(),
+            CompactInputReserveHint::TwoPerAuthoredBatch,
             || Ok(()),
             || Err("reset_cancelled".into()),
         );

@@ -94,6 +94,23 @@ fn all_chord_widths_and_max_mixed_packet_preserve_inputs() {
 }
 
 #[test]
+fn deliberately_under_reserved_arena_grows_before_freeze_with_identical_keyboard_fields() {
+    let mask = (1u16 << 15) - 1;
+    let down = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, mask)).unwrap();
+    let up = PreparedPhysicalPacket::try_new(PhysicalPacket::new(mask, 0)).unwrap();
+    // A compiled-mask hint is an estimate; any extra planned events must
+    // still be appended with canonical INPUT semantics before ownership freezes.
+    let mut builder = CompactInputArenaBuilder::try_with_capacity(2, 1).unwrap();
+    builder.append_prepared(&down).unwrap();
+    builder.append_prepared(&up).unwrap();
+    let frozen = builder.freeze().unwrap();
+    verify_against(&frozen, 0, &down).unwrap();
+    verify_against(&frozen, 1, &up).unwrap();
+    assert_eq!(frozen.sizes().event_count, 30);
+    assert!(frozen.sizes().input_reserved_bytes >= 30 * size_of::<INPUT>());
+}
+
+#[test]
 fn freeze_rejects_corrupt_descriptor_and_verifier_rejects_corrupt_event() {
     let original = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1)).unwrap();
     let mut builder = CompactInputArenaBuilder::try_with_capacity(1, 1).unwrap();
