@@ -131,11 +131,11 @@ mod windows_trial {
 
     fn parse_options() -> Result<Options, String> {
         let raw: Vec<String> = std::env::args().skip(1).collect();
-        if raw.len() % 2 != 0 {
+        if !raw.len().is_multiple_of(2) {
             return Err("expected --name value pairs".into());
         }
         let mut values = BTreeMap::new();
-        for pair in raw.chunks_exact(2) {
+        for pair in raw.as_chunks::<2>().0 {
             let name = pair[0].as_str();
             if !matches!(
                 name,
