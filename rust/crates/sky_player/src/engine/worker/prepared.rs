@@ -5,6 +5,9 @@
 //! with the same frozen commits that the runtime coordinator applies after a
 //! successful send.
 
+#[cfg(all(windows, feature = "test-support"))]
+mod compact_arena_study;
+
 use super::dispatch::{AuthoredBatchView, PhysicalCommit};
 use super::planning::{NextDispatchPlan, PlanningInput, plan_next_dispatch_projected};
 use super::{DispatchPreparationProbe, QpcClock};

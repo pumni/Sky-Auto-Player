@@ -99,8 +99,8 @@ pub struct PreparedStartupEvidence {
     pub rebuilt_coordinator_heap_payload_bytes: usize,
 }
 pub struct PreparedStartupBuilder {
-    coordinator: RuntimeDispatchCoordinator,
-    qpc_clock: QpcClock,
+    pub(super) coordinator: RuntimeDispatchCoordinator,
+    pub(super) qpc_clock: QpcClock,
 }
 impl PreparedStartupBuilder {
     pub fn clone_coordinator_for_test(&self) -> Self {

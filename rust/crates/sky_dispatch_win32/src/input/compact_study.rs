@@ -112,6 +112,12 @@ impl CompactInputArenaBuilder {
 }
 
 impl FrozenCompactInputArena {
+    /// Structural identity only. Semantic keyboard-field equality is covered
+    /// by dedicated Win32 unit tests; no union inspection on the live path.
+    pub fn packet_identity(&self, index: usize) -> Option<PhysicalPacket> {
+        Some(self.descriptors.get(index)?.packet)
+    }
+
     pub fn packet_inputs(&self, index: usize) -> Option<&[INPUT]> {
         let descriptor = self.descriptors.get(index)?;
         let start = usize::try_from(descriptor.offset).ok()?;
