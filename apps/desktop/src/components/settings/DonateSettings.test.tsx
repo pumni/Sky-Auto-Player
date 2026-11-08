@@ -26,7 +26,10 @@ describe('DonateSettings', () => {
     );
 
     expect(
-      screen.getByRole('heading', { name: 'PayPal' }).closest('.donate-provider-heading')?.querySelector('svg'),
+      screen
+        .getByRole('heading', { name: 'PayPal' })
+        .closest('.donate-provider-heading')
+        ?.querySelector('svg'),
     ).toHaveClass('lucide-wallet-cards');
 
     expect(screen.getByRole('heading', { name: 'MBBank · VietQR' })).toBeInTheDocument();
