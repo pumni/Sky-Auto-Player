@@ -93,10 +93,17 @@ fn windows_sys_paths(line: &str) -> Vec<String> {
     paths
 }
 
-fn approved_windows_sys(path: &str) -> bool {
+const OFFLINE_PROCESS_MEMORY_EXAMPLE: &str =
+    "rust/crates/sky_player/examples/rt_prepared_process_probe.rs";
+
+fn approved_windows_sys(path: &str, source_path: &str) -> bool {
     ALLOWED_WINDOWS_SYS_MODULES
         .iter()
         .any(|allowed| path == *allowed || path.starts_with(&format!("{allowed}::")))
+        // This exception is scoped to ONE offline test-support-only example.
+        // The main application and all other sources still reject ProcessStatus.
+        || (source_path == OFFLINE_PROCESS_MEMORY_EXAMPLE
+            && path == "Win32::System::ProcessStatus")
 }
 
 fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
@@ -129,7 +136,7 @@ fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
             }
         }
         for module in windows_sys_paths(line) {
-            if !approved_windows_sys(&module) {
+            if !approved_windows_sys(&module, &relative) {
                 findings.push(Finding {
                     path: relative.clone(),
                     line: line_number + 1,
@@ -249,6 +256,25 @@ mod tests {
     fn security_allows_sendinput_and_approved_windows_modules() {
         let source = "unsafe { SendInput(1, inputs, size); }\nuse windows_sys::Win32::Foundation::HANDLE;\nuse windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\nuse windows_sys::Win32::System::Threading::CloseHandle;\nuse windows_sys::Win32::System::Registry::RegOpenKeyExW;\n";
         assert!(scan_rust_text(Path::new("fixture.rs"), source).is_empty());
+    }
+
+    #[test]
+    fn offline_process_memory_exception_is_file_scoped() {
+        let usage = "use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo};";
+        assert!(scan_rust_text(Path::new(OFFLINE_PROCESS_MEMORY_EXAMPLE), usage).is_empty());
+        assert!(
+            scan_rust_text(Path::new("rust/crates/sky_player/src/lib.rs"), usage)
+                .iter()
+                .any(|finding| finding.rule == "disallowed-windows-sys-module")
+        );
+        assert!(
+            scan_rust_text(
+                Path::new("rust/crates/sky_dispatch_win32/src/input.rs"),
+                usage
+            )
+            .iter()
+            .any(|finding| finding.rule == "disallowed-windows-sys-module")
+        );
     }
 
     #[test]
