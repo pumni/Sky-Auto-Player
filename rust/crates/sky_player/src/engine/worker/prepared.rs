@@ -8,6 +8,8 @@
 #[cfg(all(windows, feature = "test-support"))]
 mod compact_arena_study;
 #[cfg(all(windows, feature = "test-support"))]
+mod compact_direct_study;
+#[cfg(all(windows, feature = "test-support"))]
 mod compact_replacement_study;
 
 use super::dispatch::{AuthoredBatchView, PhysicalCommit};

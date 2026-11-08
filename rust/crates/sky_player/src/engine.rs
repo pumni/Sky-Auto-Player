@@ -53,6 +53,8 @@ pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
     pub use super::target::SessionTarget;
+    #[cfg(windows)]
+    pub use super::test_support::CompactDirectPreparedEvidence;
     pub use super::test_support::{
         CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PhysicalFloorEvidence,
         PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,
