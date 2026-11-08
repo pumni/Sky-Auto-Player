@@ -45,6 +45,8 @@ enum CompactPreparedEntry {
     },
 }
 
+// The support library is checked without cfg(test); only focused unit tests construct this.
+#[allow(dead_code)]
 pub(crate) struct CompactReplacementStudy {
     entries: Vec<CompactPreparedEntry>,
     arena: FrozenCompactInputArena,
@@ -71,6 +73,7 @@ impl PreparedDispatchStream {
     /// Transcodes an already-prepared stream and consumes its inline owner.
     /// Transient peak memory includes BOTH representations during conversion.
     /// Do not treat this as direct compact preparation or a production sender.
+    #[allow(dead_code)]
     pub(crate) fn into_compact_replacement_for_test(
         self,
     ) -> Result<CompactReplacementStudy, String> {
@@ -201,6 +204,7 @@ impl PreparedDispatchStream {
 }
 
 impl CompactReplacementStudy {
+    #[allow(dead_code)]
     pub(crate) fn sizes(&self) -> Result<CompactReplacementSizes, String> {
         let arena = self.arena.sizes();
         let compact_entry_reserved_bytes = self
