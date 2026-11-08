@@ -465,10 +465,10 @@
   margin-top: var(--space-4);
 }
 
-/* Voluntary donation UI; uses existing semantic tokens across all palettes. */
+/* Donate follows the active palette and never embeds a payment checkout. */
 .donate-settings {
-  gap: 11px;
-  padding-top: 14px;
+  gap: 10px;
+  padding-top: 11px;
 }
 
 .donate-heading {
@@ -514,6 +514,7 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
+  min-height: 65px;
   padding: 10px 12px;
 }
 
@@ -571,16 +572,24 @@
 
 .donate-bank-content {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
-  align-items: start;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: center;
   gap: 14px;
+}
+
+.donate-qr-card {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: 200px;
+  margin: 0;
 }
 
 .donate-qr-frame {
   display: grid;
   place-items: center;
-  width: 208px;
-  height: 208px;
+  width: 200px;
+  height: 200px;
   overflow: hidden;
   border-radius: var(--radius-control);
   background: #fff;
@@ -589,28 +598,34 @@
 
 .donate-qr-frame img {
   display: block;
-  width: 208px;
-  height: 208px;
+  width: 200px;
+  height: 200px;
   image-rendering: pixelated;
+}
+
+.donate-qr-card figcaption {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
 }
 
 .donate-bank-information {
   display: grid;
-  gap: 10px;
+  gap: 13px;
   min-width: 0;
 }
 
 .donate-bank-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 10px;
+  gap: 12px;
   margin: 0;
 }
 
 .donate-bank-details div {
   display: grid;
   align-content: start;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -630,22 +645,20 @@
 
 .donate-bank-account {
   font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-}
-
-.donate-receiving-id {
-  font-size: 11px;
+  font-weight: 600;
 }
 
 .donate-copy-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .donate-copy-button {
-  min-height: 29px;
-  padding-inline: 8px;
+  min-height: 30px;
+  padding-inline: 10px;
 }
 
 .donate-disclaimer a {
@@ -657,17 +670,20 @@
   text-underline-offset: 2px;
 }
 
-@media (max-width: 620px) {
-  .donate-provider-grid,
-  .donate-bank-content,
-  .donate-bank-details {
+@media (max-width: 760px) {
+  .donate-bank-content {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .donate-qr-frame,
-  .donate-qr-frame img {
-    width: 208px;
-    height: 208px;
+  .donate-bank-details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .donate-provider-grid,
+  .donate-bank-details {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

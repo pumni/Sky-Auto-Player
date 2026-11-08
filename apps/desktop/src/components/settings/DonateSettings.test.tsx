@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe('DonateSettings', () => {
-  it('shows Ko-fi, PayPal, and the matching MoMo receive QR', () => {
+  it('shows Ko-fi, PayPal and the offline MBBank VietQR without outdated wallet data', () => {
     render(<DonateSettings />);
     expect(screen.getByRole('region', { name: 'Support Sky Auto Player' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
@@ -24,21 +24,21 @@ describe('DonateSettings', () => {
       'href',
       DONATION_CONFIG.githubUrl,
     );
-    expect(screen.getByText(DONATION_CONFIG.momoAccountHolder)).toBeInTheDocument();
-    expect(screen.getByText(DONATION_CONFIG.momoPhoneNumber)).toBeInTheDocument();
-    expect(screen.getByText(DONATION_CONFIG.momoReceivingId)).toBeInTheDocument();
+
+    expect(screen.getByRole('heading', { name: 'MBBank · VietQR' })).toBeInTheDocument();
+    expect(screen.getByText(DONATION_CONFIG.bankName)).toBeInTheDocument();
+    expect(screen.getByText(DONATION_CONFIG.accountHolder)).toBeInTheDocument();
+    expect(screen.getByText(DONATION_CONFIG.accountNumber)).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.transferMemo)).toBeInTheDocument();
-    expect(screen.queryByText(/Techcombank/i)).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('img', { name: /MoMo receive QR for Nguyen Duc Hoa/ }),
-    ).toHaveAttribute('src', DONATION_CONFIG.momoQrImagePath);
-    expect(
-      screen.queryByRole('group', { name: 'Official MoMo QR not yet configured' }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText(/Scan the QR with a supported banking app/)).toBeInTheDocument();
+    expect(screen.getByText('No fixed amount · VND')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ })).toHaveAttribute(
+      'src',
+      DONATION_CONFIG.vietQrImagePath,
+    );
+    expect(screen.queryByText(/MoMo|PSP2603710800000415|Techcombank/i)).not.toBeInTheDocument();
   });
 
-  it('copies MoMo phone, PSP receiving account and transfer note', async () => {
+  it('copies the bank account number and transfer note', async () => {
     const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -47,16 +47,10 @@ describe('DonateSettings', () => {
     });
     try {
       render(<DonateSettings />);
-      fireEvent.click(screen.getByRole('button', { name: 'Copy phone' }));
-      await waitFor(() =>
-        expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.momoPhoneNumber),
-      );
-      expect(screen.getByRole('status')).toHaveTextContent('MoMo phone number copied.');
       fireEvent.click(screen.getByRole('button', { name: 'Copy account' }));
-      await waitFor(() =>
-        expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.momoReceivingId),
-      );
-      expect(screen.getByRole('status')).toHaveTextContent('MoMo account copied.');
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.accountNumber));
+      expect(screen.getByRole('status')).toHaveTextContent('Account number copied.');
+
       fireEvent.click(screen.getByRole('button', { name: 'Copy note' }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.transferMemo));
       expect(screen.getByRole('status')).toHaveTextContent('Transfer note copied.');
@@ -69,7 +63,7 @@ describe('DonateSettings', () => {
     }
   });
 
-  it('keeps the wallet details selectable when clipboard is unavailable', async () => {
+  it('leaves bank details selectable when clipboard access is denied', async () => {
     const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -77,9 +71,9 @@ describe('DonateSettings', () => {
     });
     try {
       render(<DonateSettings />);
-      fireEvent.click(screen.getByRole('button', { name: 'Copy phone' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Copy account' }));
       expect(await screen.findByRole('alert')).toHaveTextContent('Could not copy');
-      expect(screen.getByText(DONATION_CONFIG.momoPhoneNumber)).toBeInTheDocument();
+      expect(screen.getByText(DONATION_CONFIG.accountNumber)).toBeInTheDocument();
     } finally {
       if (previousClipboard) {
         Object.defineProperty(navigator, 'clipboard', previousClipboard);

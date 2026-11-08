@@ -1,13 +1,13 @@
-/** Public, voluntary donation destinations. No payment processing or persisted settings. */
+/** Voluntary donations only; publicly displayed, never persisted in native settings. */
 export const DONATION_CONFIG = {
   koFiUrl: 'https://ko-fi.com/pumni',
   paypalUrl: 'https://www.paypal.com/paypalme/pe4ce28',
   githubUrl: 'https://github.com/pumni/Sky-Auto-Player',
-  momoPhoneNumber: '0857288363',
-  momoAccountHolder: 'Nguyễn Đức Hòa',
-  // The PSP receiving account is embedded in the owner-provided MoMo/NAPAS QR.
-  momoReceivingId: 'PSP2603710800000415',
+  bankName: 'MBBank',
+  bankBin: '970422',
+  accountNumber: '0857288363',
+  accountHolder: 'Nguyen Duc Hoa',
   transferMemo: 'Sky Auto Player Donate',
-  // Cropped from the MoMo receive QR provided by the owner, without changing its payload.
-  momoQrImagePath: '/donate-momo-receive.png',
+  // Offline NAPAS QRIBFTTA transfer to this bank account. No fixed amount.
+  vietQrImagePath: '/donate-vietqr-mbbank.png',
 } as const;

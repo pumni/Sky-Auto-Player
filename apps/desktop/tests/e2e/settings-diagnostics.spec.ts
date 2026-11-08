@@ -173,7 +173,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(settingsButton).toBeFocused();
 });
 
-test('Donate displays the MoMo receive QR and hides the native settings footer', async ({
+test('Donate shows the offline MBBank VietQR without clipping or native settings footer', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
@@ -183,6 +183,7 @@ test('Donate displays the MoMo receive QR and hides the native settings footer',
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
   await expect(dialog.getByRole('heading', { name: 'Support Sky Auto Player' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'MBBank · VietQR' })).toBeVisible();
   await expect(dialog.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
     'href',
     'https://ko-fi.com/pumni',
@@ -191,23 +192,38 @@ test('Donate displays the MoMo receive QR and hides the native settings footer',
     'href',
     'https://www.paypal.com/paypalme/pe4ce28',
   );
+
   await expect(dialog.getByText('0857288363')).toBeVisible();
-  await expect(dialog.getByText('PSP2603710800000415')).toBeVisible();
-  const qr = dialog.getByRole('img', { name: /MoMo receive QR for Nguyen Duc Hoa/ });
+  await expect(dialog.getByText('Nguyen Duc Hoa')).toBeVisible();
+  await expect(dialog.getByText('Sky Auto Player Donate')).toBeVisible();
+  await expect(dialog.getByText('MoMo')).toHaveCount(0);
+  await expect(dialog.getByText('PSP2603710800000415')).toHaveCount(0);
+  await expect(dialog.getByText('Techcombank')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Copy account' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Copy note' })).toBeVisible();
+
+  const qr = dialog.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ });
   await qr.scrollIntoViewIfNeeded();
   await expect(qr).toBeVisible();
-  await expect(qr).toHaveAttribute('src', '/donate-momo-receive.png');
+  await expect(qr).toHaveAttribute('src', '/donate-vietqr-mbbank.png');
   expect(
     await qr.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
   ).toBe(true);
-  await expect(dialog.getByText('Techcombank')).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: 'Copy account' })).toBeVisible();
   await expect(
     dialog.getByText('Settings are validated and persisted by the native runtime.'),
   ).toHaveCount(0);
+
   const content = dialog.locator('.settings-content');
-  const horizontalOverflow = await content.evaluate((element) => element.scrollWidth > element.clientWidth);
-  expect(horizontalOverflow).toBe(false);
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const horizontalOverflow = await content.evaluate(
+      (element) => element.scrollWidth > element.clientWidth,
+    );
+    expect(horizontalOverflow).toBe(false);
+  }
   await expectNoSeriousAccessibilityViolations(page);
 });
 

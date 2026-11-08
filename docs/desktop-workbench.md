@@ -35,17 +35,19 @@ respective data. These UI splits do not change the canonical Zustand store, type
 settings schema, or native diagnostics authority.
 
 The Donate Settings category is informational and intentionally omits the native settings
-persistence footer. Ko-fi, PayPal, and GitHub links open in the system browser through a
-scope-limited Tauri opener capability. The MoMo receive QR was supplied by the owner and cropped
-for the small Settings panel; its decoded EMVCo payload was checked against the public MoMo
-receiving account identifier `PSP2603710800000415` (participant `971025`, CRC-16 valid).
-The PNG in `apps/desktop/public/donate-momo-receive.png` is a static, offline app asset with
-no hardcoded amount or `Sky Auto Player Donate` memo. The displayed name comes from the
-owner-supplied image, not a live recipient lookup. Copy actions are provided separately for
-the MoMo wallet phone (MoMo-to-MoMo), PSP receiving account and optional transfer note; payers
-must verify the recipient in their banking app before confirming any transfer. The previous
-Techcombank QR is removed. Donation does not change the native settings schema, payment state,
-update trust, runtime contracts, or release qualifications.
+persistence footer. Ko-fi, PayPal, and GitHub links open in the system browser via the
+scope-limited Tauri opener capability.
+
+The MBBank VietQR is an offline PNG at
+`apps/desktop/public/donate-vietqr-mbbank.png`, generated with NAPAS QRIBFTTA account-transfer
+payload: bank BIN `970422`, account `0857288363`, currency VND, and memo
+`Sky Auto Player Donate`. It has **no fixed amount**. The code was successfully decoded after
+resizing to its displayed 200px size, and the CRC-16 was validated. This is not proof that the
+bank account belongs to the displayed recipient; the user must verify `Nguyen Duc Hoa`
+with a real bank app before releasing the change. The QR is purely static; there is no
+external QR API request, backend payment tracking, or new persisted setting.
+Only Copy account and Copy note actions are present. The previous MoMo QR asset and PSP
+information are removed from the current branch tree.
 
 ## Inspector presentation
 

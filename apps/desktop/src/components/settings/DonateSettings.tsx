@@ -1,10 +1,10 @@
 import { isTauri } from '@tauri-apps/api/core';
-import { Check, Coffee, Copy, ExternalLink, Heart, Wallet } from 'lucide-react';
+import { Check, Coffee, Copy, ExternalLink, Heart, Landmark } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { DONATION_CONFIG } from './donationConfig';
 
 type Notice = { kind: 'success' | 'error'; text: string };
-type CopyField = 'phone' | 'account' | 'memo';
+type CopyField = 'account' | 'memo';
 
 export function DonateSettings() {
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -35,7 +35,7 @@ export function DonateSettings() {
       setCopiedField(field);
       setNotice({
         kind: 'success',
-        text: `${field === 'phone' ? 'MoMo phone number' : field === 'account' ? 'MoMo account' : 'Transfer note'} copied.`,
+        text: `${field === 'account' ? 'Account number' : 'Transfer note'} copied.`,
       });
     } catch {
       setNotice({ kind: 'error', text: 'Could not copy. Select and copy the text manually.' });
@@ -50,9 +50,7 @@ export function DonateSettings() {
         </span>
         <div>
           <h3 id="donate-settings-title">Support Sky Auto Player</h3>
-          <p className="settings-note">
-            Free and open-source. Donations help support continued maintenance and development.
-          </p>
+          <p className="settings-note">Support ongoing development if you enjoy Sky Auto Player.</p>
         </div>
       </div>
 
@@ -99,42 +97,42 @@ export function DonateSettings() {
 
       <div className="donate-bank-card">
         <div className="donate-provider-heading">
-          <Wallet size={17} aria-hidden="true" />
-          <h4>MoMo · Vietnam</h4>
+          <Landmark size={17} aria-hidden="true" />
+          <h4>MBBank · VietQR</h4>
         </div>
         <p className="settings-note">
-          Scan the QR with a supported banking app, enter any amount, and verify the recipient.
-          For MoMo-to-MoMo transfers, use the wallet phone number.
+          Scan with a banking app or transfer manually. Verify the recipient before confirming.
         </p>
 
         <div className="donate-bank-content">
-          <div className="donate-qr-frame">
-            <img
-              src={DONATION_CONFIG.momoQrImagePath}
-              alt="MoMo receive QR for Nguyen Duc Hoa; scanned data matches the listed PSP account"
-              width={208}
-              height={208}
-            />
-          </div>
+          <figure className="donate-qr-card">
+            <div className="donate-qr-frame">
+              <img
+                src={DONATION_CONFIG.vietQrImagePath}
+                alt="MBBank VietQR for Nguyen Duc Hoa, account 0857288363"
+                width={200}
+                height={200}
+              />
+            </div>
+            <figcaption>No fixed amount · VND</figcaption>
+          </figure>
 
           <div className="donate-bank-information">
             <dl className="donate-bank-details">
               <div>
+                <dt>Bank</dt>
+                <dd>{DONATION_CONFIG.bankName}</dd>
+              </div>
+              <div>
                 <dt>Account holder</dt>
-                <dd>{DONATION_CONFIG.momoAccountHolder}</dd>
+                <dd>{DONATION_CONFIG.accountHolder}</dd>
               </div>
               <div>
-                <dt>MoMo wallet phone</dt>
-                <dd className="donate-bank-account">{DONATION_CONFIG.momoPhoneNumber}</dd>
+                <dt>Account number</dt>
+                <dd className="donate-bank-account">{DONATION_CONFIG.accountNumber}</dd>
               </div>
               <div>
-                <dt>MoMo receiving account (PSP)</dt>
-                <dd className="donate-bank-account donate-receiving-id">
-                  {DONATION_CONFIG.momoReceivingId}
-                </dd>
-              </div>
-              <div>
-                <dt>Suggested transfer note</dt>
+                <dt>Transfer note</dt>
                 <dd>{DONATION_CONFIG.transferMemo}</dd>
               </div>
             </dl>
@@ -142,19 +140,7 @@ export function DonateSettings() {
               <button
                 className="button donate-copy-button"
                 type="button"
-                onClick={() => void copyToClipboard('phone', DONATION_CONFIG.momoPhoneNumber)}
-              >
-                {copiedField === 'phone' ? (
-                  <Check size={14} aria-hidden="true" />
-                ) : (
-                  <Copy size={14} aria-hidden="true" />
-                )}
-                Copy phone
-              </button>
-              <button
-                className="button donate-copy-button"
-                type="button"
-                onClick={() => void copyToClipboard('account', DONATION_CONFIG.momoReceivingId)}
+                onClick={() => void copyToClipboard('account', DONATION_CONFIG.accountNumber)}
               >
                 {copiedField === 'account' ? (
                   <Check size={14} aria-hidden="true" />
@@ -189,8 +175,7 @@ export function DonateSettings() {
         </p>
       )}
       <p className="settings-note donate-disclaimer">
-        All donations are optional. Sky Auto Player never handles payments or confirms transfers.
-        You can also{' '}
+        Donations are optional. Sky Auto Player does not process or verify payments. You can also{' '}
         <a
           href={DONATION_CONFIG.githubUrl}
           target="_blank"
