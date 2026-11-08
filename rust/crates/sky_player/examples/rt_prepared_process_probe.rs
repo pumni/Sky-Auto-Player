@@ -101,8 +101,7 @@ mod windows_trial {
         let ok = unsafe {
             GetProcessMemoryInfo(
                 GetCurrentProcess(),
-                (&mut memory as *mut PROCESS_MEMORY_COUNTERS_EX)
-                    .cast::<PROCESS_MEMORY_COUNTERS>(),
+                (&mut memory as *mut PROCESS_MEMORY_COUNTERS_EX).cast::<PROCESS_MEMORY_COUNTERS>(),
                 cb,
             )
         };
@@ -161,7 +160,11 @@ mod windows_trial {
         let song_id = values.get("--song-id").cloned();
         let synthetic_generations = values
             .get("--synthetic-generations")
-            .map(|value| value.parse::<usize>().map_err(|_| "bad generations".to_string()))
+            .map(|value| {
+                value
+                    .parse::<usize>()
+                    .map_err(|_| "bad generations".to_string())
+            })
             .transpose()?;
         if song_id.is_some() == synthetic_generations.is_some() {
             return Err("select exactly one of --song-id or --synthetic-generations".into());
@@ -169,9 +172,9 @@ mod windows_trial {
         if synthetic_generations.is_some_and(|count| ![100, 1_000, 10_000].contains(&count)) {
             return Err("synthetic generations must be 100, 1000 or 10000".into());
         }
-        let width = values
-            .get("--width")
-            .map_or(Ok(1usize), |value| value.parse::<usize>().map_err(|_| "bad width".to_string()))?;
+        let width = values.get("--width").map_or(Ok(1usize), |value| {
+            value.parse::<usize>().map_err(|_| "bad width".to_string())
+        })?;
         if !(1..=15).contains(&width) || (song_id.is_some() && values.contains_key("--width")) {
             return Err("width 1..15 is supported for synthetic workloads only".into());
         }
@@ -188,10 +191,14 @@ mod windows_trial {
         {
             return Err("--output must be an absolute .json path in TEMP".into());
         }
-        let temp = std::env::temp_dir().canonicalize()
+        let temp = std::env::temp_dir()
+            .canonicalize()
             .map_err(|error| format!("TEMP canonical path: {error}"))?;
-        let parent = output.parent().ok_or_else(|| "missing output parent".to_string())?;
-        let canonical_parent = parent.canonicalize()
+        let parent = output
+            .parent()
+            .ok_or_else(|| "missing output parent".to_string())?;
+        let canonical_parent = parent
+            .canonicalize()
             .map_err(|error| format!("output parent must already exist: {error}"))?;
         if !canonical_parent.starts_with(&temp) {
             return Err("--output must remain under canonical TEMP directory".into());
@@ -302,12 +309,17 @@ mod windows_trial {
         let actions = map_actions(&schedule.actions)?;
         let compiled = compile_runtime_intents(&actions, &SKY_SCAN_CODES)
             .map_err(|error| format!("song compiler: {error}"))?;
-        Ok((compiled, format!("song:{id}"), json!({"song_sha256":hash,"path":song.path})))
+        Ok((
+            compiled,
+            format!("song:{id}"),
+            json!({"song_sha256":hash,"path":song.path}),
+        ))
     }
 
-    fn synthetic_schedule(generations: usize, width: usize)
-        -> Result<(RuntimeSchedule, String, Value), String>
-    {
+    fn synthetic_schedule(
+        generations: usize,
+        width: usize,
+    ) -> Result<(RuntimeSchedule, String, Value), String> {
         let mut actions = Vec::new();
         actions
             .try_reserve_exact(generations * 2)
@@ -351,14 +363,17 @@ mod windows_trial {
             .map_err(|error| format!("manifest read: {error}"))?;
         let manifest: BuiltinCatalogManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|error| format!("manifest decode: {error}"))?;
-        manifest.validate().map_err(|error| format!("manifest validate: {error}"))?;
+        manifest
+            .validate()
+            .map_err(|error| format!("manifest validate: {error}"))?;
         let manifest_sha256 = sha256_hex(&manifest_bytes);
         let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
             .map_err(|error| format!("timing policy: {error}"))?;
         let (compiled, workload, identity) = match opts.song_id.as_deref() {
             Some(id) => song_schedule(&root, &manifest, id, &policy)?,
             None => synthetic_schedule(
-                opts.synthetic_generations.expect("validated generation count"),
+                opts.synthetic_generations
+                    .expect("validated generation count"),
                 opts.width,
             )?,
         };
@@ -380,8 +395,8 @@ mod windows_trial {
 
         // The callback runs with the chosen stream and reset coordinator still
         // live. Its allocation counters are sampled BEFORE JSON serialization.
-        let (held, measured_memory, after_allocator) = builder
-            .with_held_prepared_owner_for_study(opts.variant == "compact", |held| {
+        let (held, measured_memory, after_allocator) =
+            builder.with_held_prepared_owner_for_study(opts.variant == "compact", |held| {
                 let after_allocator = allocator_snapshot();
                 let measured_memory = memory_snapshot()?;
                 Ok((held, measured_memory, after_allocator))
@@ -479,10 +494,8 @@ mod windows_trial {
         }
 
         #[test]
-        fn duplicate_or_unknown_flags_are_rejected() {
-            // The process CLI parser is isolated to the example and checked
-            // by the PowerShell runner as an executable smoke test.
-            assert_eq!(size_of::<PROCESS_MEMORY_COUNTERS_EX>() > 0, true);
+        fn extended_win32_memory_counter_layout_covers_base() {
+            assert!(size_of::<PROCESS_MEMORY_COUNTERS_EX>() > size_of::<PROCESS_MEMORY_COUNTERS>());
         }
     }
 }

@@ -132,8 +132,7 @@ impl PreparedStartupBuilder {
                 &probe,
                 &profile,
             )?;
-            let prepare_reset_ns =
-                u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let prepare_reset_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
             let sizes = stream.sizes()?;
             let evidence = HeldPreparedStudyEvidence {
                 entry_count: sizes.entry_count,
@@ -154,20 +153,20 @@ impl PreparedStartupBuilder {
             let start = Instant::now();
             let (stream, reset) =
                 PreparedDispatchStream::build(self.coordinator, self.qpc_clock, &probe, &profile)?;
-            let prepare_reset_ns =
-                u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let prepare_reset_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
             let (_, physical_count, metadata_count, _) =
                 stream.prepared_storage_evidence_for_test();
             let histogram = stream.physical_input_event_histogram_for_test();
-            let input_events = histogram
-                .iter()
-                .enumerate()
-                .try_fold(0usize, |sum, (width, count)| {
-                    width
-                        .checked_mul(*count)
-                        .and_then(|value| sum.checked_add(value))
-                        .ok_or_else(|| "inline INPUT count overflow".to_string())
-                })?;
+            let input_events =
+                histogram
+                    .iter()
+                    .enumerate()
+                    .try_fold(0usize, |sum, (width, count)| {
+                        width
+                            .checked_mul(*count)
+                            .and_then(|value| sum.checked_add(value))
+                            .ok_or_else(|| "inline INPUT count overflow".to_string())
+                    })?;
             let evidence = HeldPreparedStudyEvidence {
                 entry_count: stream.len(),
                 physical_count,
