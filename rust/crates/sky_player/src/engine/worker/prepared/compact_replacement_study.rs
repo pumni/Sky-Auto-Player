@@ -10,8 +10,8 @@ use crate::engine::worker::dispatch::{AuthoredBatchView, PhysicalCommit, Recover
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::TimelineTicks;
-use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
 use sky_dispatch_win32::input::compact_study::{CompactInputArenaBuilder, FrozenCompactInputArena};
+use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
 use std::mem::size_of;
 
 // Every field except the original 608-byte inline packet is retained in the
@@ -219,7 +219,10 @@ impl PreparedDispatchStream {
 impl CompactReplacementStudy {
     #[cfg(test)]
     pub(super) fn entry_debug_fingerprints_for_test(&self) -> Vec<String> {
-        self.entries.iter().map(|entry| format!("{entry:?}")).collect()
+        self.entries
+            .iter()
+            .map(|entry| format!("{entry:?}"))
+            .collect()
     }
 
     #[cfg(test)]

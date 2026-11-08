@@ -31,7 +31,6 @@ pub struct CompactDirectPreparedEvidence {
     pub build_ns_unpaired: u64,
 }
 
-
 impl PreparedStartupBuilder {
     pub fn prepare_with_compact_arena_measurement(
         self,
@@ -97,5 +96,4 @@ impl PreparedStartupBuilder {
             build_ns_unpaired,
         })
     }
-
 }

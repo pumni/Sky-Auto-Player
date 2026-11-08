@@ -178,7 +178,8 @@ fn characterize_schedule(
     if direct.physical_input_event_histogram != histogram
         || direct.physical_entry_count != prepared.physical_entry_count
         || direct.metadata_entry_count != prepared.metadata_entry_count
-        || direct.physical_entry_count + direct.metadata_entry_count != prepared.prepared_entry_count
+        || direct.physical_entry_count + direct.metadata_entry_count
+            != prepared.prepared_entry_count
         || direct.input_event_count
             != histogram
                 .iter()
@@ -384,9 +385,9 @@ fn run() -> Result<(), String> {
                 total_offline_verify_ns += read("offline_structural_verify_ns")?;
                 let direct = &evidence["direct_compact_preparation_study"];
                 let read_direct = |field: &str| -> Result<u64, String> {
-                    direct[field].as_u64().ok_or_else(|| {
-                        format!("missing direct compact {field} for {}", song.path)
-                    })
+                    direct[field]
+                        .as_u64()
+                        .ok_or_else(|| format!("missing direct compact {field} for {}", song.path))
                 };
                 if read_direct("physical_packet_count")?
                     != evidence["physical_packet_count"]
@@ -395,13 +396,15 @@ fn run() -> Result<(), String> {
                     || read_direct("input_event_count")?
                         != evidence["input_events"].as_u64().unwrap_or(u64::MAX)
                 {
-                    return Err(format!("direct compact counters disagree for {}", song.path));
+                    return Err(format!(
+                        "direct compact counters disagree for {}",
+                        song.path
+                    ));
                 }
                 baseline_inline_stream_reserved_sum += evidence["reserved_entry_bytes"]
                     .as_u64()
                     .ok_or_else(|| "missing inline stream reserved bytes".to_string())?;
-                direct_compact_stream_reserved_sum +=
-                    read_direct("compact_total_reserved_bytes")?;
+                direct_compact_stream_reserved_sum += read_direct("compact_total_reserved_bytes")?;
                 direct_compact_build_ns_unpaired_sum += read_direct("build_ns_unpaired")?;
             }
         }

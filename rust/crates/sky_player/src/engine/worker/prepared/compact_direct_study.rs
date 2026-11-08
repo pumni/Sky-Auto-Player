@@ -2,13 +2,13 @@
 //! arena. Planning still materializes one temporary inline Win32 packet, but
 //! no full-stream inline entry Vec is allocated. No sender uses these entries.
 
-use super::{PreparedDispatchEntry, PreparedDispatchStream};
 use super::compact_replacement_study::{CompactAuthoredView, CompactPreparedEntry};
-use crate::engine::worker::{DispatchPreparationProbe, QpcClock};
+use super::{PreparedDispatchEntry, PreparedDispatchStream};
 use crate::engine::worker::dispatch::PhysicalCommit;
 use crate::engine::worker::planning::{
     NextDispatchPlan, PlanningInput, plan_next_dispatch_projected,
 };
+use crate::engine::worker::{DispatchPreparationProbe, QpcClock};
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::QpcTicks;
@@ -78,7 +78,9 @@ impl CompactDirectPreparedStream {
     }
 
     #[cfg(test)]
-    fn packet_summaries_for_test(&self) -> Vec<(sky_dispatch_win32::input::PhysicalPacket, usize, usize)> {
+    fn packet_summaries_for_test(
+        &self,
+    ) -> Vec<(sky_dispatch_win32::input::PhysicalPacket, usize, usize)> {
         (0..self.physical_count)
             .map(|index| {
                 let mask = self.arena.packet_identity(index).unwrap();
