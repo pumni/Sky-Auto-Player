@@ -34,6 +34,11 @@ focused playback, readout, event, timing, and performance components owning pres
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
 
+The Donate Settings category is UI-only. Ko-fi, PayPal, and GitHub open in the system browser
+through a scope-limited Tauri opener capability. The Techcombank VietQR is an offline PNG
+asset with no fixed amount; the transfer note and account details are also visible for manual
+copying. Donation does not change native settings, payment state, or runtime trust boundaries.
+
 ## Inspector presentation
 
 The Inspector remains docked when the measured workbench width can retain the Navigator rail

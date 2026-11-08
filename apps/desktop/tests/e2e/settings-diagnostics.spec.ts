@@ -117,6 +117,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'Diagnostics',
     'Updates',
     'Advanced',
+    'Donate',
     'About',
     'Playback',
   ]) {

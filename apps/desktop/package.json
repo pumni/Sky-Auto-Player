@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-opener": "2.5.5",
     "@tanstack/react-virtual": "3.14.20",
     "lucide-react": "1.58.0",
     "react": "19.3.1",

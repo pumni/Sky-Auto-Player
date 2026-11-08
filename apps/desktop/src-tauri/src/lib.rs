@@ -258,6 +258,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
     startup_telemetry::record("tauri.builder.start");
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
