@@ -103,9 +103,7 @@ mod tests {
             "opener permission must be limited to the public donation destinations"
         );
         assert!(permissions.iter().all(|permission| {
-            permission
-                .as_str()
-                .is_some_and(|id| !id.contains('*'))
+            permission.as_str().is_some_and(|id| !id.contains('*'))
                 || permission["identifier"] == "opener:allow-open-url"
         }));
 

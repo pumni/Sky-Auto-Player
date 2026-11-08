@@ -1,6 +1,7 @@
-import { isTauri } from '@tauri-apps/api/core';
 import { Check, Coffee, Copy, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
+import { openExternalUrl } from '../../platform/externalLinks';
+import { isTauriRuntime } from '../../platform/runtime';
 import { DONATION_CONFIG } from './donationConfig';
 
 type Notice = { kind: 'success' | 'error'; text: string };
@@ -11,13 +12,12 @@ export function DonateSettings() {
   const [copiedField, setCopiedField] = useState<CopyField | null>(null);
 
   function openSupportLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     event.preventDefault();
     setNotice(null);
     void (async () => {
       try {
-        const { openUrl } = await import('@tauri-apps/plugin-opener');
-        await openUrl(url);
+        await openExternalUrl(url);
       } catch {
         setNotice({
           kind: 'error',
