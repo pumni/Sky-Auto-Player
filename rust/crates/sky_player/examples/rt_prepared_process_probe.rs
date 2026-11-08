@@ -11,6 +11,7 @@ fn main() {
 
 #[cfg(windows)]
 mod windows_trial {
+    use serde::Serialize;
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use sky_app_core::catalog::BuiltinCatalogManifest;
@@ -41,6 +42,10 @@ mod windows_trial {
     static ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
     static ALLOC_REQUESTED_BYTES: AtomicU64 = AtomicU64::new(0);
     static DEALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
+    // Bookkeeping of requested *layout* bytes freed, not actual OS heap
+    // decommit or process private commit. Count old realloc layouts only on
+    // successful realloc, and dealloc layouts at their normal release point.
+    static RELEASED_LAYOUT_BYTES: AtomicU64 = AtomicU64::new(0);
 
     // SAFETY: The system allocator preserves all GlobalAlloc contracts.
     // Atomics only record successful Rust allocator calls and never allocate.
@@ -68,12 +73,14 @@ mod windows_trial {
             if !next.is_null() {
                 ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
                 ALLOC_REQUESTED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+                RELEASED_LAYOUT_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
             }
             next
         }
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
             DEALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+            RELEASED_LAYOUT_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
             unsafe { System.dealloc(ptr, layout) };
         }
     }
@@ -81,15 +88,45 @@ mod windows_trial {
     #[global_allocator]
     static ALLOCATOR: CountedSystemAllocator = CountedSystemAllocator;
 
-    fn allocator_snapshot() -> (u64, u64, u64) {
-        (
-            ALLOC_CALLS.load(Ordering::Relaxed),
-            ALLOC_REQUESTED_BYTES.load(Ordering::Relaxed),
-            DEALLOC_CALLS.load(Ordering::Relaxed),
-        )
+    #[derive(Clone, Copy, Debug, Serialize)]
+    struct AllocatorSnapshot {
+        alloc_or_realloc_calls: u64,
+        requested_bytes: u64,
+        dealloc_calls: u64,
+        released_layout_bytes: u64,
     }
 
-    fn memory_snapshot() -> Result<Value, String> {
+    fn allocator_snapshot() -> AllocatorSnapshot {
+        AllocatorSnapshot {
+            alloc_or_realloc_calls: ALLOC_CALLS.load(Ordering::Relaxed),
+            requested_bytes: ALLOC_REQUESTED_BYTES.load(Ordering::Relaxed),
+            dealloc_calls: DEALLOC_CALLS.load(Ordering::Relaxed),
+            released_layout_bytes: RELEASED_LAYOUT_BYTES.load(Ordering::Relaxed),
+        }
+    }
+
+    fn rust_net_requested_layout_delta(
+        before: AllocatorSnapshot,
+        after: AllocatorSnapshot,
+    ) -> i128 {
+        (i128::from(after.requested_bytes) - i128::from(before.requested_bytes))
+            - (i128::from(after.released_layout_bytes)
+                - i128::from(before.released_layout_bytes))
+    }
+
+    // Keep the raw Win32 snapshots allocation-free until ALL phase samples
+    // have been captured. Constructing serde_json::Value here would change
+    // Rust heap counters before the following stage was observed.
+    #[derive(Clone, Copy, Debug, Serialize)]
+    struct ProcessMemorySnapshot {
+        working_set_bytes: usize,
+        peak_working_set_bytes_since_process_start: usize,
+        private_commit_bytes: usize,
+        peak_private_commit_bytes_since_process_start: usize,
+        page_fault_count_since_process_start: u32,
+    }
+
+    fn memory_snapshot() -> Result<ProcessMemorySnapshot, String> {
         // SAFETY: zeroed is valid for a plain Win32 output struct; cb is
         // initialized to its complete extended size before the OS call.
         let mut memory: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
@@ -112,13 +149,13 @@ mod windows_trial {
                 std::io::Error::last_os_error()
             ));
         }
-        Ok(json!({
-            "working_set_bytes":memory.WorkingSetSize,
-            "peak_working_set_bytes_since_process_start":memory.PeakWorkingSetSize,
-            "private_commit_bytes":memory.PrivateUsage,
-            "peak_private_commit_bytes_since_process_start":memory.PeakPagefileUsage,
-            "page_fault_count_since_process_start":memory.PageFaultCount
-        }))
+        Ok(ProcessMemorySnapshot {
+            working_set_bytes: memory.WorkingSetSize,
+            peak_working_set_bytes_since_process_start: memory.PeakWorkingSetSize,
+            private_commit_bytes: memory.PrivateUsage,
+            peak_private_commit_bytes_since_process_start: memory.PeakPagefileUsage,
+            page_fault_count_since_process_start: memory.PageFaultCount,
+        })
     }
 
     struct Options {
@@ -431,11 +468,22 @@ mod windows_trial {
                     Ok((held, measured_memory, after_allocator))
                 },
             )?;
+        // with_held_prepared_owner_for_study_with_input_hint returns only
+        // AFTER the prepared stream and reset coordinator have been dropped.
+        // Do not build any JSON or format a report before this snapshot.
+        let after_drop_memory = memory_snapshot()?;
+        let after_drop_allocator = allocator_snapshot();
 
         let counts = [
-            after_allocator.0.saturating_sub(before_allocator.0),
-            after_allocator.1.saturating_sub(before_allocator.1),
-            after_allocator.2.saturating_sub(before_allocator.2),
+            after_allocator
+                .alloc_or_realloc_calls
+                .saturating_sub(before_allocator.alloc_or_realloc_calls),
+            after_allocator
+                .requested_bytes
+                .saturating_sub(before_allocator.requested_bytes),
+            after_allocator
+                .dealloc_calls
+                .saturating_sub(before_allocator.dealloc_calls),
         ];
         let report = trial_report(
             &revision,
@@ -446,6 +494,10 @@ mod windows_trial {
             held,
             before_memory,
             measured_memory,
+            after_drop_memory,
+            before_allocator,
+            after_allocator,
+            after_drop_allocator,
             counts,
         );
         let mut output = serde_json::to_string_pretty(&report)
@@ -473,8 +525,12 @@ mod windows_trial {
         workload: &str,
         identity: &Value,
         held: HeldPreparedStudyEvidence,
-        before: Value,
-        while_held: Value,
+        before: ProcessMemorySnapshot,
+        while_held: ProcessMemorySnapshot,
+        after_drop: ProcessMemorySnapshot,
+        allocator_before: AllocatorSnapshot,
+        allocator_held: AllocatorSnapshot,
+        allocator_after_drop: AllocatorSnapshot,
         counts: [u64; 3],
     ) -> Value {
         json!({
@@ -504,10 +560,18 @@ mod windows_trial {
                 "prepare_reset_ns":held.prepare_reset_ns,
                 "before_prepare_process":before,
                 "while_owner_held_process":while_held,
+                "after_owner_drop_process":after_drop,
+                "before_prepare_allocator":allocator_before,
+                "while_owner_held_allocator":allocator_held,
+                "after_owner_drop_allocator":allocator_after_drop,
+                "rust_net_requested_layout_bytes_before_to_held":
+                    rust_net_requested_layout_delta(allocator_before, allocator_held),
+                "rust_net_requested_layout_bytes_before_to_after_drop":
+                    rust_net_requested_layout_delta(allocator_before, allocator_after_drop),
                 "rust_global_allocator_alloc_or_realloc_calls":counts[0],
                 "rust_global_allocator_requested_bytes":counts[1],
                 "rust_global_allocator_dealloc_calls":counts[2],
-                "scope":"Build_and_reset_only_excludes_compile_and_io; Rust allocator counters exclude OS/CRT allocations; process peak counters are lifetime peaks since process start and warmup contaminates warm peaks. Working set != private commit; sample before owner drop."
+                "scope":"Build_and_reset_only_excludes_compile_and_io; Rust allocator counters exclude OS/CRT allocations; process peak counters are lifetime peaks since process start and warmup contaminates warm peaks. Working set != private commit; while_owner_held is sampled before owner drop; after_owner_drop sampled immediately on return. Net requested Rust layout bytes are not OS committed bytes, malloc overhead or RSS."
             }
         })
     }
@@ -606,6 +670,24 @@ mod windows_trial {
                     );
                 }
             }
+        }
+
+        #[test]
+        fn requested_layout_balance_includes_realloc_old_layouts() {
+            let a = AllocatorSnapshot {
+                alloc_or_realloc_calls: 10,
+                requested_bytes: 1_000,
+                dealloc_calls: 3,
+                released_layout_bytes: 500,
+            };
+            let b = AllocatorSnapshot {
+                alloc_or_realloc_calls: 12,
+                requested_bytes: 1_400,
+                dealloc_calls: 4,
+                released_layout_bytes: 700,
+            };
+            assert_eq!(rust_net_requested_layout_delta(a, b), 200);
+            assert_eq!(rust_net_requested_layout_delta(b, a), -200);
         }
 
         #[test]
