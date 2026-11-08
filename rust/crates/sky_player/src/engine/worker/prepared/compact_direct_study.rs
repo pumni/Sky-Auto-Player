@@ -552,8 +552,16 @@ mod tests {
                 hinted.packet_summaries_for_test()
             );
             assert_eq!(
-                baseline.entries.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>(),
-                hinted.entries.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>()
+                baseline
+                    .entries
+                    .iter()
+                    .map(|x| format!("{x:?}"))
+                    .collect::<Vec<_>>(),
+                hinted
+                    .entries
+                    .iter()
+                    .map(|x| format!("{x:?}"))
+                    .collect::<Vec<_>>()
             );
             assert_eq!(a.input_event_count, width * 2, "width={width}");
             assert_eq!(a.input_event_histogram, b.input_event_histogram);

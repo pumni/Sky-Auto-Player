@@ -421,8 +421,8 @@ mod windows_trial {
 
         // The callback runs with the chosen stream and reset coordinator still
         // live. Its allocation counters are sampled BEFORE JSON serialization.
-        let (held, measured_memory, after_allocator) =
-            builder.with_held_prepared_owner_for_study_with_input_hint(
+        let (held, measured_memory, after_allocator) = builder
+            .with_held_prepared_owner_for_study_with_input_hint(
                 opts.variant != "inline",
                 opts.variant == "compact-masks",
                 |held| {
@@ -583,11 +583,9 @@ mod windows_trial {
                         .with_held_prepared_owner_for_study(true, |held| Ok(held))
                         .unwrap();
                     let hinted = builder
-                        .with_held_prepared_owner_for_study_with_input_hint(
-                            true,
-                            true,
-                            |held| Ok(held),
-                        )
+                        .with_held_prepared_owner_for_study_with_input_hint(true, true, |held| {
+                            Ok(held)
+                        })
                         .unwrap();
                     assert_eq!(legacy.entry_count, hinted.entry_count);
                     assert_eq!(legacy.physical_count, hinted.physical_count);
@@ -598,13 +596,8 @@ mod windows_trial {
                         legacy.reset_coordinator_heap_bytes,
                         hinted.reset_coordinator_heap_bytes
                     );
-                    assert_eq!(
-                        hinted.input_arena_used_bytes,
-                        generations * width * 2 * 40
-                    );
-                    assert!(
-                        hinted.input_arena_reserved_bytes >= hinted.input_arena_used_bytes
-                    );
+                    assert_eq!(hinted.input_arena_used_bytes, generations * width * 2 * 40);
+                    assert!(hinted.input_arena_reserved_bytes >= hinted.input_arena_used_bytes);
                     assert_eq!(
                         hinted.reserved_stream_bytes,
                         hinted.entry_reserved_bytes

@@ -127,11 +127,7 @@ impl PreparedStartupBuilder {
         direct_compact: bool,
         observe: impl FnOnce(HeldPreparedStudyEvidence) -> Result<R, String>,
     ) -> Result<R, String> {
-        self.with_held_prepared_owner_for_study_with_input_hint(
-            direct_compact,
-            false,
-            observe,
-        )
+        self.with_held_prepared_owner_for_study_with_input_hint(direct_compact, false, observe)
     }
 
     /// The compiled-mask hint applies only to the offline direct compact
