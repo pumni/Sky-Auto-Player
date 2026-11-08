@@ -25,6 +25,10 @@ describe('DonateSettings', () => {
       DONATION_CONFIG.githubUrl,
     );
 
+    expect(
+      screen.getByRole('heading', { name: 'PayPal' }).closest('.donate-provider-heading')?.querySelector('svg'),
+    ).toHaveClass('lucide-wallet-cards');
+
     expect(screen.getByRole('heading', { name: 'MBBank · VietQR' })).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.bankName)).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.accountHolder)).toBeInTheDocument();

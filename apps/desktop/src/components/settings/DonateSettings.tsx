@@ -1,5 +1,5 @@
 import { isTauri } from '@tauri-apps/api/core';
-import { Check, Coffee, Copy, ExternalLink, Heart, Landmark } from 'lucide-react';
+import { Check, Coffee, Copy, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { DONATION_CONFIG } from './donationConfig';
 
@@ -76,7 +76,7 @@ export function DonateSettings() {
         </div>
         <div className="donate-provider-card">
           <div className="donate-provider-heading">
-            <Heart size={17} aria-hidden="true" />
+            <WalletCards size={17} aria-hidden="true" />
             <div>
               <h4>PayPal</h4>
               <p>International support</p>
