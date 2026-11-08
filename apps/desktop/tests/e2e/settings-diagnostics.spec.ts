@@ -173,6 +173,35 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(settingsButton).toBeFocused();
 });
 
+test('Donate shows MoMo details without stale bank QR or native settings footer', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Donate' }).click();
+
+  await expect(dialog.getByRole('heading', { name: 'Support Sky Auto Player' })).toBeVisible();
+  await expect(dialog.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
+    'href',
+    'https://ko-fi.com/pumni',
+  );
+  await expect(dialog.getByRole('link', { name: 'Open PayPal in browser' })).toHaveAttribute(
+    'href',
+    'https://www.paypal.com/paypalme/pe4ce28',
+  );
+  await expect(dialog.getByText('0857288363')).toBeVisible();
+  await expect(dialog.getByText('PSP2603710800000415')).toBeVisible();
+  await expect(dialog.getByRole('group', { name: 'Official MoMo QR not yet configured' })).toBeVisible();
+  await expect(dialog.getByText('Techcombank')).toHaveCount(0);
+  await expect(dialog.getByText('Settings are validated and persisted by the native runtime.')).toHaveCount(0);
+  const content = dialog.locator('.settings-content');
+  const horizontalOverflow = await content.evaluate((element) => element.scrollWidth > element.clientWidth);
+  expect(horizontalOverflow).toBe(false);
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
 test('Playback Behavior stays usable in a compact Settings viewport', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 448 });
   await page.goto('/');

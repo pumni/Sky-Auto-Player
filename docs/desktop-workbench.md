@@ -34,10 +34,15 @@ focused playback, readout, event, timing, and performance components owning pres
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
 
-The Donate Settings category is UI-only. Ko-fi, PayPal, and GitHub open in the system browser
-through a scope-limited Tauri opener capability. The Techcombank VietQR is an offline PNG
-asset with no fixed amount; the transfer note and account details are also visible for manual
-copying. Donation does not change native settings, payment state, or runtime trust boundaries.
+The Donate Settings category is UI-only and intentionally omits the native settings persistence
+footer. Ko-fi, PayPal, and GitHub open in the system browser through a scope-limited Tauri opener
+capability. The MoMo section lists a wallet phone number, account holder, suggested transfer note,
+and a secondary PSP receiving identifier supplied by the owner; only the phone and transfer note
+have copy actions. Do not present a fabricated QR: until the owner supplies a fresh official MoMo
+Receive QR image exported from the MoMo app, the section displays an explicit non-scannable
+placeholder. MoMo's October 2026 QR migration means an old (BVBank-labelled) QR should not be
+reused. The previous Techcombank QR asset is removed. Payment processing and transaction status
+remain outside the application, with no changes to native settings, trust or runtime contracts.
 
 ## Inspector presentation
 

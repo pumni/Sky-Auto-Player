@@ -1,17 +1,16 @@
 import { isTauri } from '@tauri-apps/api/core';
-import { Check, Coffee, Copy, ExternalLink, Heart, Landmark } from 'lucide-react';
+import { Check, Coffee, Copy, ExternalLink, Heart, QrCode, Wallet } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { DONATION_CONFIG } from './donationConfig';
 
 type Notice = { kind: 'success' | 'error'; text: string };
+type CopyField = 'phone' | 'memo';
 
 export function DonateSettings() {
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [copiedField, setCopiedField] = useState<'account' | 'memo' | null>(null);
+  const [copiedField, setCopiedField] = useState<CopyField | null>(null);
 
   function openSupportLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
-    // Regular links work in the browser test harness and on the website.
-    // The packaged Tauri app must delegate links to the system browser.
     if (!isTauri()) return;
     event.preventDefault();
     setNotice(null);
@@ -22,13 +21,13 @@ export function DonateSettings() {
       } catch {
         setNotice({
           kind: 'error',
-          text: `Could not open the browser. You can visit ${url} manually.`,
+          text: `Could not open the browser. Visit ${url} manually.`,
         });
       }
     })();
   }
 
-  async function copyToClipboard(field: 'account' | 'memo', value: string) {
+  async function copyToClipboard(field: CopyField, value: string) {
     setNotice(null);
     setCopiedField(null);
     try {
@@ -36,7 +35,7 @@ export function DonateSettings() {
       setCopiedField(field);
       setNotice({
         kind: 'success',
-        text: `${field === 'account' ? 'Account number' : 'Transfer note'} copied.`,
+        text: `${field === 'phone' ? 'MoMo phone number' : 'Transfer note'} copied.`,
       });
     } catch {
       setNotice({ kind: 'error', text: 'Could not copy. Select and copy the text manually.' });
@@ -46,14 +45,13 @@ export function DonateSettings() {
   return (
     <section className="settings-section donate-settings" aria-labelledby="donate-settings-title">
       <div className="donate-heading">
-        <div className="donate-heading-icon" aria-hidden="true">
-          <Heart size={20} />
-        </div>
+        <span className="donate-heading-icon" aria-hidden="true">
+          <Heart size={19} />
+        </span>
         <div>
           <h3 id="donate-settings-title">Support Sky Auto Player</h3>
           <p className="settings-note">
-            Sky Auto Player is free and open-source. If it makes your music experience better,
-            consider supporting its continued development.
+            Free and open-source. Donations help support continued maintenance and development.
           </p>
         </div>
       </div>
@@ -62,72 +60,90 @@ export function DonateSettings() {
         <div className="donate-provider-card">
           <div className="donate-provider-heading">
             <Coffee size={17} aria-hidden="true" />
-            <h4>Ko-fi</h4>
+            <div>
+              <h4>Ko-fi</h4>
+              <p>Support the project</p>
+            </div>
           </div>
-          <p>Support the project through Ko-fi.</p>
           <a
             className="button donate-external-link"
             href={DONATION_CONFIG.koFiUrl}
+            aria-label="Open Ko-fi in browser"
             target="_blank"
             rel="noopener noreferrer"
             onClick={(event) => openSupportLink(event, DONATION_CONFIG.koFiUrl)}
           >
-            Open Ko-fi <ExternalLink size={14} aria-hidden="true" />
+            Open <ExternalLink size={14} aria-hidden="true" />
           </a>
         </div>
-
         <div className="donate-provider-card">
           <div className="donate-provider-heading">
             <Heart size={17} aria-hidden="true" />
-            <h4>PayPal</h4>
+            <div>
+              <h4>PayPal</h4>
+              <p>International support</p>
+            </div>
           </div>
-          <p>Support internationally through PayPal.Me.</p>
           <a
             className="button donate-external-link"
             href={DONATION_CONFIG.paypalUrl}
+            aria-label="Open PayPal in browser"
             target="_blank"
             rel="noopener noreferrer"
             onClick={(event) => openSupportLink(event, DONATION_CONFIG.paypalUrl)}
           >
-            Open PayPal <ExternalLink size={14} aria-hidden="true" />
+            Open <ExternalLink size={14} aria-hidden="true" />
           </a>
         </div>
       </div>
 
       <div className="donate-bank-card">
         <div className="donate-provider-heading">
-          <Landmark size={17} aria-hidden="true" />
-          <h4>Vietnam bank transfer · VietQR</h4>
+          <Wallet size={17} aria-hidden="true" />
+          <h4>MoMo · Vietnam</h4>
         </div>
         <p className="settings-note">
-          Scan with a Vietnamese banking app. Enter any amount, and verify the recipient before
-          confirming the transfer.
+          Send to this MoMo wallet using its phone number. You can also select MoMo as the recipient
+          bank in supported banking apps. Always verify the recipient before confirming.
         </p>
+
         <div className="donate-bank-content">
-          <div className="donate-qr-frame">
-            <img
-              src={DONATION_CONFIG.vietQrImagePath}
-              alt="VietQR for the listed Techcombank account, with no fixed transfer amount"
-              width={172}
-              height={172}
-            />
-          </div>
+          {DONATION_CONFIG.momoQrImagePath ? (
+            <div className="donate-qr-frame">
+              <img
+                src={DONATION_CONFIG.momoQrImagePath}
+                alt="Official MoMo receive QR for the listed wallet"
+                width={172}
+                height={172}
+              />
+            </div>
+          ) : (
+            <div className="donate-qr-placeholder" role="group" aria-label="Official MoMo QR not yet configured">
+              <QrCode size={28} aria-hidden="true" />
+              <strong>MoMo receive QR</strong>
+              <span>Not available yet</span>
+              <span className="donate-qr-hint">Use the wallet phone number for now.</span>
+            </div>
+          )}
+
           <div className="donate-bank-information">
             <dl className="donate-bank-details">
               <div>
-                <dt>Bank</dt>
-                <dd>{DONATION_CONFIG.bankName}</dd>
-              </div>
-              <div>
                 <dt>Account holder</dt>
-                <dd>{DONATION_CONFIG.accountHolder}</dd>
+                <dd>{DONATION_CONFIG.momoAccountHolder}</dd>
               </div>
               <div>
-                <dt>Account number</dt>
-                <dd className="donate-bank-account">{DONATION_CONFIG.accountNumber}</dd>
+                <dt>MoMo wallet phone</dt>
+                <dd className="donate-bank-account">{DONATION_CONFIG.momoPhoneNumber}</dd>
               </div>
               <div>
-                <dt>Transfer note</dt>
+                <dt>Receiving ID shown in MoMo</dt>
+                <dd className="donate-bank-account donate-receiving-id">
+                  {DONATION_CONFIG.momoReceivingId}
+                </dd>
+              </div>
+              <div>
+                <dt>Suggested transfer note</dt>
                 <dd>{DONATION_CONFIG.transferMemo}</dd>
               </div>
             </dl>
@@ -135,14 +151,14 @@ export function DonateSettings() {
               <button
                 className="button donate-copy-button"
                 type="button"
-                onClick={() => void copyToClipboard('account', DONATION_CONFIG.accountNumber)}
+                onClick={() => void copyToClipboard('phone', DONATION_CONFIG.momoPhoneNumber)}
               >
-                {copiedField === 'account' ? (
+                {copiedField === 'phone' ? (
                   <Check size={14} aria-hidden="true" />
                 ) : (
                   <Copy size={14} aria-hidden="true" />
                 )}
-                Copy account
+                Copy phone
               </button>
               <button
                 className="button donate-copy-button"
@@ -159,6 +175,12 @@ export function DonateSettings() {
             </div>
           </div>
         </div>
+        {!DONATION_CONFIG.momoQrImagePath && (
+          <p className="settings-note donate-qr-note">
+            The official MoMo QR has not been added. The PSP receiving ID is shown for reference
+            only; do not use it as a bank account number without verifying the recipient in MoMo.
+          </p>
+        )}
       </div>
 
       {notice && (
@@ -170,8 +192,7 @@ export function DonateSettings() {
         </p>
       )}
       <p className="settings-note donate-disclaimer">
-        Contributions are entirely optional. Every core feature remains free. Payments take place
-        outside Sky Auto Player; the app does not collect payment data or confirm transactions.
+        All donations are optional. Sky Auto Player never handles payments or confirms transfers.
         You can also{' '}
         <a
           href={DONATION_CONFIG.githubUrl}
@@ -179,7 +200,7 @@ export function DonateSettings() {
           rel="noopener noreferrer"
           onClick={(event) => openSupportLink(event, DONATION_CONFIG.githubUrl)}
         >
-          star the project on GitHub <ExternalLink size={12} aria-hidden="true" />
+          star on GitHub <ExternalLink size={12} aria-hidden="true" />
         </a>
         .
       </p>

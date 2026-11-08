@@ -1,13 +1,13 @@
-/** Public donation destinations, intentionally kept separate from persisted settings. */
+/** Public, voluntary donation destinations. No payment processing or persisted settings. */
 export const DONATION_CONFIG = {
   koFiUrl: 'https://ko-fi.com/pumni',
   paypalUrl: 'https://www.paypal.com/paypalme/pe4ce28',
   githubUrl: 'https://github.com/pumni/Sky-Auto-Player',
-  bankName: 'Techcombank',
-  bankBin: '970407',
-  accountNumber: '6708022002',
-  accountHolder: 'Nguyễn Đức Hòa',
+  momoPhoneNumber: '0857288363',
+  momoAccountHolder: 'Nguyễn Đức Hòa',
+  // Account identifier copied from MoMo; not a substitute for the official receive QR.
+  momoReceivingId: 'PSP2603710800000415',
   transferMemo: 'Sky Auto Player Donate',
-  // Bundled EMVCo/NAPAS VietQR: static amount, purpose prefilled (tag 62/08).
-  vietQrImagePath: '/donate-vietqr-techcombank.png',
+  // Set only after importing the actual NEW receive QR image exported from the user's MoMo app.
+  momoQrImagePath: null as string | null,
 } as const;

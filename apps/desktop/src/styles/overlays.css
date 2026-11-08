@@ -465,28 +465,29 @@
   margin-top: var(--space-4);
 }
 
-/* Donate is informational, not a persisted setting or an embedded checkout. */
+/* Voluntary donation UI; uses existing semantic tokens across all palettes. */
 .donate-settings {
-  gap: 15px;
+  gap: 11px;
+  padding-top: 14px;
 }
 
 .donate-heading {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
 }
 
 .donate-heading > div:last-child {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .donate-heading-icon {
   display: grid;
-  flex: 0 0 38px;
+  flex: 0 0 34px;
   place-items: center;
-  height: 38px;
+  height: 34px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   color: var(--accent-ink);
@@ -496,31 +497,38 @@
 .donate-provider-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .donate-provider-card,
 .donate-bank-card {
-  display: grid;
-  align-content: start;
-  gap: 10px;
   min-width: 0;
-  padding: 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
 }
 
-.donate-provider-card p {
-  color: var(--text-secondary);
-  font-size: 12px;
+.donate-provider-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px;
 }
 
 .donate-provider-heading {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   color: var(--text-primary);
+}
+
+.donate-provider-heading > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .donate-provider-heading svg {
@@ -533,34 +541,53 @@
   font-weight: 600;
 }
 
+.donate-provider-heading p {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .donate-external-link,
 .donate-copy-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 12px;
   text-decoration: none;
 }
 
 .donate-external-link {
-  justify-self: start;
-  min-height: 32px;
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.donate-bank-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px 14px;
 }
 
 .donate-bank-content {
   display: grid;
-  grid-template-columns: 176px minmax(0, 1fr);
+  grid-template-columns: 158px minmax(0, 1fr);
   align-items: start;
-  gap: 14px;
+  gap: 16px;
+}
+
+.donate-qr-frame,
+.donate-qr-placeholder {
+  display: grid;
+  place-items: center;
+  width: 158px;
+  min-height: 158px;
+  border-radius: var(--radius-control);
 }
 
 .donate-qr-frame {
-  display: grid;
-  place-items: center;
   overflow: hidden;
-  padding: 2px;
-  border-radius: var(--radius-control);
+  padding: 3px;
   background: #fff;
 }
 
@@ -572,6 +599,33 @@
   image-rendering: pixelated;
 }
 
+.donate-qr-placeholder {
+  align-content: center;
+  gap: 7px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-secondary);
+  background: var(--surface-panel);
+  text-align: center;
+}
+
+.donate-qr-placeholder svg {
+  color: var(--accent-ink);
+}
+
+.donate-qr-placeholder strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.donate-qr-placeholder span {
+  font-size: 11px;
+}
+
+.donate-qr-placeholder .donate-qr-hint {
+  color: var(--text-tertiary);
+}
+
 .donate-bank-information {
   display: grid;
   gap: 10px;
@@ -580,12 +634,14 @@
 
 .donate-bank-details {
   display: grid;
-  gap: 9px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 12px;
   margin: 0;
 }
 
 .donate-bank-details div {
   display: grid;
+  align-content: start;
   gap: 2px;
   min-width: 0;
 }
@@ -609,6 +665,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.donate-receiving-id {
+  font-size: 11px;
+}
+
 .donate-copy-actions {
   display: flex;
   flex-wrap: wrap;
@@ -616,8 +676,13 @@
 }
 
 .donate-copy-button {
-  min-height: 30px;
+  min-height: 29px;
   padding-inline: 9px;
+}
+
+.donate-qr-note {
+  padding-top: 7px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .donate-disclaimer a {
@@ -629,15 +694,24 @@
   text-underline-offset: 2px;
 }
 
+@media (forced-colors: active) {
+  .donate-qr-placeholder {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+}
+
 @media (max-width: 620px) {
   .donate-provider-grid,
-  .donate-bank-content {
+  .donate-bank-content,
+  .donate-bank-details {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .donate-qr-frame {
-    justify-self: start;
-    width: 176px;
+  .donate-qr-frame,
+  .donate-qr-placeholder {
+    width: 158px;
   }
 }
 

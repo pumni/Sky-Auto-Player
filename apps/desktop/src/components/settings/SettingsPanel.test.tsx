@@ -45,6 +45,26 @@ describe('SettingsPanel playback timing', () => {
     expect(screen.queryByText(/sender evidence, not proof/)).not.toBeInTheDocument();
   });
 
+  it('shows Donate without claiming the page is a persisted native setting', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const bootstrap = store.getState().bootstrap;
+    if (!bootstrap) throw new Error('bootstrap should be available');
+    act(() => store.getState().setSettingsOpen(true));
+
+    render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
+    const nativeNote = 'Settings are validated and persisted by the native runtime.';
+    expect(screen.getByText(nativeNote)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Donate' }));
+    expect(screen.getByRole('region', { name: 'Support Sky Auto Player' })).toBeInTheDocument();
+    expect(screen.queryByText(nativeNote)).not.toBeInTheDocument();
+    expect(screen.getByText('0857288363')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Playback' }));
+    expect(screen.getByText(nativeNote)).toBeInTheDocument();
+  });
+
   it('keeps the dialog usable after a failed settings mutation', async () => {
     const bridge = createMockBridge();
     const originalPatch = bridge.patchSettings;
