@@ -58,6 +58,8 @@ pub mod dispatch_primitives {
         PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,
         ProductionDispatchTestHarness,
     };
+    #[cfg(windows)]
+    pub use super::test_support::CompactDirectPreparedEvidence;
     pub use super::worker::WaitObservation;
     pub use super::worker::dispatch::DispatchStep;
     pub use super::worker::dispatch::observation::{
