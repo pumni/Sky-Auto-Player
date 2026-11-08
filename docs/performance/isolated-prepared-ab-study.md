@@ -32,6 +32,18 @@ songs plus synthetic 100, 1,000 and 10,000 generations at widths 1 and
 15. Each workload runs at least five paired trials per stage (cold
 and warm), interleaved AB/BA. Each child holds one prepared owner.
 
+The synthetic timeline intentionally uses a **60,000-us generation period**
+with authored Down at the period start and Up **25,000 us later**.
+This exceeds the frozen 60 FPS policy's **16,667-us minimum physical hold**
+and leaves 35,000 us before the next Down. The earlier 4,000/1,000-us
+synthetic schedule was **not physically preparable**: it tripped the
+production coordinator's fail-closed deadline guard on native Windows
+at smoke child 61. A test now constructs **both actual offline prepared
+owners** for all 100 / 1,000 / 10,000 generations at width 1 and 15,
+not merely the compiler packets. These synthetic workloads stress volume
+and chord width; their 60-ms period is not a claim about real-song tempo
+or game playback. No measurements from the invalid schedule are used.
+
 ## Metrics and limitations
 
 - Win32 GetProcessMemoryInfo(PROCESS_MEMORY_COUNTERS_EX).PrivateUsage is

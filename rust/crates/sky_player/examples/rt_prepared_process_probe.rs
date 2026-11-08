@@ -316,6 +316,13 @@ mod windows_trial {
         ))
     }
 
+    // Each Down generation must admit its Up before the next Down.
+    // The 60 FPS frozen policy requires >=16,667 us physical hold;
+    // the original 4,000/1,000 us synthetic times were not preparable.
+    // Leave a second full frame of slack after the authored Up.
+    const SYNTHETIC_GENERATION_STEP_US: u64 = 60_000;
+    const SYNTHETIC_UP_OFFSET_US: u64 = 25_000;
+
     fn synthetic_schedule(
         generations: usize,
         width: usize,
@@ -326,11 +333,14 @@ mod windows_trial {
             .map_err(|error| format!("reserve synthetic actions: {error}"))?;
         for index in 0..generations {
             let start = (index as u64)
-                .checked_mul(4_000)
+                .checked_mul(SYNTHETIC_GENERATION_STEP_US)
                 .ok_or_else(|| "synthetic timestamp overflow".to_string())?;
+            let up_at = start
+                .checked_add(SYNTHETIC_UP_OFFSET_US)
+                .ok_or_else(|| "synthetic release timestamp overflow".to_string())?;
             for (offset, kind, at) in [
                 (0usize, ActionKind::Down, start),
-                (1usize, ActionKind::Up, start + 1_000),
+                (1usize, ActionKind::Up, up_at),
             ] {
                 let action_index = index
                     .checked_mul(2)
@@ -351,7 +361,12 @@ mod windows_trial {
         Ok((
             compiled,
             format!("synthetic:{generations}:width:{width}"),
-            json!({"generations":generations,"width":width}),
+            json!({
+                "generations":generations,
+                "width":width,
+                "generation_step_us":SYNTHETIC_GENERATION_STEP_US,
+                "up_offset_us":SYNTHETIC_UP_OFFSET_US
+            }),
         ))
     }
 
@@ -482,14 +497,50 @@ mod windows_trial {
         use super::*;
 
         #[test]
-        fn synthetic_workloads_compile_and_preserve_width() {
-            for width in [1, 7, 15] {
-                let (compiled, _, _) = synthetic_schedule(100, width).unwrap();
-                assert_eq!(compiled.packets.len(), 200);
-                assert!(compiled.packets.iter().all(|packet| {
-                    packet.up_mask.count_ones() == width as u32
-                        || packet.down_mask.count_ones() == width as u32
-                }));
+        fn synthetic_workloads_compile_and_prepare_inline_and_direct_compact() {
+            let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0).unwrap();
+            assert!(SYNTHETIC_UP_OFFSET_US > policy.min_hold_us);
+            assert!(SYNTHETIC_GENERATION_STEP_US - SYNTHETIC_UP_OFFSET_US > policy.min_hold_us);
+
+            // All runner generation counts, including the full 10k stress
+            // case, are exercised through the actual prepared builders.
+            // Compilation alone cannot detect an infeasible release floor.
+            for generations in [100, 1_000, 10_000] {
+                for width in [1, 15] {
+                    let (compiled, _, identity) = synthetic_schedule(generations, width).unwrap();
+                    assert_eq!(compiled.packets.len(), generations * 2);
+                    assert_eq!(
+                        identity["generation_step_us"].as_u64(),
+                        Some(SYNTHETIC_GENERATION_STEP_US)
+                    );
+                    assert!(compiled.packets.iter().all(|packet| {
+                        packet.up_mask.count_ones() == width as u32
+                            || packet.down_mask.count_ones() == width as u32
+                    }));
+                    let builder =
+                        ProductionDispatchTestHarness::new_prepared_startup_builder_for_test(
+                            compiled,
+                            1_000_000,
+                            policy.min_hold_us,
+                        )
+                        .unwrap();
+
+                    let inline = builder.clone_coordinator_for_test().prepare().unwrap();
+                    let direct = builder.prepare_compact_direct_measurement().unwrap();
+
+                    assert_eq!(inline.physical_entry_count, generations * 2);
+                    assert_eq!(direct.physical_entry_count, inline.physical_entry_count);
+                    assert_eq!(direct.metadata_entry_count, inline.metadata_entry_count);
+                    assert_eq!(
+                        direct.physical_input_event_histogram,
+                        inline.physical_input_event_histogram
+                    );
+                    assert_eq!(direct.input_event_count, generations * width * 2);
+                    assert_eq!(
+                        direct.rebuilt_coordinator_heap_payload_bytes,
+                        inline.rebuilt_coordinator_heap_payload_bytes
+                    );
+                }
             }
         }
 
