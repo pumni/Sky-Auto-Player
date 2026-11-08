@@ -155,6 +155,13 @@ fn characterize_schedule(
         Ok(builder) => builder,
         Err(error) => return rejected("coordinator_rejected", error, plan_status),
     };
+    #[cfg(windows)]
+    let (prepared, compact, copy_ns, verify_ns) =
+        match builder.prepare_with_compact_arena_measurement() {
+            Ok(evidence) => evidence,
+            Err(error) => return rejected("preparation_rejected", error, plan_status),
+        };
+    #[cfg(not(windows))]
     let prepared = match builder.prepare() {
         Ok(prepared) => prepared,
         Err(error) => return rejected("preparation_rejected", error, plan_status),
@@ -184,7 +191,7 @@ fn characterize_schedule(
             plan_status,
         );
     }
-    json!({
+    let mut report = json!({
         "outcome":"prepared",
         "plan_status":plan_status,
         "authored_action_count":actions.len(),
@@ -203,7 +210,24 @@ fn characterize_schedule(
         },
         "entry_size_bytes":prepared.prepared_entry_type_size_bytes,
         "reserved_entry_bytes":prepared.prepared_entry_allocation.1
-    })
+    });
+    #[cfg(windows)]
+    {
+        report["compact_arena_study"] = json!({
+            "packet_count": compact.packet_count,
+            "input_event_count": compact.event_count,
+            "inline_packet_component_bytes": compact.inline_packet_component_bytes,
+            "compact_arena_reserved_bytes": compact.total_arena_reserved_bytes,
+            "descriptor_size_bytes": compact.descriptor_size,
+            "input_size_bytes": compact.input_size,
+            "descriptor_reserved_bytes": compact.descriptor_reserved_bytes,
+            "input_reserved_bytes": compact.input_reserved_bytes,
+            "offline_copy_build_ns": copy_ns,
+            "offline_structural_verify_ns": verify_ns,
+            "scope": "isolated_packet_component_copy_NOT_RSS_or_production_startup"
+        });
+    }
+    report
 }
 
 fn git_head(root: &Path) -> Result<String, String> {
@@ -247,6 +271,14 @@ fn run() -> Result<(), String> {
     let mut aggregate_histogram = [0u64; PHYSICAL_PACKET_SLOTS + 1];
     let mut prepared_input_events = 0u64;
     let mut prepared_physical_packets = 0u64;
+    #[cfg(windows)]
+    let mut inline_packet_component_bytes = 0u64;
+    #[cfg(windows)]
+    let mut compact_arena_reserved_bytes = 0u64;
+    #[cfg(windows)]
+    let mut total_offline_copy_ns = 0u64;
+    #[cfg(windows)]
+    let mut total_offline_verify_ns = 0u64;
 
     for song in &manifest.songs {
         let path = verified_source_path(&root, &song.path)?;
@@ -280,6 +312,28 @@ fn run() -> Result<(), String> {
             prepared_physical_packets += evidence["physical_packet_count"]
                 .as_u64()
                 .ok_or_else(|| "missing physical packet count".to_string())?;
+            #[cfg(windows)]
+            {
+                let arena = &evidence["compact_arena_study"];
+                let read = |field: &str| -> Result<u64, String> {
+                    arena[field]
+                        .as_u64()
+                        .ok_or_else(|| format!("missing arena {field} for {}", song.path))
+                };
+                if read("packet_count")?
+                    != evidence["physical_packet_count"]
+                        .as_u64()
+                        .unwrap_or(u64::MAX)
+                    || read("input_event_count")?
+                        != evidence["input_events"].as_u64().unwrap_or(u64::MAX)
+                {
+                    return Err(format!("arena/stream counters disagree for {}", song.path));
+                }
+                inline_packet_component_bytes += read("inline_packet_component_bytes")?;
+                compact_arena_reserved_bytes += read("compact_arena_reserved_bytes")?;
+                total_offline_copy_ns += read("offline_copy_build_ns")?;
+                total_offline_verify_ns += read("offline_structural_verify_ns")?;
+            }
         }
         songs.push(json!({
             "id":song.id,
@@ -294,7 +348,7 @@ fn run() -> Result<(), String> {
         return Err("some manifest songs were silently omitted".into());
     }
     let slots = prepared_physical_packets * PHYSICAL_PACKET_SLOTS as u64;
-    let report = json!({
+    let mut report = json!({
         "schema_version":SCHEMA_VERSION,
         "status":"OFFLINE_CORPUS_CHARACTERIZATION",
         "source_revision":git_head(&root)?,
@@ -317,6 +371,16 @@ fn run() -> Result<(), String> {
         "songs":songs,
         "limitations":"Offline built-in corpus, only successfully prepared songs aggregated. Source/planner/compiler/preparation exclusions are individually reported. No SendInput, receiver, CPU, RSS or latency measurements."
     });
+    #[cfg(windows)]
+    {
+        report["compact_arena_component_study"] = json!({
+            "inline_packet_component_bytes": inline_packet_component_bytes,
+            "compact_arena_reserved_bytes": compact_arena_reserved_bytes,
+            "total_offline_copy_ns_unpaired": total_offline_copy_ns,
+            "total_offline_structural_verify_ns_unpaired": total_offline_verify_ns,
+            "warning": "Offline extra copy of materialized packets, not a production replacement; cannot claim RSS, startup speedup or realtime dispatch improvement."
+        });
+    }
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("create output directory: {error}"))?;
     }

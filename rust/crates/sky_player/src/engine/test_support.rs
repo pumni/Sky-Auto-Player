@@ -1,5 +1,7 @@
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod command_timing;
+#[cfg(all(windows, feature = "test-support"))]
+mod compact_arena_study;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod dispatch_harness;
 #[cfg(any(test, feature = "test-support"))]
