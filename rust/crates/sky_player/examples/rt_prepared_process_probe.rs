@@ -110,8 +110,7 @@ mod windows_trial {
         after: AllocatorSnapshot,
     ) -> i128 {
         (i128::from(after.requested_bytes) - i128::from(before.requested_bytes))
-            - (i128::from(after.released_layout_bytes)
-                - i128::from(before.released_layout_bytes))
+            - (i128::from(after.released_layout_bytes) - i128::from(before.released_layout_bytes))
     }
 
     // Keep the raw Win32 snapshots allocation-free until ALL phase samples
