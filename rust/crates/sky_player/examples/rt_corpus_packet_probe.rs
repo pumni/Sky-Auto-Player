@@ -155,46 +155,11 @@ fn characterize_schedule(
         Ok(builder) => builder,
         Err(error) => return rejected("coordinator_rejected", error, plan_status),
     };
-    #[cfg(windows)]
-    let direct_builder = builder.clone_coordinator_for_test();
-    #[cfg(windows)]
-    let (prepared, compact, copy_ns, verify_ns) =
-        match builder.prepare_with_compact_arena_measurement() {
-            Ok(evidence) => evidence,
-            Err(error) => return rejected("preparation_rejected", error, plan_status),
-        };
-    #[cfg(not(windows))]
     let prepared = match builder.prepare() {
         Ok(prepared) => prepared,
         Err(error) => return rejected("preparation_rejected", error, plan_status),
     };
-    #[cfg(windows)]
-    let direct = match direct_builder.prepare_compact_direct_measurement() {
-        Ok(direct) => direct,
-        Err(error) => return rejected("direct_compact_rejected", error, plan_status),
-    };
     let histogram = prepared.physical_input_event_histogram;
-    #[cfg(windows)]
-    if direct.physical_input_event_histogram != histogram
-        || direct.physical_entry_count != prepared.physical_entry_count
-        || direct.metadata_entry_count != prepared.metadata_entry_count
-        || direct.physical_entry_count + direct.metadata_entry_count
-            != prepared.prepared_entry_count
-        || direct.input_event_count
-            != histogram
-                .iter()
-                .enumerate()
-                .map(|(width, count)| width * count)
-                .sum::<usize>()
-        || direct.rebuilt_coordinator_heap_payload_bytes
-            != prepared.rebuilt_coordinator_heap_payload_bytes
-    {
-        return rejected(
-            "direct_compact_invariant_rejected",
-            "direct compact event/order/count/reset payload differs from inline control".into(),
-            plan_status,
-        );
-    }
     let histogram_count = histogram.iter().sum::<usize>();
     if histogram_count != prepared.physical_entry_count || histogram[0] != 0 {
         return rejected(
@@ -219,7 +184,7 @@ fn characterize_schedule(
             plan_status,
         );
     }
-    let mut report = json!({
+    let report = json!({
         "outcome":"prepared",
         "plan_status":plan_status,
         "authored_action_count":actions.len(),
@@ -239,38 +204,6 @@ fn characterize_schedule(
         "entry_size_bytes":prepared.prepared_entry_type_size_bytes,
         "reserved_entry_bytes":prepared.prepared_entry_allocation.1
     });
-    #[cfg(windows)]
-    {
-        report["direct_compact_preparation_study"] = json!({
-            "prepared_entry_count": direct.physical_entry_count + direct.metadata_entry_count,
-            "physical_packet_count": direct.physical_entry_count,
-            "metadata_entry_count": direct.metadata_entry_count,
-            "input_event_count": direct.input_event_count,
-            "packet_histogram": direct.physical_input_event_histogram,
-            "compact_entry_size_bytes": direct.entry_size_bytes,
-            "compact_entry_capacity": direct.entry_capacity,
-            "compact_entry_reserved_bytes": direct.entry_reserved_bytes,
-            "descriptor_reserved_bytes": direct.descriptor_reserved_bytes,
-            "input_reserved_bytes": direct.input_reserved_bytes,
-            "compact_total_reserved_bytes": direct.total_reserved_bytes,
-            "rebuilt_coordinator_heap_payload_bytes": direct.rebuilt_coordinator_heap_payload_bytes,
-            "build_ns_unpaired": direct.build_ns_unpaired,
-            "scope": "direct_prepared_compact_entry_plus_arena; single_production_plan_packet_only; independent_simulator_clone; no inline_stream_staging; same_process_unpaired_NOT_RSS_peak_or_speedup"
-        });
-        report["compact_arena_study"] = json!({
-            "packet_count": compact.packet_count,
-            "input_event_count": compact.event_count,
-            "inline_packet_component_bytes": compact.inline_packet_component_bytes,
-            "compact_arena_reserved_bytes": compact.total_arena_reserved_bytes,
-            "descriptor_size_bytes": compact.descriptor_size,
-            "input_size_bytes": compact.input_size,
-            "descriptor_reserved_bytes": compact.descriptor_reserved_bytes,
-            "input_reserved_bytes": compact.input_reserved_bytes,
-            "offline_copy_build_ns": copy_ns,
-            "offline_structural_verify_ns": verify_ns,
-            "scope": "isolated_packet_component_copy_NOT_RSS_or_production_startup"
-        });
-    }
     report
 }
 
@@ -315,21 +248,6 @@ fn run() -> Result<(), String> {
     let mut aggregate_histogram = [0u64; PHYSICAL_PACKET_SLOTS + 1];
     let mut prepared_input_events = 0u64;
     let mut prepared_physical_packets = 0u64;
-    #[cfg(windows)]
-    let mut inline_packet_component_bytes = 0u64;
-    #[cfg(windows)]
-    let mut compact_arena_reserved_bytes = 0u64;
-    #[cfg(windows)]
-    let mut total_offline_copy_ns = 0u64;
-    #[cfg(windows)]
-    let mut total_offline_verify_ns = 0u64;
-    #[cfg(windows)]
-    let mut baseline_inline_stream_reserved_sum = 0u64;
-    #[cfg(windows)]
-    let mut direct_compact_stream_reserved_sum = 0u64;
-    #[cfg(windows)]
-    let mut direct_compact_build_ns_unpaired_sum = 0u64;
-
     for song in &manifest.songs {
         let path = verified_source_path(&root, &song.path)?;
         let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", song.path))?;
@@ -362,51 +280,6 @@ fn run() -> Result<(), String> {
             prepared_physical_packets += evidence["physical_packet_count"]
                 .as_u64()
                 .ok_or_else(|| "missing physical packet count".to_string())?;
-            #[cfg(windows)]
-            {
-                let arena = &evidence["compact_arena_study"];
-                let read = |field: &str| -> Result<u64, String> {
-                    arena[field]
-                        .as_u64()
-                        .ok_or_else(|| format!("missing arena {field} for {}", song.path))
-                };
-                if read("packet_count")?
-                    != evidence["physical_packet_count"]
-                        .as_u64()
-                        .unwrap_or(u64::MAX)
-                    || read("input_event_count")?
-                        != evidence["input_events"].as_u64().unwrap_or(u64::MAX)
-                {
-                    return Err(format!("arena/stream counters disagree for {}", song.path));
-                }
-                inline_packet_component_bytes += read("inline_packet_component_bytes")?;
-                compact_arena_reserved_bytes += read("compact_arena_reserved_bytes")?;
-                total_offline_copy_ns += read("offline_copy_build_ns")?;
-                total_offline_verify_ns += read("offline_structural_verify_ns")?;
-                let direct = &evidence["direct_compact_preparation_study"];
-                let read_direct = |field: &str| -> Result<u64, String> {
-                    direct[field]
-                        .as_u64()
-                        .ok_or_else(|| format!("missing direct compact {field} for {}", song.path))
-                };
-                if read_direct("physical_packet_count")?
-                    != evidence["physical_packet_count"]
-                        .as_u64()
-                        .unwrap_or(u64::MAX)
-                    || read_direct("input_event_count")?
-                        != evidence["input_events"].as_u64().unwrap_or(u64::MAX)
-                {
-                    return Err(format!(
-                        "direct compact counters disagree for {}",
-                        song.path
-                    ));
-                }
-                baseline_inline_stream_reserved_sum += evidence["reserved_entry_bytes"]
-                    .as_u64()
-                    .ok_or_else(|| "missing inline stream reserved bytes".to_string())?;
-                direct_compact_stream_reserved_sum += read_direct("compact_total_reserved_bytes")?;
-                direct_compact_build_ns_unpaired_sum += read_direct("build_ns_unpaired")?;
-            }
         }
         songs.push(json!({
             "id":song.id,
@@ -421,7 +294,7 @@ fn run() -> Result<(), String> {
         return Err("some manifest songs were silently omitted".into());
     }
     let slots = prepared_physical_packets * PHYSICAL_PACKET_SLOTS as u64;
-    let mut report = json!({
+    let report = json!({
         "schema_version":SCHEMA_VERSION,
         "status":"OFFLINE_CORPUS_CHARACTERIZATION",
         "source_revision":git_head(&root)?,
@@ -444,22 +317,6 @@ fn run() -> Result<(), String> {
         "songs":songs,
         "limitations":"Offline built-in corpus, only successfully prepared songs aggregated. Source/planner/compiler/preparation exclusions are individually reported. No SendInput, receiver, CPU, RSS or latency measurements."
     });
-    #[cfg(windows)]
-    {
-        report["direct_compact_preparation_study"] = json!({
-            "sum_individual_song_inline_entry_reserved_bytes": baseline_inline_stream_reserved_sum,
-            "sum_individual_song_direct_compact_reserved_bytes": direct_compact_stream_reserved_sum,
-            "sum_direct_compact_build_ns_unpaired": direct_compact_build_ns_unpaired_sum,
-            "warning": "Each song is prepared separately; sums are NOT simultaneous process memory or peak. Direct compact path avoids staging a song-sized inline entry Vec but still creates one temporary planner packet per iteration. Independent sequential startup durations are NOT paired A/B; no RSS, cold/warm, sender or receiver claim."
-        });
-        report["compact_arena_component_study"] = json!({
-            "inline_packet_component_bytes": inline_packet_component_bytes,
-            "compact_arena_reserved_bytes": compact_arena_reserved_bytes,
-            "total_offline_copy_ns_unpaired": total_offline_copy_ns,
-            "total_offline_structural_verify_ns_unpaired": total_offline_verify_ns,
-            "warning": "Offline extra copy of materialized packets, not a production replacement; cannot claim RSS, startup speedup or realtime dispatch improvement."
-        });
-    }
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("create output directory: {error}"))?;
     }
