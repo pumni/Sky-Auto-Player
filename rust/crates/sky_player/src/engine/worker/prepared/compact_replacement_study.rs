@@ -10,15 +10,15 @@ use crate::engine::worker::dispatch::{AuthoredBatchView, PhysicalCommit, Recover
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::TimelineTicks;
-use sky_dispatch_win32::input::PhysicalPacket;
 use sky_dispatch_win32::input::compact_study::{CompactInputArenaBuilder, FrozenCompactInputArena};
+use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
 use std::mem::size_of;
 
 // Every field except the original 608-byte inline packet is retained in the
 // alternate physical entry. This is intentionally not a minimal data summary.
 #[allow(dead_code)]
 #[derive(Debug)]
-struct CompactAuthoredView {
+pub(super) struct CompactAuthoredView {
     prepared_batch: PreparedBatch,
     batch_source_action_index: u32,
     batch_intent_count: usize,
@@ -34,7 +34,7 @@ struct CompactAuthoredView {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-enum CompactPreparedEntry {
+pub(super) enum CompactPreparedEntry {
     Physical {
         packet_index: u32,
         view: CompactAuthoredView,
@@ -43,6 +43,47 @@ enum CompactPreparedEntry {
         offset_ticks: TimelineTicks,
         commit: PreparedAuthoredCommit,
     },
+}
+
+impl CompactAuthoredView {
+    // All non-packet fields are moved once, shared by direct preparation
+    // and post-hoc transcoding, so both alternate layouts have equal shape.
+    pub(super) fn from_view(view: AuthoredBatchView) -> (Self, PreparedPhysicalPacket) {
+        let AuthoredBatchView {
+            prepared_batch,
+            batch_source_action_index,
+            batch_intent_count,
+            batch_kind,
+            batch_scheduled_ticks,
+            authored_batch_scheduled_ticks,
+            conflict_mask,
+            dispatch_path,
+            packet_masks,
+            prepared_packet,
+            recovery,
+            commit,
+        } = view;
+        (
+            Self {
+                prepared_batch,
+                batch_source_action_index,
+                batch_intent_count,
+                batch_kind,
+                batch_scheduled_ticks,
+                authored_batch_scheduled_ticks,
+                conflict_mask,
+                dispatch_path,
+                packet_masks,
+                recovery,
+                commit,
+            },
+            prepared_packet,
+        )
+    }
+
+    pub(super) fn packet_masks(&self) -> PhysicalPacket {
+        self.packet_masks
+    }
 }
 
 // The support library is checked without cfg(test); only focused unit tests construct this.
@@ -105,45 +146,17 @@ impl PreparedDispatchStream {
         for entry in self.entries {
             match entry {
                 PreparedDispatchEntry::Physical(frame) => {
-                    let AuthoredBatchView {
-                        prepared_batch,
-                        batch_source_action_index,
-                        batch_intent_count,
-                        batch_kind,
-                        batch_scheduled_ticks,
-                        authored_batch_scheduled_ticks,
-                        conflict_mask,
-                        dispatch_path,
-                        packet_masks,
-                        prepared_packet,
-                        recovery,
-                        commit,
-                    } = frame.view;
-                    if packet_masks != prepared_packet.packet() {
+                    let (view, packet) = CompactAuthoredView::from_view(frame.view);
+                    if view.packet_masks() != packet.packet() {
                         return Err("compact replacement packet identity mismatch".into());
                     }
-                    if !matches!(&commit, PhysicalCommit::Authored(_)) {
+                    if !matches!(&view.commit, PhysicalCommit::Authored(_)) {
                         return Err("compact replacement must retain authored-only commits".into());
                     }
-                    arena_builder.append_prepared(&prepared_packet)?;
+                    arena_builder.append_prepared(&packet)?;
                     let packet_index = u32::try_from(physical_written)
                         .map_err(|_| "compact replacement packet index exceeds u32".to_string())?;
-                    entries.push(CompactPreparedEntry::Physical {
-                        packet_index,
-                        view: CompactAuthoredView {
-                            prepared_batch,
-                            batch_source_action_index,
-                            batch_intent_count,
-                            batch_kind,
-                            batch_scheduled_ticks,
-                            authored_batch_scheduled_ticks,
-                            conflict_mask,
-                            dispatch_path,
-                            packet_masks,
-                            recovery,
-                            commit,
-                        },
-                    });
+                    entries.push(CompactPreparedEntry::Physical { packet_index, view });
                     physical_written += 1;
                 }
                 PreparedDispatchEntry::Metadata {
@@ -204,6 +217,29 @@ impl PreparedDispatchStream {
 }
 
 impl CompactReplacementStudy {
+    #[cfg(test)]
+    pub(super) fn entry_debug_fingerprints_for_test(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| format!("{entry:?}"))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn packet_summaries_for_test(&self) -> Vec<(PhysicalPacket, usize, usize)> {
+        (0..self.physical_count)
+            .map(|index| {
+                let mask = self.arena.packet_identity(index).unwrap();
+                let width = self.arena.packet_inputs(index).unwrap().len();
+                let up_prefix = self
+                    .arena
+                    .mixed_up_prefix(index)
+                    .map_or(0, |(_, inputs)| inputs.len());
+                (mask, width, up_prefix)
+            })
+            .collect()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn sizes(&self) -> Result<CompactReplacementSizes, String> {
         let arena = self.arena.sizes();
