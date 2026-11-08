@@ -46,5 +46,8 @@ prepared offline packets do **not** establish that a real game receives the
 same events on time. No measurements of SendInput latency, CPU, RSS,
 runtime physical hold floors or gameplay are claimed.
 
-Do not start a packed arena refactor until the prepared histogram,
-compiler rejection rate, and per-song distributions are reviewed.
+This maintained test-support corpus profiler supports future **production
+scheduler and admission** characterization. The retired compact arena,
+replacement, reserve-hint and phase-memory research code was removed after
+archiving results in GitHub issues #632, #640 and PRs #638, #641, #642.
+No compact implementation is linked into the test-support or production build.
