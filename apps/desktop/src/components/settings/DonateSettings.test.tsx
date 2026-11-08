@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe('DonateSettings', () => {
-  it('shows Ko-fi, PayPal, and the MoMo wallet without the old bank QR', () => {
+  it('shows Ko-fi, PayPal, and the matching MoMo receive QR', () => {
     render(<DonateSettings />);
     expect(screen.getByRole('region', { name: 'Support Sky Auto Player' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
@@ -29,12 +29,16 @@ describe('DonateSettings', () => {
     expect(screen.getByText(DONATION_CONFIG.momoReceivingId)).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.transferMemo)).toBeInTheDocument();
     expect(screen.queryByText(/Techcombank/i)).not.toBeInTheDocument();
-    expect(screen.queryByAltText(/Official MoMo receive QR/)).not.toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Official MoMo QR not yet configured' })).toBeInTheDocument();
-    expect(screen.getByText(/not a bank account number without verifying/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: /MoMo receive QR for Nguyen Duc Hoa/ }),
+    ).toHaveAttribute('src', DONATION_CONFIG.momoQrImagePath);
+    expect(
+      screen.queryByRole('group', { name: 'Official MoMo QR not yet configured' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Scan the QR with a supported banking app/)).toBeInTheDocument();
   });
 
-  it('copies the wallet phone and suggested transfer note', async () => {
+  it('copies MoMo phone, PSP receiving account and transfer note', async () => {
     const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -48,6 +52,11 @@ describe('DonateSettings', () => {
         expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.momoPhoneNumber),
       );
       expect(screen.getByRole('status')).toHaveTextContent('MoMo phone number copied.');
+      fireEvent.click(screen.getByRole('button', { name: 'Copy account' }));
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.momoReceivingId),
+      );
+      expect(screen.getByRole('status')).toHaveTextContent('MoMo account copied.');
       fireEvent.click(screen.getByRole('button', { name: 'Copy note' }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith(DONATION_CONFIG.transferMemo));
       expect(screen.getByRole('status')).toHaveTextContent('Transfer note copied.');

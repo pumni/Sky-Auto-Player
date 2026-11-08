@@ -34,15 +34,18 @@ focused playback, readout, event, timing, and performance components owning pres
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
 
-The Donate Settings category is UI-only and intentionally omits the native settings persistence
-footer. Ko-fi, PayPal, and GitHub open in the system browser through a scope-limited Tauri opener
-capability. The MoMo section lists a wallet phone number, account holder, suggested transfer note,
-and a secondary PSP receiving identifier supplied by the owner; only the phone and transfer note
-have copy actions. Do not present a fabricated QR: until the owner supplies a fresh official MoMo
-Receive QR image exported from the MoMo app, the section displays an explicit non-scannable
-placeholder. MoMo's October 2026 QR migration means an old (BVBank-labelled) QR should not be
-reused. The previous Techcombank QR asset is removed. Payment processing and transaction status
-remain outside the application, with no changes to native settings, trust or runtime contracts.
+The Donate Settings category is informational and intentionally omits the native settings
+persistence footer. Ko-fi, PayPal, and GitHub links open in the system browser through a
+scope-limited Tauri opener capability. The MoMo receive QR was supplied by the owner and cropped
+for the small Settings panel; its decoded EMVCo payload was checked against the public MoMo
+receiving account identifier `PSP2603710800000415` (participant `971025`, CRC-16 valid).
+The PNG in `apps/desktop/public/donate-momo-receive.png` is a static, offline app asset with
+no hardcoded amount or `Sky Auto Player Donate` memo. The displayed name comes from the
+owner-supplied image, not a live recipient lookup. Copy actions are provided separately for
+the MoMo wallet phone (MoMo-to-MoMo), PSP receiving account and optional transfer note; payers
+must verify the recipient in their banking app before confirming any transfer. The previous
+Techcombank QR is removed. Donation does not change the native settings schema, payment state,
+update trust, runtime contracts, or release qualifications.
 
 ## Inspector presentation
 

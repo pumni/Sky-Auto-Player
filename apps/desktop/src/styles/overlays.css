@@ -513,8 +513,8 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px 12px;
 }
 
 .donate-provider-heading {
@@ -565,65 +565,33 @@
 .donate-bank-card {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 8px;
   padding: 12px 14px;
 }
 
 .donate-bank-content {
   display: grid;
-  grid-template-columns: 158px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
   align-items: start;
-  gap: 16px;
-}
-
-.donate-qr-frame,
-.donate-qr-placeholder {
-  display: grid;
-  place-items: center;
-  width: 158px;
-  min-height: 158px;
-  border-radius: var(--radius-control);
+  gap: 14px;
 }
 
 .donate-qr-frame {
+  display: grid;
+  place-items: center;
+  width: 208px;
+  height: 208px;
   overflow: hidden;
-  padding: 3px;
+  border-radius: var(--radius-control);
   background: #fff;
+  forced-color-adjust: none;
 }
 
 .donate-qr-frame img {
   display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 1;
+  width: 208px;
+  height: 208px;
   image-rendering: pixelated;
-}
-
-.donate-qr-placeholder {
-  align-content: center;
-  gap: 7px;
-  padding: 12px;
-  border: 1px dashed var(--border-strong);
-  color: var(--text-secondary);
-  background: var(--surface-panel);
-  text-align: center;
-}
-
-.donate-qr-placeholder svg {
-  color: var(--accent-ink);
-}
-
-.donate-qr-placeholder strong {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.donate-qr-placeholder span {
-  font-size: 11px;
-}
-
-.donate-qr-placeholder .donate-qr-hint {
-  color: var(--text-tertiary);
 }
 
 .donate-bank-information {
@@ -635,7 +603,7 @@
 .donate-bank-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px 12px;
+  gap: 8px 10px;
   margin: 0;
 }
 
@@ -672,17 +640,12 @@
 .donate-copy-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .donate-copy-button {
   min-height: 29px;
-  padding-inline: 9px;
-}
-
-.donate-qr-note {
-  padding-top: 7px;
-  border-top: 1px solid var(--border-subtle);
+  padding-inline: 8px;
 }
 
 .donate-disclaimer a {
@@ -694,14 +657,6 @@
   text-underline-offset: 2px;
 }
 
-@media (forced-colors: active) {
-  .donate-qr-placeholder {
-    border-color: CanvasText;
-    color: CanvasText;
-    background: Canvas;
-  }
-}
-
 @media (max-width: 620px) {
   .donate-provider-grid,
   .donate-bank-content,
@@ -710,8 +665,9 @@
   }
 
   .donate-qr-frame,
-  .donate-qr-placeholder {
-    width: 158px;
+  .donate-qr-frame img {
+    width: 208px;
+    height: 208px;
   }
 }
 

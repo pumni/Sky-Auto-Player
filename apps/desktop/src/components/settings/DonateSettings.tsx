@@ -1,10 +1,10 @@
 import { isTauri } from '@tauri-apps/api/core';
-import { Check, Coffee, Copy, ExternalLink, Heart, QrCode, Wallet } from 'lucide-react';
+import { Check, Coffee, Copy, ExternalLink, Heart, Wallet } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { DONATION_CONFIG } from './donationConfig';
 
 type Notice = { kind: 'success' | 'error'; text: string };
-type CopyField = 'phone' | 'memo';
+type CopyField = 'phone' | 'account' | 'memo';
 
 export function DonateSettings() {
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -35,7 +35,7 @@ export function DonateSettings() {
       setCopiedField(field);
       setNotice({
         kind: 'success',
-        text: `${field === 'phone' ? 'MoMo phone number' : 'Transfer note'} copied.`,
+        text: `${field === 'phone' ? 'MoMo phone number' : field === 'account' ? 'MoMo account' : 'Transfer note'} copied.`,
       });
     } catch {
       setNotice({ kind: 'error', text: 'Could not copy. Select and copy the text manually.' });
@@ -103,28 +103,19 @@ export function DonateSettings() {
           <h4>MoMo · Vietnam</h4>
         </div>
         <p className="settings-note">
-          Send to this MoMo wallet using its phone number. You can also select MoMo as the recipient
-          bank in supported banking apps. Always verify the recipient before confirming.
+          Scan the QR with a supported banking app, enter any amount, and verify the recipient.
+          For MoMo-to-MoMo transfers, use the wallet phone number.
         </p>
 
         <div className="donate-bank-content">
-          {DONATION_CONFIG.momoQrImagePath ? (
-            <div className="donate-qr-frame">
-              <img
-                src={DONATION_CONFIG.momoQrImagePath}
-                alt="Official MoMo receive QR for the listed wallet"
-                width={172}
-                height={172}
-              />
-            </div>
-          ) : (
-            <div className="donate-qr-placeholder" role="group" aria-label="Official MoMo QR not yet configured">
-              <QrCode size={28} aria-hidden="true" />
-              <strong>MoMo receive QR</strong>
-              <span>Not available yet</span>
-              <span className="donate-qr-hint">Use the wallet phone number for now.</span>
-            </div>
-          )}
+          <div className="donate-qr-frame">
+            <img
+              src={DONATION_CONFIG.momoQrImagePath}
+              alt="MoMo receive QR for Nguyen Duc Hoa; scanned data matches the listed PSP account"
+              width={208}
+              height={208}
+            />
+          </div>
 
           <div className="donate-bank-information">
             <dl className="donate-bank-details">
@@ -137,7 +128,7 @@ export function DonateSettings() {
                 <dd className="donate-bank-account">{DONATION_CONFIG.momoPhoneNumber}</dd>
               </div>
               <div>
-                <dt>Receiving ID shown in MoMo</dt>
+                <dt>MoMo receiving account (PSP)</dt>
                 <dd className="donate-bank-account donate-receiving-id">
                   {DONATION_CONFIG.momoReceivingId}
                 </dd>
@@ -163,6 +154,18 @@ export function DonateSettings() {
               <button
                 className="button donate-copy-button"
                 type="button"
+                onClick={() => void copyToClipboard('account', DONATION_CONFIG.momoReceivingId)}
+              >
+                {copiedField === 'account' ? (
+                  <Check size={14} aria-hidden="true" />
+                ) : (
+                  <Copy size={14} aria-hidden="true" />
+                )}
+                Copy account
+              </button>
+              <button
+                className="button donate-copy-button"
+                type="button"
                 onClick={() => void copyToClipboard('memo', DONATION_CONFIG.transferMemo)}
               >
                 {copiedField === 'memo' ? (
@@ -175,12 +178,6 @@ export function DonateSettings() {
             </div>
           </div>
         </div>
-        {!DONATION_CONFIG.momoQrImagePath && (
-          <p className="settings-note donate-qr-note">
-            The official MoMo QR has not been added. The PSP receiving ID is shown for reference
-            only; do not use it as a bank account number without verifying the recipient in MoMo.
-          </p>
-        )}
       </div>
 
       {notice && (
