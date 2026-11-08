@@ -1,6 +1,7 @@
 //! Windows-only, offline, mutually-exclusive prepared-storage process trial.
 //! No playback worker, keyboard injection, SendInput, window focus or sender.
-//! One process owns ONE inline or ONE direct compact prepared stream.
+//! One process owns ONE inline, legacy compact or mask-reserved compact stream.
+//! The third variant is an offline-only capacity experiment for issue #640.
 
 #[cfg(not(windows))]
 fn main() {
@@ -154,8 +155,8 @@ mod windows_trial {
             .get("--variant")
             .ok_or_else(|| "missing --variant".to_string())?
             .clone();
-        if variant != "inline" && variant != "compact" {
-            return Err("--variant must be inline or compact".into());
+        if !matches!(variant.as_str(), "inline" | "compact" | "compact-masks") {
+            return Err("--variant must be inline, compact or compact-masks".into());
         }
         let song_id = values.get("--song-id").cloned();
         let synthetic_generations = values
@@ -399,10 +400,20 @@ mod windows_trial {
         )?;
         if opts.warmup {
             let warm_builder = builder.clone_coordinator_for_test();
-            if opts.variant == "compact" {
-                warm_builder.prepare_compact_direct_measurement()?;
-            } else {
-                warm_builder.prepare()?;
+            match opts.variant.as_str() {
+                "compact" => {
+                    warm_builder.prepare_compact_direct_measurement()?;
+                }
+                "compact-masks" => {
+                    warm_builder.with_held_prepared_owner_for_study_with_input_hint(
+                        true,
+                        true,
+                        |_| Ok(()),
+                    )?;
+                }
+                _ => {
+                    warm_builder.prepare()?;
+                }
             }
         }
         let before_memory = memory_snapshot()?;
@@ -411,11 +422,15 @@ mod windows_trial {
         // The callback runs with the chosen stream and reset coordinator still
         // live. Its allocation counters are sampled BEFORE JSON serialization.
         let (held, measured_memory, after_allocator) =
-            builder.with_held_prepared_owner_for_study(opts.variant == "compact", |held| {
-                let after_allocator = allocator_snapshot();
-                let measured_memory = memory_snapshot()?;
-                Ok((held, measured_memory, after_allocator))
-            })?;
+            builder.with_held_prepared_owner_for_study_with_input_hint(
+                opts.variant != "inline",
+                opts.variant == "compact-masks",
+                |held| {
+                    let after_allocator = allocator_snapshot();
+                    let measured_memory = memory_snapshot()?;
+                    Ok((held, measured_memory, after_allocator))
+                },
+            )?;
 
         let counts = [
             after_allocator.0.saturating_sub(before_allocator.0),
@@ -478,6 +493,11 @@ mod windows_trial {
                 "input_events":held.input_events,
                 "packet_histogram":held.histogram,
                 "reserved_stream_buffer_bytes":held.reserved_stream_bytes,
+                "entry_reserved_bytes":held.entry_reserved_bytes,
+                "descriptor_reserved_bytes":held.descriptor_reserved_bytes,
+                "input_arena_reserved_bytes":held.input_arena_reserved_bytes,
+                "input_arena_used_bytes":held.input_arena_used_bytes,
+                "input_arena_capacity_events":held.input_arena_capacity_events,
                 "reset_coordinator_heap_payload_bytes":held.reset_coordinator_heap_bytes
             },
             "measurements":{
@@ -539,6 +559,57 @@ mod windows_trial {
                     assert_eq!(
                         direct.rebuilt_coordinator_heap_payload_bytes,
                         inline.rebuilt_coordinator_heap_payload_bytes
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn mask_reserved_synthetic_owners_preserve_legacy_compact_accounting() {
+            let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0).unwrap();
+            for generations in [100, 1_000, 10_000] {
+                for width in [1, 7, 14, 15] {
+                    let (compiled, _, _) = synthetic_schedule(generations, width).unwrap();
+                    let builder =
+                        ProductionDispatchTestHarness::new_prepared_startup_builder_for_test(
+                            compiled,
+                            1_000_000,
+                            policy.min_hold_us,
+                        )
+                        .unwrap();
+
+                    let legacy = builder
+                        .clone_coordinator_for_test()
+                        .with_held_prepared_owner_for_study(true, |held| Ok(held))
+                        .unwrap();
+                    let hinted = builder
+                        .with_held_prepared_owner_for_study_with_input_hint(
+                            true,
+                            true,
+                            |held| Ok(held),
+                        )
+                        .unwrap();
+                    assert_eq!(legacy.entry_count, hinted.entry_count);
+                    assert_eq!(legacy.physical_count, hinted.physical_count);
+                    assert_eq!(legacy.metadata_count, hinted.metadata_count);
+                    assert_eq!(legacy.input_events, hinted.input_events);
+                    assert_eq!(legacy.histogram, hinted.histogram);
+                    assert_eq!(
+                        legacy.reset_coordinator_heap_bytes,
+                        hinted.reset_coordinator_heap_bytes
+                    );
+                    assert_eq!(
+                        hinted.input_arena_used_bytes,
+                        generations * width * 2 * 40
+                    );
+                    assert!(
+                        hinted.input_arena_reserved_bytes >= hinted.input_arena_used_bytes
+                    );
+                    assert_eq!(
+                        hinted.reserved_stream_bytes,
+                        hinted.entry_reserved_bytes
+                            + hinted.descriptor_reserved_bytes
+                            + hinted.input_arena_reserved_bytes
                     );
                 }
             }
