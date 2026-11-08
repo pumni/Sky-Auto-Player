@@ -86,10 +86,25 @@ mod tests {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         assert_eq!(actual_command_permissions, expected_command_permissions);
+        let opener_permissions = permissions
+            .iter()
+            .filter(|permission| permission["identifier"] == "opener:allow-open-url")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            opener_permissions,
+            vec![&serde_json::json!({
+                "identifier": "opener:allow-open-url",
+                "allow": [
+                    { "url": "https://ko-fi.com/pumni" },
+                    { "url": "https://www.paypal.com/paypalme/pe4ce28" },
+                    { "url": "https://github.com/pumni/Sky-Auto-Player" }
+                ]
+            })],
+            "opener permission must be limited to the public donation destinations"
+        );
         assert!(permissions.iter().all(|permission| {
-            permission
-                .as_str()
-                .is_some_and(|permission| !permission.contains('*'))
+            permission.as_str().is_some_and(|id| !id.contains('*'))
+                || permission["identifier"] == "opener:allow-open-url"
         }));
 
         let generated_command_names = include_str!("../../src/bridge/generated/command_names.ts");

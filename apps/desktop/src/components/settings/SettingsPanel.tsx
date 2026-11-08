@@ -90,9 +90,11 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
               Could not save settings. {settingsError}
             </p>
           )}
-          <p className="settings-note settings-footer-note">
-            Settings are validated and persisted by the native runtime.
-          </p>
+          {category !== 'donate' && (
+            <p className="settings-note settings-footer-note">
+              Settings are validated and persisted by the native runtime.
+            </p>
+          )}
         </Dialog>
       </Modal>
     </ModalOverlay>

@@ -117,6 +117,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'Diagnostics',
     'Updates',
     'Advanced',
+    'Donate',
     'About',
     'Playback',
   ]) {
@@ -170,6 +171,139 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(settingsButton).toBeFocused();
+});
+
+test('Donate shows the offline MBBank VietQR without clipping or native settings footer', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Donate' }).click();
+
+  await expect(dialog.getByRole('heading', { name: 'Support Sky Auto Player' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'MBBank · VietQR' })).toBeVisible();
+  await expect(dialog.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
+    'href',
+    'https://ko-fi.com/pumni',
+  );
+  await expect(dialog.getByRole('link', { name: 'Open PayPal in browser' })).toHaveAttribute(
+    'href',
+    'https://www.paypal.com/paypalme/pe4ce28',
+  );
+
+  await expect(dialog.getByText('0857288363')).toBeVisible();
+  await expect(dialog.getByText('Nguyen Duc Hoa')).toBeVisible();
+  await expect(dialog.getByText('Sky Auto Player Donate')).toBeVisible();
+  await expect(dialog.getByText('MoMo')).toHaveCount(0);
+  await expect(dialog.getByText('PSP2603710800000415')).toHaveCount(0);
+  await expect(dialog.getByText('Techcombank')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Copy account' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Copy note' })).toBeVisible();
+
+  const qr = dialog.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ });
+  await qr.scrollIntoViewIfNeeded();
+  await expect(qr).toBeVisible();
+  await expect(qr).toHaveAttribute('src', '/donate-vietqr-mbbank.png');
+  expect(
+    await qr.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
+  ).toBe(true);
+  await expect(
+    dialog.getByText('Settings are validated and persisted by the native runtime.'),
+  ).toHaveCount(0);
+
+  const content = dialog.locator('.settings-content');
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const horizontalOverflow = await content.evaluate(
+      (element) => element.scrollWidth > element.clientWidth,
+    );
+    expect(horizontalOverflow).toBe(false);
+  }
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('Donate provider cards align their text and Open actions at desktop width', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Donate' }).click();
+
+  const cards = dialog.locator('.donate-provider-card');
+  await expect(cards).toHaveCount(2);
+  const layout = await cards.evaluateAll((elements) =>
+    elements.map((card) => {
+      const title = card.querySelector<HTMLElement>('h4');
+      const subtitle = card.querySelector<HTMLElement>('p');
+      const icon = card.querySelector<SVGElement>('.donate-provider-heading svg');
+      const action = card.querySelector<HTMLAnchorElement>('.donate-external-link');
+      if (!title || !subtitle || !icon || !action) return null;
+
+      const cardRect = card.getBoundingClientRect();
+      const titleRect = title.getBoundingClientRect();
+      const subtitleRect = subtitle.getBoundingClientRect();
+      const iconRect = icon.getBoundingClientRect();
+      const actionRect = action.getBoundingClientRect();
+      const copyMid = (titleRect.top + subtitleRect.bottom) / 2;
+      return {
+        top: cardRect.top,
+        height: cardRect.height,
+        subtitleGap: subtitleRect.top - titleRect.bottom,
+        iconOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - copyMid),
+        actionOffset: Math.abs((actionRect.top + actionRect.bottom) / 2 - copyMid),
+        actionInside: actionRect.right <= cardRect.right - 4,
+      };
+    }),
+  );
+  expect(layout).toHaveLength(2);
+  for (const item of layout) {
+    expect(item).not.toBeNull();
+    if (!item) continue;
+    expect(item.subtitleGap).toBeGreaterThanOrEqual(0);
+    expect(item.subtitleGap).toBeLessThanOrEqual(8);
+    expect(item.iconOffset).toBeLessThanOrEqual(5);
+    expect(item.actionOffset).toBeLessThanOrEqual(5);
+    expect(item.actionInside).toBe(true);
+  }
+  const first = layout[0];
+  const second = layout[1];
+  if (first && second) {
+    expect(Math.abs(first.top - second.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(first.height - second.height)).toBeLessThanOrEqual(1);
+  }
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  const compact = await cards.evaluateAll((elements) =>
+    elements.map((card) => {
+      const rect = card.getBoundingClientRect();
+      const action = card.querySelector<HTMLAnchorElement>('.donate-external-link');
+      const actionRect = action?.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.top,
+        bottom: rect.bottom,
+        right: rect.right,
+        actionRight: actionRect?.right ?? Infinity,
+      };
+    }),
+  );
+  const [compactFirst, compactSecond] = compact;
+  expect(compactFirst).toBeDefined();
+  expect(compactSecond).toBeDefined();
+  if (compactFirst && compactSecond) {
+    expect(Math.abs(compactFirst.left - compactSecond.left)).toBeLessThanOrEqual(1);
+    expect(compactSecond.top).toBeGreaterThan(compactFirst.bottom);
+  }
+  for (const item of compact) {
+    expect(item.actionRight).toBeLessThanOrEqual(item.right - 4);
+  }
 });
 
 test('Playback Behavior stays usable in a compact Settings viewport', async ({ page }) => {

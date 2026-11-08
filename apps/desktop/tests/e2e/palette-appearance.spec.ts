@@ -743,6 +743,7 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
       name: 'Advanced',
       locator: navigation.getByRole('button', { name: 'Advanced', exact: true }),
     },
+    { name: 'Donate', locator: navigation.getByRole('button', { name: 'Donate', exact: true }) },
     { name: 'About', locator: navigation.getByRole('button', { name: 'About', exact: true }) },
     { name: 'Theme', locator: themeSelect },
     { name: 'Dark palette', locator: paletteSelect },
