@@ -2,10 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
+
+static NEXT_COORDINATOR_ID: AtomicU64 = AtomicU64::new(1);
 
 type SplitIntentResult = (
     SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
@@ -127,6 +130,18 @@ pub enum CoordinatorError {
     PendingReleaseAlreadyRegistered { slot: KeySlot },
     #[error("pending release does not match active generation for key slot {slot}")]
     PendingReleaseOwnershipMismatch { slot: KeySlot },
+}
+
+fn next_coordinator_id() -> Result<u64, CoordinatorError> {
+    NEXT_COORDINATOR_ID
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "coordinator identity space exhausted".into(),
+            ))
+        })
 }
 
 pub fn physical_packet_kind(
@@ -439,12 +454,13 @@ pub struct PreparedAuthoredCommit {
 
 /// One-use proof that a frozen authored commit matched the coordinator before
 /// a prepared physical wait. The private references bind the proof to that
-/// exact stream entry; the coordinator pointer and cursor are checked when the
-/// successful send commits it.
+/// exact stream entry; coordinator identity, state revision, and cursor are
+/// checked when the successful send commits it.
 #[derive(Debug)]
 pub struct PreparedAuthoredCommitProof<'a> {
     pub(super) commit: &'a PreparedAuthoredCommit,
-    pub(super) coordinator: *const RuntimeDispatchCoordinator,
+    pub(super) coordinator_id: u64,
+    pub(super) state_revision: u64,
     pub(super) cursor: usize,
 }
 
@@ -475,8 +491,9 @@ pub struct PreparedStalePacket {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "test-support", derive(Clone))]
 pub struct RuntimeDispatchCoordinator {
+    coordinator_id: u64,
+    state_revision: u64,
     pub schedule: RuntimeSchedule,
     pub min_hold_us: u64,
     pub min_hold_ticks: DurationTicks,
@@ -505,6 +522,34 @@ pub struct RuntimeDispatchCoordinator {
     pending_release_mask: u16,
     #[cfg(any(test, feature = "test-support"))]
     operation_evidence: std::cell::Cell<CoordinatorOperationEvidence>,
+}
+
+#[cfg(feature = "test-support")]
+impl Clone for RuntimeDispatchCoordinator {
+    fn clone(&self) -> Self {
+        Self {
+            coordinator_id: next_coordinator_id().expect("coordinator identity space exhausted"),
+            state_revision: self.state_revision,
+            schedule: self.schedule.clone(),
+            min_hold_us: self.min_hold_us,
+            min_hold_ticks: self.min_hold_ticks,
+            batch_scheduled_ticks: self.batch_scheduled_ticks.clone(),
+            cursor: self.cursor,
+            active_by_slot: self.active_by_slot.clone(),
+            active_mask: self.active_mask,
+            blocked_mask: self.blocked_mask,
+            counters: self.counters,
+            activated_generation_count: self.activated_generation_count,
+            generation_states: self.generation_states.clone(),
+            generation_count: self.generation_count,
+            up_intent_locations: self.up_intent_locations.clone(),
+            cancelled_up_by_slot: self.cancelled_up_by_slot,
+            pending_release_by_slot: self.pending_release_by_slot,
+            pending_release_mask: self.pending_release_mask,
+            #[cfg(any(test, feature = "test-support"))]
+            operation_evidence: std::cell::Cell::new(self.operation_evidence.get()),
+        }
+    }
 }
 
 /// Deterministic operation-site evidence for pause/resume complexity tests.
@@ -670,7 +715,10 @@ impl RuntimeDispatchCoordinator {
             }
         }
 
+        let coordinator_id = next_coordinator_id()?;
         Ok(Self {
+            coordinator_id,
+            state_revision: 0,
             schedule,
             min_hold_us,
             min_hold_ticks,

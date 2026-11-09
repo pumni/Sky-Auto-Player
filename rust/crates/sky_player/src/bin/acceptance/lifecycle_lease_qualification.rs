@@ -5,7 +5,7 @@ use super::{
 use serde_json::{Map, json};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcClock;
-use sky_player::engine::StartupOrderingHook;
+use sky_player::engine::{StartupCheckpoint, StartupOrderingHook};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -37,6 +37,11 @@ pub(super) fn hook_for_scenario(scenario: Scenario) -> Option<Arc<StartupOrderin
         Scenario::LeaseAgeWatchdogDelayed => {
             let hook = Arc::new(StartupOrderingHook::default());
             hook.hold_watchdog();
+            Some(hook)
+        }
+        Scenario::OwnerProcessTermination => {
+            let hook = Arc::new(StartupOrderingHook::default());
+            hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 1);
             Some(hook)
         }
         _ => None,
@@ -251,6 +256,7 @@ pub(super) struct CaseDetails<'a> {
     pub(super) release_floor_cycles: &'a [Value],
     pub(super) watchdog_was_held: bool,
     pub(super) hook: Option<&'a StartupOrderingHook>,
+    pub(super) terminal_outcome: Option<&'a str>,
     pub(super) final_gate_lease_expirations: u64,
     pub(super) terminal_error: Option<&'a str>,
     pub(super) terminal_trigger_reason: Option<&'a str>,
@@ -281,6 +287,7 @@ pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: Case
                 "down_sender_attempt_count": hook.down_sender_attempt_count(),
                 "final_gate_lease_expirations": details.final_gate_lease_expirations,
                 "auxiliary_thread_liveness_ticks": details.helper_liveness_ticks,
+                "terminal_outcome": details.terminal_outcome,
                 "terminal_error": details.terminal_error,
                 "terminal_trigger_reason": details.terminal_trigger_reason
             }),
@@ -291,9 +298,13 @@ pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: Case
 pub(super) fn expected_delayed_watchdog_expiry(
     scenario: Scenario,
     terminal_trigger_reason: Option<&str>,
+    terminal_error: Option<&str>,
+    final_gate_lease_expirations: u64,
 ) -> bool {
     scenario == Scenario::LeaseAgeWatchdogDelayed
         && terminal_trigger_reason == Some("supervisor_lease_expired")
+        && terminal_error == Some("supervisor_lease_expired")
+        && final_gate_lease_expirations > 0
 }
 
 pub(super) fn release_floor_failure(
@@ -318,6 +329,7 @@ pub(super) struct DelayedWatchdogOracle<'a> {
     pub(super) watchdog_was_held: bool,
     pub(super) down_sender_attempt_count: u64,
     pub(super) final_gate_lease_expirations: u64,
+    pub(super) terminal_outcome: Option<&'a str>,
     pub(super) terminal_error: Option<&'a str>,
     pub(super) terminal_trigger_reason: Option<&'a str>,
     pub(super) final_release_obligation_mask: u16,
@@ -343,7 +355,8 @@ pub(super) fn finish_delayed_watchdog_case(
         || oracle.down_sender_attempt_count != 0
         || oracle.final_gate_lease_expirations == 0
         || oracle.terminal_trigger_reason != Some("supervisor_lease_expired")
-        || oracle.terminal_error.is_some()
+        || oracle.terminal_outcome != Some("error")
+        || oracle.terminal_error != Some("supervisor_lease_expired")
         || oracle.final_release_obligation_mask != 0
         || !oracle.sink_events_empty
         || oracle.helper_liveness_ticks == 0
@@ -358,7 +371,7 @@ pub(super) fn finish_delayed_watchdog_case(
     write_report(
         args,
         Verdict::Pass,
-        "watchdog stayed behind the test barrier; final Down lease-age proof rejected before the sender while the helper remained alive",
+        "expired supervisor lease caused the expected terminal block at final Down admission before the sender while the helper remained alive",
         oracle.details,
     )
 }

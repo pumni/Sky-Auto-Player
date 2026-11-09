@@ -75,11 +75,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let requested_wait_policy = config
         .wait
         .requested_wait_policy_label(matches!(&config.backend, &BackendConfig::Production));
-    let effective_wait_policy = if production_wait {
-        "production_calibrated"
-    } else {
-        "legacy_test_wide_spin"
-    };
     #[cfg(any(test, feature = "test-support"))]
     let calibration_placement = config.startup_calibration_placement;
     #[cfg(not(any(test, feature = "test-support")))]
@@ -182,11 +177,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         };
     let StartupResources { waiter } = initialize_startup(
         worker.config.priority.mode,
-        production_wait,
+        effective_policy,
         config.wait.enable_waitable_timer,
         config.wait.enable_event_wait,
         requested_wait_policy,
-        effective_wait_policy,
         priority_acquired,
         metrics,
     );

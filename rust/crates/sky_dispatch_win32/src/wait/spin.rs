@@ -24,6 +24,14 @@ pub(crate) fn wait_result_with_spin(
             spin_ticks,
             #[cfg(any(test, feature = "test-support"))]
             timer_return_qpc: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_arm_qpc: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_arm_target_qpc: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_arm_generation: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_return_generation: None,
         },
         Err(failure) => WaitResult {
             outcome: WaitOutcome::Failed(failure),
@@ -31,6 +39,14 @@ pub(crate) fn wait_result_with_spin(
             spin_ticks: crate::clock::DurationTicks::ZERO,
             #[cfg(any(test, feature = "test-support"))]
             timer_return_qpc: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_arm_qpc: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_arm_target_qpc: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_arm_generation: None,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_return_generation: None,
         },
     }
 }

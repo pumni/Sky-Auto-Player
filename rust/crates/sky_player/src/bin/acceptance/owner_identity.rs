@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use sky_dispatch_win32::focus::{
     retain_window_identity, set_foreground_owner_for_test,
 };
-use sky_player::engine::NativeDispatchSession;
+use sky_player::engine::{NativeDispatchSession, StartupOrderingHook};
+use std::time::Duration;
 
 pub(super) struct BindingEvidence {
     pub(super) actual_owner_pid: u32,
@@ -28,6 +29,15 @@ impl BindingEvidence {
         object: &mut serde_json::Map<String, Value>,
     ) {
         object.insert("owner_identity_binding_requested".to_string(), json!(true));
+        if scenario == Scenario::OwnerProcessTermination {
+            object.insert(
+                "owner_process_termination_fixture".to_string(),
+                json!({
+                    "method": "test_support authority invalidation at FirstDownAdmission checkpoint",
+                    "os_process_terminated": false,
+                }),
+            );
+        }
         object.insert(
             "owner_identity_failure_case".to_string(),
             json!(self.is_failure_case(scenario)),
@@ -56,18 +66,27 @@ pub(super) fn bind(
     };
     result?;
 
-    match scenario {
-        Scenario::OwnerQueryFailure => set_foreground_owner_for_test(Some(None)),
-        Scenario::OwnerProcessTermination => {
-            session.invalidate_window_identity_authority_for_test();
-        }
-        _ => {}
+    if scenario == Scenario::OwnerQueryFailure {
+        set_foreground_owner_for_test(Some(None));
     }
 
     Ok(BindingEvidence {
         actual_owner_pid,
         expected_owner_pid,
     })
+}
+
+pub(super) fn invalidate_at_first_down_admission(
+    session: &NativeDispatchSession,
+    hook: &StartupOrderingHook,
+) -> Result<(), String> {
+    if !hook.wait_for_startup_checkpoint(Duration::from_secs(5)) {
+        hook.release_startup_checkpoint();
+        return Err("worker did not reach the first Down admission checkpoint".into());
+    }
+    session.invalidate_window_identity_authority_for_test();
+    hook.release_startup_checkpoint();
+    Ok(())
 }
 
 pub(super) fn clear_test_override(scenario: Scenario) {
@@ -115,15 +134,42 @@ pub(super) fn failure_result(
         release_obligation_mask,
     );
     Some((
-        if qualified {
+        if qualified && scenario == Scenario::OwnerProcessTermination {
+            super::Verdict::Inconclusive
+        } else if qualified {
             super::Verdict::Pass
         } else {
             super::Verdict::Fail
         },
-        if qualified {
+        if qualified && scenario == Scenario::OwnerProcessTermination {
+            "synthetic owner-authority invalidation stopped before the sender with zero release obligation; the OS owner process was not terminated"
+        } else if qualified {
             "window-owner authority failure stopped before the prepared sender"
         } else {
             "window-owner authority failure did not stop before gameplay delivery with zero release obligation"
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Scenario, failure_result};
+
+    #[test]
+    fn synthetic_authority_revocation_does_not_claim_process_termination() {
+        let result = failure_result(
+            Scenario::OwnerProcessTermination,
+            Some("prepared_down_owner_process_terminated"),
+            true,
+            0,
+        );
+
+        assert!(matches!(
+            result,
+            Some((
+                super::super::Verdict::Inconclusive,
+                "synthetic owner-authority invalidation stopped before the sender with zero release obligation; the OS owner process was not terminated"
+            ))
+        ));
+    }
 }

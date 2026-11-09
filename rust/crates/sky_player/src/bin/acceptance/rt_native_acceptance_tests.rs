@@ -40,6 +40,7 @@ fn base_arguments(scenario: &str) -> Vec<String> {
     .map(str::to_owned)
     .collect()
 }
+
 fn ready(role: &str) -> ReadyRecord {
     let (sink_kind, title) = if role == RECEIVE_ONLY_ROLE {
         (SINK_KIND, SINK_TITLE)

@@ -24,7 +24,34 @@ fn empty_successful_cleanup(snapshot: &EngineSnapshot) -> bool {
     snapshot.final_release_obligation_mask == 0 && snapshot.failed_release_count == 0 && outcome.is_some_and(|outcome| outcome.attempted_mask == 0 && outcome.attempts == 0 && outcome.released_successfully && outcome.stuck_mask == 0 && !outcome.verification_inconclusive && !outcome.transport_anomaly)
 }
 pub(super) fn target_change_cleanup_exception(snapshot: &EngineSnapshot) -> bool { target_change_preflight_error(snapshot) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && empty_successful_cleanup(snapshot) }
-pub(super) fn preflight_user_held_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.outcome.as_deref() == Some("finished") && snapshot.last_error.as_deref().is_some_and(|error| error.contains("instrument key preflight failed during preroll") && error.contains("physically held before playback")) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.failed_release_count == 0 && snapshot.final_release_obligation_mask == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.release_outcome.as_ref().is_none_or(|outcome| outcome.attempted_mask == 0 && outcome.attempts == 0 && outcome.released_successfully && outcome.stuck_mask == 0 && !outcome.verification_inconclusive && !outcome.transport_anomaly) }
+pub(super) fn preflight_user_held_cleanup_exception(snapshot: &EngineSnapshot) -> bool {
+    let expected_preflight_error = snapshot
+        .terminal_error
+        .as_deref()
+        .or(snapshot.last_error.as_deref())
+        .is_some_and(|error| {
+            error.contains("instrument key preflight failed during preroll")
+                && error.contains("physically held before playback")
+        });
+    snapshot.outcome.as_deref() == Some("error")
+        && snapshot.terminal_trigger_reason.as_deref() == Some("startup_failure")
+        && expected_preflight_error
+        && snapshot.keys_inserted_before_failure == 0
+        && snapshot.active_count == 0
+        && snapshot.possibly_active_count == 0
+        && snapshot.failed_release_count == 0
+        && snapshot.final_release_obligation_mask == 0
+        && snapshot.sendinput_partial_events == 0
+        && snapshot.sendinput_zero_progress_failures == 0
+        && snapshot.release_outcome.as_ref().is_none_or(|outcome| {
+            outcome.attempted_mask == 0
+                && outcome.attempts == 0
+                && outcome.released_successfully
+                && outcome.stuck_mask == 0
+                && !outcome.verification_inconclusive
+                && !outcome.transport_anomaly
+        })
+}
 pub(super) fn supervisor_expiry_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.terminal_trigger_reason.as_deref() == Some("supervisor_lease_expired") && snapshot.terminal_error.is_none() && snapshot.secondary_errors.is_empty() && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.timeline_rebase_count == 0 && empty_successful_cleanup(snapshot) }
 
 pub(super) fn ambiguous_packet_event_sequence_matches(events: &[EventRecord], first: PhysicalExpectation, second: PhysicalExpectation) -> bool {

@@ -13,7 +13,13 @@ pub struct WaitObservation {
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
     #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
     pub timer_arm_target_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_generation: Option<u64>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_return_generation: Option<u64>,
     #[cfg(any(test, feature = "test-support"))]
     pub timer_return_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))]

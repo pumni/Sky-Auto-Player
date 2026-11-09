@@ -22,6 +22,7 @@ pub enum TimestampProvenance {
     DerivedFromWakeQpc = 3,
     DerivedFromSendInputCompletion = 4,
     ConfiguredTarget = 5,
+    DerivedFromTimerArm = 6,
 }
 
 /// Fixed-size record retained on the real-time worker path.
@@ -42,8 +43,11 @@ pub struct RtTraceRecord {
     /// Absolute QPC values below are present only when an actual sample exists.
     pub wake_qpc_ticks: u64,
     pub physical_eligibility_qpc_ticks: u64,
+    pub timer_arm_qpc_ticks: u64,
     pub timer_arm_target_qpc_ticks: u64,
     pub timer_return_qpc_ticks: u64,
+    pub timer_arm_generation: u64,
+    pub timer_return_generation: u64,
     pub waiter_deadline_crossing_qpc_ticks: u64,
     pub waiter_return_qpc_ticks: u64,
     pub target_crossing_qpc_ticks: u64,
@@ -95,8 +99,11 @@ pub struct RtTraceRecord {
     pub wake_offset_available: bool,
     pub wake_qpc_available: bool,
     pub physical_eligibility_qpc_available: bool,
+    pub timer_arm_qpc_available: bool,
     pub timer_arm_target_qpc_available: bool,
     pub timer_return_qpc_available: bool,
+    pub timer_arm_generation_available: bool,
+    pub timer_return_generation_available: bool,
     pub waiter_deadline_crossing_qpc_available: bool,
     pub waiter_return_qpc_available: bool,
     pub target_crossing_qpc_available: bool,
@@ -116,6 +123,7 @@ pub struct RtTraceRecord {
     pub wake_offset_provenance: TimestampProvenance,
     pub wake_qpc_provenance: TimestampProvenance,
     pub physical_eligibility_qpc_provenance: TimestampProvenance,
+    pub timer_arm_qpc_provenance: TimestampProvenance,
     pub timer_arm_target_qpc_provenance: TimestampProvenance,
     pub timer_return_qpc_provenance: TimestampProvenance,
     pub waiter_deadline_crossing_qpc_provenance: TimestampProvenance,
@@ -140,7 +148,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 21;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 22;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -180,8 +188,11 @@ pub(crate) struct TraceTiming {
     pub(crate) wake_ticks: Option<TimelineTicks>,
     pub(crate) wake_qpc_ticks: Option<u64>,
     pub(crate) physical_eligibility_qpc_ticks: Option<u64>,
+    pub(crate) timer_arm_qpc_ticks: Option<u64>,
     pub(crate) timer_arm_target_qpc_ticks: Option<u64>,
     pub(crate) timer_return_qpc_ticks: Option<u64>,
+    pub(crate) timer_arm_generation: Option<u64>,
+    pub(crate) timer_return_generation: Option<u64>,
     pub(crate) waiter_deadline_crossing_qpc_ticks: Option<u64>,
     pub(crate) waiter_return_qpc_ticks: Option<u64>,
     pub(crate) target_crossing_qpc_ticks: Option<u64>,
@@ -362,10 +373,16 @@ impl RtTraceRecord {
                 .or(timing.physical_not_before_qpc_ticks)
                 .or(timing.physical_target_qpc_ticks)
                 .is_some(),
+            timer_arm_qpc_ticks: timing.timer_arm_qpc_ticks.unwrap_or_default(),
+            timer_arm_qpc_available: timing.timer_arm_qpc_ticks.is_some(),
             timer_arm_target_qpc_ticks: timing.timer_arm_target_qpc_ticks.unwrap_or_default(),
             timer_arm_target_qpc_available: timing.timer_arm_target_qpc_ticks.is_some(),
             timer_return_qpc_ticks: timing.timer_return_qpc_ticks.unwrap_or_default(),
             timer_return_qpc_available: timing.timer_return_qpc_ticks.is_some(),
+            timer_arm_generation: timing.timer_arm_generation.unwrap_or_default(),
+            timer_arm_generation_available: timing.timer_arm_generation.is_some(),
+            timer_return_generation: timing.timer_return_generation.unwrap_or_default(),
+            timer_return_generation_available: timing.timer_return_generation.is_some(),
             waiter_deadline_crossing_qpc_ticks: timing
                 .waiter_deadline_crossing_qpc_ticks
                 .unwrap_or_default(),
@@ -428,8 +445,9 @@ impl RtTraceRecord {
             } else {
                 TimestampProvenance::Unavailable
             },
+            timer_arm_qpc_provenance: provenance(timing.timer_arm_qpc_ticks.is_some()),
             timer_arm_target_qpc_provenance: if timing.timer_arm_target_qpc_ticks.is_some() {
-                TimestampProvenance::ConfiguredTarget
+                TimestampProvenance::DerivedFromTimerArm
             } else {
                 TimestampProvenance::Unavailable
             },
@@ -589,7 +607,7 @@ impl Default for TimingSemantics {
             scheduled_boundary: "authored_timeline",
             wake_boundary: "worker_wake_before_sendinput",
             physical_eligibility_boundary: "current_physical_not_before_target",
-            timer_arm_target_boundary: "configured_physical_qpc_deadline",
+            timer_arm_target_boundary: "qpc_sample_before_timer_arm_plus_relative_timeout_passed_to_timer_api",
             timer_return_boundary: "first_existing_qpc_sample_after_timer_return",
             waiter_deadline_crossing_boundary: "qpc_sample_that_detected_deadline",
             waiter_return_boundary: "wait_boundary_qpc_sample_before_admission",
@@ -597,7 +615,7 @@ impl Default for TimingSemantics {
             sender_completion_boundary: "sendinput_completion_qpc",
             timestamp_provenance: concat!(
                 "measured|derived_from_wake_qpc|derived_from_pre_call|",
-                "derived_from_send_input_completion|configured_target|unavailable",
+                "derived_from_send_input_completion|configured_target|derived_from_timer_arm|unavailable",
             ),
             final_policy_boundary: "sampled_when_present_else_unavailable",
             observer_boundary: "post_send_capture_and_observer_drain_are_distinct",

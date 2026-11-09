@@ -15,6 +15,24 @@ use sky_dispatch_win32::input::TrackedKeyState;
 use std::num::NonZeroU64;
 use std::time::Instant;
 
+fn observed_timer_wait_result(sample: &PacketSample) -> WaitResult {
+    WaitResult {
+        outcome: WaitOutcome::Deadline,
+        wake_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
+        spin_ticks: DurationTicks::ZERO,
+        #[cfg(feature = "test-support")]
+        timer_return_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
+        #[cfg(feature = "test-support")]
+        timer_arm_qpc: Some(QpcTicks::from_raw(sample.target_ticks.saturating_sub(10))),
+        #[cfg(feature = "test-support")]
+        timer_arm_target_qpc: Some(QpcTicks::from_raw(sample.target_ticks)),
+        #[cfg(feature = "test-support")]
+        timer_arm_generation: Some(1),
+        #[cfg(feature = "test-support")]
+        timer_return_generation: Some(1),
+    }
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore = "manual Windows component-cost qualification; see docs/dispatch-forensics-cost-qualification.md"]
@@ -123,13 +141,7 @@ fn dispatch_cost_qualification() {
             for sample in &samples {
                 let wait = record_wait_attempt(
                     Some(&wait_queue),
-                    Some(WaitResult {
-                        outcome: WaitOutcome::Deadline,
-                        wake_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
-                        spin_ticks: DurationTicks::ZERO,
-                        #[cfg(feature = "test-support")]
-                        timer_return_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
-                    }),
+                    Some(observed_timer_wait_result(sample)),
                     QpcTicks::from_raw(sample.target_ticks),
                     DurationTicks::from_raw(
                         sample.pre_call_ticks.saturating_sub(sample.target_ticks),

@@ -10,6 +10,7 @@ param(
     [switch]$TimingObserverForQualification,
     [switch]$CpuContention,
     [switch]$HistoricalSourceAllowed,
+    [switch]$QpcReadCountingEvidenceOnly,
     [string]$HarnessPath,
     [string]$HarnessManifestPath,
     [string]$OutputRoot,
@@ -139,6 +140,9 @@ try {
     if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle')) {
         throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, and long-idle'
     }
+    if ($QpcReadCountingEvidenceOnly -and (-not $HarnessManifestPath -or $Scenario -ne 'canonical-single' -or $SampleSeconds -or -not $TimingObserverForQualification)) {
+        throw 'QPC counting evidence requires an immutable counted harness, one canonical-single ReceiveOnly case, no timed sample, and the qualification observer'
+    }
     if ($HarnessPath) {
         Assert-PathOutsideRepository $harness 'immutable harness binary'
         Assert-PathOutsideRepository $HarnessManifestPath 'immutable harness manifest'
@@ -159,6 +163,7 @@ try {
         $harnessManifest = (Get-Content -LiteralPath $HarnessManifestPath -Raw) | ConvertFrom-Json
         $harnessManifestHash = Get-Sha256 $HarnessManifestPath
         $manifestFeatures = @($harnessManifest.cargo_features)
+        $expectedManifestFeatures = if ($QpcReadCountingEvidenceOnly) { @('real-input-acceptance', 'qpc-read-counting') } else { @('real-input-acceptance') }
         $manifestBinaryPath = [System.IO.Path]::GetFullPath([string]$harnessManifest.binary_path)
         $expectedObserverMode = if ($TimingObserverForQualification) { 'qualification-on' } else { 'off' }
         $rustcVersion = (& rustc -Vv) -join [Environment]::NewLine
@@ -172,9 +177,8 @@ try {
             -not [bool]$harnessManifest.source_tree_clean -or
             -not [bool]$harnessManifest.clean_build -or
             $harnessManifest.cargo_profile -ne 'dist' -or
-            $manifestFeatures.Count -ne 1 -or
-            $manifestFeatures[0] -ne 'real-input-acceptance' -or
-            [bool]$harnessManifest.qpc_read_counting -or
+            (($manifestFeatures -join ',') -ne ($expectedManifestFeatures -join ',')) -or
+            ([bool]$harnessManifest.qpc_read_counting -ne [bool]$QpcReadCountingEvidenceOnly) -or
             $harnessManifest.observer_mode -ne $expectedObserverMode -or
             $harnessManifest.guard_mode -ne 'frozen' -or
             $harnessManifest.workload_version -ne 'dispatch-core-646-a1' -or
@@ -243,9 +247,9 @@ try {
         waitable_timer_enabled = $true
         event_wait_enabled = $true
         priority_mode = 'auto'
-        harness_path = $harness
+        harness_path = [System.IO.Path]::GetFileName($harness)
         harness_sha256 = $harnessHash
-        harness_manifest_path = if ($HarnessManifestPath) { [System.IO.Path]::GetFullPath($HarnessManifestPath) } else { $null }
+        harness_manifest_path = if ($HarnessManifestPath) { '<immutable-manifest>' } else { $null }
         harness_manifest_sha256 = $harnessManifestHash
         runner_sha256 = $runnerHash
         rust_version = $rustVersion
@@ -256,8 +260,8 @@ try {
         processor_cores = $processor.NumberOfCores
         processor_logical_processors = $processor.NumberOfLogicalProcessors
         power_scheme = (& powercfg /getactivescheme | Out-String).Trim()
-        sink_ready_path = $readyPath
-        sink_event_path = $eventsPath
+        sink_ready_path = 'sink-ready.json'
+        sink_event_path = 'sink-events.jsonl'
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
         sink_event_log_id = $sink.event_log_id
@@ -362,7 +366,7 @@ try {
         expected_event_count = [long]$details.expected_sink_event_count
         observed_event_count = $observedWindow.Count
         report_window_match = $windowIntegrity
-        report_path = $reportPath
+        report_path = 'rt-native-acceptance.jsonl'
     }
     $invocation | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $invocationPath -Encoding UTF8
     if ($nativeExit -ne 0 -or $report.status -ne 'PASS' -or -not $windowIntegrity) {

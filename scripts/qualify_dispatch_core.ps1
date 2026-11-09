@@ -62,6 +62,10 @@ function Assert-AbsolutePath {
 function Get-OptionalProperty {
     param($Object, [string]$Name)
     if ($null -eq $Object) { return $null }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $null
+    }
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     $property.Value
@@ -144,54 +148,259 @@ function Get-TimingMetrics {
     if ($null -eq $telemetry) { return $null }
     $frequency = [double]$telemetry.qpc_frequency_hz
     if ($frequency -le 0) { return $null }
-    $authored = [System.Collections.Generic.List[double]]::new()
-    $downAuthored = [System.Collections.Generic.List[double]]::new()
-    $upAuthored = [System.Collections.Generic.List[double]]::new()
-    $downChordEnvelope = [System.Collections.Generic.List[double]]::new()
-    $allDownEnvelope = [System.Collections.Generic.List[double]]::new()
-    $allUpEnvelope = [System.Collections.Generic.List[double]]::new()
-    $timerArmToReturn = [System.Collections.Generic.List[double]]::new()
-    $eligibilityToWaiterReturn = [System.Collections.Generic.List[double]]::new()
-    foreach ($record in @($telemetry.records)) {
-        if ([bool]$record.authored_lateness_available) {
-            $value = ([double]$record.authored_lateness_ticks * 1000000.0) / $frequency
-            $authored.Add($value)
-            if ([int]$record.kind -eq 0) { $downAuthored.Add($value) }
-            if ([int]$record.kind -eq 1) { $upAuthored.Add($value) }
-        }
-        if ([bool]$record.sendinput_envelope_available) {
-            $envelope = ([double]$record.sendinput_envelope_ticks * 1000000.0) / $frequency
-            if ([int]$record.kind -eq 0) {
-                $allDownEnvelope.Add($envelope)
-                $mask = [int]$record.down_mask
-                if ($mask -ne 0 -and (($mask -band ($mask - 1)) -ne 0)) { $downChordEnvelope.Add($envelope) }
-            }
-            if ([int]$record.kind -eq 1) { $allUpEnvelope.Add($envelope) }
-        }
-        if ([bool]$record.timer_arm_target_qpc_available -and [bool]$record.timer_return_qpc_available) {
-            $delta = [double]$record.timer_return_qpc_ticks - [double]$record.timer_arm_target_qpc_ticks
-            if ($delta -ge 0) { $timerArmToReturn.Add(($delta * 1000000.0) / $frequency) }
-        }
-        if ([bool]$record.physical_eligibility_qpc_available -and [bool]$record.waiter_return_qpc_available) {
-            $delta = [double]$record.waiter_return_qpc_ticks - [double]$record.physical_eligibility_qpc_ticks
-            if ($delta -ge 0) { $eligibilityToWaiterReturn.Add(($delta * 1000000.0) / $frequency) }
+    $metricNames = @(
+        'authored_lateness_per_chord_us', 'floor_displacement_us', 'residual_lateness_us',
+        'waiter_to_pre_call_us', 'sender_envelope_per_syscall_us', 'timer_requested_delay_us',
+        'timer_arm_to_return_us', 'timer_wake_residual_us', 'eligibility_minus_timer_arm_target_us',
+        'realized_hold_H_us', 'realized_gap_G_us'
+    )
+    $values = [ordered]@{}
+    foreach ($name in $metricNames) { $values[$name] = [System.Collections.Generic.List[double]]::new() }
+    $kindValues = [ordered]@{}
+    foreach ($kind in @('down_only', 'up_only', 'mixed')) {
+        $kindValues[$kind] = [ordered]@{
+            authored_lateness_us = [System.Collections.Generic.List[double]]::new()
+            floor_displacement_us = [System.Collections.Generic.List[double]]::new()
+            residual_lateness_us = [System.Collections.Generic.List[double]]::new()
+            sender_envelope_per_syscall_us = [System.Collections.Generic.List[double]]::new()
         }
     }
+    $widthValues = @{}
+    $gapValues = [ordered]@{
+        hot = [System.Collections.Generic.List[double]]::new()
+        cold = [System.Collections.Generic.List[double]]::new()
+    }
+    $lastDownCompletion = [System.Collections.Generic.Dictionary[int, double]]::new()
+    $lastUpCompletion = [System.Collections.Generic.Dictionary[int, double]]::new()
+    $identityRecords = [System.Collections.Generic.List[object]]::new()
+    $counts = [ordered]@{
+        trace_records = @($telemetry.records).Count
+        down_only_chords = 0
+        up_only_events = 0
+        mixed_events = 0
+        down_chord_syscalls = 0
+        attempted_down_send_calls = 0
+        completed_down_chords = 0
+        failed_down_chords = 0
+        sendinput_calls = 0
+        timer_arm_samples = 0
+        timer_return_samples = 0
+        timer_generation_matched = 0
+        timer_generation_mismatch = 0
+        timer_pair_unavailable = 0
+        timer_target_provenance_invalid = 0
+        negative_order = 0
+        missing_authored = 0
+        missing_floor_displacement = 0
+        missing_residual = 0
+        missing_waiter_to_pre_call = 0
+        missing_sender_envelope = 0
+        missing_timer_arm = 0
+        missing_timer_return = 0
+        missing_H_pair = 0
+        missing_G_pair = 0
+        duplicate_event_identity = 0
+    }
+    $seenDownChords = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $lastDownAuthored = $null
+    $lastDownIdentity = $null
+
+    foreach ($record in @($telemetry.records)) {
+        $kindCode = [int]$record.kind
+        $kindName = switch ($kindCode) { 0 { 'down_only' } 1 { 'up_only' } 2 { 'mixed' } default { $null } }
+        $downMask = [int]$record.down_mask
+        $upMask = [int]$record.up_mask
+        $downWidth = 0
+        for ($bit = 0; $bit -lt 15; $bit++) { if (($downMask -band (1 -shl $bit)) -ne 0) { $downWidth++ } }
+        if ($kindCode -eq 0) { $counts.down_only_chords++ }
+        if ($kindCode -eq 1) { $counts.up_only_events++ }
+        if ($kindCode -eq 2) { $counts.mixed_events++ }
+        $counts.sendinput_calls += [long]$record.send_attempts
+        if ($kindCode -eq 0 -or $kindCode -eq 2) {
+            $counts.down_chord_syscalls++
+            if ([int]$record.send_attempts -gt 0) { $counts.attempted_down_send_calls += [int]$record.send_attempts }
+            if ([int]$record.send_status -eq 0 -and ([int]$record.flags -band 1) -ne 0 -and [int]$record.sent_count -eq [int]$record.requested_count) {
+                $counts.completed_down_chords++
+            } elseif ([int]$record.send_attempts -gt 0) { $counts.failed_down_chords++ }
+            if ($downWidth -gt 0) {
+                $widthKey = 'width_' + $downWidth
+                if (-not $widthValues.ContainsKey($widthKey)) {
+                    $widthValues[$widthKey] = [ordered]@{
+                        authored_lateness_per_chord_us = [System.Collections.Generic.List[double]]::new()
+                        sender_envelope_per_syscall_us = [System.Collections.Generic.List[double]]::new()
+                    }
+                }
+            }
+            $packetIndex = if ([bool]$record.compiled_packet_index_available) { [string]$record.compiled_packet_index } else { 'none' }
+            $identity = [string]$packetIndex + '/' + [string]$record.event_index
+            if ($seenDownChords.Add($identity)) {
+                $identityRecords.Add([ordered]@{
+                    compiled_packet_index = if ([bool]$record.compiled_packet_index_available) { $record.compiled_packet_index } else { $null }
+                    event_index = $record.event_index
+                    source_action_index = $record.source_action_index
+                    kind = $kindName
+                    up_mask = $upMask
+                    down_mask = $downMask
+                    down_chord_width = $downWidth
+                    send_attempts = $record.send_attempts
+                })
+                if ($null -ne $lastDownAuthored -and $identity -ne $lastDownIdentity) {
+                    $gapTicks = [double]$record.authored_offset_ticks - [double]$lastDownAuthored
+                    if ($gapTicks -lt 0) { $counts.negative_order++ }
+                    else {
+                        $gapUs = ($gapTicks * 1000000.0) / $frequency
+                        if ($gapUs -lt 20000.0) { $gapValues.hot.Add($gapUs) } else { $gapValues.cold.Add($gapUs) }
+                    }
+                }
+                $lastDownAuthored = [double]$record.authored_offset_ticks
+                $lastDownIdentity = $identity
+            } else { $counts.duplicate_event_identity++ }
+        }
+
+        if ([bool]$record.authored_lateness_available) {
+            $value = ([double]$record.authored_lateness_ticks * 1000000.0) / $frequency
+            $values.authored_lateness_per_chord_us.Add($value)
+            if ($null -ne $kindName) { $kindValues[$kindName].authored_lateness_us.Add($value) }
+            if (($kindCode -eq 0 -or $kindCode -eq 2) -and $downWidth -gt 0) {
+                $valuesForWidth = $widthValues['width_' + $downWidth]
+                if ($null -ne $valuesForWidth) { $valuesForWidth.authored_lateness_per_chord_us.Add($value) }
+            }
+        } else { $counts.missing_authored++ }
+
+        if ([bool]$record.floor_displacement_available) {
+            $value = ([double]$record.physical_floor_displacement_ticks * 1000000.0) / $frequency
+            $values.floor_displacement_us.Add($value)
+            if ($null -ne $kindName) { $kindValues[$kindName].floor_displacement_us.Add($value) }
+        } else { $counts.missing_floor_displacement++ }
+
+        if ([bool]$record.residual_lateness_available) {
+            $value = ([double]$record.residual_lateness_ticks * 1000000.0) / $frequency
+            $values.residual_lateness_us.Add($value)
+            if ($null -ne $kindName) { $kindValues[$kindName].residual_lateness_us.Add($value) }
+            if ($value -lt 0) { $counts.negative_order++ }
+        } else { $counts.missing_residual++ }
+
+        if ([bool]$record.waiter_return_qpc_available -and [bool]$record.pre_call_qpc_available) {
+            $delta = [double]$record.pre_call_qpc_ticks - [double]$record.waiter_return_qpc_ticks
+            if ($delta -lt 0) { $counts.negative_order++ }
+            else { $values.waiter_to_pre_call_us.Add(($delta * 1000000.0) / $frequency) }
+        } else { $counts.missing_waiter_to_pre_call++ }
+
+        if ([bool]$record.sendinput_envelope_available) {
+            $value = ([double]$record.sendinput_envelope_ticks * 1000000.0) / $frequency
+            $values.sender_envelope_per_syscall_us.Add($value)
+            if ($null -ne $kindName) { $kindValues[$kindName].sender_envelope_per_syscall_us.Add($value) }
+            if (($kindCode -eq 0 -or $kindCode -eq 2) -and $downWidth -gt 0) {
+                $valuesForWidth = $widthValues['width_' + $downWidth]
+                if ($null -ne $valuesForWidth) { $valuesForWidth.sender_envelope_per_syscall_us.Add($value) }
+            }
+        } else { $counts.missing_sender_envelope++ }
+
+        $armQpcAvailable = [bool](Get-OptionalProperty $record 'timer_arm_qpc_available')
+        $armTargetAvailable = [bool](Get-OptionalProperty $record 'timer_arm_target_qpc_available')
+        $armGenerationAvailable = [bool](Get-OptionalProperty $record 'timer_arm_generation_available')
+        $armQpcProvenance = Get-OptionalProperty $record 'timer_arm_qpc_provenance'
+        $armTargetProvenance = Get-OptionalProperty $record 'timer_arm_target_qpc_provenance'
+        $validArmTarget = $armTargetProvenance -eq 'derived_from_timer_arm'
+        if ($armTargetAvailable -and -not $validArmTarget) { $counts.timer_target_provenance_invalid++ }
+        $returnAvailable = [bool](Get-OptionalProperty $record 'timer_return_qpc_available')
+        $returnGenerationAvailable = [bool](Get-OptionalProperty $record 'timer_return_generation_available')
+        if ($armQpcAvailable -and $armTargetAvailable -and $armGenerationAvailable) {
+            $counts.timer_arm_samples++
+            $armDelay = [double]$record.timer_arm_target_qpc_ticks - [double]$record.timer_arm_qpc_ticks
+            if ($armDelay -lt 0) { $counts.negative_order++ }
+            elseif ($validArmTarget) { $values.timer_requested_delay_us.Add(($armDelay * 1000000.0) / $frequency) }
+            if ($validArmTarget -and [bool]$record.physical_eligibility_qpc_available) {
+                $values.eligibility_minus_timer_arm_target_us.Add((( [double]$record.physical_eligibility_qpc_ticks - [double]$record.timer_arm_target_qpc_ticks) * 1000000.0) / $frequency)
+            }
+        } else { $counts.missing_timer_arm++ }
+        if ($returnAvailable -and $returnGenerationAvailable) { $counts.timer_return_samples++ } else { $counts.missing_timer_return++ }
+        if ($armTargetAvailable -and $returnAvailable -and $armGenerationAvailable -and $returnGenerationAvailable) {
+            if ([long]$record.timer_arm_generation -eq [long]$record.timer_return_generation) {
+                $counts.timer_generation_matched++
+                $wakeResidual = [double]$record.timer_return_qpc_ticks - [double]$record.timer_arm_target_qpc_ticks
+                if ($validArmTarget) { $values.timer_wake_residual_us.Add(($wakeResidual * 1000000.0) / $frequency) }
+                if ($armQpcAvailable -and $armQpcProvenance -eq 'measured') {
+                    $armToReturn = [double]$record.timer_return_qpc_ticks - [double]$record.timer_arm_qpc_ticks
+                    if ($armToReturn -lt 0) { $counts.negative_order++ }
+                    else { $values.timer_arm_to_return_us.Add(($armToReturn * 1000000.0) / $frequency) }
+                }
+            } else { $counts.timer_generation_mismatch++ }
+        } else { $counts.timer_pair_unavailable++ }
+
+        $preAvailable = [bool]$record.pre_call_qpc_available
+        $completionAvailable = [bool]$record.sendinput_completion_qpc_available
+        $preQpc = if ($preAvailable) { [double]$record.pre_call_qpc_ticks } else { $null }
+        $completionQpc = if ($completionAvailable) { [double]$record.sendinput_completion_qpc_ticks } else { $null }
+        if ($null -ne $preQpc -and $null -ne $completionQpc) {
+            for ($slot = 0; $slot -lt 15; $slot++) {
+                $slotMask = 1 -shl $slot
+                if (($upMask -band $slotMask) -ne 0) {
+                    if ($lastDownCompletion.ContainsKey($slot)) {
+                        $hold = $preQpc - $lastDownCompletion[$slot]
+                        if ($hold -lt 0) { $counts.negative_order++ }
+                        else { $values.realized_hold_H_us.Add(($hold * 1000000.0) / $frequency) }
+                        $lastDownCompletion.Remove($slot)
+                    } else { $counts.missing_H_pair++ }
+                    $lastUpCompletion[$slot] = $completionQpc
+                }
+                if (($downMask -band $slotMask) -ne 0) {
+                    if ($lastUpCompletion.ContainsKey($slot)) {
+                        $gap = $preQpc - $lastUpCompletion[$slot]
+                        if ($gap -lt 0) { $counts.negative_order++ }
+                        else { $values.realized_gap_G_us.Add(($gap * 1000000.0) / $frequency) }
+                    } else { $counts.missing_G_pair++ }
+                    $lastDownCompletion[$slot] = $completionQpc
+                }
+            }
+        }
+    }
+
+    $perKind = [ordered]@{}
+    foreach ($kind in $kindValues.Keys) {
+        $perKind[$kind] = [ordered]@{
+            authored_lateness_per_chord_us = Get-Percentiles $kindValues[$kind].authored_lateness_us.ToArray()
+            floor_displacement_us = Get-Percentiles $kindValues[$kind].floor_displacement_us.ToArray()
+            residual_lateness_us = Get-Percentiles $kindValues[$kind].residual_lateness_us.ToArray()
+            sender_envelope_per_syscall_us = Get-Percentiles $kindValues[$kind].sender_envelope_per_syscall_us.ToArray()
+        }
+    }
+    $widthMetrics = [ordered]@{}
+    foreach ($key in ($widthValues.Keys | Sort-Object)) {
+        $widthMetrics[$key] = [ordered]@{
+            authored_lateness_per_chord_us = Get-Percentiles $widthValues[$key].authored_lateness_per_chord_us.ToArray()
+            sender_envelope_per_syscall_us = Get-Percentiles $widthValues[$key].sender_envelope_per_syscall_us.ToArray()
+        }
+    }
+    $allMetrics = [ordered]@{}
+    foreach ($name in $metricNames) { $allMetrics[$name] = Get-Percentiles $values[$name].ToArray() }
     [ordered]@{
-        authored_lateness_us = Get-Percentiles $authored.ToArray()
-        down_authored_lateness_us = Get-Percentiles $downAuthored.ToArray()
-        up_authored_lateness_us = Get-Percentiles $upAuthored.ToArray()
-        down_chord_send_envelope_us = Get-Percentiles $downChordEnvelope.ToArray()
-        down_send_envelope_us = Get-Percentiles $allDownEnvelope.ToArray()
-        up_send_envelope_us = Get-Percentiles $allUpEnvelope.ToArray()
-        timer_arm_to_return_us = Get-Percentiles $timerArmToReturn.ToArray()
-        physical_eligibility_to_waiter_return_us = Get-Percentiles $eligibilityToWaiterReturn.ToArray()
-        telemetry_records = @($telemetry.records).Count
+        metrics = $allMetrics
+        per_kind = $perKind
+        down_chord_widths = $widthMetrics
+        authored_gap_hot_cold_us = [ordered]@{
+            hot_threshold_us = 20000
+            hot = Get-Percentiles $gapValues.hot.ToArray()
+            cold = Get-Percentiles $gapValues.cold.ToArray()
+        }
+        counts = $counts
+        event_chord_identities = $identityRecords.ToArray()
         telemetry_accepted = [long]$telemetry.accepted
         telemetry_dropped = [long]$telemetry.dropped
         observer_queue_dropped = [long]$telemetry.observer_queue_dropped
         telemetry_truncated = [bool]$telemetry.truncated
         qpc_frequency_hz = [long]$frequency
+        cpu = [ordered]@{
+            worker_cpu_time_us = Get-OptionalProperty $details 'worker_cpu_time_us'
+            process_cpu_time_us = Get-OptionalProperty $details 'process_cpu_time_us'
+            spin_time_us = Get-OptionalProperty $details 'spin_time_us'
+            spin_time_available = Get-OptionalProperty $details 'spin_time_available'
+            spin_time_complete = Get-OptionalProperty $details 'spin_time_complete'
+            spin_duty_cycle_ppm = Get-OptionalProperty $details 'spin_duty_cycle_ppm'
+            spin_expected_samples = Get-OptionalProperty $details 'spin_observation_expected_samples'
+            spin_dropped_samples = Get-OptionalProperty $details 'spin_observation_dropped_samples'
+            spin_missing_samples = Get-OptionalProperty $details 'spin_observation_missing_samples'
+        }
     }
 }
 
@@ -229,6 +438,10 @@ function Invoke-NativeCase {
     if ($Load -eq 'Contention') { $args += '-CpuContention' }
     if ($Historical) { $args += '-HistoricalSourceAllowed' }
     $commandText = 'pwsh -NoProfile -File scripts/run_native_acceptance_case.ps1 ' + (($args | ForEach-Object { '"' + ([string]$_).Replace('"', '\"') + '"' }) -join ' ')
+    $commandText = $commandText.Replace($caseRunner, 'scripts/run_native_acceptance_case.ps1')
+    $commandText = $commandText.Replace($HarnessManifest.resolved_binary_path, '<immutable-binary>')
+    $commandText = $commandText.Replace($HarnessManifest.manifest_path, '<immutable-manifest>')
+    $commandText = $commandText.Replace($sessionRoot, '<sessions-root>')
     $script:commandRows.Add($commandText)
     $started = [DateTimeOffset]::UtcNow.ToString('O')
     $output = @(& (Get-Command pwsh.exe).Source @args 2>&1)
@@ -273,8 +486,8 @@ function Invoke-NativeCase {
         case_exit_code = $caseExit
         status = $status
         reason = $reason
-        evidence_directory = $caseDirectory
-        report_path = $reportPath
+        evidence_directory = if ($caseDirectory) { [System.IO.Path]::GetRelativePath($evidenceRoot, $caseDirectory) } else { $null }
+        report_path = if ($reportPath) { [System.IO.Path]::GetRelativePath($evidenceRoot, $reportPath) } else { $null }
         expected_sink_event_count = Get-OptionalProperty $details 'expected_sink_event_count'
         observed_sink_event_count = Get-OptionalProperty $details 'observed_sink_event_count'
         sink_window_match = Get-OptionalProperty $invocation 'report_window_match'
@@ -292,9 +505,24 @@ function Invoke-NativeCase {
         missed_down_keys = Get-OptionalProperty $details 'missed_down_keys'
         missed_physical_window_boundaries = Get-OptionalProperty $details 'missed_physical_window_boundaries'
         keys_dropped = Get-OptionalProperty $details 'keys_dropped'
+        generation_total = Get-OptionalProperty $details 'generation_total'
+        generation_activated = Get-OptionalProperty $details 'generation_activated'
+        generation_released = Get-OptionalProperty $details 'generation_released'
+        generation_cancelled = Get-OptionalProperty $details 'generation_cancelled'
+        generation_scheduled = Get-OptionalProperty $details 'generation_scheduled'
         chord_split_events = Get-OptionalProperty $details 'chord_split_events'
         sendinput_partial_events = Get-OptionalProperty $details 'sendinput_partial_events'
         sendinput_zero_progress_failures = Get-OptionalProperty $details 'sendinput_zero_progress_failures'
+        expected_down_key_count = Get-OptionalProperty $details 'expected_down_key_count'
+        expected_up_key_count = Get-OptionalProperty $details 'expected_up_key_count'
+        precision_packet_attempts = Get-OptionalProperty $details 'precision_packet_attempts'
+        authored_lateness_samples = Get-OptionalProperty $details 'authored_lateness_samples'
+        residual_lateness_samples = Get-OptionalProperty $details 'residual_lateness_samples'
+        sendinput_envelope_samples = Get-OptionalProperty $details 'sendinput_envelope_samples'
+        qpc_read_count_available = Get-OptionalProperty $details 'qpc_read_count_available'
+        qpc_read_count = Get-OptionalProperty $details 'qpc_read_count'
+        native_timing_telemetry_available = Get-OptionalProperty $details 'native_timing_telemetry_available'
+        native_timing_telemetry_unavailable_reason = Get-OptionalProperty $details 'native_timing_telemetry_unavailable_reason'
         worker_cpu_time_us = Get-OptionalProperty $details 'worker_cpu_time_us'
         process_cpu_time_us = Get-OptionalProperty $details 'process_cpu_time_us'
         spin_time_us = Get-OptionalProperty $details 'spin_time_us'
@@ -304,9 +532,20 @@ function Invoke-NativeCase {
         spin_expected_samples = Get-OptionalProperty $details 'spin_observation_expected_samples'
         spin_dropped_samples = Get-OptionalProperty $details 'spin_observation_dropped_samples'
         spin_missing_samples = Get-OptionalProperty $details 'spin_observation_missing_samples'
+        telemetry_trace_records = if ($null -ne $metrics) { $metrics.counts.trace_records } else { $null }
+        observed_down_chords = if ($null -ne $metrics) { $metrics.counts.down_chord_syscalls } else { $null }
+        attempted_down_send_calls = if ($null -ne $metrics) { $metrics.counts.attempted_down_send_calls } else { $null }
+        completed_down_chords = if ($null -ne $metrics) { $metrics.counts.completed_down_chords } else { $null }
+        failed_down_chords = if ($null -ne $metrics) { $metrics.counts.failed_down_chords } else { $null }
+        actual_sendinput_calls = if ($null -ne $metrics) { $metrics.counts.sendinput_calls } else { $null }
+        telemetry_generation_mismatch = if ($null -ne $metrics) { $metrics.counts.timer_generation_mismatch } else { $null }
+        telemetry_negative_order = if ($null -ne $metrics) { $metrics.counts.negative_order } else { $null }
+        telemetry_dropped = if ($null -ne $metrics) { $metrics.telemetry_dropped } else { $null }
+        observer_queue_dropped = if ($null -ne $metrics) { $metrics.observer_queue_dropped } else { $null }
+        timing_metrics_json = if ($null -ne $metrics) { ConvertTo-Json -InputObject $metrics -Depth 12 -Compress } else { $null }
         timing_metrics = $metrics
         report = $report
-        runner_output = $text
+        runner_output = if ($caseDirectory) { $text.Replace($caseDirectory, '<evidence-directory>').Replace($evidenceRoot, '<evidence-root>') } else { $text }
     }
     $script:runRows.Add($row)
     if ($caseExit -ne 0 -or $status -ne 'PASS') {
@@ -339,37 +578,116 @@ function Invoke-PairedWorkloads {
     }
 }
 
+function Get-MetricPath {
+    param($Metrics, [string]$Path)
+    $current = $Metrics
+    foreach ($part in $Path.Split('.')) {
+        $current = Get-OptionalProperty $current $part
+        if ($null -eq $current) { return $null }
+    }
+    $current
+}
+
 function Get-PairedMetrics {
-    $pairsOut = [System.Collections.Generic.List[object]]::new()
-    foreach ($group in ($runRows | Where-Object { $_.pair_id -and $_.status -eq 'PASS' } | Group-Object pair_id)) {
+    $pairRows = [System.Collections.Generic.List[object]]::new()
+    $metricPaths = @(
+        'metrics.authored_lateness_per_chord_us', 'metrics.floor_displacement_us',
+        'metrics.residual_lateness_us', 'metrics.waiter_to_pre_call_us',
+        'metrics.sender_envelope_per_syscall_us', 'metrics.timer_arm_to_return_us',
+        'metrics.timer_wake_residual_us',
+        'metrics.realized_hold_H_us', 'metrics.realized_gap_G_us',
+        'per_kind.down_only.authored_lateness_per_chord_us', 'per_kind.up_only.authored_lateness_per_chord_us',
+        'per_kind.mixed.authored_lateness_per_chord_us', 'per_kind.down_only.residual_lateness_us',
+        'per_kind.up_only.residual_lateness_us', 'per_kind.mixed.residual_lateness_us',
+        'per_kind.down_only.sender_envelope_per_syscall_us',
+        'per_kind.up_only.sender_envelope_per_syscall_us',
+        'per_kind.mixed.sender_envelope_per_syscall_us'
+    )
+    foreach ($group in ($runRows | Where-Object { $_.pair_id } | Group-Object pair_id)) {
         $baseline = @($group.Group | Where-Object role -eq 'control') | Select-Object -First 1
         $next = @($group.Group | Where-Object role -eq 'candidate') | Select-Object -First 1
-        if ($null -eq $baseline -or $null -eq $next -or $null -eq $baseline.timing_metrics -or $null -eq $next.timing_metrics) { continue }
-        $controlMetric = $baseline.timing_metrics.authored_lateness_us
-        $candidateMetric = $next.timing_metrics.authored_lateness_us
-        if ($null -eq $controlMetric.p99 -or $null -eq $candidateMetric.p99) { continue }
-        $pairsOut.Add([pscustomobject]@{
-            cell_id = $baseline.cell_id
-            pair_id = $group.Name
-            order = $baseline.pair_order
-            control_p50_us = $controlMetric.p50
-            candidate_p50_us = $candidateMetric.p50
-            delta_p50_us = [double]$candidateMetric.p50 - [double]$controlMetric.p50
-            control_p95_us = $controlMetric.p95
-            candidate_p95_us = $candidateMetric.p95
-            delta_p95_us = [double]$candidateMetric.p95 - [double]$controlMetric.p95
-            control_p99_us = $controlMetric.p99
-            candidate_p99_us = $candidateMetric.p99
-            delta_p99_us = [double]$candidateMetric.p99 - [double]$controlMetric.p99
-            control_max_us = $controlMetric.max
-            candidate_max_us = $candidateMetric.max
-            delta_max_us = [double]$candidateMetric.max - [double]$controlMetric.max
-            control_samples = $controlMetric.sample_count
-            candidate_samples = $candidateMetric.sample_count
-            favorable_p99 = [double]$candidateMetric.p99 - [double]$controlMetric.p99 -lt 0
+        if ($null -eq $baseline -or $null -eq $next) { continue }
+        foreach ($metricPath in $metricPaths) {
+            $controlMetric = if ($baseline.status -eq 'PASS') { Get-MetricPath $baseline.timing_metrics $metricPath } else { $null }
+            $candidateMetric = if ($next.status -eq 'PASS') { Get-MetricPath $next.timing_metrics $metricPath } else { $null }
+            $controlP50 = Get-OptionalProperty $controlMetric 'p50'
+            $controlP95 = Get-OptionalProperty $controlMetric 'p95'
+            $controlP99 = Get-OptionalProperty $controlMetric 'p99'
+            $controlMax = Get-OptionalProperty $controlMetric 'max'
+            $candidateP50 = Get-OptionalProperty $candidateMetric 'p50'
+            $candidateP95 = Get-OptionalProperty $candidateMetric 'p95'
+            $candidateP99 = Get-OptionalProperty $candidateMetric 'p99'
+            $candidateMax = Get-OptionalProperty $candidateMetric 'max'
+            $available = $null -ne $controlP95 -and $null -ne $controlP99 -and $null -ne $candidateP95 -and $null -ne $candidateP99
+            $deltaP95 = if ($available) { [double]$candidateP95 - [double]$controlP95 } else { $null }
+            $deltaP99 = if ($available) { [double]$candidateP99 - [double]$controlP99 } else { $null }
+            $p95Limit = if ($available) { [Math]::Max(5.0, [double]$controlP95 * 0.10) } else { $null }
+            $p99Limit = if ($available) { [Math]::Max(20.0, [double]$controlP99 * 0.10) } else { $null }
+            $p95Regression = $available -and $deltaP95 -gt $p95Limit
+            $p99Regression = $available -and $deltaP99 -gt $p99Limit
+            $pairRows.Add([pscustomobject]@{
+                cell_id = $baseline.cell_id
+                pair_id = $group.Name
+                order = $baseline.pair_order
+                metric = $metricPath
+                control_status = $baseline.status
+                candidate_status = $next.status
+                available = $available
+                control_p50_us = $controlP50
+                candidate_p50_us = $candidateP50
+                delta_p50_us = if ($null -ne $controlP50 -and $null -ne $candidateP50) { [double]$candidateP50 - [double]$controlP50 } else { $null }
+                control_p95_us = $controlP95
+                candidate_p95_us = $candidateP95
+                delta_p95_us = $deltaP95
+                p95_regression_limit_us = $p95Limit
+                p95_regression = $p95Regression
+                control_p99_us = $controlP99
+                candidate_p99_us = $candidateP99
+                delta_p99_us = $deltaP99
+                p99_regression_limit_us = $p99Limit
+                p99_regression = $p99Regression
+                control_max_us = $controlMax
+                candidate_max_us = $candidateMax
+                delta_max_us = if ($null -ne $controlMax -and $null -ne $candidateMax) { [double]$candidateMax - [double]$controlMax } else { $null }
+                control_samples = Get-OptionalProperty $controlMetric 'sample_count'
+                candidate_samples = Get-OptionalProperty $candidateMetric 'sample_count'
+                favorable_p95 = $available -and $deltaP95 -le 0
+                favorable_p99 = $available -and $deltaP99 -le 0
+                regression_screen_triggered = $p95Regression -or $p99Regression
+            })
+        }
+    }
+
+    $cellRows = [System.Collections.Generic.List[object]]::new()
+    foreach ($group in ($pairRows | Group-Object { $_.cell_id + '|' + $_.metric })) {
+        $rows = @($group.Group)
+        $availableRows = @($rows | Where-Object available)
+        $p95Worse = @($availableRows | Where-Object p95_regression).Count
+        $p99Worse = @($availableRows | Where-Object p99_regression).Count
+        $triggered = @($availableRows | Where-Object regression_screen_triggered).Count
+        $deltaP95 = @($availableRows | ForEach-Object { [double]$_.delta_p95_us })
+        $deltaP99 = @($availableRows | ForEach-Object { [double]$_.delta_p99_us })
+        $first = $rows | Select-Object -First 1
+        $cellRows.Add([pscustomobject]@{
+            cell_id = $first.cell_id
+            metric = $first.metric
+            attempted_pairs = $rows.Count
+            available_pairs = $availableRows.Count
+            favorable_p95_pairs = @($availableRows | Where-Object favorable_p95).Count
+            unfavorable_p95_pairs = @($availableRows | Where-Object { -not $_.favorable_p95 }).Count
+            favorable_p99_pairs = @($availableRows | Where-Object favorable_p99).Count
+            unfavorable_p99_pairs = @($availableRows | Where-Object { -not $_.favorable_p99 }).Count
+            p95_regression_pairs = $p95Worse
+            p99_regression_pairs = $p99Worse
+            paired_sessions_over_threshold = $triggered
+            screen_complete = $rows.Count -eq 6 -and $availableRows.Count -eq 6
+            leader_review_prompt = $rows.Count -eq 6 -and $availableRows.Count -eq 6 -and $triggered -ge 4
+            p95_delta_us = Get-Percentiles $deltaP95
+            p99_delta_us = Get-Percentiles $deltaP99
+            no_outlier_removed = $true
         })
     }
-    $pairsOut.ToArray()
+    [ordered]@{ paired_sessions = $pairRows.ToArray(); cell_summary = $cellRows.ToArray() }
 }
 
 try {
@@ -452,24 +770,41 @@ try {
         run_id = $runId
         stage = $Stage
         source = $source
-        candidate = [ordered]@{ manifest_path = $candidate.manifest_path; manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
-        control = if ($control) { [ordered]@{ manifest_path = $control.manifest_path; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
+        candidate = [ordered]@{ manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
+        control = if ($control) { [ordered]@{ manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
         parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { $Pairs }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID' }
         environment = [ordered]@{ rustc_version = $rustcVersion.Trim(); windows_caption = $os.Caption; windows_version = $os.Version; windows_build = $os.BuildNumber; processor_name = $cpu.Name; processor_cores = $cpu.NumberOfCores; processor_logical_processors = $cpu.NumberOfLogicalProcessors; power_scheme = (& powercfg /getactivescheme | Out-String).Trim() }
         run_count = $runRows.Count
         passed_count = $passed
         failed_count = $failureRows.Count
         hard_safety_review = $hardSafety
-        performance_pairs = $pairedMetrics
+        performance_pairs = $pairedMetrics.paired_sessions
+        performance_cells = $pairedMetrics.cell_summary
+        measurement_definitions = [ordered]@{
+            floor_displacement = 'physical eligibility/floor QPC minus authored target'
+            residual_lateness = 'sender pre-call QPC minus physical eligibility/floor QPC'
+            waiter_to_pre_call = 'sender pre-call QPC minus waiter-return QPC'
+            sender_envelope = 'SendInput completion QPC minus sender pre-call QPC, per syscall'
+            timer_arm_target = 'only records with derived_from_timer_arm provenance are compared; target is QPC arm sample plus the relative microsecond timeout passed to SetWaitableTimer'
+            timer_arm_to_return = 'timer return QPC minus matching arm QPC; timer wake residual is return QPC minus requested timer target QPC'
+            realized_H_G = 'per-key successful Down completion to authored Up pre-call (H), and successful Up completion to next Down pre-call (G)'
+            hot_cold = 'authored Down-chord schedule gap; hot < 20000 us, cold >= 20000 us'
+            paired_screen = 'candidate worse than max(5 us, 10% control) at p95 or max(20 us, 10% control) at p99 in at least 4 of 6 pairs prompts leader review'
+        }
+        remote_evidence = [ordered]@{ summary_and_manifest = 'PR report'; raw_bundle = 'PENDING user attachment; no existing workflow uploader used' }
         failures = $failureRows.ToArray()
         sessions = $runRows.ToArray()
         disposition = if ($exitCode -eq 0) { 'collected; leader review required for performance gates' } else { 'one or more cases failed; leader review required' }
     }
     $summary | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
-    $runRows | Select-Object run_id,stage,cell_id,pair_id,pair_order,role,source_revision,source_tree_sha,harness_sha256,profile,features,observer_mode,guard_mode,workload,scenario,load,game_fps,timing_margin_us,sample_seconds,started_utc,ended_utc,case_exit_code,status,reason,evidence_directory,expected_sink_event_count,observed_sink_event_count,sink_window_match,active_count,possibly_active_count,final_release_obligation_mask,production_hold_floor_violation_count,production_release_floor_violation_count,production_forensics_anomaly_count,production_structural_anomaly_count,production_same_key_overlap_forensics_count,production_anchor_overwrite_count,production_unmatched_up_count,missed_down_boundaries,missed_down_keys,missed_physical_window_boundaries,keys_dropped,chord_split_events,sendinput_partial_events,sendinput_zero_progress_failures,worker_cpu_time_us,process_cpu_time_us,spin_time_us,spin_time_available,spin_time_complete,spin_duty_cycle_ppm,spin_expected_samples,spin_dropped_samples,spin_missing_samples | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    $runRows | Select-Object run_id,stage,cell_id,pair_id,pair_order,role,source_revision,source_tree_sha,harness_sha256,profile,features,observer_mode,guard_mode,workload,scenario,load,game_fps,timing_margin_us,sample_seconds,started_utc,ended_utc,case_exit_code,status,reason,evidence_directory,expected_sink_event_count,observed_sink_event_count,sink_window_match,active_count,possibly_active_count,final_release_obligation_mask,production_hold_floor_violation_count,production_release_floor_violation_count,production_forensics_anomaly_count,production_structural_anomaly_count,production_same_key_overlap_forensics_count,production_anchor_overwrite_count,production_unmatched_up_count,missed_down_boundaries,missed_down_keys,missed_physical_window_boundaries,keys_dropped,chord_split_events,sendinput_partial_events,sendinput_zero_progress_failures,generation_total,generation_activated,generation_released,generation_cancelled,generation_scheduled,expected_down_key_count,expected_up_key_count,precision_packet_attempts,authored_lateness_samples,residual_lateness_samples,sendinput_envelope_samples,qpc_read_count_available,qpc_read_count,native_timing_telemetry_available,native_timing_telemetry_unavailable_reason,telemetry_trace_records,observed_down_chords,attempted_down_send_calls,completed_down_chords,failed_down_chords,actual_sendinput_calls,telemetry_generation_mismatch,telemetry_negative_order,telemetry_dropped,observer_queue_dropped,worker_cpu_time_us,process_cpu_time_us,spin_time_us,spin_time_available,spin_time_complete,spin_duty_cycle_ppm,spin_expected_samples,spin_dropped_samples,spin_missing_samples,timing_metrics_json | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    $pairedMetrics.paired_sessions | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'paired-sessions.csv') -NoTypeInformation -Encoding UTF8
+    $pairedMetrics.cell_summary | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'paired-cells.csv') -NoTypeInformation -Encoding UTF8
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
     $safetyMarkdown = @($safetyRows | ForEach-Object { '| ' + $_.scenario + ' | ' + $_.status + ' | ' + $_.case_exit_code + ' | ' + $_.reason.Replace('|', '\|') + ' |' })
-    $performanceMarkdown = @($pairedMetrics | ForEach-Object { '| ' + $_.cell_id + ' | ' + $_.pair_id + ' | ' + $_.control_p99_us + ' | ' + $_.candidate_p99_us + ' | ' + $_.delta_p99_us + ' | ' + $_.control_samples + '/' + $_.candidate_samples + ' |' })
+    $performanceMarkdown = @($pairedMetrics.cell_summary | ForEach-Object {
+        '| ' + $_.cell_id + ' | ' + $_.metric + ' | ' + $_.available_pairs + '/' + $_.attempted_pairs + ' | ' + $_.favorable_p95_pairs + '/' + $_.unfavorable_p95_pairs + ' | ' + $_.favorable_p99_pairs + '/' + $_.unfavorable_p99_pairs + ' | ' + $_.p95_regression_pairs + '/' + $_.p99_regression_pairs + ' | ' + $_.leader_review_prompt + ' |'
+    })
     $markdown = @(
         '# Dispatch Core qualification ' + $Stage,
         '',
@@ -480,7 +815,10 @@ try {
         '- Sessions: ' + $runRows.Count + '; PASS: ' + $passed + '; failed/inconclusive: ' + $failureRows.Count,
         '- Paired order: AB/BA alternating; six pairs per workload/load cell; 15 seconds per timed session.',
         '- Contention: two hidden PowerShell CPU workers at BelowNormal priority. Sink: identity-verified ReceiveOnly.',
-        '- Percentiles use nearest-rank ceiling; p99 is shown with sample count. No p99.9 is inferred.',
+        '- Percentiles use nearest-rank ceiling. No p99.9 is inferred.',
+        '- Reported: per-chord authored lateness, floor displacement, residual lateness, waiter-to-pre-call, per-syscall sender envelope, per-key realized H/G, Down/Up/Mixed, chord width and authored hot/cold gap groups.',
+        '- Timer target uses the arm QPC sample plus the relative timeout passed to the timer API; timer return is paired with the arm generation. Missing and negative-order samples remain counted.',
+        '- Tail screen: candidate p95 worse than max(5 us, 10% control) or p99 worse than max(20 us, 10% control) in >=4/6 pairs in a cell prompts leader review; outliers are retained.',
         '- Native RT allocation is not instrumented in the sink runner; see focused no-allocation test result in the accompanying command record.',
         '',
         '## Safety cases',
@@ -491,8 +829,8 @@ try {
         '',
         '## Paired performance observations',
         '',
-        '| Cell | Pair | Control p99 authored lateness (us) | Candidate p99 (us) | Delta (us) | Samples C0/final |',
-        '|---|---:|---:|---:|---:|---:|'
+        '| Cell | Metric | Available pairs | p95 favorable/unfavorable | p99 favorable/unfavorable | p95/p99 threshold pairs | Leader review prompt |',
+        '|---|---|---:|---:|---:|---:|---:|'
     ) + $performanceMarkdown + @(
         '',
         'These are evidence summaries, not an automatic performance-gate verdict. No design, gate, or rollout selection is made by this runner.',
@@ -505,7 +843,7 @@ try {
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $evidenceRoot 'qualify_dispatch_core.ps1')
     Copy-Item -LiteralPath $caseRunner -Destination (Join-Path $evidenceRoot 'run_native_acceptance_case.ps1')
     Copy-Item -LiteralPath $manifestBuilder -Destination (Join-Path $evidenceRoot 'build_dispatch_core_harness.ps1')
-    $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage ' + $Stage + ' -CandidateManifest "' + $candidateManifestPath + '"' + $(if ($controlManifestPath) { ' -ControlManifest "' + $controlManifestPath + '" -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot "' + $evidenceRoot + '"')
+    $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
     $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null } }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8
@@ -518,8 +856,8 @@ try {
         source_revision = $source.revision
         source_tree_sha = $source.tree
         source_tree_clean = $source.clean
-        control_manifest = if ($control) { [ordered]@{ path = $control.manifest_path; sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
-        candidate_manifest = [ordered]@{ path = $candidate.manifest_path; sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
+        control_manifest = if ($control) { [ordered]@{ sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
+        candidate_manifest = [ordered]@{ sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { 6 }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { 15 }; timing_margin_us = $TimingMarginUs; workload_version = $candidate.workload_version; observer_mode = $candidate.observer_mode; guard_mode = $candidate.guard_mode; quiet_load = 'no extra qualification workers'; contention_load = 'two BelowNormal CPU workers'; pair_order = 'alternating AB/BA' }
         rustc_version = $rustcVersion.Trim()
         windows_caption = $os.Caption

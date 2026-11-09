@@ -19,7 +19,13 @@ pub(crate) fn precision_handoff(
     #[cfg(any(test, feature = "test-support"))]
     let waiter_deadline_crossing_qpc = pending_wait.and_then(|wait| wait.deadline_crossing_qpc);
     #[cfg(any(test, feature = "test-support"))]
+    let timer_arm_qpc = pending_wait.and_then(|wait| wait.timer_arm_qpc);
+    #[cfg(any(test, feature = "test-support"))]
     let timer_arm_target_qpc = pending_wait.and_then(|wait| wait.timer_arm_target_qpc);
+    #[cfg(any(test, feature = "test-support"))]
+    let timer_arm_generation = pending_wait.and_then(|wait| wait.timer_arm_generation);
+    #[cfg(any(test, feature = "test-support"))]
+    let timer_return_generation = pending_wait.and_then(|wait| wait.timer_return_generation);
     #[cfg(any(test, feature = "test-support"))]
     let timer_return_qpc = pending_wait.and_then(|wait| wait.timer_return_qpc);
     #[cfg(any(test, feature = "test-support"))]
@@ -29,7 +35,10 @@ pub(crate) fn precision_handoff(
     #[cfg(any(test, feature = "test-support"))]
     let has_precision_handoff = base_handoff_available
         || waiter_deadline_crossing_qpc.is_some()
+        || timer_arm_qpc.is_some()
         || timer_arm_target_qpc.is_some()
+        || timer_arm_generation.is_some()
+        || timer_return_generation.is_some()
         || timer_return_qpc.is_some()
         || waiter_return_qpc.is_some();
     #[cfg(not(any(test, feature = "test-support")))]
@@ -41,7 +50,13 @@ pub(crate) fn precision_handoff(
         #[cfg(any(test, feature = "test-support"))]
         waiter_deadline_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
+        timer_arm_qpc,
+        #[cfg(any(test, feature = "test-support"))]
         timer_arm_target_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_generation,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_return_generation,
         #[cfg(any(test, feature = "test-support"))]
         timer_return_qpc,
         #[cfg(any(test, feature = "test-support"))]
@@ -94,7 +109,13 @@ pub(crate) fn record_wait_attempt(
         epoch_qpc,
         allow_pre_epoch_startup_dispatch: true,
         #[cfg(any(test, feature = "test-support"))]
-        timer_arm_target_qpc: Some(physical_target_qpc),
+        timer_arm_qpc: result.timer_arm_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_target_qpc: result.timer_arm_target_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_generation: result.timer_arm_generation,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_return_generation: result.timer_return_generation,
         #[cfg(any(test, feature = "test-support"))]
         timer_return_qpc: result.timer_return_qpc,
         #[cfg(any(test, feature = "test-support"))]
@@ -300,6 +321,46 @@ mod tests {
     }
 
     #[test]
+    fn wait_observation_preserves_relative_timer_arm_target_and_generation() {
+        let queue = PendingObservationQueue::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        let physical_target = QpcTicks::from_raw(31_000);
+        let observation = record_wait_attempt(
+            Some(&queue),
+            Some(WaitResult {
+                outcome: WaitOutcome::Deadline,
+                wake_qpc: Some(QpcTicks::from_raw(29_000)),
+                spin_ticks: DurationTicks::from_raw(0),
+                timer_arm_qpc: Some(QpcTicks::from_raw(20_000)),
+                timer_arm_target_qpc: Some(QpcTicks::from_raw(25_000)),
+                timer_arm_generation: Some(3),
+                timer_return_qpc: Some(QpcTicks::from_raw(26_000)),
+                timer_return_generation: Some(3),
+            }),
+            physical_target,
+            DurationTicks::from_raw(11_000),
+            TimelineTicks::from_raw(22_000),
+            QpcTicks::from_raw(10_000),
+            Some(QpcTicks::from_raw(29_000)),
+            &mut metrics,
+        )
+        .expect("real timer wait should be observed");
+
+        assert_eq!(observation.physical_target_qpc, physical_target);
+        assert_eq!(
+            observation.timer_arm_target_qpc,
+            Some(QpcTicks::from_raw(25_000))
+        );
+        assert_ne!(observation.timer_arm_target_qpc, Some(physical_target));
+        assert_eq!(observation.timer_arm_generation, Some(3));
+        assert_eq!(observation.timer_return_generation, Some(3));
+        assert_eq!(
+            observation.timer_return_qpc,
+            Some(QpcTicks::from_raw(26_000))
+        );
+    }
+
+    #[test]
     fn observer_disabled_marks_spin_sample_missing_instead_of_zero() {
         let mut metrics = WorkerMetricsLocal::default();
         let result = WaitResult {
@@ -308,6 +369,14 @@ mod tests {
             spin_ticks: DurationTicks::from_raw(100),
             #[cfg(feature = "test-support")]
             timer_return_qpc: Some(QpcTicks::from_raw(4_000)),
+            #[cfg(feature = "test-support")]
+            timer_arm_qpc: Some(QpcTicks::from_raw(3_890)),
+            #[cfg(feature = "test-support")]
+            timer_arm_target_qpc: Some(QpcTicks::from_raw(3_900)),
+            #[cfg(feature = "test-support")]
+            timer_arm_generation: Some(1),
+            #[cfg(feature = "test-support")]
+            timer_return_generation: Some(1),
         };
 
         assert!(
@@ -359,6 +428,14 @@ mod tests {
                 spin_ticks: DurationTicks::from_raw(8),
                 #[cfg(feature = "test-support")]
                 timer_return_qpc: Some(QpcTicks::from_raw(5_000)),
+                #[cfg(feature = "test-support")]
+                timer_arm_qpc: Some(QpcTicks::from_raw(4_980)),
+                #[cfg(feature = "test-support")]
+                timer_arm_target_qpc: Some(QpcTicks::from_raw(4_990)),
+                #[cfg(feature = "test-support")]
+                timer_arm_generation: Some(1),
+                #[cfg(feature = "test-support")]
+                timer_return_generation: Some(1),
             }),
             QpcTicks::from_raw(5_000),
             DurationTicks::from_raw(2_400),

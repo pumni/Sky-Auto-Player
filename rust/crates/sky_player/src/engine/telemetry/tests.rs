@@ -49,8 +49,11 @@ fn record_with_packet_index(
             wake_ticks: Some(TimelineTicks::ZERO),
             wake_qpc_ticks: Some(0),
             physical_eligibility_qpc_ticks: Some(1),
-            timer_arm_target_qpc_ticks: Some(1),
-            timer_return_qpc_ticks: Some(2),
+            timer_arm_qpc_ticks: Some(4),
+            timer_arm_target_qpc_ticks: Some(5),
+            timer_return_qpc_ticks: Some(6),
+            timer_arm_generation: Some(7),
+            timer_return_generation: Some(7),
             waiter_deadline_crossing_qpc_ticks: Some(3),
             waiter_return_qpc_ticks: Some(4),
             pre_call_qpc_ticks: Some(1),
@@ -109,6 +112,15 @@ fn timing_semantics_names_the_true_pre_call_boundary() {
         semantics.sender_completion_boundary,
         "sendinput_completion_qpc"
     );
+    assert_eq!(
+        semantics.timer_arm_target_boundary,
+        "qpc_sample_before_timer_arm_plus_relative_timeout_passed_to_timer_api"
+    );
+    assert!(
+        semantics
+            .timestamp_provenance
+            .contains("derived_from_timer_arm")
+    );
     assert!(!semantics.game_observed_available);
 }
 
@@ -124,11 +136,16 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
         value["physical_eligibility_qpc_provenance"],
         "configured_target"
     );
+    assert_eq!(value["timer_arm_qpc_ticks"], 4);
+    assert_eq!(value["timer_arm_qpc_provenance"], "measured");
+    assert_eq!(value["timer_arm_target_qpc_ticks"], 5);
     assert_eq!(
         value["timer_arm_target_qpc_provenance"],
-        "configured_target"
+        "derived_from_timer_arm"
     );
-    assert_eq!(value["timer_return_qpc_ticks"], 2);
+    assert_eq!(value["timer_return_qpc_ticks"], 6);
+    assert_eq!(value["timer_arm_generation"], 7);
+    assert_eq!(value["timer_return_generation"], 7);
     assert_eq!(value["timer_return_qpc_provenance"], "measured");
     assert_eq!(value["waiter_deadline_crossing_qpc_ticks"], 3);
     assert_eq!(value["waiter_deadline_crossing_qpc_provenance"], "measured");
@@ -147,7 +164,7 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
-    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 21);
+    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 22);
 }
 
 #[test]

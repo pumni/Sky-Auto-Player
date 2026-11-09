@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)]
-    [string]$OutputRoot
+    [string]$OutputRoot,
+    [switch]$QpcReadCounting
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,7 +9,10 @@ $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $rustRoot = Join-Path $root 'rust'
 $targetTriple = 'x86_64-pc-windows-msvc'
 $profile = 'dist'
-$feature = 'real-input-acceptance'
+$features = [System.Collections.Generic.List[string]]::new()
+$features.Add('real-input-acceptance')
+if ($QpcReadCounting) { $features.Add('qpc-read-counting') }
+$featureArgument = $features -join ','
 $workloadVersion = 'dispatch-core-646-a1'
 $baseRevision = '843cc0c6a1392dfff0ca4b017551bd1ffb180579'
 $expectedBranch = 'perf/dispatch-core-20261109'
@@ -59,7 +63,7 @@ if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
 $cargoVersion = (& cargo --version).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'could not identify active cargo version' }
 $cargoCleanCommand = 'cargo clean --manifest-path rust/Cargo.toml --profile dist --target x86_64-pc-windows-msvc'
-$cargoBuildCommand = 'cargo build --locked --manifest-path rust/Cargo.toml -p sky_player --profile dist --target x86_64-pc-windows-msvc --features real-input-acceptance --bin rt-native-acceptance'
+$cargoBuildCommand = 'cargo build --locked --manifest-path rust/Cargo.toml -p sky_player --profile dist --target x86_64-pc-windows-msvc --features ' + $featureArgument + ' --bin rt-native-acceptance'
 $buildLog = Join-Path $destination 'build.log'
 
 $cleanOutput = @(& cargo clean --manifest-path (Join-Path $rustRoot 'Cargo.toml') --profile $profile --target $targetTriple 2>&1)
@@ -67,7 +71,7 @@ $cleanExit = $LASTEXITCODE
 $cleanOutput | Set-Content -LiteralPath (Join-Path $destination 'clean.log') -Encoding UTF8
 if ($cleanExit -ne 0) { throw ('cargo clean failed with exit code ' + $cleanExit) }
 
-$buildOutput = @(& cargo build --locked --manifest-path (Join-Path $rustRoot 'Cargo.toml') -p sky_player --profile $profile --target $targetTriple --features $feature --bin rt-native-acceptance 2>&1)
+$buildOutput = @(& cargo build --locked --manifest-path (Join-Path $rustRoot 'Cargo.toml') -p sky_player --profile $profile --target $targetTriple --features $featureArgument --bin rt-native-acceptance 2>&1)
 $buildExit = $LASTEXITCODE
 $buildOutput | Set-Content -LiteralPath $buildLog -Encoding UTF8
 if ($buildExit -ne 0) { throw ('cargo build failed with exit code ' + $buildExit) }
@@ -93,8 +97,8 @@ $manifest = [ordered]@{
     source_tree_clean = $true
     clean_build = $true
     cargo_profile = $profile
-    cargo_features = @($feature)
-    qpc_read_counting = $false
+    cargo_features = $features.ToArray()
+    qpc_read_counting = [bool]$QpcReadCounting
     observer_mode = 'qualification-on'
     guard_mode = 'frozen'
     workload_version = $workloadVersion

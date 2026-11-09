@@ -43,6 +43,12 @@ impl RuntimeDispatchCoordinator {
                 },
             ));
         }
+        let next_state_revision = self.state_revision.checked_add(1).ok_or_else(|| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "coordinator state revision overflow".into(),
+            ))
+        })?;
+        self.state_revision = next_state_revision;
         if matches!(
             (expected, next),
             (GenerationStatus::Scheduled, GenerationStatus::Active)
@@ -129,10 +135,16 @@ impl RuntimeDispatchCoordinator {
                 "released generation counter overflow during suspension reconciliation".into(),
             ))
         })?;
+        let next_state_revision = self.state_revision.checked_add(1).ok_or_else(|| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "coordinator state revision overflow".into(),
+            ))
+        })?;
         self.counters.cancelled -= 1;
         self.counters.released = released;
         self.generation_states[generation_id as usize] = GenerationStatus::Released;
         self.cancelled_up_by_slot[usize::from(slot)] = None;
+        self.state_revision = next_state_revision;
         Ok(())
     }
 
@@ -151,7 +163,8 @@ impl RuntimeDispatchCoordinator {
         self.validate_frozen_authored_commit(commit)?;
         Ok(PreparedAuthoredCommitProof {
             commit,
-            coordinator: std::ptr::from_ref(self),
+            coordinator_id: self.coordinator_id,
+            state_revision: self.state_revision,
             cursor: self.cursor,
         })
     }
@@ -185,7 +198,8 @@ impl RuntimeDispatchCoordinator {
         _completed: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
         if !std::ptr::eq(proof.commit, expected_commit)
-            || !std::ptr::eq(proof.coordinator, std::ptr::from_ref(self))
+            || proof.coordinator_id != self.coordinator_id
+            || proof.state_revision != self.state_revision
         {
             return Err(CoordinatorError::PreparedAuthoredProofMismatch);
         }
