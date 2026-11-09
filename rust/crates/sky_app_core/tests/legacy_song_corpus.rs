@@ -23,6 +23,18 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn historical_source_fixture(relative: &str) -> Option<&'static [u8]> {
+    match relative {
+        "Only_LeeHi.json" => Some(include_bytes!(
+            "../../../../tests/fixtures/song_planning/historical_sources/Only_LeeHi.json"
+        )),
+        "Stay with me Goblin.json" => Some(include_bytes!(
+            "../../../../tests/fixtures/song_planning/historical_sources/Stay with me Goblin.json"
+        )),
+        _ => None,
+    }
+}
+
 #[test]
 fn frozen_historical_songs_match_the_pinned_legacy_schedule_baseline() {
     let expected: BTreeMap<String, BaselineFingerprint> = serde_json::from_slice(include_bytes!(
@@ -40,7 +52,11 @@ fn frozen_historical_songs_match_the_pinned_legacy_schedule_baseline() {
         .expect("valid frozen compatibility timing policy");
     for (relative, baseline) in &expected {
         let path = songs_dir.join(relative);
-        let bytes = fs::read(&path).expect("read built-in song");
+        // Replaced active sources retain their original bytes in immutable
+        // fixtures. Every unchanged historical source is still read from songs/.
+        let bytes = historical_source_fixture(relative)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_else(|| fs::read(&path).expect("read built-in song"));
         assert_eq!(
             sha256_hex(&bytes),
             baseline.input_sha256,

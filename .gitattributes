@@ -11,3 +11,5 @@ rust/supply-chain/*.toml text eol=lf
 rust/supply-chain/*.lock text eol=lf
 **/Cargo.toml text eol=lf
 Cargo.toml text eol=lf
+# Historical byte-identical song fixtures must not gain CRLF on Windows checkouts.
+tests/fixtures/song_planning/historical_sources/*.json text eol=lf
