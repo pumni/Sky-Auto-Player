@@ -59,6 +59,14 @@ function Assert-AbsolutePath {
     if (-not [System.IO.Path]::IsPathRooted($Path)) { throw ($Label + ' must be an absolute path') }
 }
 
+function Get-OptionalProperty {
+    param($Object, [string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    $property.Value
+}
+
 function Get-CurrentSourceIdentity {
     $branch = (& git -C $root branch --show-current).Trim()
     if ($LASTEXITCODE -ne 0 -or $branch -ne $expectedBranch) { throw ('expected branch ' + $expectedBranch + ', got ' + $branch) }
@@ -131,7 +139,8 @@ function Get-Percentiles {
 
 function Get-TimingMetrics {
     param($Report)
-    $telemetry = $Report.details.native_timing_telemetry
+    $details = Get-OptionalProperty $Report 'details'
+    $telemetry = Get-OptionalProperty $details 'native_timing_telemetry'
     if ($null -eq $telemetry) { return $null }
     $frequency = [double]$telemetry.qpc_frequency_hz
     if ($frequency -le 0) { return $null }
@@ -236,7 +245,9 @@ function Invoke-NativeCase {
     $status = if ($null -ne $report) { [string]$report.status } elseif ($caseExit -eq 2) { 'RUNNER_FAILURE' } else { 'MISSING_REPORT' }
     $reason = if ($null -ne $report) { [string]$report.reason } elseif ($text) { $text } else { 'native runner produced no report or failure text' }
     $metrics = if ($null -ne $report) { Get-TimingMetrics $report } else { $null }
-    $details = if ($null -ne $report) { $report.details } else { $null }
+    $details = if ($null -ne $report) { Get-OptionalProperty $report 'details' } else { $null }
+    $invocationPath = if ($caseDirectory) { Join-Path $caseDirectory 'invocation.json' } else { $null }
+    $invocation = if ($invocationPath -and (Test-Path -LiteralPath $invocationPath -PathType Leaf)) { Get-Content -LiteralPath $invocationPath -Raw | ConvertFrom-Json } else { $null }
     $row = [pscustomobject]@{
         run_id = if ($null -ne $report) { [string]$report.run_id } else { $null }
         stage = $Stage
@@ -264,35 +275,35 @@ function Invoke-NativeCase {
         reason = $reason
         evidence_directory = $caseDirectory
         report_path = $reportPath
-        expected_sink_event_count = if ($null -ne $details) { $details.expected_sink_event_count } else { $null }
-        observed_sink_event_count = if ($null -ne $details) { $details.observed_sink_event_count } else { $null }
-        sink_window_match = if ($null -ne $details) { $details.sink_event_window_matches_report } else { $null }
-        active_count = if ($null -ne $details) { $details.active_count } else { $null }
-        possibly_active_count = if ($null -ne $details) { $details.possibly_active_count } else { $null }
-        final_release_obligation_mask = if ($null -ne $details) { $details.final_release_obligation_mask } else { $null }
-        production_hold_floor_violation_count = if ($null -ne $details) { $details.production_hold_floor_violation_count } else { $null }
-        production_release_floor_violation_count = if ($null -ne $details) { $details.production_release_floor_violation_count } else { $null }
-        production_forensics_anomaly_count = if ($null -ne $details) { $details.production_forensics_anomaly_count } else { $null }
-        production_structural_anomaly_count = if ($null -ne $details) { $details.production_structural_anomaly_count } else { $null }
-        production_same_key_overlap_forensics_count = if ($null -ne $details) { $details.production_same_key_overlap_forensics_count } else { $null }
-        production_anchor_overwrite_count = if ($null -ne $details) { $details.production_anchor_overwrite_count } else { $null }
-        production_unmatched_up_count = if ($null -ne $details) { $details.production_unmatched_up_count } else { $null }
-        missed_down_boundaries = if ($null -ne $details) { $details.missed_down_boundaries } else { $null }
-        missed_down_keys = if ($null -ne $details) { $details.missed_down_keys } else { $null }
-        missed_physical_window_boundaries = if ($null -ne $details) { $details.missed_physical_window_boundaries } else { $null }
-        keys_dropped = if ($null -ne $details) { $details.keys_dropped } else { $null }
-        chord_split_events = if ($null -ne $details) { $details.chord_split_events } else { $null }
-        sendinput_partial_events = if ($null -ne $details) { $details.sendinput_partial_events } else { $null }
-        sendinput_zero_progress_failures = if ($null -ne $details) { $details.sendinput_zero_progress_failures } else { $null }
-        worker_cpu_time_us = if ($null -ne $details) { $details.worker_cpu_time_us } else { $null }
-        process_cpu_time_us = if ($null -ne $details) { $details.process_cpu_time_us } else { $null }
-        spin_time_us = if ($null -ne $details) { $details.spin_time_us } else { $null }
-        spin_time_available = if ($null -ne $details) { $details.spin_time_available } else { $null }
-        spin_time_complete = if ($null -ne $details) { $details.spin_time_complete } else { $null }
-        spin_duty_cycle_ppm = if ($null -ne $details) { $details.spin_duty_cycle_ppm } else { $null }
-        spin_expected_samples = if ($null -ne $details) { $details.spin_observation_expected_samples } else { $null }
-        spin_dropped_samples = if ($null -ne $details) { $details.spin_observation_dropped_samples } else { $null }
-        spin_missing_samples = if ($null -ne $details) { $details.spin_observation_missing_samples } else { $null }
+        expected_sink_event_count = Get-OptionalProperty $details 'expected_sink_event_count'
+        observed_sink_event_count = Get-OptionalProperty $details 'observed_sink_event_count'
+        sink_window_match = Get-OptionalProperty $invocation 'report_window_match'
+        active_count = Get-OptionalProperty $details 'active_count'
+        possibly_active_count = Get-OptionalProperty $details 'possibly_active_count'
+        final_release_obligation_mask = Get-OptionalProperty $details 'final_release_obligation_mask'
+        production_hold_floor_violation_count = Get-OptionalProperty $details 'production_hold_floor_violation_count'
+        production_release_floor_violation_count = Get-OptionalProperty $details 'production_release_floor_violation_count'
+        production_forensics_anomaly_count = Get-OptionalProperty $details 'production_forensics_anomaly_count'
+        production_structural_anomaly_count = Get-OptionalProperty $details 'production_structural_anomaly_count'
+        production_same_key_overlap_forensics_count = Get-OptionalProperty $details 'production_same_key_overlap_forensics_count'
+        production_anchor_overwrite_count = Get-OptionalProperty $details 'production_anchor_overwrite_count'
+        production_unmatched_up_count = Get-OptionalProperty $details 'production_unmatched_up_count'
+        missed_down_boundaries = Get-OptionalProperty $details 'missed_down_boundaries'
+        missed_down_keys = Get-OptionalProperty $details 'missed_down_keys'
+        missed_physical_window_boundaries = Get-OptionalProperty $details 'missed_physical_window_boundaries'
+        keys_dropped = Get-OptionalProperty $details 'keys_dropped'
+        chord_split_events = Get-OptionalProperty $details 'chord_split_events'
+        sendinput_partial_events = Get-OptionalProperty $details 'sendinput_partial_events'
+        sendinput_zero_progress_failures = Get-OptionalProperty $details 'sendinput_zero_progress_failures'
+        worker_cpu_time_us = Get-OptionalProperty $details 'worker_cpu_time_us'
+        process_cpu_time_us = Get-OptionalProperty $details 'process_cpu_time_us'
+        spin_time_us = Get-OptionalProperty $details 'spin_time_us'
+        spin_time_available = Get-OptionalProperty $details 'spin_time_available'
+        spin_time_complete = Get-OptionalProperty $details 'spin_time_complete'
+        spin_duty_cycle_ppm = Get-OptionalProperty $details 'spin_duty_cycle_ppm'
+        spin_expected_samples = Get-OptionalProperty $details 'spin_observation_expected_samples'
+        spin_dropped_samples = Get-OptionalProperty $details 'spin_observation_dropped_samples'
+        spin_missing_samples = Get-OptionalProperty $details 'spin_observation_missing_samples'
         timing_metrics = $metrics
         report = $report
         runner_output = $text
