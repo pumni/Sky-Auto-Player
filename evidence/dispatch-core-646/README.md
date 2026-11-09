@@ -72,7 +72,7 @@ Commands were run on Windows 11 using the repository-pinned Rust 1.99.1 toolchai
 | --- | ---: | --- |
 | `cargo fmt --manifest-path rust/Cargo.toml --all` | 0 | pass |
 | `cargo test --manifest-path rust/Cargo.toml -p sky_player --bin rt-native-acceptance --features real-input-acceptance --locked` | 0 | 30 tests passed |
-| `rtk cargo xtask check all` (repository root) | 0 | full local gate passed: architecture/static/security, vet, fmt, clippy all-features, workspace tests, Bun checks/E2E and Tauri checks |
+| `rtk cargo xtask check all` (repository root) | 0 | full local gate passed: architecture/static/security, vet, fmt, Clippy all-features, workspace tests, Bun checks/E2E and Tauri checks. Architecture audit reported 55 allowlisted warnings, not failures. |
 | `pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 -OutputRoot <candidate-output>` | 0 | clean candidate build and manifest |
 | `pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage Smoke -CandidateManifest <candidate-manifest> -TimingMarginUs 500 -OutputRoot <smoke-output>` | 1 | 20 PASS, 1 INCONCLUSIVE, 1 FAIL; preserved above |
 | `pwsh -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario pause-resume-release-floor -TimingMarginUs 500 -CalibrationPlacement Baseline -TimingObserverForQualification -HarnessPath <immutable-candidate> -HarnessManifestPath <candidate-manifest> -OutputRoot <focused-output> -GameFps 60` | 0 | 20 intended cycles passed |
