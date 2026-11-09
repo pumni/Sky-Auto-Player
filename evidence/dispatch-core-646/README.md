@@ -1,6 +1,6 @@
 # Evidence — Issue #646, package A (leader review #2 follow-up)
 
-This directory contains the readable report and path-redacted raw evidence for the Windows runs below. The archived JSONL, logs, runner inputs, ReceiveOnly sink events, and invocation summaries preserve each run's reported outcome. Redaction replaces only local absolute checkout/temp roots; it does not change scenario results. `ORIGINAL-SHA256SUMS.txt` records hashes of the original local ZIPs before redaction. `SHA256SUMS.txt` verifies the files published here.
+This directory contains the readable report, manifests, and checksums for the Windows runs below. The path-redacted raw JSONL, logs, runner inputs, ReceiveOnly sink events, invocation summaries, and original verdicts are in the [GitHub Actions evidence artifact](https://github.com/pumni/Sky-Auto-Player/actions/runs/42617626785), uploaded from commit `ac4d42832d1ce1d1319fdf290aab52ee4ce0311a`. Artifact ID `13672948052` expires `2027-02-07T12:30:45Z`. [`ACTIONS-ARTIFACT-SHA256SUMS.txt`](./ACTIONS-ARTIFACT-SHA256SUMS.txt) lists each nested ZIP hash and the artifact digest; `ORIGINAL-SHA256SUMS.txt` preserves original local ZIP hashes.
 
 ## Source and executable identity
 
@@ -30,7 +30,7 @@ All native harness traffic used the project's identity-verified **ReceiveOnly** 
 
 ### C0 failures and inconclusives — individually reproduced
 
-The direct reproductions used the unchanged C0 binary and manifest. The [external requalification report](./c0-requalification-b52106b4-r4.md) yields 21 PASS and 1 BLOCKED; it retains each original native verdict and does not upgrade the original `FAIL` or `INCONCLUSIVE` records. The full JSON/CSV/script bundle is `c0-requalification-b52106b4-r4.redacted.zip`.
+The direct reproductions used the unchanged C0 binary and manifest. The [external requalification report](./c0-requalification-b52106b4-r4.md) yields 21 PASS and 1 BLOCKED; it retains each original native verdict and does not upgrade the original `FAIL` or `INCONCLUSIVE` records. The full JSON/CSV/script bundle `c0-requalification-b52106b4-r4.redacted.zip` is in the Actions artifact.
 
 | Scenario | C0 recorded result | Raw evidence and diagnosis |
 | --- | --- | --- |
@@ -39,15 +39,15 @@ The direct reproductions used the unchanged C0 binary and manifest. The [externa
 | `owner-process-termination` | **INCONCLUSIVE / BLOCKED** | C0's immutable fixture only invalidated synthetic owner authority during preparation (`owner_authority_invalidated_during_preparation`); its raw report has no OS termination fixture. This does **not** prove termination of the owner process. The external result is BLOCKED, with no verdict rewrite. |
 | `suspend-resume` | **INCONCLUSIVE** | C0 reports terminal `system_suspend`, the expected key Down followed by safety Up on the ReceiveOnly sink, verified cleanup and zero residual obligations. The old fixture's resume/full-song expectation is outside the authorized terminal-suspend semantics. The external oracle passes the terminal prefix while preserving the original INCONCLUSIVE. |
 
-The four C0 raw reproductions are in [`c0-targeted-p0-fbe703ab.redacted.zip`](./c0-targeted-p0-fbe703ab.redacted.zip); the immutable-C0 22-case archive is [`c0-smoke-b52106b4.redacted.zip`](./c0-smoke-b52106b4.redacted.zip). The latest external oracle result is in `c0-requalification-b52106b4-r4.redacted.zip`. The earlier submitted candidate run remains in [`a2-original-review-fbe703ab.redacted.zip`](./a2-original-review-fbe703ab.redacted.zip).
+The four C0 raw reproductions (`c0-targeted-p0-fbe703ab.redacted.zip`), immutable-C0 22-case archive (`c0-smoke-b52106b4.redacted.zip`), latest external oracle (`c0-requalification-b52106b4-r4.redacted.zip`), and earlier submitted candidate run (`a2-original-review-fbe703ab.redacted.zip`) are in the Actions artifact.
 
 ### Candidate Smoke findings
 
-The latest candidate Smoke at `4b1cec7` records **22/22 PASS**. Its [readable summary](./a2-smoke-4b1cec7-summary.md) and full raw bundle preserve all case evidence. The owner-process test independently verified `TerminateProcess` on the identity-bound ReceiveOnly sink (exit code `0x646`), zero sink events and sender attempts, no release obligations, and fail-closed terminal `focus_lost_during_preroll`. The release-floor case completed 20 cycles; each resumed authored target was observed due before its Q+T barrier, no Down sender attempt occurred before the barrier, and all 20 Down/Up pairs completed. First-cycle QPCs: target `2908233817555`, due checkpoint `2908233863456`, barrier `2908233926163`, sender start `2908233926837`. The last-cycle values and full per-cycle evidence are in `a2-smoke-4b1cec7.redacted.zip`.
+The latest candidate Smoke at `4b1cec7` records **22/22 PASS**. Its [readable summary](./a2-smoke-4b1cec7-summary.md) and raw bundle `a2-smoke-4b1cec7.redacted.zip` preserve all case evidence in the Actions artifact. The owner-process test independently verified `TerminateProcess` on the identity-bound ReceiveOnly sink (exit code `0x646`), zero sink events and sender attempts, no release obligations, and fail-closed terminal `focus_lost_during_preroll`. The release-floor case completed 20 cycles; each resumed authored target was observed due before its Q+T barrier, no Down sender attempt occurred before the barrier, and all 20 Down/Up pairs completed. First-cycle QPCs: target `2908233817555`, due checkpoint `2908233863456`, barrier `2908233926163`, sender start `2908233926837`.
 
-The earlier `5e0b5b3` candidate Smoke records 21 PASS and one `pause-resume-release-floor` FAIL. Its failure was `CASE-NOT-EXERCISED`: the prior checkpoint sampled before the resumed target could be observed; the native output did not report a floor violation. That recorded failure remains preserved in `a2-smoke-5e0b5b3.redacted.zip`. The corrected runner captures the prepared target/window before its floor wait, and the later `4b1cec7` full Smoke passes. The previous `27bea42` full Smoke, focused run and `d417b0c` suspend-fixture run are also retained with their original results.
+The earlier `5e0b5b3` candidate Smoke records 21 PASS and one `pause-resume-release-floor` FAIL. Its failure was `CASE-NOT-EXERCISED`: the prior checkpoint sampled before the resumed target could be observed; the native output did not report a floor violation. That recorded failure remains preserved in `a2-smoke-5e0b5b3.redacted.zip` in the Actions artifact. The corrected runner captures the prepared target/window before its floor wait, and the later `4b1cec7` full Smoke passes. The previous `27bea42` full Smoke, focused run and `d417b0c` suspend-fixture run are also retained in the artifact with their original results.
 
-An earlier `c0977bf` candidate Smoke attempt stopped in the runner with a PowerShell missing-property error (`counts`); the runner output bug was corrected and the original failure retained in [`a2-runner-failure-c0977bf.redacted.zip`](./a2-runner-failure-c0977bf.redacted.zip).
+An earlier `c0977bf` candidate Smoke attempt stopped in the runner with a PowerShell missing-property error (`counts`); the runner output bug was corrected and the original failure remains in `a2-runner-failure-c0977bf.redacted.zip` in the Actions artifact.
 
 ## Measurement and benchmark status
 
@@ -62,7 +62,7 @@ The runner reports separate per-chord authored lateness, floor displacement and 
 | Counting optimized assembly | SHA-256 `8c639d8037946665da477018ebee62cca7bd042cc9c9f4e010da816fd21fc5ad`; `QpcClock::now` adds `lock incq QPC_READ_COUNT` before the same API call |
 | Snippet file | [`qpc-assembly-snippets.txt`](./qpc-assembly-snippets.txt), SHA-256 `7ab4450652c39c57039684a9fa2820629300d2e78a3a0ab21c2926619858880b4` |
 
-The complete counting run, both manifests, assembly excerpt, focused release-floor run, and ReceiveOnly sink evidence are bundled in [`a2-focused-qpc-release-floor-27bea42.redacted.zip`](./a2-focused-qpc-release-floor-27bea42.redacted.zip). Counting/assembly evidence is diagnostic and is not from the timed candidate binary.
+The complete counting run, both manifests, assembly excerpt, focused release-floor run, and ReceiveOnly sink evidence are bundled in `a2-focused-qpc-release-floor-27bea42.redacted.zip` in the Actions artifact. Counting/assembly evidence is diagnostic and is not from the timed candidate binary.
 
 ## Commands and exit codes
 
@@ -106,5 +106,5 @@ This is the A-related inventory requested by the runbook. It records consumers a
 - Latest candidate Smoke at `4b1cec7` is 22/22 PASS. The prior `5e0b5b3` FAIL remains archived; it was an unexercised runner precondition, not evidence of a physical floor violation.
 - The fixed Compare matrix (3 workloads × Quiet/Contention × 6 pairs × 15 seconds, alternating AB/BA) was **not run** because C0 qualification is BLOCKED. Benchmark fields and separate p95/p99 paired regression screens are implemented, but there is no valid C0/A performance result.
 - Candidate OS owner-process termination is verified on the identity-bound ReceiveOnly sink. C0 cannot satisfy the same proof with its immutable, older fixture; this is the sole remaining C0 qualification blocker.
-- Full local checks passed; GitHub CI status is reported separately on PR #647 and may still be pending when this evidence commit is pushed.
+- Full local checks passed; at the last lookup the evidence-upload job succeeded and the remaining CI jobs were still in progress on PR #647.
 - B/C/D remain blocked pending leader acceptance/authorization. No merge, policy/gate change, or unrelated security/updater/release-trust change is included.
