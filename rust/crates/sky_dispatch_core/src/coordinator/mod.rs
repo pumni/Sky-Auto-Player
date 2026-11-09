@@ -239,6 +239,7 @@ mod authored;
 mod cleanup;
 mod conflict;
 mod ownership;
+mod stale;
 mod timeline;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveGeneration {
@@ -769,5 +770,22 @@ impl RuntimeDispatchCoordinator {
 
     pub fn pending_release_count(&self) -> usize {
         self.pending_release_mask.count_ones() as usize
+    }
+
+    pub fn attach_executor(
+        &mut self,
+        min_hold_ticks: DurationTicks,
+        frame_ticks: DurationTicks,
+        to_ticks: impl Fn(u64) -> TimelineTicks,
+    ) -> Result<(), String> {
+        let executor = crate::executor::DispatchExecutor::new(
+            &self.schedule,
+            min_hold_ticks,
+            frame_ticks,
+            to_ticks,
+        )
+        .map_err(|e| e.to_string())?;
+        self.executor = Some(executor);
+        Ok(())
     }
 }

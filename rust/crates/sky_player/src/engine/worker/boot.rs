@@ -272,26 +272,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let executor = match sky_dispatch_core::executor::DispatchExecutor::new(
-        &coordinator.schedule,
-        min_hold_ticks,
-        frame_ticks,
-        |us| {
-            qpc_clock
-                .timeline_from_us(us)
-                .unwrap_or(sky_dispatch_core::time::TimelineTicks::ZERO)
-        },
-    ) {
-        Ok(executor) => executor,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("executor construction failed: {error}"),
-            );
-        }
-    };
-    coordinator.executor = Some(executor);
+    if let Err(error) = coordinator.attach_executor(min_hold_ticks, frame_ticks, |us| {
+        qpc_clock
+            .timeline_from_us(us)
+            .unwrap_or(sky_dispatch_core::time::TimelineTicks::ZERO)
+    }) {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            format!("executor construction failed: {error}"),
+        );
+    }
     let prepared_stream = if effective_policy.prepared_normal {
         match PreparedDispatchStream::build_with_checkpoints(
             coordinator,
@@ -808,59 +799,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    #[cfg(any(test, feature = "test-support"))]
-    let inject_epoch_conversion_failure =
-        startup_hook.is_some_and(|hook| hook.take_startup_epoch_conversion_failure());
-    #[cfg(not(any(test, feature = "test-support")))]
-    let inject_epoch_conversion_failure = false;
-    let pre_roll_ticks = match if inject_epoch_conversion_failure {
-        Err("injected QPC pre-roll conversion failure".to_string())
-    } else {
-        qpc_clock
-            .duration_from_us(shared.publication.pre_roll_us.load(Ordering::Acquire))
-            .map_err(|error| format!("{error:?}"))
-    } {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("pre-roll conversion failed before epoch publication: {error}"),
-            );
-        }
-    };
-    let epoch_qpc = match epoch_base.checked_add_duration(pre_roll_ticks) {
-        Ok(epoch) => epoch,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("playback epoch arithmetic failed: {error}"),
-            );
-        }
-    };
-    let playback = match PlaybackClockState::new(epoch_qpc, DurationTicks::ZERO) {
-        Ok(playback) => playback,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("playback clock initialization failed: {error}"),
-            );
-        }
+    let (epoch_qpc, playback, epoch_wall_us) = match compute_playback_epoch(
+        qpc_clock,
+        epoch_base,
+        shared.publication.pre_roll_us.load(Ordering::Acquire),
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook.is_some_and(|hook| hook.take_startup_epoch_conversion_failure()),
+    ) {
+        Ok(state) => state,
+        Err(error) => return admission_failure(&mut backend, metrics, error),
     };
     worker.epoch_qpc = epoch_qpc;
-    let epoch_wall_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(epoch_qpc.as_u64()))
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("playback epoch wall-time conversion failed: {error:?}"),
-            );
-        }
-    };
     if let Some(timing) = core.timing.as_mut() {
         timing.start_wall_time_us = epoch_wall_us;
         timing.last_cpu_metrics_sample_us = epoch_wall_us;
@@ -905,6 +854,30 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         scheduling,
     });
     0
+}
+
+fn compute_playback_epoch(
+    qpc_clock: QpcClock,
+    epoch_base: QpcTicks,
+    pre_roll_us: u64,
+    #[cfg(any(test, feature = "test-support"))] inject_epoch_conversion_failure: bool,
+) -> Result<(QpcTicks, PlaybackClockState, u64), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    if inject_epoch_conversion_failure {
+        return Err("injected QPC pre-roll conversion failure".to_string());
+    }
+    let pre_roll_ticks = qpc_clock.duration_from_us(pre_roll_us).map_err(|error| {
+        format!("pre-roll conversion failed before epoch publication: {error:?}")
+    })?;
+    let epoch_qpc = epoch_base
+        .checked_add_duration(pre_roll_ticks)
+        .map_err(|error| format!("playback epoch arithmetic failed: {error}"))?;
+    let playback = PlaybackClockState::new(epoch_qpc, DurationTicks::ZERO)
+        .map_err(|error| format!("playback clock initialization failed: {error}"))?;
+    let epoch_wall_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(epoch_qpc.as_u64()))
+        .map_err(|error| format!("playback epoch wall-time conversion failed: {error:?}"))?;
+    Ok((epoch_qpc, playback, epoch_wall_us))
 }
 
 #[cfg(test)]
