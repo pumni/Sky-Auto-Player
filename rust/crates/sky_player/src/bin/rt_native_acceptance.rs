@@ -350,6 +350,9 @@ fn drain_event_window(
     let mut reader = FileEventWindowReader { path, cursor, ready, role }; let mut clock = RealDrainClock { started: Instant::now(), poll_ms: DRAIN_POLL_MS };
     drain_event_window_with(&mut reader, &mut clock, mode, expected_down, expected_up)
 }
+#[cfg(any(windows, test))]
+fn needs_supervisor_progress_heartbeat(scenario: Scenario, sample_seconds: Option<u8>) -> bool { !matches!(scenario, Scenario::SupervisorLeaseExpiry | Scenario::LeaseAgeWatchdogDelayed) && (sample_seconds.is_some() || matches!(scenario, Scenario::ReleaseGapStress | Scenario::FocusLoss | Scenario::SuspendResume)) }
+
 #[cfg(windows)]
 fn run_windows(args: RunArgs) -> i32 {
     macro_rules! inconclusive {
@@ -434,7 +437,7 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
-    if matches!(args.scenario, Scenario::ReleaseGapStress | Scenario::FocusLoss | Scenario::SuspendResume)
+    if needs_supervisor_progress_heartbeat(args.scenario, args.sample_seconds)
         && let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session))
     {
         inconclusive!(&error, json!({}));

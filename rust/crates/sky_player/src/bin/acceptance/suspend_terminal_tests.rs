@@ -40,3 +40,18 @@ fn terminal_suspend_reconciles_only_committed_down_and_cleanup_up() {
     assert!(reconcile_events(&observed, &sink_down, &sink_up, true).is_ok());
     assert!(reconcile_events(&observed, &authored_down, &authored_up, true).is_err());
 }
+
+#[test]
+fn timed_session_heartbeat_preserves_intentional_lease_expiry() {
+    for scenario in [Scenario::CanonicalMaxChord, Scenario::DenseAlternating, Scenario::NearMinimumRetrigger, Scenario::MixedUpDown, Scenario::LongIdle] {
+        assert!(super::needs_supervisor_progress_heartbeat(scenario, Some(15)));
+        assert!(!super::needs_supervisor_progress_heartbeat(scenario, None));
+    }
+    for scenario in [Scenario::ReleaseGapStress, Scenario::FocusLoss, Scenario::SuspendResume] {
+        assert!(super::needs_supervisor_progress_heartbeat(scenario, None));
+    }
+    for scenario in [Scenario::SupervisorLeaseExpiry, Scenario::LeaseAgeWatchdogDelayed] {
+        assert!(!super::needs_supervisor_progress_heartbeat(scenario, None));
+        assert!(!super::needs_supervisor_progress_heartbeat(scenario, Some(15)));
+    }
+}

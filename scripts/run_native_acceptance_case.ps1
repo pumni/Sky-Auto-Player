@@ -22,6 +22,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
 $pwshPath = (Get-Command pwsh.exe).Source
 $pwshExecutablePath = (Get-Process -Id $PID).Path
@@ -158,9 +159,11 @@ try {
     $treeChanges = (& git -C $root status --porcelain --untracked-files=all) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'could not verify source-tree cleanliness' }
     $sourceTreeClean = [string]::IsNullOrWhiteSpace($treeChanges)
+    $c1TimedVerified = $false
     if ($HarnessManifestPath) {
         if (-not $sourceTreeClean) { throw 'immutable harness acceptance requires a clean source checkout' }
         $harnessManifest = (Get-Content -LiteralPath $HarnessManifestPath -Raw) | ConvertFrom-Json
+        $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $harnessManifest -RepositoryRoot $root -Role 'case-runner' -AllowHistoricalControl:$HistoricalSourceAllowed
         $harnessManifestHash = Get-Sha256 $HarnessManifestPath
         $manifestFeatures = @($harnessManifest.cargo_features)
         $expectedManifestFeatures = if ($QpcReadCountingEvidenceOnly) { @('real-input-acceptance', 'qpc-read-counting') } else { @('real-input-acceptance') }
@@ -174,7 +177,7 @@ try {
             $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_branch -ne 'perf/dispatch-core-20261109' -or
-            -not [bool]$harnessManifest.source_tree_clean -or
+            ([bool]$harnessManifest.source_tree_clean -ne (-not $c1TimedVerified)) -or
             -not [bool]$harnessManifest.clean_build -or
             $harnessManifest.cargo_profile -ne 'dist' -or
             (($manifestFeatures -join ',') -ne ($expectedManifestFeatures -join ',')) -or
@@ -237,6 +240,18 @@ try {
         profile = 'production'
         cargo_profile = if ($harnessManifest) { $harnessManifest.cargo_profile } else { 'legacy-checkout-release' }
         cargo_features = if ($harnessManifest) { @($harnessManifest.cargo_features) } else { @() }
+        harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
+        harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
+        harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
+        harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
+        harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
+        harness_base_source_file_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_file_sha256' } else { $null }
+        harness_overlay_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'overlay_sha256' } else { $null }
+        harness_derived_source_file_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'derived_source_file_sha256' } else { $null }
+        harness_source_changes_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_changes_sha256' } else { $null }
+        harness_derived_source_inventory_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'derived_source_inventory_sha256' } else { $null }
         qpc_read_counting = [bool]($harnessManifest -and $harnessManifest.qpc_read_counting)
         observer_mode = if ($TimingObserverForQualification) { 'qualification-on' } else { 'off' }
         guard_mode = if ($harnessManifest) { $harnessManifest.guard_mode } else { 'unknown' }
@@ -367,6 +382,18 @@ try {
         source_revision = $head
         source_tree_sha = $sourceTree
         source_tree_clean = $sourceTreeClean
+        harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
+        harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
+        harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
+        harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
+        harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
+        harness_base_source_file_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_file_sha256' } else { $null }
+        harness_overlay_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'overlay_sha256' } else { $null }
+        harness_derived_source_file_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'derived_source_file_sha256' } else { $null }
+        harness_source_changes_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_changes_sha256' } else { $null }
+        harness_derived_source_inventory_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'derived_source_inventory_sha256' } else { $null }
         scenario = $Scenario
         calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
