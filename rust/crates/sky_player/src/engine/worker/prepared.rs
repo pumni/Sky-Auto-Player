@@ -41,6 +41,25 @@ pub(crate) enum PreparedDispatchEntry {
     },
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl crate::engine::config::StartupOrderingHook {
+    pub(crate) fn visit_down_admission_checkpoint(
+        &self,
+        evidence: (
+            QpcTicks,
+            Option<super::physical_timing_guard::PhysicalTimingWindow>,
+        ),
+    ) {
+        let (authored_target_qpc, timing_window) = evidence;
+        let window = timing_window.expect("prepared physical timing window");
+        self.record_down_window(
+            authored_target_qpc.as_u64(),
+            window.packet_not_before_qpc.as_u64(),
+        );
+        self.visit_startup_checkpoint(crate::engine::config::StartupCheckpoint::FirstDownAdmission);
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PreparedDispatchStream {
     entries: Vec<PreparedDispatchEntry>,
