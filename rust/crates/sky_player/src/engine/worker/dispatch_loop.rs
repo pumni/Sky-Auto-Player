@@ -1068,6 +1068,13 @@ pub(super) fn dispatch(
                 } else {
                     None
                 };
+                #[cfg(any(test, feature = "test-support"))]
+                let packet_down_mask = super::prepared::record_down_window_before_wait(
+                    core.runtime.startup_ordering_hook.as_deref(),
+                    prepared_stream.as_ref().and_then(|stream| stream.current()),
+                    authored_target_qpc,
+                    prepared_physical_timing_window,
+                );
                 let wait_target_qpc = prepared_physical_timing_window
                     .map_or(target_qpc, |window| window.packet_not_before_qpc);
                 core.runtime.future_physical_wait_target_qpc =
@@ -1164,8 +1171,6 @@ pub(super) fn dispatch(
                         break;
                     }
                 };
-                #[cfg(any(test, feature = "test-support"))]
-                let mut packet_down_mask = 0;
                 let step = if !has_physical {
                     let stream = prepared_stream
                         .as_mut()
@@ -1200,17 +1205,12 @@ pub(super) fn dispatch(
                         break;
                     };
                     #[cfg(any(test, feature = "test-support"))]
-                    {
-                        packet_down_mask = frame.view.packet_masks.down_mask;
-                    }
-                    #[cfg(any(test, feature = "test-support"))]
                     if frame.view.packet_masks.down_mask != 0
                         && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                     {
-                        hook.visit_down_admission_checkpoint((
-                            authored_target_qpc,
-                            prepared_physical_timing_window,
-                        ));
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::FirstDownAdmission,
+                        );
                     }
                     let proof = authored_commit_proof.expect("missing prepared authored proof");
                     dispatch_prepared_normal_frame(
