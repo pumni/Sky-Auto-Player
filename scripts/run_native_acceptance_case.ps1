@@ -93,6 +93,11 @@ function Assert-SinkIdentity {
         throw 'sink ready record omitted process, HWND, event-log, or start-time identity'
     }
     $owner = Get-Process -Id ([int]$Record.pid)
+    $deadline = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $deadline -and ($owner.MainWindowHandle -ne [long]$Record.hwnd -or $owner.MainWindowTitle -ne $Record.title)) {
+        Start-Sleep -Milliseconds 50
+        $owner.Refresh()
+    }
     $ownerStartTimeFiletime = [long]$owner.StartTime.ToUniversalTime().ToFileTimeUtc()
     $sameExecutable = [string]::Equals($owner.Path, $pwshExecutablePath, [System.StringComparison]::OrdinalIgnoreCase)
     if (-not $sameExecutable -or $owner.SessionId -ne $SessionId -or $ownerStartTimeFiletime -ne [long]$Record.process_start_time_filetime -or [long]$owner.MainWindowHandle -ne [long]$Record.hwnd -or $owner.MainWindowTitle -ne $Record.title) {

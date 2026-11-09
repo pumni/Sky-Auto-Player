@@ -128,10 +128,36 @@ if ($RunId.Length -gt 128) {
 
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class NativeAcceptanceSinkFocus {
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    public static void SuppressOverlayWindows(uint pid) {
+        EnumWindows((hWnd, lParam) => {
+            uint procId;
+            GetWindowThreadProcessId(hWnd, out procId);
+            if (procId == pid) {
+                StringBuilder cls = new StringBuilder(256);
+                GetClassName(hWnd, cls, 256);
+                string name = cls.ToString();
+                if (name.StartsWith("UAC") || name.StartsWith("Touch Tooltip")) {
+                    ShowWindow(hWnd, 0);
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+    }
 }
 "@
 
@@ -244,6 +270,7 @@ $form.Add_Shown({
         $form.Focus()
         [void][NativeAcceptanceSinkFocus]::SetForegroundWindow($form.Handle)
     }
+    [NativeAcceptanceSinkFocus]::SuppressOverlayWindows([uint32]$PID)
 })
 $form.Add_FormClosed({
     if ($null -ne $eventWriter) {
@@ -270,6 +297,13 @@ $ready = [ordered]@{
 } | ConvertTo-Json
 Write-Output $ready
 Set-Content -Path $ReadyFile -Value $ready -Encoding UTF8
+
+$suppressTimer = New-Object System.Windows.Forms.Timer
+$suppressTimer.Interval = 50
+$suppressTimer.Add_Tick({
+    [NativeAcceptanceSinkFocus]::SuppressOverlayWindows([uint32]$PID)
+})
+$suppressTimer.Start()
 
 if ($DurationSeconds -gt 0) {
     $timer = New-Object System.Windows.Forms.Timer
