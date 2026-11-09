@@ -28,4 +28,3 @@
 |---|---|---:|---:|---:|---:|---:|
 
 These are evidence summaries, not an automatic performance-gate verdict. No design, gate, or rollout selection is made by this runner.
-

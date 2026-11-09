@@ -32,4 +32,3 @@
 | preflight-user-held | INCONCLUSIVE | INCONCLUSIVE | PASS | external sink-window proof: startup preflight rejection before Armed/SendInput; original native telemetry-unavailable INCONCLUSIVE is retained; live sink identity is attested by the hashed archived runner and ready/config/event records |
 | owner-process-termination | INCONCLUSIVE | INCONCLUSIVE | BLOCKED | BLOCKED: frozen C0 fixture only invalidated synthetic owner authority; its immutable executable has no OS process-termination fixture. No reclassification as PASS. |
 | suspend-resume | INCONCLUSIVE | INCONCLUSIVE | PASS | terminal system_suspend event prefix contains the expected Down and safety Up on the identity-bound ReceiveOnly sink, with verified release and zero residual obligations; the old resume/full-song INCONCLUSIVE remains recorded |
-
