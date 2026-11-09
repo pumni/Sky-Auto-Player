@@ -829,6 +829,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
         active_mask: u16,
         release_obligations: u16,
         lease_samples: u64,
+        foreground_queries: u64,
         accounting_changed: bool,
         focus_paused: bool,
     }
@@ -847,6 +848,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
                 | Fault::ForegroundOwnerSwitch
                 | Fault::ForegroundOwnerUnavailable
                 | Fault::OwnerFailureAfterModifier(_)
+                | Fault::ModifierHeld
         );
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         harness.set_strict_timing_for_test(path == DispatchPath::StrictDynamic);
@@ -990,6 +992,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             | Fault::Allowed => {}
         }
 
+        sky_dispatch_win32::focus::reset_foreground_query_count();
         let step = match path {
             DispatchPath::PreparedNormal => {
                 harness.prepare_prepared_stream_for_test();
@@ -1001,6 +1004,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
                 harness.dispatch_at_plan_target_for_test(&plan)
             }
         };
+        let foreground_queries = sky_dispatch_win32::focus::foreground_query_count();
         let step_class = match step {
             super::worker::DispatchStep::Dispatched => 0,
             super::worker::DispatchStep::Continue => 1,
@@ -1019,6 +1023,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             active_mask: harness.backend_active_mask(),
             release_obligations: harness.release_obligation_mask_for_test(),
             lease_samples: harness.final_lease_qpc_sample_count_for_test(),
+            foreground_queries,
             accounting_changed: harness.generation_accounting_for_test() != accounting_before,
             focus_paused: harness
                 .resources
@@ -1076,6 +1081,12 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             )),
             "transport attempts for {fault:?}"
         );
+        if fault == Fault::ModifierHeld {
+            assert_eq!(
+                prepared.foreground_queries, 0,
+                "held modifiers reject before the fresh foreground query"
+            );
+        }
         assert_eq!(
             prepared.step_class,
             match fault {

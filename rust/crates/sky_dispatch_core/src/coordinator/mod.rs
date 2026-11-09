@@ -103,6 +103,8 @@ pub enum CoordinatorError {
     Schedule(#[from] RuntimeScheduleError),
     #[error("prepared batch index {prepared} does not match coordinator cursor {cursor}")]
     PreparedBatchMismatch { prepared: usize, cursor: usize },
+    #[error("prepared authored proof does not match the current stream entry or coordinator")]
+    PreparedAuthoredProofMismatch,
     #[error("invalid key slot {slot}")]
     InvalidKeySlot { slot: KeySlot },
     #[error("generation count does not fit in usize")]
@@ -433,6 +435,17 @@ pub struct PreparedAuthoredCommit {
     pub up_intents: SmallVec<[PreparedUpIntent; MAX_KEYS]>,
     pub down_intents: SmallVec<[PreparedDownIntent; MAX_KEYS]>,
     pub down_source_action_index: Option<u32>,
+}
+
+/// One-use proof that a frozen authored commit matched the coordinator before
+/// a prepared physical wait. The private references bind the proof to that
+/// exact stream entry; the coordinator pointer and cursor are checked when the
+/// successful send commits it.
+#[derive(Debug)]
+pub struct PreparedAuthoredCommitProof<'a> {
+    pub(super) commit: &'a PreparedAuthoredCommit,
+    pub(super) coordinator: *const RuntimeDispatchCoordinator,
+    pub(super) cursor: usize,
 }
 
 /// One authored release that is waiting for its own physical due boundary.

@@ -819,7 +819,7 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
-    fn commit_prepared_up_intents_frozen(
+    pub(super) fn commit_prepared_up_intents_frozen(
         &mut self,
         prepared: PreparedAuthoredFrame,
         up_intents: &[PreparedUpIntent],
@@ -924,71 +924,6 @@ impl RuntimeDispatchCoordinator {
             .get(identity.generation_id() as usize)
             .is_some_and(|state| *state == GenerationStatus::DroppedExpired)
             && self.validate_dropped_expired_up_identity(identity).is_ok()
-    }
-
-    /// Apply a frozen authored commit after a successful physical send.
-    /// There is no schedule or packet traversal on this path.
-    pub fn commit_prepared_authored_frame_success_frozen(
-        &mut self,
-        commit: &PreparedAuthoredCommit,
-        started: TimelineTicks,
-        _completed: TimelineTicks,
-    ) -> Result<(), CoordinatorError> {
-        let prepared = commit.frame;
-        if prepared.first_batch_index != self.cursor {
-            return Err(CoordinatorError::PreparedBatchMismatch {
-                prepared: prepared.first_batch_index,
-                cursor: self.cursor,
-            });
-        }
-        self.validate_frozen_authored_commit(commit)?;
-        let release_not_before_ticks = prepared
-            .authored_ticks
-            .checked_add_duration(self.min_hold_ticks)?;
-
-        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
-
-        for down in &commit.down_intents {
-            let generation_id = down.generation_id();
-            if generation_id == NO_GENERATION_ID {
-                continue;
-            }
-            let slot = down.key_slot();
-            let bit = Self::bit_for_slot(slot);
-            if self.active_by_slot[usize::from(slot)].is_some()
-                || self.active_mask & bit != 0
-                || self.blocked_mask & bit != 0
-            {
-                return Err(CoordinatorError::Invariant(
-                    CoordinatorInvariantError::Accounting(
-                        "authored Down would overwrite an active or blocked key slot".into(),
-                    ),
-                ));
-            }
-            self.transition_generation(
-                generation_id,
-                GenerationStatus::Scheduled,
-                GenerationStatus::Active,
-            )?;
-            self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
-                generation_id,
-                scan_code: down.scan_code(),
-                key_slot: slot,
-                source_action_index: commit.down_source_action_index.unwrap_or(0),
-                release_not_before_ticks,
-            });
-            self.active_mask |= bit;
-            self.blocked_mask |= bit;
-        }
-
-        self.cursor =
-            self.cursor
-                .checked_add(prepared.packet_batch_count)
-                .ok_or(CoordinatorError::Time(
-                    crate::time::TimeArithmeticError::Overflow,
-                ))?;
-        self.validate_local_slot_masks()?;
-        Ok(())
     }
 
     /// Commit an authored physical frame whose musical Down deadline was
@@ -1765,7 +1700,7 @@ impl RuntimeDispatchCoordinator {
     /// explicit cleanup and test validation, never for a stale or physical
     /// packet deadline path.
     #[inline]
-    fn validate_local_slot_masks(&self) -> Result<(), CoordinatorError> {
+    pub(super) fn validate_local_slot_masks(&self) -> Result<(), CoordinatorError> {
         #[cfg(any(test, debug_assertions))]
         {
             self.validate_local_slot_masks_full()

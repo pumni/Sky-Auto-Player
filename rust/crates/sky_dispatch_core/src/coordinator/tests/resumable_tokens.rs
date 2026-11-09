@@ -18,6 +18,108 @@ fn commit_next(coordinator: &mut RuntimeDispatchCoordinator) {
 }
 
 #[test]
+fn prepared_authored_proof_is_bound_to_entry_coordinator_and_cursor() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "proof Down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100,
+                scan_codes: vec![0x15].into(),
+                reason: "proof Up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid proof schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule.clone(), 0, 0, TimelineTicks::from_raw);
+    let mut other_coordinator =
+        RuntimeDispatchCoordinator::new(schedule.clone(), 0, 0, TimelineTicks::from_raw);
+    let prepared_commit = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare proof packet")
+        .expect("proof packet exists")
+        .commit
+        .clone();
+
+    let copied_entry = prepared_commit.clone();
+    let wrong_entry_proof = coordinator
+        .prove_prepared_authored_commit(&prepared_commit)
+        .expect("proof matches original entry");
+    assert!(matches!(
+        coordinator.commit_prepared_authored_frame_success_proven(
+            wrong_entry_proof,
+            &copied_entry,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        ),
+        Err(CoordinatorError::PreparedAuthoredProofMismatch)
+    ));
+
+    let proof = coordinator
+        .prove_prepared_authored_commit(&prepared_commit)
+        .expect("proof matches current entry");
+    assert!(matches!(
+        other_coordinator.commit_prepared_authored_frame_success_proven(
+            proof,
+            &prepared_commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        ),
+        Err(CoordinatorError::PreparedAuthoredProofMismatch)
+    ));
+    assert_eq!(other_coordinator.cursor, 0);
+
+    let stale_proof = coordinator
+        .prove_prepared_authored_commit(&prepared_commit)
+        .expect("second proof matches current entry");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &prepared_commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("advance coordinator before stale proof use");
+    assert!(matches!(
+        coordinator.commit_prepared_authored_frame_success_proven(
+            stale_proof,
+            &prepared_commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        ),
+        Err(CoordinatorError::PreparedBatchMismatch { .. })
+    ));
+
+    let mut successful = RuntimeDispatchCoordinator::new(schedule, 0, 0, TimelineTicks::from_raw);
+    let prepared_commit = successful
+        .prepare_current_authored_packet()
+        .expect("prepare successful proof packet")
+        .expect("successful proof packet exists")
+        .commit
+        .clone();
+    let proof = successful
+        .prove_prepared_authored_commit(&prepared_commit)
+        .expect("successful proof matches current entry");
+    successful
+        .commit_prepared_authored_frame_success_proven(
+            proof,
+            &prepared_commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("consume proof on successful commit");
+    assert_eq!(successful.cursor, 1);
+}
+
+#[test]
 fn all_fifteen_cancelled_ups_keep_exact_identity_and_reconcile_once() {
     let scan_codes = (0..MAX_KEYS)
         .map(|slot| 0x15 + slot as u16)

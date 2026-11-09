@@ -24,11 +24,13 @@ mod wait;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use admission::invoke_final_gate_race_hook;
+#[allow(unused_imports)]
 pub(crate) use admission::{
     FinalControlAdmission, FinalControlSignals, FinalDownVerdict, FinalGateRejection,
     FinalTargetSignals, TargetStamp, apply_final_down_rejection, ensure_preflight_for_target,
     enter_focus_pause, final_control_precheck, final_down_control_verdict,
-    final_down_modifier_verdict, final_down_post_modifier_verdict, final_down_target_admission,
+    final_down_fresh_target_admission, final_down_modifier_verdict,
+    final_down_post_modifier_verdict, final_down_target_admission, final_down_target_hint,
     focus_matches, focus_matches_hwnd, handle_final_focus_loss, load_target_stamp,
     modifier_guard_rejection_step, owner_rejection_reason, record_final_gate_rejection,
     target_stamp_still_current, trace_kind_for_packet_kind,

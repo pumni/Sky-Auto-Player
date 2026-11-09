@@ -204,6 +204,7 @@ pub(crate) struct FinalControlSignals<'a> {
     pub(crate) system_power: Option<&'a super::super::shared::SystemPowerState>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) expected: TargetStamp,
     pub(crate) require_focus: bool,
@@ -249,28 +250,33 @@ pub(crate) fn final_down_control_verdict(signals: FinalControlSignals<'_>) -> Fi
     }
 }
 
-/// Final target/focus gate for Down-bearing traffic at the precision boundary.
-/// Control and lease decisions are intentionally kept in the shared control
-/// gate so an UpOnly/release send never acquires a focus dependency.  The
-/// published focus hint is a cheap early rejection; a Down that remains
-/// eligible then receives one fresh foreground proof before the final atomic
-/// revalidation.
-pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> FinalDownVerdict {
+/// Cheap target and published-focus hints used before modifier observation.
+#[inline(always)]
+pub(crate) fn final_down_target_hint(target: &FinalTargetSignals<'_>) -> FinalDownVerdict {
     if !target_stamp_still_current(target.target, target.expected) {
         return FinalDownVerdict::TargetChanged;
     }
     if !focus_matches(target.require_focus, target.focus_active) {
         return FinalDownVerdict::FocusLost;
     }
-    if target.require_focus {
+    FinalDownVerdict::Allowed
+}
+
+/// Fresh foreground/process proof and coherent target-owner revalidation for
+/// Down-bearing traffic. Call after modifier observation, immediately before
+/// the shared lease and final-control suffix.
+pub(crate) fn final_down_fresh_target_admission(
+    target: FinalTargetSignals<'_>,
+) -> FinalDownVerdict {
+    let owner_pid = if target.require_focus {
         if target.expected.hwnd == 0 {
             return FinalDownVerdict::FocusLost;
         }
-        let owner_pid = match target
+        match target
             .target
             .owner_identity_status(target.expected.generation)
         {
-            OwnerIdentityStatus::Bound(owner_pid) => owner_pid,
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => owner_pid,
             OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
                 return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
             }
@@ -290,7 +296,14 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Fin
             | OwnerIdentityStatus::ProcessIdentityMismatch => {
                 return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityDrift);
             }
-        };
+            OwnerIdentityStatus::Bound(_) => {
+                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
+            }
+        }
+    } else {
+        0
+    };
+    if target.require_focus {
         match sky_dispatch_win32::focus::foreground_window_owner_matches(
             target.expected.hwnd,
             owner_pid,
@@ -330,7 +343,20 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Fin
         target.expected,
         target.require_focus,
         target.focus_active,
+        target.require_focus.then_some(owner_pid),
     )
+}
+
+/// Compatibility helper for callers that need the complete target gate in
+/// one call. Precision dispatch uses the two stages explicitly so modifiers
+/// precede the fresh foreground query.
+#[allow(dead_code)]
+pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> FinalDownVerdict {
+    let hint = final_down_target_hint(&target);
+    if hint != FinalDownVerdict::Allowed {
+        return hint;
+    }
+    final_down_fresh_target_admission(target)
 }
 
 /// Recheck only bounded atomic target, focus, and owner state after the
@@ -342,6 +368,7 @@ pub(crate) fn final_down_atomic_revalidation(
     expected: TargetStamp,
     require_focus: bool,
     focus_active: &AtomicBool,
+    expected_owner_pid: Option<u32>,
 ) -> FinalDownVerdict {
     if !target_stamp_still_current(target, expected) {
         return FinalDownVerdict::TargetChanged;
@@ -351,7 +378,11 @@ pub(crate) fn final_down_atomic_revalidation(
     }
     if require_focus {
         match target.owner_identity_status(expected.generation) {
-            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {}
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {
+                if expected_owner_pid.is_some_and(|expected| expected != owner_pid) {
+                    return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch);
+                }
+            }
             OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
                 return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
             }
@@ -400,7 +431,8 @@ pub(crate) fn final_down_post_modifier_verdict(
     #[cfg(test)] qpc_sample_count: &mut u64,
     #[cfg(test)] qpc_sample_override: &mut Option<Result<QpcTicks, QpcError>>,
 ) -> Result<FinalDownVerdict, QpcError> {
-    let authority = final_down_atomic_revalidation(target, expected, require_focus, focus_active);
+    let authority =
+        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
     if authority != FinalDownVerdict::Allowed {
         return Ok(authority);
     }

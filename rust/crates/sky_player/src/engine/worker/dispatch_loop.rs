@@ -1034,6 +1034,15 @@ pub(super) fn dispatch(
                 } else {
                     None
                 };
+                let authored_commit_proof = super::dispatch::prove_prepared_authored_entry(
+                    &resources.coordinator,
+                    prepared_stream.as_ref().and_then(|stream| stream.current()),
+                    has_physical,
+                    &mut core.runtime.terminal_error,
+                );
+                if has_physical && authored_commit_proof.is_none() {
+                    break;
+                }
                 let prepared_physical_timing_window = if has_physical {
                     let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
                         Some(PreparedDispatchEntry::Physical(frame)) => frame,
@@ -1194,26 +1203,6 @@ pub(super) fn dispatch(
                     {
                         packet_down_mask = frame.view.packet_masks.down_mask;
                     }
-                    if let Err(error) = resources.coordinator.validate_frozen_authored_commit(
-                        match &frame.view.commit {
-                            super::dispatch::PhysicalCommit::Authored(commit)
-                            | super::dispatch::PhysicalCommit::Coalesced {
-                                authored: commit, ..
-                            } => commit,
-                            super::dispatch::PhysicalCommit::PendingRelease { .. } => {
-                                core.runtime.terminal_error = Some(
-                                    "prepared physical frame has no authored cancellation identity"
-                                        .to_string(),
-                                );
-                                break;
-                            }
-                        },
-                    ) {
-                        core.runtime.terminal_error = Some(format!(
-                            "prepared authored cancellation identity validation failed before SendInput: {error}"
-                        ));
-                        break;
-                    }
                     #[cfg(any(test, feature = "test-support"))]
                     if frame.view.packet_masks.down_mask != 0
                         && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
@@ -1222,8 +1211,10 @@ pub(super) fn dispatch(
                             super::super::config::StartupCheckpoint::FirstDownAdmission,
                         );
                     }
+                    let proof = authored_commit_proof.expect("missing prepared authored proof");
                     dispatch_prepared_normal_frame(
                         frame,
+                        Some(proof),
                         config,
                         resources,
                         core.health.as_mut().unwrap(),

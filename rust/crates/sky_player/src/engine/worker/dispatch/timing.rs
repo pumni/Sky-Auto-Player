@@ -18,7 +18,9 @@ use super::super::{
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit, RecoveryDescriptor};
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::PreparedAuthoredFrame;
-use sky_dispatch_core::coordinator::{PreparedAuthoredPacket, PreparedBatch};
+use sky_dispatch_core::coordinator::{
+    PreparedAuthoredCommitProof, PreparedAuthoredPacket, PreparedBatch,
+};
 use sky_dispatch_win32::input::{
     MaterializedInstrumentKeyProfile, PacketRetryReason, PhysicalPacket, SendTransactionStatus,
 };
@@ -377,6 +379,7 @@ pub(crate) struct DownSendTiming {
 #[allow(clippy::too_many_arguments)]
 fn resolve_send_boundaries(
     view: &AuthoredBatchView,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     coordinator: &mut RuntimeDispatchCoordinator,
@@ -437,17 +440,30 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    let commit_result = match &view.commit {
-        PhysicalCommit::Authored(commit) => coordinator
+    let commit_result = match (&view.commit, authored_commit_proof) {
+        (PhysicalCommit::Authored(commit), Some(proof)) => coordinator
+            .commit_prepared_authored_frame_success_proven(
+                proof,
+                commit,
+                pre_call_effective_ticks,
+                completed_effective_ticks,
+            ),
+        (PhysicalCommit::Authored(commit), None) => coordinator
             .commit_prepared_authored_frame_success_frozen(
                 commit,
                 pre_call_effective_ticks,
                 completed_effective_ticks,
             ),
-        PhysicalCommit::PendingRelease {
-            release_mask,
-            due_ticks,
-        } => {
+        (PhysicalCommit::PendingRelease { .. } | PhysicalCommit::Coalesced { .. }, Some(_)) => {
+            Err(sky_dispatch_core::coordinator::CoordinatorError::PreparedAuthoredProofMismatch)
+        }
+        (
+            PhysicalCommit::PendingRelease {
+                release_mask,
+                due_ticks,
+            },
+            None,
+        ) => {
             if pre_call_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "pending release started before its due boundary".to_string(),
@@ -455,11 +471,14 @@ fn resolve_send_boundaries(
             }
             coordinator.commit_pending_release_success(*release_mask, pre_call_effective_ticks)
         }
-        PhysicalCommit::Coalesced {
-            authored,
-            release_mask,
-            due_ticks,
-        } => {
+        (
+            PhysicalCommit::Coalesced {
+                authored,
+                release_mask,
+                due_ticks,
+            },
+            None,
+        ) => {
             if pre_call_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "coalesced pending release started before its due boundary".to_string(),
@@ -518,6 +537,7 @@ pub(crate) fn interpret_down_send_timing(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
 ) -> Result<DownSendTiming, DispatchStep> {
     if let Some(completed_qpc) = result_completed_ticks
         && completed_qpc
@@ -535,6 +555,7 @@ pub(crate) fn interpret_down_send_timing(
         completion_lateness_ticks,
     ) = resolve_send_boundaries(
         view,
+        authored_commit_proof,
         clock_state,
         runtime,
         coordinator,

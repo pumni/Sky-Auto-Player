@@ -6,11 +6,11 @@ use super::super::super::{
 use super::super::invoke_final_gate_race_hook;
 use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::{
-    DispatchPath, FinalControlAdmission, FinalControlSignals, FinalDownVerdict, FinalTargetSignals,
-    TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
-    WorkerRuntime, WorkerTimingState, apply_final_down_rejection, enter_focus_pause,
-    final_control_precheck, final_down_control_verdict, final_down_modifier_verdict,
-    final_down_post_modifier_verdict, final_down_target_admission, focus_matches,
+    DispatchPath, FinalControlAdmission, FinalControlSignals, FinalDownVerdict, TargetStamp,
+    WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
+    WorkerTimingState, apply_final_down_rejection, enter_focus_pause, final_control_precheck,
+    final_down_control_verdict, final_down_fresh_target_admission, final_down_modifier_verdict,
+    final_down_post_modifier_verdict, final_down_target_hint, focus_matches,
     handle_final_focus_loss, modifier_guard_rejection_step, owner_rejection_reason,
     signed_ticks_to_us, target_stamp_still_current, trace_kind_for_packet_kind,
 };
@@ -20,9 +20,16 @@ use super::observer::publisher_down_send_outcome;
 use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
+#[path = "authored/admission.rs"]
+mod admission;
 use crate::engine::shared::{
     SessionTarget, SharedProgressClock, SupervisorLeaseState, SystemPowerState,
 };
+use admission::{
+    build_final_target_signals, final_policy_boundary_qpc, reject_authored_target_if_needed,
+    resolve_target_crossing,
+};
+use sky_dispatch_core::coordinator::PreparedAuthoredCommitProof;
 use sky_dispatch_win32::input::SendTransactionOutcome;
 use std::sync::atomic::AtomicBool;
 #[allow(clippy::too_many_arguments)]
@@ -416,16 +423,14 @@ fn finalize_authored_down_admission(
     else {
         return Ok(admission);
     };
-    let target_crossing_qpc = match resolve_target_crossing_qpc(
+    let Some(target_crossing_qpc) = resolve_target_crossing(
         down_admission,
         boundary_crossing_qpc,
         physical_target_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
-    ) {
-        Ok(value) => value,
-        Err(DispatchStep::Continue) => return Ok(AdmissionOutcome::ControlRejected),
-        Err(step) => return Err(step),
+    )? else {
+        return Ok(AdmissionOutcome::ControlRejected);
     };
     #[cfg(any(test, feature = "test-support"))]
     invoke_final_gate_race_hook(
@@ -450,39 +455,45 @@ fn finalize_authored_down_admission(
         apply_final_down_rejection(FinalDownVerdict::ControlRejected, runtime, local_metrics);
         return Ok(AdmissionOutcome::ControlRejected);
     }
-    let view_has_down = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
-    if view_has_down {
+    #[cfg(any(test, feature = "test-support"))]
+    let post_focus_race_hook = runtime.final_gate_post_focus_race_hook.clone();
+    let target_signals = if view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down {
         let Some(expected) = preflight_target else {
             return Err(DispatchStep::Terminate(
                 "down-bearing dispatch reached final admission without frozen target proof"
                     .to_string(),
             ));
         };
-        let target_verdict = final_down_target_admission(FinalTargetSignals {
+        Some(build_final_target_signals(
             expected,
-            require_focus: config.focus.require_focus,
+            config.focus.require_focus,
             focus_active,
             target,
             #[cfg(any(test, feature = "test-support"))]
-            post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
+            post_focus_race_hook.as_ref(),
             #[cfg(any(test, feature = "test-support"))]
-            post_focus_control_signals: Some(control_signals),
-        });
-        if target_verdict != FinalDownVerdict::Allowed {
-            apply_final_down_rejection(target_verdict, runtime, local_metrics);
-            return authored_target_rejection_outcome(
-                target_verdict,
-                qpc_clock,
-                clock_state,
-                runtime,
-                progress_clock,
-            );
+            control_signals,
+        ))
+    } else {
+        None
+    };
+    if let Some(signals) = target_signals {
+        let target_hint = final_down_target_hint(&signals);
+        if let Some(outcome) = reject_authored_target_if_needed(
+            target_hint,
+            qpc_clock,
+            clock_state,
+            runtime,
+            local_metrics,
+            progress_clock,
+        )? {
+            return Ok(outcome);
         }
     }
     if !final_atomic_revalidation(control_signals, runtime, local_metrics) {
         return Ok(AdmissionOutcome::ControlRejected);
     }
-    if view_has_down {
+    if let Some(signals) = target_signals {
         let modifier_verdict = final_down_modifier_verdict(backend);
         if modifier_verdict != FinalDownVerdict::Allowed {
             apply_final_down_rejection(modifier_verdict, runtime, local_metrics);
@@ -506,18 +517,24 @@ fn finalize_authored_down_admission(
             desired_pause,
             system_power,
         );
-        let Some(expected) = preflight_target else {
-            return Err(DispatchStep::TerminateStatic(
-                "modifier guard reached without frozen target proof",
-            ));
-        };
+        let fresh_target_verdict = final_down_fresh_target_admission(signals);
+        if let Some(outcome) = reject_authored_target_if_needed(
+            fresh_target_verdict,
+            qpc_clock,
+            clock_state,
+            runtime,
+            local_metrics,
+            progress_clock,
+        )? {
+            return Ok(outcome);
+        }
         #[cfg(test)]
         if let Some(hook) = runtime.final_lease_age_hook_for_test.as_deref() {
             hook(supervisor_expired);
         }
         let verdict = final_down_post_modifier_verdict(
             target,
-            expected,
+            signals.expected,
             config.focus.require_focus,
             focus_active,
             control_signals,
@@ -542,23 +559,13 @@ fn finalize_authored_down_admission(
             );
         }
     }
-    #[cfg(any(test, feature = "test-support"))]
-    let final_policy_qpc = if test_direct_boundary {
-        physical_target_qpc
-    } else {
-        qpc_clock.now().map_err(|error| {
-            DispatchStep::Terminate(format!("QPC final policy boundary failure: {error:?}"))
-        })?
-    };
-    #[cfg(not(any(test, feature = "test-support")))]
-    let final_policy_qpc = qpc_clock.now().map_err(|error| {
-        DispatchStep::Terminate(format!("QPC final policy boundary failure: {error:?}"))
-    })?;
-    Ok(AdmissionOutcome::Allowed {
-        trace_kind,
-        target_crossing_qpc,
-        final_policy_qpc,
-    })
+    let final_policy_qpc = final_policy_boundary_qpc(
+        qpc_clock,
+        physical_target_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        test_direct_boundary,
+    )?;
+    Ok(AdmissionOutcome::Allowed { trace_kind, target_crossing_qpc, final_policy_qpc })
 }
 
 #[cold]
@@ -688,6 +695,7 @@ pub(super) fn record_down_send_outcome(
         backend.send_prepared_physical_packet_at_final_boundary(prepared_packet, test_now_ticks);
     super::prepared::record_down_send_result(
         view,
+        None,
         config,
         health,
         timing,
@@ -711,6 +719,7 @@ pub(super) fn record_down_send_outcome(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_prepared_normal_send_outcome(
     view: &AuthoredBatchView,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
     config: &WorkerConfig,
     health: &mut WorkerHealthState,
     timing: &WorkerTimingState,
@@ -731,6 +740,7 @@ pub(super) fn record_prepared_normal_send_outcome(
     debug_assert!(!timing.strict_timing);
     super::prepared::record_down_send_result(
         view,
+        authored_commit_proof,
         config,
         health,
         timing,
@@ -778,6 +788,7 @@ pub(super) fn finalize_down_send_outcome(
     result_retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let timing_proof = match interpret_down_send_timing(
@@ -802,6 +813,7 @@ pub(super) fn finalize_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
+        authored_commit_proof,
     ) {
         Ok(value) => value,
         Err(step) => return step,
