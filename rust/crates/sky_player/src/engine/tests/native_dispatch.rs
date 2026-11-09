@@ -757,7 +757,7 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
 
     let _observer_hooks = observer_test_hook_guard();
     set_observer_artificial_cost_us(20_000);
-    let stale_count = 64usize;
+    let stale_count = 256usize;
     let expected_stale_packets = stale_count + 1;
     let mut actions = vec![
         KeyActionInput {
