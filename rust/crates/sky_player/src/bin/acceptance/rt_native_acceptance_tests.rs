@@ -10,7 +10,7 @@ use super::{
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
-    reconcile_events, scenario_plan,
+    reconcile_events, expected_sink_physical_keys, scenario_plan,
     validate_event_stream, validate_ready_record, noncanonical_profile_spec, wait_for_sink_events_with,
 };
 use super::scenarios::production_options;
@@ -284,6 +284,39 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert!(delayed.schedule.packets[0].scheduled_us > 3_000_000);
     assert!(delayed.expected_down_slots.is_empty());
     assert!(delayed.expected_up_slots.is_empty());
+}
+#[test]
+fn system_suspend_terminal_reconciles_only_committed_down_and_cleanup_up() {
+    let plan = scenario_plan(Scenario::SuspendResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    let authored_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
+    let authored_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let (sink_down, sink_up) = expected_sink_physical_keys(
+        Scenario::SuspendResume,
+        plan.profile.as_ref(),
+        &authored_down,
+        &authored_up,
+    );
+
+    assert_eq!(sink_down.len(), 1);
+    assert_eq!(sink_up, sink_down);
+    let observed_terminal_cleanup = [
+        event(1, "key_press", sink_down[0].scan_code),
+        event(2, "key_release", sink_up[0].scan_code),
+    ];
+    assert!(reconcile_events(
+        &observed_terminal_cleanup,
+        &sink_down,
+        &sink_up,
+        true,
+    )
+    .is_ok());
+    assert!(reconcile_events(
+        &observed_terminal_cleanup,
+        &authored_down,
+        &authored_up,
+        true,
+    )
+    .is_err());
 }
 #[test]
 fn processkey_correct_scan_passes_and_wrong_scan_fails() {

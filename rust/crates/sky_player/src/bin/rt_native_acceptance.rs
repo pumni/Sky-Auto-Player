@@ -233,6 +233,22 @@ fn read_log_window_status(
 fn physical_event(event: &EventRecord) -> PhysicalExpectation {
     PhysicalExpectation { scan_code: event.scan_code, extended: event.extended }
 }
+fn expected_sink_physical_keys(
+    scenario: Scenario,
+    profile: Option<&InstrumentKeyProfileSpec>,
+    expected_down: &[PhysicalExpectation],
+    expected_up: &[PhysicalExpectation],
+) -> (Vec<PhysicalExpectation>, Vec<PhysicalExpectation>) {
+    if scenario == Scenario::SuspendResume {
+        // System suspend is terminal for this physical session. Only the first
+        // committed Down and its safety Up can be observed; later authored
+        // events are not expected after terminal cleanup.
+        let first_key = expected_physical_keys(profile, &[0]);
+        (first_key.clone(), first_key)
+    } else {
+        (expected_down.to_vec(), expected_up.to_vec())
+    }
+}
 fn validate_event_prefix(
     events: &[EventRecord],
     expected_down: &[PhysicalExpectation],
@@ -377,6 +393,12 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(
+        args.scenario,
+        plan.profile.as_ref(),
+        &expected_down,
+        &expected_up,
+    );
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
     let (mut options, modifier_query_count) = modifier_guard::native_session_options(
         plan.schedule,
@@ -607,10 +629,6 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         Err(error) => inconclusive!(&format!("native timing telemetry unavailable: {error}"), snapshot_json(&snapshot)),
     };
-    let suspend_down = expected_physical_keys(plan.profile.as_ref(), &[0]);
-    let suspend_up = expected_physical_keys(plan.profile.as_ref(), &[0]);
-    let sink_expected_down = if args.scenario == Scenario::SuspendResume { &suspend_down } else { &expected_down };
-    let sink_expected_up = if args.scenario == Scenario::SuspendResume { &suspend_up } else { &expected_up };
     let sink_drain_mode = DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: plan.allow_unpaired_cleanup_ups };
     let (sink_events, sink_drain_failure) = match drain_event_window(
         &args.sink_events,
@@ -618,8 +636,8 @@ fn run_windows(args: RunArgs) -> i32 {
         &fresh_sink,
         RECEIVE_ONLY_ROLE,
         sink_drain_mode,
-        sink_expected_down,
-        sink_expected_up,
+        &sink_expected_down,
+        &sink_expected_up,
     ) {
         DrainResult::Pass(events) => (events, None),
         DrainResult::Fail(reason, events) => (events, Some(reason)),
@@ -681,7 +699,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("independent_helper_liveness_ticks".to_string(), json!(independent_helper_liveness_ticks));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
-        object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_authority_invalidated_at_first_down_checkpoint": owner_authority_invalidated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_authority_invalidated_at_first_down_checkpoint": owner_authority_invalidated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
             object.insert(
@@ -767,7 +785,7 @@ fn run_windows(args: RunArgs) -> i32 {
         {
             return write_report(&args, Verdict::Fail, "suspend/resume control evidence is incomplete", details);
         }
-        let first = suspend_down[0];
+        let first = sink_expected_down[0];
         let expected = [("key_press", first), ("key_release", first)];
         if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); }
     }
@@ -807,7 +825,7 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Fail, "ambiguous packet did not reconcile to its exact bounded cleanup mask and event sequence", details);
     }
     if args.scenario.needs_focus_probe() {
-        let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, plan.allow_unpaired_cleanup_ups).is_ok();
+        let sink_events_clean = reconcile_events(&sink_events, &sink_expected_down, &sink_expected_up, plan.allow_unpaired_cleanup_ups).is_ok();
         if !focus_evidence_clean(focus_gate_observed, snapshot.final_gate_focus_losses, snapshot.final_gate_target_changes, sink_events_clean, probe_events.is_empty()) {
             return write_report(
                 &args,
@@ -818,8 +836,8 @@ fn run_windows(args: RunArgs) -> i32 {
         }
     } else if let Err(error) = reconcile_events(
         &sink_events,
-        &expected_down,
-        &expected_up,
+        &sink_expected_down,
+        &sink_expected_up,
         plan.allow_unpaired_cleanup_ups,
     ) {
         return write_report(&args, Verdict::Fail, &error, details);
