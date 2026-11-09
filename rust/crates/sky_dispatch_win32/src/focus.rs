@@ -247,6 +247,8 @@ pub fn foreground_window_owner_matches(
 }
 
 mod window_identity;
+#[cfg(all(windows, feature = "test-support"))]
+pub use window_identity::terminate_receive_only_sink_process_for_test;
 pub use window_identity::{
     WindowIdentity, WindowIdentityAuthority, WindowIdentityContinuity, retain_window_identity,
 };

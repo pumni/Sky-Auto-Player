@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $baseRevision = '843cc0c6a1392dfff0ca4b017551bd1ffb180579'
@@ -679,9 +680,9 @@ function Get-PairedMetrics {
             unfavorable_p99_pairs = @($availableRows | Where-Object { -not $_.favorable_p99 }).Count
             p95_regression_pairs = $p95Worse
             p99_regression_pairs = $p99Worse
-            paired_sessions_over_threshold = $triggered
+            pairs_with_any_tail_regression = $triggered
             screen_complete = $rows.Count -eq 6 -and $availableRows.Count -eq 6
-            leader_review_prompt = $rows.Count -eq 6 -and $availableRows.Count -eq 6 -and $triggered -ge 4
+            leader_review_prompt = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs $rows.Count -AvailablePairs $availableRows.Count -P95RegressionPairs $p95Worse -P99RegressionPairs $p99Worse
             p95_delta_us = Get-Percentiles $deltaP95
             p99_delta_us = Get-Percentiles $deltaP99
             no_outlier_removed = $true

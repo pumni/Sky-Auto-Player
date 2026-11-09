@@ -122,15 +122,36 @@ fn run_release_floor_cycles(
                 "CASE-NOT-EXERCISED: actual successful Up completion {cycle} was not observed"
             ));
         }
-        // Let the next authored Down target fall below the post-cleanup global
-        // frame floor even at the 500us acceptance margin. This stays inside
-        // the test fixture and makes the native oracle exercise the barrier.
-        thread::sleep(Duration::from_millis(4));
-        hook.clear_pause_ack_qpc();
-        session
-            .pause()
-            .map_err(|error| format!("manual pause request failed at cycle {cycle}: {error}"))?;
+        // Hold the worker after the next authored Down target is due. This
+        // makes the precondition independent of machine scheduling: the
+        // authored target is already in the past before cleanup establishes
+        // the new Q + T release barrier.
+        hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 1);
         hook.release_completed_up_through(cycle);
+        if !hook.wait_for_startup_checkpoint(Duration::from_secs(5)) {
+            hook.release_startup_checkpoint();
+            hook.release_completed_up_through(u64::MAX);
+            return Err(format!(
+                "CASE-NOT-EXERCISED: next authored Down did not reach its admission checkpoint at cycle {cycle}"
+            ));
+        }
+        let authored_due_checkpoint_qpc = match qpc.now() {
+            Ok(ticks) => ticks.as_u64(),
+            Err(error) => {
+                hook.release_startup_checkpoint();
+                hook.release_completed_up_through(u64::MAX);
+                return Err(format!(
+                    "QPC read failed at due Down checkpoint in cycle {cycle}: {error:?}"
+                ));
+            }
+        };
+        hook.clear_pause_ack_qpc();
+        if let Err(error) = session.pause() {
+            hook.release_startup_checkpoint();
+            hook.release_completed_up_through(u64::MAX);
+            return Err(format!("manual pause request failed at cycle {cycle}: {error}"));
+        }
+        hook.release_startup_checkpoint();
         if !wait_for_focus_pause(session) {
             return Err(format!("manual pause did not acknowledge at cycle {cycle}"));
         }
@@ -204,6 +225,13 @@ fn run_release_floor_cycles(
                 "CASE-NOT-EXERCISED: resumed authored Down target {authored_target_qpc} was not before release floor {barrier_qpc} at cycle {cycle} (cleanup QPC {cleanup_qpc})"
             ));
         }
+        if authored_target_qpc > authored_due_checkpoint_qpc
+            || authored_due_checkpoint_qpc >= barrier_qpc
+        {
+            return Err(format!(
+                "CASE-NOT-EXERCISED: authored target was not proven due before the release floor at cycle {cycle} (authored={authored_target_qpc}, due checkpoint={authored_due_checkpoint_qpc}, barrier={barrier_qpc})"
+            ));
+        }
         if down_not_before_qpc < barrier_qpc
             || down_sender_start_qpc < barrier_qpc
             || down_sender_attempt_count != cycle + 1
@@ -220,6 +248,7 @@ fn run_release_floor_cycles(
             "frame_ticks": frame_ticks,
             "release_barrier_qpc_ticks": barrier_qpc,
             "resume_request_qpc_ticks": resume_request_qpc,
+            "authored_due_admission_checkpoint_qpc_ticks": authored_due_checkpoint_qpc,
             "resumed_authored_down_target_qpc_ticks": authored_target_qpc,
             "resumed_down_not_before_qpc_ticks": down_not_before_qpc,
             "resumed_down_sender_start_qpc_ticks": down_sender_start_qpc,

@@ -99,6 +99,16 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: "Upload dispatch-core #646 review evidence"
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'perf/dispatch-core-20261109' && hashFiles('evidence/dispatch-core-646/*.zip') != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dispatch-core-646-${{ github.event.pull_request.head.sha }}
+          path: evidence/dispatch-core-646/*.zip
+          if-no-files-found: error
+          retention-days: 90
+
   updater_bridge:
     name: Build updater bridge fixture
     needs: changes

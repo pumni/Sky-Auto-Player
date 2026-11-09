@@ -265,6 +265,8 @@ try {
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
         sink_event_log_id = $sink.event_log_id
+        sink_process_start_time_filetime = [long]$sink.process_start_time_filetime
+        sink_process_image_path = $pwshExecutablePath
         foreground_permission_granted_to_sink = [bool]$foregroundPermissionGranted
     }
     $runConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runConfigPath -Encoding UTF8
@@ -305,6 +307,21 @@ try {
         throw 'passing native report settings do not match this invocation'
     }
 
+    $ownerProcessTerminationVerified = $null
+    if ($Scenario -eq 'owner-process-termination') {
+        $terminationFixture = $report.details.owner_process_termination_fixture
+        [void]$sinkProcess.WaitForExit(5000)
+        $sinkProcess.Refresh()
+        $ownerProcessTerminationVerified = $sinkProcess.HasExited -and
+            $sinkProcess.ExitCode -eq 0x646 -and
+            [bool]$terminationFixture.os_process_terminated -and
+            [int]$terminationFixture.owner_pid -eq [int]$sink.pid -and
+            [long]$terminationFixture.owner_hwnd -eq [long]$sink.hwnd -and
+            [long]$terminationFixture.owner_process_start_time_filetime -eq [long]$sink.process_start_time_filetime -and
+            [string]::Equals([string]$terminationFixture.owner_process_image_basename, [System.IO.Path]::GetFileName($pwshExecutablePath), [System.StringComparison]::OrdinalIgnoreCase) -and
+            [long]$terminationFixture.exit_code -eq 0x646
+    }
+
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
     for ($index = 0; $index -lt $sinkRecords.Count; $index++) {
         $record = $sinkRecords[$index]
@@ -323,10 +340,16 @@ try {
         $details.first_authorized_sequence -eq $first -and
         $details.last_authorized_sequence -eq $last -and
         $details.sink_event_count -eq $observedWindow.Count
+    if ($Scenario -eq 'owner-process-termination') {
+        $windowIntegrity = $windowIntegrity -and [bool]$ownerProcessTerminationVerified
+    }
     $window = [ordered]@{
         event_log_id = $sink.event_log_id
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
+        sink_process_start_time_filetime = [long]$sink.process_start_time_filetime
+        sink_process_image_path = $pwshExecutablePath
+        owner_process_termination_verified = $ownerProcessTerminationVerified
         cursor_sequence_before_arm = $cursor
         cursor_offset_before_arm = [long]$details.sink_cursor_offset_before_arm
         first_authorized_sequence = $first
@@ -366,6 +389,7 @@ try {
         expected_event_count = [long]$details.expected_sink_event_count
         observed_event_count = $observedWindow.Count
         report_window_match = $windowIntegrity
+        owner_process_termination_verified = $ownerProcessTerminationVerified
         report_path = 'rt-native-acceptance.jsonl'
     }
     $invocation | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $invocationPath -Encoding UTF8
@@ -408,11 +432,11 @@ try {
         }
     }
     if ($sinkProcess) {
-        $live = Get-Process -Id $sinkProcess.Id -ErrorAction SilentlyContinue
-        if ($live) {
-            [void]$live.CloseMainWindow()
-            if (-not $live.WaitForExit(3000)) {
-                Stop-Process -Id $sinkProcess.Id -Force -ErrorAction SilentlyContinue
+        $sinkProcess.Refresh()
+        if (-not $sinkProcess.HasExited) {
+            [void]$sinkProcess.CloseMainWindow()
+            if (-not $sinkProcess.WaitForExit(3000)) {
+                Stop-Process -InputObject $sinkProcess -Force -ErrorAction SilentlyContinue
             }
         }
     }

@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/evidence_runner_contract.ps1')
 . (Join-Path $PSScriptRoot 'lib/evidence_publication_contract.ps1')
+Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 
 function Assert-Contract([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "Evidence contract self-test failed: $Message" }
@@ -84,5 +85,14 @@ $publisherOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -
 $publisherExitCode = $LASTEXITCODE
 Assert-Contract ($publisherExitCode -ne 0) 'the evidence publisher accepted an external phase identifier as an evidence kind'
 Assert-Contract (($publisherOutput -join "`n").Contains('ValidateSet')) 'legacy publisher rejection did not come from the parameter contract'
+
+$disjointTailPairs = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs 6 -AvailablePairs 6 -P95RegressionPairs 2 -P99RegressionPairs 2
+Assert-Contract ($disjointTailPairs -eq $false) 'two p95 and two separate p99 regression pairs must not combine into a 4/6 prompt'
+$p95TailPairs = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs 6 -AvailablePairs 6 -P95RegressionPairs 4 -P99RegressionPairs 0
+Assert-Contract ($p95TailPairs -eq $true) 'four p95 regression pairs must prompt leader review'
+$p99TailPairs = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs 6 -AvailablePairs 6 -P95RegressionPairs 0 -P99RegressionPairs 4
+Assert-Contract ($p99TailPairs -eq $true) 'four p99 regression pairs must prompt leader review'
+$incompletePairs = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs 6 -AvailablePairs 5 -P95RegressionPairs 4 -P99RegressionPairs 4
+Assert-Contract ($null -eq $incompletePairs) 'incomplete paired data must remain inconclusive'
 
 Write-Output 'Evidence runner and publication contracts: PASS'

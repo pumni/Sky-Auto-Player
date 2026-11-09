@@ -418,7 +418,7 @@ fn run_windows(args: RunArgs) -> i32 {
         acceptance_hook.clone(),
     );
     let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
-    let owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let mut owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
         Ok(record) => record,
@@ -443,19 +443,19 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut independent_helper_probe: Option<release_gap_stress::IndependentHelperLivenessProbe> = None;
     let mut release_floor_cycles = Vec::<Value>::new();
     let mut watchdog_was_held = false;
-    let mut owner_authority_invalidated_at_first_down_checkpoint = false;
+    let mut owner_process_terminated_at_first_down_checkpoint = false;
     let mut system_suspend_terminal_observed = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     if args.scenario == Scenario::OwnerProcessTermination {
         let hook = acceptance_hook
             .as_deref()
             .expect("owner-process-termination admission checkpoint");
-        if let Err(error) = owner_identity::invalidate_at_first_down_admission(&session, hook) {
+        if let Err(error) = owner_identity::terminate_at_first_down_admission(&mut owner_binding, hook) {
             let _ = session.quit();
             let _ = session.join(Duration::from_secs(5));
             inconclusive!(&error, snapshot_json(&session.snapshot()));
         }
-        owner_authority_invalidated_at_first_down_checkpoint = true;
+        owner_process_terminated_at_first_down_checkpoint = true;
     }
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_armed(&session) {
@@ -699,7 +699,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("independent_helper_liveness_ticks".to_string(), json!(independent_helper_liveness_ticks));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
-        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_authority_invalidated_at_first_down_checkpoint": owner_authority_invalidated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
             object.insert(
@@ -756,7 +756,7 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Fail, &error, details);
     }
     if args.scenario == Scenario::TargetHwndChange && (!target_changed || !target_change_cleanup_exception(&snapshot) || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "target HWND transition did not fail closed before gameplay delivery with zero transport events", details); }
-    if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask) { return write_report(&args, verdict, reason, details); }
+    if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask, owner_binding.process_termination_verified()) { return write_report(&args, verdict, reason, details); }
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
