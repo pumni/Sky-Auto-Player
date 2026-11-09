@@ -275,7 +275,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     if let Err(error) = coordinator.attach_executor(min_hold_ticks, frame_ticks, |us| {
         qpc_clock
             .timeline_from_us(us)
-            .unwrap_or(sky_dispatch_core::time::TimelineTicks::ZERO)
+            .map_err(|e| format!("QPC conversion failure: {e:?}"))
     }) {
         return admission_failure(
             &mut backend,

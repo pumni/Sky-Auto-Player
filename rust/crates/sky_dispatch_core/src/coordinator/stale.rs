@@ -119,11 +119,21 @@ impl RuntimeDispatchCoordinator {
     /// Prepare the next stale packet at or before `now_ticks`, advancing the
     /// cursor past physical packets that have already arrived so that midstream
     /// and trailing stale metadata remains reachable under Phase B execution.
+    pub const MAX_STALE_PACKETS_SCANNED_PER_STEP: usize = 32;
+
+    /// Prepare the current stale packet at `now_ticks`.
+    ///
+    /// The scan is bounded to at most [`Self::MAX_STALE_PACKETS_SCANNED_PER_STEP`]
+    /// packets per invocation to maintain real-time responsiveness.
     pub fn prepare_current_stale_packet_at(
         &mut self,
         now_ticks: TimelineTicks,
     ) -> Result<Option<PreparedStalePacket>, CoordinatorError> {
-        while self.cursor < self.schedule.batches.len() {
+        let mut scanned = 0usize;
+        while self.cursor < self.schedule.batches.len()
+            && scanned < Self::MAX_STALE_PACKETS_SCANNED_PER_STEP
+        {
+            scanned += 1;
             let batch = &self.schedule.batches[self.cursor];
             let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
                 CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(

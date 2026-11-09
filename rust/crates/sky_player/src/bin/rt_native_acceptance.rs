@@ -403,22 +403,21 @@ fn run_windows(args: RunArgs) -> i32 {
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
     let (mut options, modifier_query_count) = modifier_guard::native_session_options(
-        plan.schedule,
-        plan.profile,
-        args.timing_margin_us,
-        args.scenario,
-        args.game_fps,
+        plan.schedule, plan.profile, args.timing_margin_us, args.scenario, args.game_fps,
     );
     options.startup_calibration_placement = match args.calibration_placement {
         CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,
     };
     options.timing_observer_for_qualification = args.timing_observer_for_qualification;
-    let acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
+    let mut acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
+    if args.hol_stall_us > 0 {
+        let hook = acceptance_hook.unwrap_or_else(|| Arc::new(sky_player::engine::StartupOrderingHook::default()));
+        hook.enable_hol_stall(args.hol_stall_us, 0x0001);
+        acceptance_hook = Some(hook);
+    }
     options.startup_ordering_hook = acceptance_hook.clone();
-    let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(
-        acceptance_hook.clone(),
-    );
+    let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(acceptance_hook.clone());
     let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
     let mut owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
     session.set_focus_hint(true);
@@ -707,20 +706,18 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
-            object.insert(
-                "system_suspend_fixture".to_string(),
-                json!({
-                    "injection_method": "NativeDispatchSession::notify_system_power(true)",
-                    "physical_os_suspend_performed": false,
-                    "resume_notified": false,
-                    "physical_session_terminal": system_suspend_terminal_observed,
-                }),
-            );
+            object.insert("system_suspend_fixture".to_string(), json!({"injection_method": "NativeDispatchSession::notify_system_power(true)", "physical_os_suspend_performed": false, "resume_notified": false, "physical_session_terminal": system_suspend_terminal_observed}));
         }
         modifier_guard::attach_query_evidence(object, args.scenario, modifier_query_count.load(Ordering::SeqCst));
         owner_binding.insert_report_fields(args.scenario, object, down_sender_attempt_count);
         let power = session.system_power_snapshot();
         object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
+        if let Some(hook) = acceptance_hook.as_ref() {
+            let (count, pre_qpc, post_qpc) = hook.hol_stall_evidence();
+            object.insert("hol_stall_count".to_string(), json!(count));
+            object.insert("hol_last_stall_pre_qpc".to_string(), json!(pre_qpc));
+            object.insert("hol_last_stall_post_qpc".to_string(), json!(post_qpc));
+        }
     }
     if args.scenario == Scenario::PreflightUserHeld {
         let (verdict, reason) = preflight_user_held_result(&snapshot, &sink_events);

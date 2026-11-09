@@ -171,6 +171,7 @@ pub(super) struct RunArgs {
     pub(super) focus_probe_events: Option<PathBuf>,
     pub(super) focus_probe_hwnd: Option<isize>,
     pub(super) focus_restore_request: Option<PathBuf>,
+    pub(super) hol_stall_us: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +262,7 @@ where
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
     let mut focus_restore_request = None;
+    let mut hol_stall_us = 0u64;
     let mut arguments = arguments.peekable();
     while let Some(flag) = arguments.next() {
         macro_rules! next_value {
@@ -374,6 +376,12 @@ where
                 let value = next_value!("--focus-restore-request");
                 focus_restore_request = Some(bounded_path(&value, "--focus-restore-request")?);
             }
+            "--hol-stall-us" => {
+                let value = next_value!("--hol-stall-us");
+                hol_stall_us = value
+                    .parse::<u64>()
+                    .map_err(|_| "--hol-stall-us must be an integer".to_string())?;
+            }
             "--help" | "-h" => return Ok(ParsedCommand::Help),
             _ => return Err(format!("unknown argument {flag:?}")),
         }
@@ -398,6 +406,7 @@ where
         focus_probe_events,
         focus_probe_hwnd,
         focus_restore_request,
+        hol_stall_us,
     };
     let probe_count = [
         run.focus_probe_ready.is_some(),

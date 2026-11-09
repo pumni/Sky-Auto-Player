@@ -772,19 +772,22 @@ impl RuntimeDispatchCoordinator {
         self.pending_release_mask.count_ones() as usize
     }
 
-    pub fn attach_executor(
+    pub fn attach_executor<F, E>(
         &mut self,
         min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
-        to_ticks: impl Fn(u64) -> TimelineTicks,
-    ) -> Result<(), String> {
+        to_ticks: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64) -> Result<TimelineTicks, E>,
+        E: std::fmt::Display,
+    {
         let executor = crate::executor::DispatchExecutor::new(
             &self.schedule,
             min_hold_ticks,
             frame_ticks,
             to_ticks,
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
         self.executor = Some(executor);
         Ok(())
     }

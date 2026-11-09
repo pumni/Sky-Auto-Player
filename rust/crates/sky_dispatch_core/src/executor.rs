@@ -95,27 +95,40 @@ pub struct DispatchExecutor {
 
 impl DispatchExecutor {
     /// Construct a new 15-slot executor from a validated `RuntimeSchedule`.
-    pub fn new<F>(
+    pub fn new<F, E>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
         mut us_to_ticks: F,
     ) -> Result<Self, String>
     where
-        F: FnMut(u64) -> TimelineTicks,
+        F: FnMut(u64) -> Result<TimelineTicks, E>,
+        E: std::fmt::Display,
     {
         let mut down_chords = Vec::with_capacity(schedule.down_chords.len());
         for chord in &schedule.down_chords {
-            let scheduled_ticks = us_to_ticks(chord.scheduled_us);
+            let scheduled_ticks = us_to_ticks(chord.scheduled_us).map_err(|e| {
+                format!(
+                    "scheduled timestamp conversion failed for chord at {}us: {e}",
+                    chord.scheduled_us
+                )
+            })?;
             let mut intents = SmallVec::new();
             for intent in &chord.intents {
+                let paired_up_offset_ticks =
+                    us_to_ticks(intent.paired_up_offset_us).map_err(|e| {
+                        format!(
+                            "paired Up offset timestamp conversion failed at {}us: {e}",
+                            intent.paired_up_offset_us
+                        )
+                    })?;
                 intents.push(DownIntentTicks {
                     generation_id: intent.generation_id,
                     key_slot: intent.key_slot,
                     scan_code: intent.scan_code,
                     source_action_index: intent.source_action_index,
                     reason_id: intent.reason_id,
-                    paired_up_offset_ticks: us_to_ticks(intent.paired_up_offset_us),
+                    paired_up_offset_ticks,
                     paired_up_offset_us: intent.paired_up_offset_us,
                     paired_up_source_action_index: intent.paired_up_source_action_index,
                 });
@@ -131,7 +144,13 @@ impl DispatchExecutor {
             });
         }
 
-        let schedule_end_offset_ticks = us_to_ticks(schedule.schedule_end_offset_us);
+        let schedule_end_offset_ticks =
+            us_to_ticks(schedule.schedule_end_offset_us).map_err(|e| {
+                format!(
+                    "schedule end offset timestamp conversion failed at {}us: {e}",
+                    schedule.schedule_end_offset_us
+                )
+            })?;
 
         Ok(Self {
             down_chords,
@@ -416,5 +435,7 @@ impl DispatchExecutor {
     }
 }
 
+#[cfg(test)]
+mod scale_tests;
 #[cfg(test)]
 mod tests;

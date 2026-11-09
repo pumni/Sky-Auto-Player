@@ -2050,6 +2050,7 @@ impl ProductionDispatchTestHarness {
         &mut self,
         post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
     ) -> Result<(), String> {
+        let playback = self.resources.playback.clone();
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2057,6 +2058,15 @@ impl ProductionDispatchTestHarness {
             Ok(self.effective_now_ticks),
             self.target.hwnd_for_safety_release(),
             post_cleanup_qpc,
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
+            },
         )
     }
 
@@ -2068,6 +2078,7 @@ impl ProductionDispatchTestHarness {
         let effective_now_ticks = self.effective_now_ticks;
         let target_hwnd = self.target.hwnd_for_safety_release();
         let qpc_clock = self.resources.clock;
+        let playback = self.resources.playback.clone();
         super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2078,6 +2089,15 @@ impl ProductionDispatchTestHarness {
                 qpc_clock
                     .now()
                     .map_err(|error| format!("test cleanup QPC: {error:?}"))
+            },
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
             },
         )
     }
@@ -2097,6 +2117,7 @@ impl ProductionDispatchTestHarness {
             .get_elapsed_allow_pre_epoch(pause_qpc, false)
             .map_err(|error| format!("manual pause probe clock: {error}"))?;
         self.effective_now_ticks = effective_now;
+        let playback = self.resources.playback.clone();
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2104,6 +2125,15 @@ impl ProductionDispatchTestHarness {
             Ok(effective_now),
             self.target.hwnd_for_safety_release(),
             || Ok(pause_qpc),
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
+            },
         )?;
         self.resources
             .playback
@@ -2139,6 +2169,7 @@ impl ProductionDispatchTestHarness {
             .playback
             .get_elapsed_allow_pre_epoch(restore_qpc, false)
             .map_err(|error| format!("focus restore probe clock: {error}"))?;
+        let playback = self.resources.playback.clone();
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2149,6 +2180,15 @@ impl ProductionDispatchTestHarness {
                 qpc_clock
                     .now()
                     .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
+            },
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
             },
         )?;
         self.resources

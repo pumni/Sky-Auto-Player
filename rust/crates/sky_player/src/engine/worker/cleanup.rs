@@ -543,6 +543,7 @@ pub(crate) fn suspend_live_input(
     effective_now_ticks: Result<TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
+    post_cleanup_timeline_ticks: impl FnOnce(QpcTicks) -> Result<TimelineTicks, String>,
 ) -> Result<usize, String> {
     runtime.invalidate_down_authorization();
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
@@ -600,10 +601,10 @@ pub(crate) fn suspend_live_input(
             )
             .map_err(|error| format!("coordinator missed Down commit failure: {error}"))?;
     }
+    let post_cleanup_timeline = post_cleanup_timeline_ticks(cleanup_completed_qpc)
+        .map_err(|error| format!("post-cleanup timeline ticks conversion failure: {error}"))?;
     let cancelled = coordinator
-        .cancel_live_generations_after_verified_resumable_cleanup_with_time(
-            effective_now_ticks.ok().unwrap_or(TimelineTicks::ZERO),
-        )
+        .cancel_live_generations_after_verified_resumable_cleanup_with_time(post_cleanup_timeline)
         .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
     runtime.invalidate_down_authorization();
     runtime.pending_up_recovery = None;

@@ -129,7 +129,7 @@ pub(crate) fn validate_timing_constants() -> Result<(), String> {
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
 use super::FaultInjectionScript;
@@ -275,6 +275,12 @@ pub struct StartupOrderingHook {
     fail_watchdog_spawn: AtomicBool,
     fail_observer_spawn: AtomicBool,
     fail_startup_epoch_conversion: AtomicBool,
+    pub(crate) hol_stall_enabled: AtomicBool,
+    pub(crate) hol_stall_duration_us: AtomicU64,
+    pub(crate) hol_stall_target_mask: AtomicU16,
+    pub(crate) hol_stall_count: AtomicU64,
+    pub(crate) hol_last_stall_pre_qpc: AtomicU64,
+    pub(crate) hol_last_stall_post_qpc: AtomicU64,
     scheduling_threads:
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
 }
@@ -588,6 +594,58 @@ impl StartupOrderingHook {
 
     pub fn watchdog_is_held(&self) -> bool {
         self.watchdog_hold.load(Ordering::Acquire)
+    }
+
+    pub fn enable_hol_stall(&self, duration_us: u64, target_mask: u16) {
+        self.hol_stall_duration_us
+            .store(duration_us, Ordering::Release);
+        self.hol_stall_target_mask
+            .store(target_mask, Ordering::Release);
+        self.hol_stall_enabled.store(true, Ordering::Release);
+    }
+
+    pub fn hol_stall_evidence(&self) -> (u64, u64, u64) {
+        (
+            self.hol_stall_count.load(Ordering::Acquire),
+            self.hol_last_stall_pre_qpc.load(Ordering::Acquire),
+            self.hol_last_stall_post_qpc.load(Ordering::Acquire),
+        )
+    }
+
+    pub(crate) fn maybe_inject_hol_stall(
+        &self,
+        down_mask: u16,
+        qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    ) {
+        if !self.hol_stall_enabled.load(Ordering::Acquire) {
+            return;
+        }
+        let target_mask = self.hol_stall_target_mask.load(Ordering::Acquire);
+        if target_mask != 0 && (down_mask & target_mask) == 0 {
+            return;
+        }
+        let duration_us = self.hol_stall_duration_us.load(Ordering::Acquire);
+        if duration_us == 0 {
+            return;
+        }
+        // One-shot injection
+        if self.hol_stall_enabled.swap(false, Ordering::AcqRel)
+            && let Ok(pre_qpc) = qpc_clock.now()
+            && let Ok(duration_ticks) = qpc_clock.duration_from_us(duration_us)
+            && let Ok(target_qpc) = pre_qpc.checked_add_duration(duration_ticks)
+        {
+            while let Ok(now) = qpc_clock.now() {
+                if now >= target_qpc {
+                    self.hol_last_stall_pre_qpc
+                        .store(pre_qpc.as_u64(), Ordering::Release);
+                    self.hol_last_stall_post_qpc
+                        .store(now.as_u64(), Ordering::Release);
+                    self.hol_stall_count.fetch_add(1, Ordering::AcqRel);
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+        }
     }
 }
 

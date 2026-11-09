@@ -1,20 +1,17 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
 use super::super::{
-    DurationTicks, QpcError, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
+    DurationTicks, QpcError, QpcTicks, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
     try_publish_metrics,
 };
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
-    FinalControlSignals, FinalDownVerdict, FinalTargetSignals, PlanningInput, WaitBoundary,
-    WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, Worker, apply_final_down_rejection,
-    ensure_preflight_for_target, enter_focus_pause, final_down_control_verdict,
-    final_down_fresh_target_admission, final_down_modifier_verdict,
-    final_down_post_modifier_verdict, final_down_target_hint, focus_matches, focus_matches_hwnd,
-    handle_final_focus_loss, load_target_stamp, modifier_guard_rejection_step,
-    plan_next_dispatch_projected, process_command_control, publish_backend_counters,
-    publish_backend_metrics, record_wait_failure, suspend_live_input, target_stamp_still_current,
-    wait_for_next_boundary,
+    FinalControlSignals, FinalDownAdmissionResult, PlanningInput, WaitBoundary, WaitBoundaryInput,
+    WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
+    focus_matches, focus_matches_hwnd, load_target_stamp, plan_next_dispatch_projected,
+    process_command_control, publish_backend_counters, publish_backend_metrics,
+    record_wait_failure, suspend_live_input, target_stamp_still_current,
+    verify_final_down_admission, wait_for_next_boundary,
 };
 use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
@@ -454,6 +451,10 @@ fn suspend_live_input_for_dispatch(
     effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
+    post_cleanup_timeline_ticks: impl FnOnce(
+        sky_dispatch_win32::clock::QpcTicks,
+    )
+        -> Result<sky_dispatch_core::time::TimelineTicks, String>,
 ) -> Result<(), String> {
     suspend_live_input(
         backend,
@@ -462,6 +463,7 @@ fn suspend_live_input_for_dispatch(
         effective_now_ticks,
         target_hwnd,
         post_cleanup_qpc,
+        post_cleanup_timeline_ticks,
     )
     .map(|_| ())
 }
@@ -475,6 +477,10 @@ pub(crate) fn apply_resumable_lifecycle_transition_for_test(
     effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
+    post_cleanup_timeline_ticks: impl FnOnce(
+        sky_dispatch_win32::clock::QpcTicks,
+    )
+        -> Result<sky_dispatch_core::time::TimelineTicks, String>,
 ) -> Result<(), String> {
     suspend_live_input_for_dispatch(
         backend,
@@ -483,6 +489,7 @@ pub(crate) fn apply_resumable_lifecycle_transition_for_test(
         effective_now_ticks,
         target_hwnd,
         post_cleanup_qpc,
+        post_cleanup_timeline_ticks,
     )
 }
 
@@ -558,7 +565,15 @@ pub(super) fn dispatch(
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
         let mut prepared_stream = resources.prepared_stream.take();
-        while !resources.coordinator.is_finished() {
+        while !resources.coordinator.is_finished_at(
+            resources
+                .playback
+                .get_elapsed_allow_pre_epoch(
+                    resources.clock.now().unwrap_or(QpcTicks::ZERO),
+                    core.runtime.allow_pre_epoch_startup_dispatch,
+                )
+                .unwrap_or(TimelineTicks::ZERO),
+        ) {
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
             // after interrupts, replans, command transitions, or failures.
@@ -677,13 +692,11 @@ pub(super) fn dispatch(
                         core.runtime.focus_restore_started_ticks = None;
                         continue;
                     }
+                    let allow_pre = core.runtime.allow_pre_epoch_startup_dispatch;
                     if !manual_pause_active {
                         let lifecycle_effective_now = resources
                             .playback
-                            .get_elapsed_allow_pre_epoch(
-                                now_ticks,
-                                core.runtime.allow_pre_epoch_startup_dispatch,
-                            )
+                            .get_elapsed_allow_pre_epoch(now_ticks, allow_pre)
                             .map_err(|error| error.to_string());
                         if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
@@ -692,6 +705,16 @@ pub(super) fn dispatch(
                             lifecycle_effective_now,
                             preflight_target.hwnd,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                            |qpc| {
+                                if qpc < resources.playback.epoch {
+                                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                                } else {
+                                    resources
+                                        .playback
+                                        .get_elapsed(qpc)
+                                        .map_err(|error| format!("{error:?}"))
+                                }
+                            },
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.terminal_error =
@@ -716,10 +739,7 @@ pub(super) fn dispatch(
                     } else if core.runtime.manual_pause_suspension_pending {
                         let lifecycle_effective_now = resources
                             .playback
-                            .get_elapsed_allow_pre_epoch(
-                                now_ticks,
-                                core.runtime.allow_pre_epoch_startup_dispatch,
-                            )
+                            .get_elapsed_allow_pre_epoch(now_ticks, allow_pre)
                             .map_err(|error| error.to_string());
                         if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
@@ -728,6 +748,16 @@ pub(super) fn dispatch(
                             lifecycle_effective_now,
                             preflight_target.hwnd,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                            |qpc| {
+                                if qpc < resources.playback.epoch {
+                                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                                } else {
+                                    resources
+                                        .playback
+                                        .get_elapsed(qpc)
+                                        .map_err(|error| format!("{error:?}"))
+                                }
+                            },
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.terminal_error =
@@ -795,13 +825,11 @@ pub(super) fn dispatch(
             if manual_pause && !resources.playback.has_pause_reason(PauseReason::Manual) {
                 core.runtime.invalidate_down_authorization();
                 core.runtime.verified_target = None;
+                let allow_pre = core.runtime.allow_pre_epoch_startup_dispatch;
                 if !resources.playback.is_paused() {
                     let lifecycle_effective_now = resources
                         .playback
-                        .get_elapsed_allow_pre_epoch(
-                            now_ticks,
-                            core.runtime.allow_pre_epoch_startup_dispatch,
-                        )
+                        .get_elapsed_allow_pre_epoch(now_ticks, allow_pre)
                         .map_err(|error| error.to_string());
                     if let Err(error) = suspend_live_input_for_dispatch(
                         &mut resources.backend,
@@ -810,6 +838,16 @@ pub(super) fn dispatch(
                         lifecycle_effective_now,
                         target.hwnd_for_safety_release(),
                         || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                        |qpc| {
+                            if qpc < resources.playback.epoch {
+                                Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                            } else {
+                                resources
+                                    .playback
+                                    .get_elapsed(qpc)
+                                    .map_err(|error| format!("{error:?}"))
+                            }
+                        },
                     ) {
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
@@ -849,12 +887,10 @@ pub(super) fn dispatch(
             } else if !manual_pause && resources.playback.has_pause_reason(PauseReason::Manual) {
                 if !resources.playback.has_pause_reason(PauseReason::Focus) {
                     if core.runtime.manual_pause_suspension_pending {
+                        let allow_pre = core.runtime.allow_pre_epoch_startup_dispatch;
                         let lifecycle_effective_now = resources
                             .playback
-                            .get_elapsed_allow_pre_epoch(
-                                now_ticks,
-                                core.runtime.allow_pre_epoch_startup_dispatch,
-                            )
+                            .get_elapsed_allow_pre_epoch(now_ticks, allow_pre)
                             .map_err(|error| error.to_string());
                         if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
@@ -863,6 +899,16 @@ pub(super) fn dispatch(
                             lifecycle_effective_now,
                             target.hwnd_for_safety_release(),
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                            |qpc| {
+                                if qpc < resources.playback.epoch {
+                                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                                } else {
+                                    resources
+                                        .playback
+                                        .get_elapsed(qpc)
+                                        .map_err(|error| format!("{error:?}"))
+                                }
+                            },
                         ) {
                             core.runtime.terminal_error =
                                 Some(format!("manual resume deferred suspension failed: {error}"));
@@ -1175,151 +1221,6 @@ pub(super) fn dispatch(
                             None
                         };
 
-                        if has_down {
-                            let control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            if final_down_control_verdict(control_signals)
-                                != FinalDownVerdict::Allowed
-                            {
-                                continue;
-                            }
-
-                            let expected = preflight_target.expect("target stamp checked above");
-                            let target_hint = final_down_target_hint(&FinalTargetSignals {
-                                expected,
-                                require_focus: config.focus.require_focus,
-                                focus_active,
-                                target,
-                                #[cfg(any(test, feature = "test-support"))]
-                                post_focus_race_hook: core
-                                    .runtime
-                                    .final_gate_post_focus_race_hook
-                                    .as_ref(),
-                                #[cfg(any(test, feature = "test-support"))]
-                                post_focus_control_signals: Some(control_signals),
-                            });
-                            if target_hint != FinalDownVerdict::Allowed {
-                                apply_final_down_rejection(
-                                    target_hint,
-                                    &mut core.runtime,
-                                    &mut core.metrics,
-                                );
-                                if target_hint == FinalDownVerdict::FocusLost
-                                    && let Err(step) = handle_final_focus_loss(
-                                        resources.clock,
-                                        &mut resources.playback,
-                                        &mut core.runtime,
-                                        &shared.publication.progress_clock,
-                                    )
-                                {
-                                    if let super::DispatchStep::Terminate(err) = step {
-                                        core.runtime.terminal_error = Some(err);
-                                        break;
-                                    } else if let super::DispatchStep::TerminateStatic(err) = step {
-                                        core.runtime.terminal_error = Some(err.to_string());
-                                        break;
-                                    }
-                                }
-                                continue;
-                            }
-
-                            let modifier_verdict = final_down_modifier_verdict(&resources.backend);
-                            if modifier_verdict != FinalDownVerdict::Allowed {
-                                apply_final_down_rejection(
-                                    modifier_verdict,
-                                    &mut core.runtime,
-                                    &mut core.metrics,
-                                );
-                                match modifier_verdict {
-                                    FinalDownVerdict::ModifierHeld(mask) => {
-                                        match modifier_guard_rejection_step(mask) {
-                                            super::DispatchStep::Terminate(err) => {
-                                                core.runtime.terminal_error = Some(err);
-                                            }
-                                            super::DispatchStep::TerminateStatic(err) => {
-                                                core.runtime.terminal_error = Some(err.to_string());
-                                            }
-                                            _ => {}
-                                        }
-                                        break;
-                                    }
-                                    _ => continue,
-                                }
-                            }
-
-                            let fresh_target_verdict =
-                                final_down_fresh_target_admission(FinalTargetSignals {
-                                    expected,
-                                    require_focus: config.focus.require_focus,
-                                    focus_active,
-                                    target,
-                                    #[cfg(any(test, feature = "test-support"))]
-                                    post_focus_race_hook: core
-                                        .runtime
-                                        .final_gate_post_focus_race_hook
-                                        .as_ref(),
-                                    #[cfg(any(test, feature = "test-support"))]
-                                    post_focus_control_signals: Some(control_signals),
-                                });
-                            if fresh_target_verdict != FinalDownVerdict::Allowed {
-                                apply_final_down_rejection(
-                                    fresh_target_verdict,
-                                    &mut core.runtime,
-                                    &mut core.metrics,
-                                );
-                                continue;
-                            }
-
-                            let verdict = match final_down_post_modifier_verdict(
-                                target,
-                                expected,
-                                config.focus.require_focus,
-                                focus_active,
-                                control_signals,
-                                timing.lease_timeout_ticks,
-                                qpc_clock,
-                                #[cfg(any(test, feature = "test-support"))]
-                                core.runtime.final_gate_post_lease_race_hook.as_ref(),
-                                #[cfg(test)]
-                                &mut core.runtime.final_lease_qpc_sample_count_for_test,
-                                #[cfg(test)]
-                                &mut core.runtime.final_lease_qpc_sample_override_for_test,
-                            ) {
-                                Ok(verdict) => verdict,
-                                Err(_) => {
-                                    core.runtime.terminal_error =
-                                        Some("prepared_down_qpc_failure".to_string());
-                                    break;
-                                }
-                            };
-                            if verdict != FinalDownVerdict::Allowed {
-                                apply_final_down_rejection(
-                                    verdict,
-                                    &mut core.runtime,
-                                    &mut core.metrics,
-                                );
-                                match verdict {
-                                    FinalDownVerdict::LeaseExpired => {
-                                        core.runtime.terminal_error =
-                                            Some("supervisor_lease_expired".to_string());
-                                        break;
-                                    }
-                                    FinalDownVerdict::LeaseUnproven => {
-                                        core.runtime.terminal_error =
-                                            Some("supervisor_lease_unproven".to_string());
-                                        break;
-                                    }
-                                    _ => continue,
-                                }
-                            }
-                        }
-
                         let authored_target_ticks = down_chord
                             .as_ref()
                             .map_or(effective_now_ticks, |c| c.scheduled_ticks);
@@ -1347,6 +1248,39 @@ pub(super) fn dispatch(
                         };
 
                         if timing_window.packet_not_before_qpc > now_ticks {
+                            if has_down {
+                                let expected =
+                                    preflight_target.expect("target stamp checked above");
+                                let control_signals = FinalControlSignals {
+                                    quit_requested,
+                                    skip_requested,
+                                    panic_requested,
+                                    desired_pause,
+                                    supervisor_expired,
+                                    system_power: Some(system_power),
+                                };
+                                match verify_final_down_admission(
+                                    target,
+                                    expected,
+                                    config.focus.require_focus,
+                                    focus_active,
+                                    control_signals,
+                                    timing.lease_timeout_ticks,
+                                    qpc_clock,
+                                    &shared.publication.progress_clock,
+                                    &resources.backend,
+                                    &mut resources.playback,
+                                    &mut core.runtime,
+                                    &mut core.metrics,
+                                ) {
+                                    FinalDownAdmissionResult::Allowed => {}
+                                    FinalDownAdmissionResult::Replan => continue,
+                                    FinalDownAdmissionResult::Terminal(err) => {
+                                        core.runtime.terminal_error = Some(err);
+                                        break;
+                                    }
+                                }
+                            }
                             let wait_target_qpc = timing_window.packet_not_before_qpc;
                             match wait_for_next_boundary(WaitBoundaryInput {
                                 deadline: WaitDeadline {
@@ -1369,6 +1303,41 @@ pub(super) fn dispatch(
                                     continue;
                                 }
                                 WaitBoundary::Exit => break,
+                            }
+                        }
+
+                        // Re-validate final Down authority immediately before physical send.
+                        // This guarantees authority is fresh at SendInput and never stale across waits.
+                        if has_down {
+                            let expected = preflight_target.expect("target stamp checked above");
+                            let control_signals = FinalControlSignals {
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                                supervisor_expired,
+                                system_power: Some(system_power),
+                            };
+                            match verify_final_down_admission(
+                                target,
+                                expected,
+                                config.focus.require_focus,
+                                focus_active,
+                                control_signals,
+                                timing.lease_timeout_ticks,
+                                qpc_clock,
+                                &shared.publication.progress_clock,
+                                &resources.backend,
+                                &mut resources.playback,
+                                &mut core.runtime,
+                                &mut core.metrics,
+                            ) {
+                                FinalDownAdmissionResult::Allowed => {}
+                                FinalDownAdmissionResult::Replan => continue,
+                                FinalDownAdmissionResult::Terminal(err) => {
+                                    core.runtime.terminal_error = Some(err);
+                                    break;
+                                }
                             }
                         }
 
@@ -1399,6 +1368,7 @@ pub(super) fn dispatch(
                         #[cfg(any(test, feature = "test-support"))]
                         if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
                             hook.mark_first_physical_send_started();
+                            hook.maybe_inject_hol_stall(down_mask, qpc_clock);
                         }
 
                         let send_result = resources
@@ -1526,12 +1496,17 @@ pub(super) fn dispatch(
                             core.runtime.musical_physical_commit_started = true;
                         }
 
-                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
-                            let _ = guard.observe_successful_packet(
+                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut()
+                            && let Err(error) = guard.observe_successful_packet(
                                 completion_qpc,
                                 confirmed_up_mask,
                                 confirmed_down_mask,
-                            );
+                            )
+                        {
+                            core.runtime.terminal_error = Some(format!(
+                                "physical timing guard completion update failed: {error:?}"
+                            ));
+                            break;
                         }
 
                         let trace_kind = match (up_mask != 0, down_mask != 0) {

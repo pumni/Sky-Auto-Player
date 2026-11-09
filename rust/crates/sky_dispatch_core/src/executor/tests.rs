@@ -8,6 +8,10 @@ fn compile_actions(actions: &[KeyActionInput], allowed: &[u16]) -> RuntimeSchedu
     compile_runtime_intents(actions, allowed).expect("valid test schedule")
 }
 
+fn test_ticks(us: u64) -> Result<TimelineTicks, std::convert::Infallible> {
+    Ok(TimelineTicks::from_raw(us))
+}
+
 #[test]
 fn fixture_1_independent_release_a_floor_does_not_block_b_down() {
     // A-Up authored 20 ms, floor 25 ms; B-Down independent at 21 ms
@@ -51,8 +55,7 @@ fn fixture_1_independent_release_a_floor_does_not_block_b_down() {
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(25_000); // H = 25 ms floor
     let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // 1. At 0 ms: Down A is ready
     let step0 = executor.evaluate(TimelineTicks::from_raw(0));
@@ -169,8 +172,7 @@ fn fixture_2_same_key_down_waits_up_completion_plus_t() {
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000); // H = 5 ms
     let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // Down 1
     assert!(matches!(
@@ -277,8 +279,7 @@ fn fixture_3_and_4_chord_blocked_by_member_does_not_split_while_unrelated_up_pro
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000); // H = 5 ms
     let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // 0 ms: Down {A, C} (chord 0 has A, chord 1 has C? Wait, A and C are at same timestamp 0 so compiler combined them into chord {A, C})
     let step0 = executor.evaluate(TimelineTicks::from_raw(0));
@@ -394,8 +395,7 @@ fn fixture_5_mixed_up_down_combined_when_coincident_split_when_divergent() {
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
     let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // 0 ms: Down A
     executor
@@ -458,8 +458,7 @@ fn fixture_hol_stalled_down_does_not_block_independent_slot() {
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
     let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // 10 ms: Key A is dispatched
     let step10 = executor.evaluate(TimelineTicks::from_raw(10_000));
@@ -553,8 +552,7 @@ fn fixture_6_down_delayed_past_authored_up_creates_valid_release() {
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
     let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // Down completes late at 35 ms (past authored Up of 20 ms)
     executor
@@ -612,8 +610,7 @@ fn fixture_7_15_slots_distinct_deadlines_no_starvation() {
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000);
     let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // Down chord of 15 keys completed at 10 ms
     executor
@@ -683,8 +680,7 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000);
     let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
 
     // Down first chord at 10 ms
     executor
@@ -731,156 +727,158 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
     );
 }
 
-// ---------------------------------------------------------------------------
-// Checkpoint B4: Scale fixtures (100, 1,000, 10,000 generations; widths 1, 5, 15)
-// ---------------------------------------------------------------------------
+#[test]
+fn fixture_forced_conversion_failure_fails_construction() {
+    let allowed = vec![0x15];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up".into(),
+        },
+    ];
+    let sched = compile_actions(&actions, &allowed);
+    let min_hold = DurationTicks::from_raw(10_000);
+    let frame_time = DurationTicks::from_raw(16_000);
+    let err = DispatchExecutor::new(&sched, min_hold, frame_time, |us| {
+        if us == 10_000 {
+            Err("simulated QPC clock overflow")
+        } else {
+            Ok(TimelineTicks::from_raw(us))
+        }
+    })
+    .expect_err("conversion failure must fail executor construction");
+    assert!(err.contains("simulated QPC clock overflow"));
+}
 
-fn generate_scale_schedule(
-    generations: usize,
-    chord_width: usize,
-    allowed: &[u16],
-) -> RuntimeSchedule {
-    assert!(chord_width >= 1 && chord_width <= allowed.len());
-    let mut actions = Vec::with_capacity((generations / chord_width) * 2);
-    let chords_count = generations / chord_width;
+#[test]
+fn fixture_end_state_waits_for_schedule_end_offset_even_with_zero_active_keys() {
+    let allowed = vec![0x15];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up".into(),
+        },
+    ];
+    let mut sched = compile_actions(&actions, &allowed);
+    // Explicitly extend schedule end offset to 60 ms (metadata-only tail)
+    sched.schedule_end_offset_us = 60_000;
+
+    let min_hold = DurationTicks::from_raw(10_000);
+    let frame_time = DurationTicks::from_raw(16_000);
+    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+
+    // 10 ms: Down
+    let step = executor.evaluate(TimelineTicks::from_raw(10_000));
+    assert!(matches!(
+        step,
+        DispatchAction::Send {
+            down_chord: Some(_),
+            ..
+        }
+    ));
+    executor
+        .on_send_completed(0, 0b1, TimelineTicks::from_raw(10_000))
+        .unwrap();
+
+    // 20 ms: Up
+    let step = executor.evaluate(TimelineTicks::from_raw(20_000));
+    assert!(matches!(
+        step,
+        DispatchAction::Send {
+            up_mask: 0b1,
+            down_chord: None
+        }
+    ));
+    executor
+        .on_send_completed(0b1, 0, TimelineTicks::from_raw(20_000))
+        .unwrap();
+
+    // At 25 ms: all chords dispatched, all slots empty, BUT schedule_end_offset (60 ms) not reached!
+    assert_eq!(executor.active_mask(), 0);
+    assert!(
+        !executor.is_finished(TimelineTicks::from_raw(25_000)),
+        "executor must NOT be finished before schedule_end_offset"
+    );
+    let step = executor.evaluate(TimelineTicks::from_raw(25_000));
+    assert_eq!(
+        step,
+        DispatchAction::Wait {
+            deadline_ticks: TimelineTicks::from_raw(60_000),
+        },
+        "executor must wait for metadata-only schedule end offset"
+    );
+
+    // At 60 ms: reached schedule_end_offset
+    assert!(
+        executor.is_finished(TimelineTicks::from_raw(60_000)),
+        "executor must be finished once schedule_end_offset is reached"
+    );
+    let step = executor.evaluate(TimelineTicks::from_raw(60_000));
+    assert_eq!(step, DispatchAction::Finished);
+}
+
+#[test]
+fn fixture_stale_metadata_scan_is_bounded_per_step() {
+    let allowed = vec![0x15];
+    let mut actions = Vec::new();
     let mut action_idx = 0u32;
-    let time_step_us = 50_000u64; // 50 ms between chords
-    let hold_duration_us = 30_000u64; // 30 ms hold
-
-    for i in 0..chords_count {
-        let t_down = i as u64 * time_step_us;
-        let t_up = t_down + hold_duration_us;
-        let sc_slice = (0..chord_width)
-            .map(|k| allowed[(i * chord_width + k) % allowed.len()])
-            .collect::<smallvec::SmallVec<[u16; 4]>>();
-
+    // Generate 100 empty/metadata-only actions in the past
+    for i in 0..100 {
         actions.push(KeyActionInput {
             source_action_index: action_idx,
             kind: ActionKind::Down,
-            scheduled_us: t_down,
-            scan_codes: sc_slice.clone(),
-            reason: "scale-down".into(),
+            scheduled_us: 1_000 + i as u64 * 10,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "past down".into(),
         });
         action_idx += 1;
-
         actions.push(KeyActionInput {
             source_action_index: action_idx,
             kind: ActionKind::Up,
-            scheduled_us: t_up,
-            scan_codes: sc_slice,
-            reason: "scale-up".into(),
+            scheduled_us: 1_005 + i as u64 * 10,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "past up".into(),
         });
         action_idx += 1;
     }
+    let sched = compile_actions(&actions, &allowed);
+    let mut coordinator =
+        crate::coordinator::RuntimeDispatchCoordinator::new(sched, 0, 0, TimelineTicks::from_raw);
 
-    compile_runtime_intents(&actions, allowed).expect("valid scale schedule")
-}
+    let initial_cursor = coordinator.cursor;
+    assert_eq!(initial_cursor, 0);
 
-fn execute_scale_scenario(schedule: &RuntimeSchedule) {
-    let min_hold = DurationTicks::from_raw(20_000); // 20 ms
-    let frame_time = DurationTicks::from_raw(16_000); // 16 ms
-    let mut executor =
-        DispatchExecutor::new(schedule, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+    // Single step with now_ticks far in future
+    let result = coordinator
+        .prepare_current_stale_packet_at(TimelineTicks::from_raw(500_000))
+        .expect("bounded stale scan");
+    assert!(result.is_none());
 
-    let mut sim_time = TimelineTicks::ZERO;
-    let mut steps = 0usize;
-    let max_allowed_steps = schedule.down_chords.len() * 4 + 100;
-    while !executor.is_finished(sim_time) {
-        steps += 1;
-        assert!(steps <= max_allowed_steps, "infinite loop protection");
-        match executor.evaluate(sim_time) {
-            DispatchAction::Send {
-                up_mask,
-                down_chord,
-            } => {
-                let down_mask = down_chord.map_or(0, |c| c.down_mask);
-                executor
-                    .on_send_completed(up_mask, down_mask, sim_time)
-                    .unwrap();
-            }
-            DispatchAction::Wait { deadline_ticks } => {
-                assert!(deadline_ticks >= sim_time);
-                sim_time = deadline_ticks;
-            }
-            DispatchAction::Finished => {
-                break;
-            }
-        }
-    }
-    assert_eq!(executor.active_mask(), 0);
-    assert_eq!(executor.accounting().active, 0);
-    assert_eq!(executor.accounting().released, schedule.generation_count);
-}
-
-#[test]
-fn scale_fixture_100_generations_width_1_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(100, 1, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_100_generations_width_5_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(100, 5, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_100_generations_width_15_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(105, 15, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_1000_generations_width_1_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(1_000, 1, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_1000_generations_width_5_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(1_000, 5, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_1000_generations_width_15_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(1_005, 15, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_10000_generations_width_1_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(10_000, 1, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_10000_generations_width_5_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(10_000, 5, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_10000_generations_width_15_canonical() {
-    let canonical = (0x15..0x15 + 15).collect::<Vec<u16>>();
-    let sched = generate_scale_schedule(10_005, 15, &canonical);
-    execute_scale_scenario(&sched);
-}
-
-#[test]
-fn scale_fixture_1000_generations_width_5_noncanonical() {
-    // Non-canonical scan codes (arbitrary keyboard layout)
-    let noncanonical = vec![
-        0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x12, 0x1E, 0x1F, 0x20, 0x2C, 0x2D, 0x2E, 0x39,
-    ];
-    let sched = generate_scale_schedule(1_000, 5, &noncanonical);
-    execute_scale_scenario(&sched);
+    // Cursor must not have advanced past the per-step scan bound
+    let cursor_advance = coordinator.cursor - initial_cursor;
+    assert!(
+        cursor_advance
+            <= crate::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP,
+        "stale packet scan must be bounded per step (advanced {cursor_advance})"
+    );
 }

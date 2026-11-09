@@ -7,6 +7,13 @@ use crate::time::TimelineTicks;
 use smallvec::SmallVec;
 
 impl RuntimeDispatchCoordinator {
+    pub fn is_finished_at(&self, now_ticks: TimelineTicks) -> bool {
+        if let Some(exec) = &self.executor {
+            return exec.is_finished(now_ticks) && self.cursor >= self.schedule.batches.len();
+        }
+        self.is_finished()
+    }
+
     pub fn is_finished(&self) -> bool {
         if let Some(exec) = &self.executor {
             return exec.chord_cursor() >= exec.total_chords()
@@ -450,10 +457,26 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         completion_ticks: TimelineTicks,
     ) -> Result<usize, CoordinatorError> {
-        if let Some(exec) = self.executor.as_mut() {
-            let _ = exec.on_verified_cleanup(completion_ticks);
+        let exec_cancelled = if let Some(exec) = self.executor.as_mut() {
+            Some(exec.on_verified_cleanup(completion_ticks).map_err(|e| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(format!(
+                    "executor verified cleanup barrier failed: {e}"
+                )))
+            })?)
+        } else {
+            None
+        };
+        let coord_cancelled = self.cancel_live_generations_after_verified_resumable_cleanup()?;
+        if let Some(ec) = exec_cancelled
+            && ec as usize != coord_cancelled
+        {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(format!(
+                    "executor cancelled count {ec} does not match coordinator cancelled count {coord_cancelled}"
+                )),
+            ));
         }
-        self.cancel_live_generations_after_verified_resumable_cleanup()
+        Ok(coord_cancelled)
     }
 
     pub fn record_executor_completion(

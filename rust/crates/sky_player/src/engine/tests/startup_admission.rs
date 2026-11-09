@@ -512,6 +512,32 @@ fn quit_after_armed_publication_wait_and_first_down_gate_never_sends() {
 }
 
 #[test]
+fn focus_loss_at_first_down_admission_never_sends_physical_down() {
+    let (session, hook, send_calls) = checkpointed_session(
+        startup_boundary_schedule(),
+        StartupCheckpoint::FirstDownAdmission,
+        1,
+        false,
+    );
+    session.arm(50_000).expect("worker arm request");
+    assert!(
+        hook.wait_for_startup_checkpoint(Duration::from_secs(5)),
+        "reached FirstDownAdmission"
+    );
+    // Simulate focus loss immediately before SendInput
+    session.set_focus_hint(false);
+    hook.release_startup_checkpoint();
+    // Cleanly tear down session
+    let _ = session.quit();
+    let _ = session.join(Duration::from_secs(2));
+    assert_eq!(
+        send_calls.load(Ordering::Acquire),
+        0,
+        "zero physical down sender attempts after focus loss at final gate"
+    );
+}
+
+#[test]
 fn startup_panic_is_contained_before_armed_and_produces_error_not_finished() {
     let hook = Arc::new(StartupOrderingHook::default());
     hook.panic_at_startup_checkpoint(StartupCheckpoint::BeforeReady);

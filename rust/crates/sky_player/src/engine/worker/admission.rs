@@ -597,3 +597,123 @@ pub(crate) fn ensure_preflight_for_target(
 pub(crate) fn target_stamp_still_current(target: &SessionTarget, expected: TargetStamp) -> bool {
     target.is_current(expected.hwnd, expected.generation)
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FinalDownAdmissionResult {
+    Allowed,
+    Replan,
+    Terminal(String),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_final_down_admission(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+) -> FinalDownAdmissionResult {
+    if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    let target_hint = final_down_target_hint(&FinalTargetSignals {
+        expected,
+        require_focus,
+        focus_active,
+        target,
+        #[cfg(any(test, feature = "test-support"))]
+        post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
+        #[cfg(any(test, feature = "test-support"))]
+        post_focus_control_signals: Some(control_signals),
+    });
+    if target_hint != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(target_hint, runtime, metrics);
+        if target_hint == FinalDownVerdict::FocusLost
+            && let Err(step) = handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+        {
+            return match step {
+                DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
+                DispatchStep::TerminateStatic(err) => {
+                    FinalDownAdmissionResult::Terminal(err.to_string())
+                }
+                _ => FinalDownAdmissionResult::Replan,
+            };
+        }
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    let modifier_verdict = final_down_modifier_verdict(backend);
+    if modifier_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(modifier_verdict, runtime, metrics);
+        match modifier_verdict {
+            FinalDownVerdict::ModifierHeld(mask) => {
+                return match modifier_guard_rejection_step(mask) {
+                    DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
+                    DispatchStep::TerminateStatic(err) => {
+                        FinalDownAdmissionResult::Terminal(err.to_string())
+                    }
+                    _ => FinalDownAdmissionResult::Replan,
+                };
+            }
+            _ => return FinalDownAdmissionResult::Replan,
+        }
+    }
+
+    let fresh_target_verdict = final_down_fresh_target_admission(FinalTargetSignals {
+        expected,
+        require_focus,
+        focus_active,
+        target,
+        #[cfg(any(test, feature = "test-support"))]
+        post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
+        #[cfg(any(test, feature = "test-support"))]
+        post_focus_control_signals: Some(control_signals),
+    });
+    if fresh_target_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(fresh_target_verdict, runtime, metrics);
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    let verdict = match final_down_post_modifier_verdict(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        #[cfg(any(test, feature = "test-support"))]
+        runtime.final_gate_post_lease_race_hook.as_ref(),
+        #[cfg(test)]
+        &mut runtime.final_lease_qpc_sample_count_for_test,
+        #[cfg(test)]
+        &mut runtime.final_lease_qpc_sample_override_for_test,
+    ) {
+        Ok(verdict) => verdict,
+        Err(_) => {
+            return FinalDownAdmissionResult::Terminal("prepared_down_qpc_failure".to_string());
+        }
+    };
+    if verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(verdict, runtime, metrics);
+        match verdict {
+            FinalDownVerdict::LeaseExpired => {
+                return FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string());
+            }
+            FinalDownVerdict::LeaseUnproven => {
+                return FinalDownAdmissionResult::Terminal("supervisor_lease_unproven".to_string());
+            }
+            _ => return FinalDownAdmissionResult::Replan,
+        }
+    }
+
+    FinalDownAdmissionResult::Allowed
+}

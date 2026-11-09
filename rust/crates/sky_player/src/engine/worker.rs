@@ -16,6 +16,8 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
+#[cfg(test)]
+pub(crate) use physical_timing_guard::PhysicalTimingGuard;
 mod planning;
 mod prepared;
 mod startup;
@@ -26,14 +28,14 @@ mod wait;
 pub(crate) use admission::invoke_final_gate_race_hook;
 #[allow(unused_imports)]
 pub(crate) use admission::{
-    FinalControlAdmission, FinalControlSignals, FinalDownVerdict, FinalGateRejection,
-    FinalTargetSignals, TargetStamp, apply_final_down_rejection, ensure_preflight_for_target,
-    enter_focus_pause, final_control_precheck, final_down_control_verdict,
-    final_down_fresh_target_admission, final_down_modifier_verdict,
+    FinalControlAdmission, FinalControlSignals, FinalDownAdmissionResult, FinalDownVerdict,
+    FinalGateRejection, FinalTargetSignals, TargetStamp, apply_final_down_rejection,
+    ensure_preflight_for_target, enter_focus_pause, final_control_precheck,
+    final_down_control_verdict, final_down_fresh_target_admission, final_down_modifier_verdict,
     final_down_post_modifier_verdict, final_down_target_admission, final_down_target_hint,
     focus_matches, focus_matches_hwnd, handle_final_focus_loss, load_target_stamp,
     modifier_guard_rejection_step, owner_rejection_reason, record_final_gate_rejection,
-    target_stamp_still_current, trace_kind_for_packet_kind,
+    target_stamp_still_current, trace_kind_for_packet_kind, verify_final_down_admission,
 };
 #[cfg(test)]
 pub(crate) use admission::{OwnerAdmissionFailure, final_down_lease_age_proof};
@@ -426,7 +428,7 @@ pub(crate) struct WorkerRuntime {
     /// final foreground mismatch before that point is startup failure, not a
     /// pause/rebase event.
     pub(crate) musical_physical_commit_started: bool,
-    allow_pre_epoch_startup_dispatch: bool,
+    pub(crate) allow_pre_epoch_startup_dispatch: bool,
     chord_integrity_lost: u64,
 }
 
