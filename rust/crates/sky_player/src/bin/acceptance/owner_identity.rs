@@ -23,7 +23,8 @@ struct ProcessTerminationEvidence {
 }
 
 impl ProcessTerminationEvidence {
-    fn verified_for(&self, identity: &WindowIdentity) -> bool {
+    // The Win32 TerminateProcess helper proves termination; this only binds its retained evidence to the sink identity.
+    fn matches_retained_sink_identity(&self, identity: &WindowIdentity) -> bool {
         self.owner_pid == identity.owner_pid
             && self.process_start_time_filetime == identity.process_start_time_filetime
             && self.process_image_basename == identity.process_image_basename
@@ -39,7 +40,7 @@ impl BindingEvidence {
     pub(super) fn process_termination_verified(&self) -> bool {
         self.process_termination
             .as_ref()
-            .is_some_and(|evidence| evidence.verified_for(&self.retained_identity))
+            .is_some_and(|evidence| evidence.matches_retained_sink_identity(&self.retained_identity))
     }
 
     pub(super) fn report(&self) -> Value {
@@ -57,10 +58,15 @@ impl BindingEvidence {
         &self,
         scenario: Scenario,
         object: &mut serde_json::Map<String, Value>,
+        down_sender_attempt_count: Option<u64>,
     ) {
         object.insert("owner_identity_binding_requested".to_string(), json!(true));
         if scenario == Scenario::OwnerProcessTermination {
             let termination = self.process_termination.as_ref();
+            object.insert(
+                "down_sender_attempt_count".to_string(),
+                json!(down_sender_attempt_count),
+            );
             object.insert(
                 "owner_process_termination_fixture".to_string(),
                 json!({
@@ -173,10 +179,12 @@ pub(super) fn failure_qualified(
     sink_events_empty: bool,
     release_obligation_mask: u16,
     process_termination_verified: bool,
+    down_sender_attempt_count: Option<u64>,
 ) -> bool {
     failure_matches(scenario, terminal_error, process_termination_verified)
         && sink_events_empty
         && release_obligation_mask == 0
+        && (scenario != Scenario::OwnerProcessTermination || down_sender_attempt_count == Some(0))
 }
 
 pub(super) fn failure_result(
@@ -185,6 +193,7 @@ pub(super) fn failure_result(
     sink_events_empty: bool,
     release_obligation_mask: u16,
     process_termination_verified: bool,
+    down_sender_attempt_count: Option<u64>,
 ) -> Option<(super::Verdict, &'static str)> {
     expected_failure_reason(scenario)?;
     let qualified = failure_qualified(
@@ -193,6 +202,7 @@ pub(super) fn failure_result(
         sink_events_empty,
         release_obligation_mask,
         process_termination_verified,
+        down_sender_attempt_count,
     );
     Some((
         if qualified && scenario == Scenario::OwnerProcessTermination && process_termination_verified {
@@ -214,6 +224,10 @@ pub(super) fn failure_result(
             "identity-verified ReceiveOnly owner process was terminated by the OS at first Down admission; no sender attempt or release obligation remained"
         } else if qualified && scenario == Scenario::OwnerProcessTermination {
             "owner termination checkpoint stopped before the sender, but the OS owner process termination was not verified"
+        } else if scenario == Scenario::OwnerProcessTermination
+            && down_sender_attempt_count != Some(0)
+        {
+            "owner process termination did not prove zero Down sender attempts"
         } else if qualified {
             "window-owner authority failure stopped before the prepared sender"
         } else {
@@ -234,6 +248,7 @@ mod tests {
             true,
             0,
             false,
+            Some(0),
         );
 
         assert!(matches!(
@@ -253,6 +268,7 @@ mod tests {
             true,
             0,
             true,
+            Some(0),
         );
 
         assert!(matches!(
@@ -272,6 +288,7 @@ mod tests {
             true,
             0,
             true,
+            Some(0),
         );
 
         assert!(matches!(
@@ -281,5 +298,33 @@ mod tests {
                 "identity-verified ReceiveOnly owner process termination destroyed the foreground window; preroll failed closed before the sender"
             ))
         ));
+    }
+
+    #[test]
+    fn verified_receive_only_termination_with_down_attempt_fails() {
+        let result = failure_result(
+            Scenario::OwnerProcessTermination,
+            Some("prepared_down_owner_process_terminated"),
+            true,
+            0,
+            true,
+            Some(1),
+        );
+
+        assert!(matches!(result, Some((super::super::Verdict::Fail, _))));
+    }
+
+    #[test]
+    fn missing_down_attempt_evidence_does_not_pass_termination_case() {
+        let result = failure_result(
+            Scenario::OwnerProcessTermination,
+            Some("prepared_down_owner_process_terminated"),
+            true,
+            0,
+            true,
+            None,
+        );
+
+        assert!(!matches!(result, Some((super::super::Verdict::Pass, _))));
     }
 }

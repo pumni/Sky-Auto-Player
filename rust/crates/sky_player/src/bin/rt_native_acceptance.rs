@@ -660,6 +660,9 @@ fn run_windows(args: RunArgs) -> i32 {
         (None, None, None) => (Vec::new(), None),
         _ => inconclusive!("focus probe evidence paths are incomplete", snapshot_json(&snapshot)),
     };
+    let down_sender_attempt_count = acceptance_hook
+        .as_deref()
+        .map(|hook| hook.down_sender_attempt_count());
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, sink_expected_down.len() + sink_expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
         object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
@@ -713,7 +716,7 @@ fn run_windows(args: RunArgs) -> i32 {
             );
         }
         modifier_guard::attach_query_evidence(object, args.scenario, modifier_query_count.load(Ordering::SeqCst));
-        owner_binding.insert_report_fields(args.scenario, object);
+        owner_binding.insert_report_fields(args.scenario, object, down_sender_attempt_count);
         let power = session.system_power_snapshot();
         object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
     }
@@ -756,7 +759,7 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Fail, &error, details);
     }
     if args.scenario == Scenario::TargetHwndChange && (!target_changed || !target_change_cleanup_exception(&snapshot) || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "target HWND transition did not fail closed before gameplay delivery with zero transport events", details); }
-    if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask, owner_binding.process_termination_verified()) { return write_report(&args, verdict, reason, details); }
+    if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask, owner_binding.process_termination_verified(), down_sender_attempt_count) { return write_report(&args, verdict, reason, details); }
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
