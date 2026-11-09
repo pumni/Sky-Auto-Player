@@ -135,7 +135,8 @@ fn run_release_floor_cycles(
                 "CASE-NOT-EXERCISED: next authored Down did not reach its admission checkpoint at cycle {cycle}"
             ));
         }
-        let authored_due_checkpoint_qpc = match qpc.now() {
+        let (pre_pause_authored_target_qpc, _) = hook.last_down_window();
+        let pre_pause_due_checkpoint_qpc = match qpc.now() {
             Ok(ticks) => ticks.as_u64(),
             Err(error) => {
                 hook.release_startup_checkpoint();
@@ -145,6 +146,15 @@ fn run_release_floor_cycles(
                 ));
             }
         };
+        if pre_pause_authored_target_qpc == 0
+            || pre_pause_authored_target_qpc > pre_pause_due_checkpoint_qpc
+        {
+            hook.release_startup_checkpoint();
+            hook.release_completed_up_through(u64::MAX);
+            return Err(format!(
+                "CASE-NOT-EXERCISED: authored target was not due at the pre-pause admission checkpoint in cycle {cycle} (authored={pre_pause_authored_target_qpc}, checkpoint={pre_pause_due_checkpoint_qpc})"
+            ));
+        }
         hook.clear_pause_ack_qpc();
         if let Err(error) = session.pause() {
             hook.release_startup_checkpoint();
@@ -211,6 +221,37 @@ fn run_release_floor_cycles(
         if !wait_for_resume(session) {
             return Err(format!("manual resume did not commit at cycle {cycle}"));
         }
+
+        let due_deadline = Instant::now() + Duration::from_secs(5);
+        let authored_due_checkpoint_qpc = loop {
+            let (resumed_target_qpc, resumed_not_before_qpc) = hook.last_down_window();
+            let now_qpc = qpc
+                .now()
+                .map_err(|error| format!("QPC read failed while proving resumed Down target at cycle {cycle}: {error:?}"))?
+                .as_u64();
+            if now_qpc >= barrier_qpc {
+                return Err(format!(
+                    "CASE-NOT-EXERCISED: resumed authored target was not observed due before release floor at cycle {cycle} (authored={resumed_target_qpc}, barrier={barrier_qpc}, now={now_qpc})"
+                ));
+            }
+            if resumed_target_qpc != 0
+                && resumed_not_before_qpc >= barrier_qpc
+                && now_qpc >= resumed_target_qpc
+            {
+                if hook.down_sender_attempt_count() != cycle {
+                    return Err(format!(
+                        "release-floor oracle failed at cycle {cycle}: a Down sender attempt occurred before the release barrier"
+                    ));
+                }
+                break now_qpc;
+            }
+            if session.snapshot().is_finished || Instant::now() >= due_deadline {
+                return Err(format!(
+                    "CASE-NOT-EXERCISED: resumed authored target did not become observable before the release floor in cycle {cycle}"
+                ));
+            }
+            thread::sleep(Duration::from_micros(100));
+        };
         if !wait_for_up_count(session, hook, cycle + 1) {
             return Err(format!(
                 "CASE-NOT-EXERCISED: resumed Down/Up pair {cycle} did not complete"
@@ -248,6 +289,8 @@ fn run_release_floor_cycles(
             "frame_ticks": frame_ticks,
             "release_barrier_qpc_ticks": barrier_qpc,
             "resume_request_qpc_ticks": resume_request_qpc,
+            "pre_pause_authored_target_qpc_ticks": pre_pause_authored_target_qpc,
+            "pre_pause_due_admission_checkpoint_qpc_ticks": pre_pause_due_checkpoint_qpc,
             "authored_due_admission_checkpoint_qpc_ticks": authored_due_checkpoint_qpc,
             "resumed_authored_down_target_qpc_ticks": authored_target_qpc,
             "resumed_down_not_before_qpc_ticks": down_not_before_qpc,

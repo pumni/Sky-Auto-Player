@@ -155,9 +155,16 @@ pub(super) fn expected_failure_reason(scenario: Scenario) -> Option<&'static str
     }
 }
 
-pub(super) fn failure_matches(scenario: Scenario, terminal_error: Option<&str>) -> bool {
+pub(super) fn failure_matches(
+    scenario: Scenario,
+    terminal_error: Option<&str>,
+    process_termination_verified: bool,
+) -> bool {
     expected_failure_reason(scenario)
         .is_some_and(|expected| terminal_error == Some(expected))
+        || (scenario == Scenario::OwnerProcessTermination
+            && process_termination_verified
+            && terminal_error == Some("focus_lost_during_preroll"))
 }
 
 pub(super) fn failure_qualified(
@@ -165,8 +172,9 @@ pub(super) fn failure_qualified(
     terminal_error: Option<&str>,
     sink_events_empty: bool,
     release_obligation_mask: u16,
+    process_termination_verified: bool,
 ) -> bool {
-    failure_matches(scenario, terminal_error)
+    failure_matches(scenario, terminal_error, process_termination_verified)
         && sink_events_empty
         && release_obligation_mask == 0
 }
@@ -184,6 +192,7 @@ pub(super) fn failure_result(
         terminal_error,
         sink_events_empty,
         release_obligation_mask,
+        process_termination_verified,
     );
     Some((
         if qualified && scenario == Scenario::OwnerProcessTermination && process_termination_verified {
@@ -195,7 +204,13 @@ pub(super) fn failure_result(
         } else {
             super::Verdict::Fail
         },
-        if qualified && scenario == Scenario::OwnerProcessTermination && process_termination_verified {
+        if qualified
+            && scenario == Scenario::OwnerProcessTermination
+            && process_termination_verified
+            && terminal_error == Some("focus_lost_during_preroll")
+        {
+            "identity-verified ReceiveOnly owner process termination destroyed the foreground window; preroll failed closed before the sender"
+        } else if qualified && scenario == Scenario::OwnerProcessTermination && process_termination_verified {
             "identity-verified ReceiveOnly owner process was terminated by the OS at first Down admission; no sender attempt or release obligation remained"
         } else if qualified && scenario == Scenario::OwnerProcessTermination {
             "owner termination checkpoint stopped before the sender, but the OS owner process termination was not verified"
@@ -245,6 +260,25 @@ mod tests {
             Some((
                 super::super::Verdict::Pass,
                 "identity-verified ReceiveOnly owner process was terminated by the OS at first Down admission; no sender attempt or release obligation remained"
+            ))
+        ));
+    }
+
+    #[test]
+    fn verified_receive_only_termination_that_destroys_foreground_fails_closed() {
+        let result = failure_result(
+            Scenario::OwnerProcessTermination,
+            Some("focus_lost_during_preroll"),
+            true,
+            0,
+            true,
+        );
+
+        assert!(matches!(
+            result,
+            Some((
+                super::super::Verdict::Pass,
+                "identity-verified ReceiveOnly owner process termination destroyed the foreground window; preroll failed closed before the sender"
             ))
         ));
     }

@@ -1068,6 +1068,19 @@ pub(super) fn dispatch(
                 } else {
                     None
                 };
+                #[cfg(any(test, feature = "test-support"))]
+                if let (Some(window), Some(hook)) = (
+                    prepared_physical_timing_window,
+                    core.runtime.startup_ordering_hook.as_ref(),
+                ) && let Some(PreparedDispatchEntry::Physical(frame)) =
+                    prepared_stream.as_ref().and_then(|stream| stream.current())
+                    && frame.view.packet_masks.down_mask != 0
+                {
+                    hook.record_down_window(
+                        authored_target_qpc.as_u64(),
+                        window.packet_not_before_qpc.as_u64(),
+                    );
+                }
                 let wait_target_qpc = prepared_physical_timing_window
                     .map_or(target_qpc, |window| window.packet_not_before_qpc);
                 core.runtime.future_physical_wait_target_qpc =
