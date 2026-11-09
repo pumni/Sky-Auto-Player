@@ -340,7 +340,7 @@ function Get-TimingMetrics {
                         $hold = $preQpc - $lastDownCompletion[$slot]
                         if ($hold -lt 0) { $counts.negative_order++ }
                         else { $values.realized_hold_H_us.Add(($hold * 1000000.0) / $frequency) }
-                        $lastDownCompletion.Remove($slot)
+                        [void]$lastDownCompletion.Remove($slot)
                     } else { $counts.missing_H_pair++ }
                     $lastUpCompletion[$slot] = $completionQpc
                 }
