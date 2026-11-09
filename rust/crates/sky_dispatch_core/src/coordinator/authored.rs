@@ -1,10 +1,12 @@
+#[cfg(any(test, feature = "test-support"))]
+use super::ActiveGeneration;
 #[cfg(feature = "test-support")]
 use super::AuthoredPreparationEvidence;
 use super::{
-    ActiveGeneration, AuthoredUpIdentity, CoordinatorError, CoordinatorInvariantError,
-    GenerationStatus, PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame,
-    PreparedAuthoredPacket, PreparedBatch, PreparedDownIntent, PreparedStalePacket,
-    PreparedUpIntent, RuntimeDispatchCoordinator, physical_packet_kind,
+    AuthoredUpIdentity, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
+    PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame, PreparedAuthoredPacket,
+    PreparedBatch, PreparedDownIntent, PreparedStalePacket, PreparedUpIntent,
+    RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
 #[cfg(test)]
@@ -1422,6 +1424,73 @@ impl RuntimeDispatchCoordinator {
             source_action_index: batch.source_action_index,
             suppressed_intent_count: up_intents.len(),
         }))
+    }
+
+    /// Prepare the next stale packet at or before `now_ticks`, advancing the
+    /// cursor past physical packets that have already arrived so that midstream
+    /// and trailing stale metadata remains reachable under Phase B execution.
+    pub fn prepare_current_stale_packet_at(
+        &mut self,
+        now_ticks: TimelineTicks,
+    ) -> Result<Option<PreparedStalePacket>, CoordinatorError> {
+        while self.cursor < self.schedule.batches.len() {
+            let batch = &self.schedule.batches[self.cursor];
+            let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                    "packet id does not fit in usize".to_string(),
+                ))
+            })?;
+            let packet =
+                self.schedule
+                    .packets
+                    .get(packet_index)
+                    .ok_or(CoordinatorError::Schedule(
+                        RuntimeScheduleError::InvalidPacketIndex {
+                            index: packet_index,
+                        },
+                    ))?;
+            if packet.first_batch_index as usize != self.cursor {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "stale packet first batch does not match coordinator cursor".to_string(),
+                    ),
+                ));
+            }
+            let packet_ticks =
+                self.effective_batch_scheduled_ticks(packet.first_batch_index as usize)?;
+            if packet.up_mask == 0 && packet.down_mask == 0 && packet.up_intent_len > 0 {
+                if packet_ticks <= now_ticks {
+                    return self.prepare_current_stale_packet();
+                } else {
+                    return Ok(None);
+                }
+            } else if packet_ticks <= now_ticks {
+                self.cursor += usize::from(packet.batch_count);
+                continue;
+            } else {
+                return Ok(None);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Return the scheduled offset in timeline ticks of the earliest remaining
+    /// stale packet, if any.
+    pub fn next_stale_packet_target_ticks(&self) -> Option<TimelineTicks> {
+        let mut cursor = self.cursor;
+        while cursor < self.schedule.batches.len() {
+            let batch = self.schedule.batches.get(cursor)?;
+            let packet_index = usize::try_from(batch.packet_id).ok()?;
+            let packet = self.schedule.packets.get(packet_index)?;
+            if packet.first_batch_index as usize != cursor {
+                return None;
+            }
+            if packet.up_mask == 0 && packet.down_mask == 0 && packet.up_intent_len > 0 {
+                return self.effective_batch_scheduled_ticks(cursor).ok();
+            }
+            cursor += usize::from(packet.batch_count);
+        }
+        None
     }
 
     /// Atomically consume one prepared stale compiler packet.

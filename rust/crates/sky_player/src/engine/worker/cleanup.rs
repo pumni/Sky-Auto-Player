@@ -588,7 +588,7 @@ pub(crate) fn suspend_live_input(
         {
             return Err("pending Up recovery no longer matches its frozen authored miss".into());
         }
-        let effective_now_ticks = effective_now_ticks.map_err(|error| {
+        let resolved_now_ticks = effective_now_ticks.as_ref().map_err(|error| {
             format!("playback clock failure while resolving missed Down: {error}")
         })?;
         coordinator
@@ -596,12 +596,14 @@ pub(crate) fn suspend_live_input(
                 &pending.authored_commit,
                 frame.immediate_up_mask,
                 frame.down_mask,
-                effective_now_ticks,
+                *resolved_now_ticks,
             )
             .map_err(|error| format!("coordinator missed Down commit failure: {error}"))?;
     }
     let cancelled = coordinator
-        .cancel_live_generations_after_verified_resumable_cleanup()
+        .cancel_live_generations_after_verified_resumable_cleanup_with_time(
+            effective_now_ticks.ok().unwrap_or(TimelineTicks::ZERO),
+        )
         .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
     runtime.invalidate_down_authorization();
     runtime.pending_up_recovery = None;

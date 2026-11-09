@@ -21,6 +21,8 @@ pub struct MusicalSlot {
     pub release_not_before_ticks: TimelineTicks,
     /// Physical repress floor: previous Up completion + T.
     pub next_down_not_before_ticks: TimelineTicks,
+    /// Exact authored source action index of the paired Up.
+    pub paired_up_source_action_index: u32,
 }
 
 impl Default for MusicalSlot {
@@ -30,6 +32,7 @@ impl Default for MusicalSlot {
             authored_up_offset_ticks: TimelineTicks::ZERO,
             release_not_before_ticks: TimelineTicks::ZERO,
             next_down_not_before_ticks: TimelineTicks::ZERO,
+            paired_up_source_action_index: 0,
         }
     }
 }
@@ -44,6 +47,7 @@ pub struct DownIntentTicks {
     pub reason_id: crate::model::ReasonId,
     pub paired_up_offset_ticks: TimelineTicks,
     pub paired_up_offset_us: u64,
+    pub paired_up_source_action_index: u32,
 }
 
 /// An immutable Down chord with timeline tick offsets.
@@ -67,9 +71,7 @@ pub enum DispatchAction<'a> {
         down_chord: Option<&'a DownChordTicks>,
     },
     /// No physical work ready; wait until the specified deadline.
-    Wait {
-        deadline_ticks: TimelineTicks,
-    },
+    Wait { deadline_ticks: TimelineTicks },
     /// All Down chords sent, all slots released, and timeline end offset reached.
     Finished,
 }
@@ -115,6 +117,7 @@ impl DispatchExecutor {
                     reason_id: intent.reason_id,
                     paired_up_offset_ticks: us_to_ticks(intent.paired_up_offset_us),
                     paired_up_offset_us: intent.paired_up_offset_us,
+                    paired_up_source_action_index: intent.paired_up_source_action_index,
                 });
             }
             down_chords.push(DownChordTicks {
@@ -153,6 +156,11 @@ impl DispatchExecutor {
 
     #[inline]
     pub fn down_chord_count(&self) -> usize {
+        self.down_chords.len()
+    }
+
+    #[inline]
+    pub fn total_chords(&self) -> usize {
         self.down_chords.len()
     }
 
@@ -328,6 +336,7 @@ impl DispatchExecutor {
                 }
                 slot.active_generation = Some(intent.generation_id);
                 slot.authored_up_offset_ticks = intent.paired_up_offset_ticks;
+                slot.paired_up_source_action_index = intent.paired_up_source_action_index;
                 slot.release_not_before_ticks =
                     completion_ticks.saturating_add_duration(self.min_hold_ticks);
                 self.activated_generations = self
@@ -394,6 +403,16 @@ impl DispatchExecutor {
             dropped_expired: self.counters.dropped_expired,
             cancelled: self.counters.cancelled,
         }
+    }
+
+    /// Return the authored source action index of the first released key in `up_mask`.
+    pub fn up_source_action_index(&self, up_mask: u16) -> Option<u32> {
+        for slot in 0..MAX_KEYS {
+            if up_mask & (1 << slot) != 0 {
+                return Some(self.slots[slot].paired_up_source_action_index);
+            }
+        }
+        None
     }
 }
 

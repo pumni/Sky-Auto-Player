@@ -1,6 +1,8 @@
+#[cfg(any(test, feature = "test-support"))]
+use super::super::super::FinalControlSignals;
 use super::super::super::{
-    FinalControlSignals, FinalDownVerdict, FinalTargetSignals, PlaybackClockState, QpcClock,
-    TargetStamp, WorkerRuntime, apply_final_down_rejection,
+    FinalDownVerdict, FinalTargetSignals, PlaybackClockState, QpcClock, TargetStamp, WorkerRuntime,
+    apply_final_down_rejection,
 };
 use super::super::{DispatchStep, DownBoundaryAdmission};
 use super::AdmissionOutcome;
@@ -56,12 +58,12 @@ pub(super) fn reject_authored_target_if_needed(
 
 pub(super) fn final_policy_boundary_qpc(
     qpc_clock: QpcClock,
-    physical_target_qpc: QpcTicks,
+    _physical_target_qpc: QpcTicks,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
 ) -> Result<QpcTicks, DispatchStep> {
     #[cfg(any(test, feature = "test-support"))]
     if test_direct_boundary {
-        return Ok(physical_target_qpc);
+        return Ok(_physical_target_qpc);
     }
     qpc_clock.now().map_err(|error| {
         DispatchStep::Terminate(format!("QPC final policy boundary failure: {error:?}"))

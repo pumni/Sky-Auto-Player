@@ -161,6 +161,7 @@ pub struct CompiledDownIntent {
     pub source_action_index: u32,
     pub reason_id: ReasonId,
     pub paired_up_offset_us: u64,
+    pub paired_up_source_action_index: u32,
 }
 
 /// One immutable Down chord representing an atomic transport batch.

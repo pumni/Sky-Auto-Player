@@ -520,6 +520,7 @@ pub struct RuntimeDispatchCoordinator {
     cancelled_up_by_slot: [Option<AuthoredUpIdentity>; MAX_KEYS],
     pending_release_by_slot: [Option<PendingRelease>; MAX_KEYS],
     pending_release_mask: u16,
+    pub executor: Option<crate::executor::DispatchExecutor>,
     #[cfg(any(test, feature = "test-support"))]
     operation_evidence: std::cell::Cell<CoordinatorOperationEvidence>,
 }
@@ -546,6 +547,7 @@ impl Clone for RuntimeDispatchCoordinator {
             cancelled_up_by_slot: self.cancelled_up_by_slot,
             pending_release_by_slot: self.pending_release_by_slot,
             pending_release_mask: self.pending_release_mask,
+            executor: self.executor.clone(),
             #[cfg(any(test, feature = "test-support"))]
             operation_evidence: std::cell::Cell::new(self.operation_evidence.get()),
         }
@@ -735,6 +737,7 @@ impl RuntimeDispatchCoordinator {
             cancelled_up_by_slot: [None; MAX_KEYS],
             pending_release_by_slot: [None; MAX_KEYS],
             pending_release_mask: 0,
+            executor: None,
             #[cfg(any(test, feature = "test-support"))]
             operation_evidence: std::cell::Cell::new(CoordinatorOperationEvidence::default()),
         })

@@ -272,6 +272,26 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
+    let executor = match sky_dispatch_core::executor::DispatchExecutor::new(
+        &coordinator.schedule,
+        min_hold_ticks,
+        frame_ticks,
+        |us| {
+            qpc_clock
+                .timeline_from_us(us)
+                .unwrap_or(sky_dispatch_core::time::TimelineTicks::ZERO)
+        },
+    ) {
+        Ok(executor) => executor,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("executor construction failed: {error}"),
+            );
+        }
+    };
+    coordinator.executor = Some(executor);
     let prepared_stream = if effective_policy.prepared_normal {
         match PreparedDispatchStream::build_with_checkpoints(
             coordinator,

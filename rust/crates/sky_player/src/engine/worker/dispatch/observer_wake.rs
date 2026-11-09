@@ -80,7 +80,7 @@ pub(crate) fn record_wait_attempt(
     planned_wait_ticks: DurationTicks,
     deadline_ticks: TimelineTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-    waiter_return_qpc: Option<QpcTicks>,
+    _waiter_return_qpc: Option<QpcTicks>,
     local_metrics: &mut WorkerMetricsLocal,
 ) -> Option<WaitObservation> {
     let result = wait_result?;
@@ -123,7 +123,7 @@ pub(crate) fn record_wait_attempt(
             .then_some(result.wake_qpc)
             .flatten(),
         #[cfg(any(test, feature = "test-support"))]
-        waiter_return_qpc,
+        waiter_return_qpc: _waiter_return_qpc,
     };
     Some(observation)
 }

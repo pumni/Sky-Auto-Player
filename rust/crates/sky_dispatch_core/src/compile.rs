@@ -236,6 +236,8 @@ pub fn compile_runtime_intents(
                         Some(action.source_action_index);
                     down_chords[open.down_chord_index].intents[open.down_intent_index]
                         .paired_up_offset_us = scheduled_us;
+                    down_chords[open.down_chord_index].intents[open.down_intent_index]
+                        .paired_up_source_action_index = action.source_action_index;
                 }
                 intents.push(CompactIntent::new(
                     generation_id.unwrap_or(NO_GENERATION_ID),
@@ -320,6 +322,7 @@ pub fn compile_runtime_intents(
                     source_action_index: action.source_action_index,
                     reason_id,
                     paired_up_offset_us: 0,
+                    paired_up_source_action_index: 0,
                 });
             }
             down_chords.push(CompiledDownChord {

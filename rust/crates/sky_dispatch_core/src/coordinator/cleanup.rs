@@ -3,10 +3,16 @@ use super::{
     GenerationStatus, RuntimeDispatchCoordinator,
 };
 use crate::model::*;
+use crate::time::TimelineTicks;
 use smallvec::SmallVec;
 
 impl RuntimeDispatchCoordinator {
     pub fn is_finished(&self) -> bool {
+        if let Some(exec) = &self.executor {
+            return exec.chord_cursor() >= exec.total_chords()
+                && exec.active_mask() == 0
+                && self.cursor >= self.schedule.batches.len();
+        }
         // This is a lifecycle predicate, not the success predicate. A
         // terminal backend/conflict/expired generation allows the worker to
         // stop, but the session must still reject OUTCOME_FINISHED unless
@@ -287,6 +293,9 @@ impl RuntimeDispatchCoordinator {
     /// Return compact generation accounting without allocating or rebuilding
     /// a second lifecycle ledger.
     pub fn generation_accounting(&self) -> GenerationAccounting {
+        if let Some(exec) = &self.executor {
+            return exec.accounting();
+        }
         let terminal = self
             .counters
             .terminal_total_checked()
@@ -437,6 +446,69 @@ impl RuntimeDispatchCoordinator {
     /// exact immutable authored Up locations are collected from the bounded
     /// fifteen-slot table; no historical generation scan or allocation is
     /// performed. Scheduled generations remain eligible for later playback.
+    pub fn cancel_live_generations_after_verified_resumable_cleanup_with_time(
+        &mut self,
+        completion_ticks: TimelineTicks,
+    ) -> Result<usize, CoordinatorError> {
+        if let Some(exec) = self.executor.as_mut() {
+            let _ = exec.on_verified_cleanup(completion_ticks);
+        }
+        self.cancel_live_generations_after_verified_resumable_cleanup()
+    }
+
+    pub fn record_executor_completion(
+        &mut self,
+        confirmed_up_mask: u16,
+        confirmed_down: Option<&crate::executor::DownChordTicks>,
+    ) {
+        if let Some(chord) = confirmed_down {
+            for intent in &chord.intents {
+                let slot = intent.key_slot as usize;
+                self.active_by_slot[slot] = Some(super::ActiveGeneration {
+                    generation_id: intent.generation_id,
+                    scan_code: intent.scan_code,
+                    key_slot: intent.key_slot,
+                    source_action_index: intent.source_action_index,
+                    release_not_before_ticks: TimelineTicks::ZERO,
+                });
+                if let Some(state) = self
+                    .generation_states
+                    .get_mut(intent.generation_id as usize)
+                {
+                    *state = GenerationStatus::Active;
+                }
+                self.activated_generation_count += 1;
+            }
+        }
+        for slot in 0..MAX_KEYS {
+            let bit = 1_u16 << slot;
+            if confirmed_up_mask & bit == 0 {
+                continue;
+            }
+            if let Some(active) = self.active_by_slot[slot].take() {
+                if let Some(state) = self
+                    .generation_states
+                    .get_mut(active.generation_id as usize)
+                {
+                    *state = GenerationStatus::Released;
+                }
+                self.counters.released += 1;
+            }
+        }
+        self.active_mask = self
+            .active_by_slot
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (i, slot)| {
+                if slot.is_some() {
+                    mask | (1 << i)
+                } else {
+                    mask
+                }
+            });
+        self.blocked_mask = self.active_mask;
+    }
+
     pub fn cancel_live_generations_after_verified_resumable_cleanup(
         &mut self,
     ) -> Result<usize, CoordinatorError> {

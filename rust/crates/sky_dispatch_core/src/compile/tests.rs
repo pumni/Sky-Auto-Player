@@ -878,17 +878,31 @@ fn test_compile_multi_chord_sequence_preserves_chord_order() {
     assert_eq!(sched.down_chords[1].chord_index, 1);
     assert_eq!(sched.down_chords[1].scheduled_us, 1800);
 
-    let c0_15 = sched.down_chords[0].intents.iter().find(|i| i.scan_code == 0x15).unwrap();
+    let c0_15 = sched.down_chords[0]
+        .intents
+        .iter()
+        .find(|i| i.scan_code == 0x15)
+        .unwrap();
     assert_eq!(c0_15.paired_up_offset_us, 1500);
 
-    let c0_16 = sched.down_chords[0].intents.iter().find(|i| i.scan_code == 0x16).unwrap();
+    let c0_16 = sched.down_chords[0]
+        .intents
+        .iter()
+        .find(|i| i.scan_code == 0x16)
+        .unwrap();
     assert_eq!(c0_16.paired_up_offset_us, 2200);
 
-    let c1_17 = sched.down_chords[1].intents.iter().find(|i| i.scan_code == 0x17).unwrap();
+    let c1_17 = sched.down_chords[1]
+        .intents
+        .iter()
+        .find(|i| i.scan_code == 0x17)
+        .unwrap();
     assert_eq!(c1_17.paired_up_offset_us, 2200);
 
-    let c1_18 = sched.down_chords[1].intents.iter().find(|i| i.scan_code == 0x18).unwrap();
+    let c1_18 = sched.down_chords[1]
+        .intents
+        .iter()
+        .find(|i| i.scan_code == 0x18)
+        .unwrap();
     assert_eq!(c1_18.paired_up_offset_us, 2500);
 }
-
-
