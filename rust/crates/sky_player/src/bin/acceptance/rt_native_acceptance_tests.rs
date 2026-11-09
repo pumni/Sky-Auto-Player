@@ -10,7 +10,7 @@ use super::{
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
-    reconcile_events, scenario_plan,
+    expected_mixed_up_down_event_sequence, reconcile_event_sequence, reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, noncanonical_profile_spec, wait_for_sink_events_with,
 };
 use super::scenarios::production_options;
@@ -316,40 +316,9 @@ fn processkey_correct_scan_passes_and_wrong_scan_fails() {
 #[test]
 fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() {
     let e = [physical(0x15)];
-    assert!(
-        reconcile_events(
-            &[
-                event_with(1, "key_press", 0x15, true, 0xE5),
-                event_with(2, "key_release", 0x15, true, 0x59)
-            ],
-            &e,
-            &e,
-            false
-        )
-        .is_err()
-    );
-    assert!(
-        reconcile_events(
-            &[
-                event(1, "key_press", 0x15),
-                event(2, "key_press", 0x15),
-                event(3, "key_release", 0x15)
-            ],
-            &e,
-            &e,
-            false
-        )
-        .is_err()
-    );
-    assert!(
-        reconcile_events(
-            &[event_with(1, "sys_key_press", 0x15, false, 0xE5)],
-            &e,
-            &[],
-            false
-        )
-        .is_err()
-    );
+    assert!(reconcile_events(&[event_with(1, "key_press", 0x15, true, 0xE5), event_with(2, "key_release", 0x15, true, 0x59)], &e, &e, false).is_err());
+    assert!(reconcile_events(&[event(1, "key_press", 0x15), event(2, "key_press", 0x15), event(3, "key_release", 0x15)], &e, &e, false).is_err());
+    assert!(reconcile_events(&[event_with(1, "sys_key_press", 0x15, false, 0xE5)], &e, &[], false).is_err());
     let retrigger = [
         event(1, "key_press", 0x15),
         event(2, "key_release", 0x15),
@@ -357,6 +326,35 @@ fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() {
         event(4, "key_release", 0x15),
     ];
     assert!(reconcile_events(&retrigger, &[e[0], e[0]], &[e[0], e[0]], false).is_ok());
+}
+
+#[test]
+fn mixed_up_down_oracle_matches_repeated_cycles_and_rejects_mutations() {
+    let event_records = |expected: &[(&str, PhysicalExpectation)]| expected.iter().enumerate().map(|(index, (kind, key))| event_with(index as u64 + 1, kind, key.scan_code, key.extended, 89)).collect::<Vec<_>>();
+    let plan = scenario_plan(Scenario::MixedUpDown, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    let authored_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
+    let authored_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    assert_eq!(authored_down.len(), 2);
+    for (cycles, event_count) in [(1, 4), (2, 8), (129, 516)] {
+        let down = authored_down.iter().cycle().take(cycles * 2).copied().collect::<Vec<_>>();
+        let up = authored_up.iter().cycle().take(cycles * 2).copied().collect::<Vec<_>>();
+        let expected = expected_mixed_up_down_event_sequence(&down, &up).unwrap();
+        let events = event_records(&expected);
+        assert_eq!(expected.len(), event_count);
+        assert!(expected.as_chunks::<4>().0.iter().all(|cycle| cycle == &[("key_press", authored_down[0]), ("key_release", authored_up[0]), ("key_press", authored_down[1]), ("key_release", authored_up[1])]));
+        reconcile_event_sequence(&events, &expected).unwrap();
+    }
+    let down = [physical(0x15), PhysicalExpectation { scan_code: 0x16, extended: true }];
+    let expected = expected_mixed_up_down_event_sequence(&down, &down).unwrap();
+    let valid = event_records(&expected);
+    let mut invalid = vec![valid.clone(); 7];
+    invalid[0].swap(0, 1); invalid[1].pop(); invalid[2].push(event(5, "key_press", 0x15));
+    invalid[3][2] = valid[0].clone(); invalid[4][0].scan_code = 0x16; invalid[5][0].extended = true; invalid[6][0].kind = "sys_key_press".into();
+    assert!(invalid.iter().all(|events| reconcile_event_sequence(events, &expected).is_err()));
+    assert!(expected_mixed_up_down_event_sequence(&down[..1], &down[..1]).is_err());
+    assert!(expected_mixed_up_down_event_sequence(&down, &down[..1]).is_err());
+    let up = [physical(0x17), PhysicalExpectation { scan_code: 0x18, extended: true }];
+    assert_eq!(expected_mixed_up_down_event_sequence(&down, &up).unwrap(), vec![("key_press", down[0]), ("key_release", up[0]), ("key_press", down[1]), ("key_release", up[1])]);
 }
 #[test]
 fn expected_drain_waits_for_late_event_and_quiet() {

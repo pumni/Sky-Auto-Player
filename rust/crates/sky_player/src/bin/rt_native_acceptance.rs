@@ -286,6 +286,11 @@ fn reconcile_event_sequence(events: &[EventRecord], expected: &[(&str, PhysicalE
     for (index, (event, (kind, physical))) in events.iter().zip(expected).enumerate() { if event.kind != *kind || physical_event(event) != *physical { return Err(format!("event {index} does not match expected {kind} scan=0x{:02X}", physical.scan_code)); } }
     Ok(())
 }
+fn expected_mixed_up_down_event_sequence(down: &[PhysicalExpectation], up: &[PhysicalExpectation]) -> Result<Vec<(&'static str, PhysicalExpectation)>, &'static str> {
+    if down.len() < 2 || down.len() != up.len() || !down.len().is_multiple_of(2) { return Err("mixed-up-down expected Down/Up slots must have equal, nonzero, even counts"); }
+    let (down_pairs, _) = down.as_chunks::<2>(); let (up_pairs, _) = up.as_chunks::<2>();
+    Ok(down_pairs.iter().zip(up_pairs).flat_map(|(down, up)| [("key_press", down[0]), ("key_release", up[0]), ("key_press", down[1]), ("key_release", up[1])]).collect())
+}
 trait EventWindowReader {
     fn read(&mut self) -> Result<EventWindow, String>;
 }
@@ -394,14 +399,8 @@ fn run_windows(args: RunArgs) -> i32 {
         Ok(plan) => plan,
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),
     };
-    let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
-    let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
-    let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(
-        args.scenario,
-        plan.profile.as_ref(),
-        &expected_down,
-        &expected_up,
-    );
+    let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
     let (mut options, modifier_query_count) = modifier_guard::native_session_options(
         plan.schedule,
@@ -826,7 +825,7 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Pass, "session watchdog expired after session progress stopped while the unrelated helper remained alive", details);
     }
     if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
-    if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
+    if args.scenario == Scenario::MixedUpDown { let expected = match expected_mixed_up_down_event_sequence(&expected_down, &expected_up) { Ok(expected) => expected, Err(error) => return write_report(&args, Verdict::Fail, error, details) }; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario == Scenario::AmbiguousPacket && (!expected_ambiguous_cleanup || !ambiguous_packet_event_sequence_matches(&sink_events, expected_physical_keys(plan.profile.as_ref(), &[0])[0], expected_physical_keys(plan.profile.as_ref(), &[1])[0])) {
         return write_report(&args, Verdict::Fail, "ambiguous packet did not reconcile to its exact bounded cleanup mask and event sequence", details);
     }

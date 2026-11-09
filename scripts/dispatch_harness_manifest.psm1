@@ -4,10 +4,10 @@ $script:c1SourceRevision = 'b52106b47e4163d0906abbaa59d343935f4fba42'
 $script:c1SourceTree = '0e1933cc565ad8f9b42239312c996facf2a5126a'
 $script:c1AllowedSourcePath = 'rust/crates/sky_player/src/bin/rt_native_acceptance.rs'
 $script:c1ArchiveSha256 = '423231b0de048bd5ac86de855e184159f7d45df5b6401738842d6af5e4935536'
-$script:c1OverlaySha256 = '62490e0d3664b3434c3402e96099206336f255c15d006657fcd6b43f43de32bf'
-$script:c1DerivedSourceSha256 = '527ea2358e9babe1307e8e996891633fa229dbbbdc20c147825bb0185127b897'
+$script:c1OverlaySha256 = '7029fd6889ce1c0955f7cb8e911c7350a2a05ccfb13ad34b397ab0cf829287b6'
+$script:c1DerivedSourceSha256 = '82580ef5c4d5b8089e15511f6f8f4663a1ac5d8cd1a42553cadc63d7f5160cbd'
 $script:c1ChangesSha256 = '92afb7eef1c7011d4e61382aef9f89086bbecef198190ef7f84d49a2c6f8f329'
-$script:c1InventorySha256 = '7722ba7ff3a32a0560a176249e64160c8a9c2188a5747c7bed96793017218bdc'
+$script:c1InventorySha256 = 'de73297399584506a65c9be91c3c488d37fde0759b40baf1d4121e912a20d6f5'
 
 function Get-ManifestProperty {
     param($Manifest, [string]$Name)

@@ -40,6 +40,7 @@ $control = $null
 $head = $null
 $tree = $null
 $exitCode = 0
+$stoppedAtFirstNativeFailure = $false
 
 function Get-Sha256 {
     param([string]$Path)
@@ -476,7 +477,7 @@ function Invoke-NativeCase {
         source_revision = $HarnessManifest.source_revision
         source_tree_sha = $HarnessManifest.source_tree_sha
         control_kind = Get-OptionalProperty $HarnessManifest 'control_kind'
-        control_label = if ($HarnessManifest.c1_timed_verified) { 'C1-TIMED' } elseif ($Role -eq 'candidate') { 'A' } else { 'C0' }
+        control_label = if ($HarnessManifest.c1_timed_verified) { 'C1-TIMED-R2' } elseif ($Role -eq 'candidate') { 'Candidate-R2' } else { 'C0' }
         base_source_revision = Get-OptionalProperty $HarnessManifest 'base_source_revision'
         base_source_tree_sha = Get-OptionalProperty $HarnessManifest 'base_source_tree_sha'
         base_source_archive_sha256 = Get-OptionalProperty $HarnessManifest 'base_source_archive_sha256'
@@ -586,6 +587,8 @@ function Invoke-PairedWorkloads {
                     $manifest = if ($isControl) { $control } else { $candidate }
                     $manifestPath = if ($isControl) { $controlManifestPath } else { $candidateManifestPath }
                     [void](Invoke-NativeCase -Scenario $workload -Workload $workload -Role $role -HarnessManifest $manifest -Load $load -CellId $cellId -PairId $pairId -Order $order -Margin $TimingMarginUs -Fps 60 -Sample $SampleSeconds -Historical $isControl)
+                    $completedCase = $script:runRows[$script:runRows.Count - 1]
+                    if ($completedCase.case_exit_code -ne 0 -or $completedCase.status -ne 'PASS') { $script:stoppedAtFirstNativeFailure = $true; return }
                 }
             }
         }
@@ -764,11 +767,13 @@ try {
         Invoke-PairedWorkloads $performanceWorkloads
     } else {
         Invoke-PairedWorkloads $performanceWorkloads
-        foreach ($scenario in $scenarios) {
-            [void](Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'final-safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
+        if ($script:exitCode -eq 0) {
+            foreach ($scenario in $scenarios) {
+                [void](Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'final-safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
+            }
+            [void](Invoke-NativeCase -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'boundary-safety' -PairId '' -Order '' -Margin 0 -Fps 60 -Sample 0 -Historical $false)
+            [void](Invoke-NativeCase -Scenario 'timing-margin-sweep' -Workload 'boundary-120fps-margin-500' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'boundary-safety' -PairId '' -Order '' -Margin 500 -Fps 120 -Sample 0 -Historical $false)
         }
-        [void](Invoke-NativeCase -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'boundary-safety' -PairId '' -Order '' -Margin 0 -Fps 60 -Sample 0 -Historical $false)
-        [void](Invoke-NativeCase -Scenario 'timing-margin-sweep' -Workload 'boundary-120fps-margin-500' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'boundary-safety' -PairId '' -Order '' -Margin 500 -Fps 120 -Sample 0 -Historical $false)
     }
 
     $source = Get-CurrentSourceIdentity
@@ -790,7 +795,7 @@ try {
         schema_version = 1
         run_id = $runId
         stage = $Stage
-        comparison = if ($Stage -eq 'Compare') { 'C1-TIMED vs A; C0 not timed-qualified' } else { $null }
+        comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null }
         source = $source
         candidate = [ordered]@{ manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         control = if ($control) { [ordered]@{ control_label = if ($control.c1_timed_verified) { 'C1-TIMED' } else { 'C0' }; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
@@ -799,6 +804,7 @@ try {
         run_count = $runRows.Count
         passed_count = $passed
         failed_count = $failureRows.Count
+        stopped_at_first_native_failure = $stoppedAtFirstNativeFailure
         hard_safety_review = $hardSafety
         performance_pairs = $pairedMetrics.paired_sessions
         performance_cells = $pairedMetrics.cell_summary
@@ -816,7 +822,7 @@ try {
         remote_evidence = [ordered]@{ summary_and_manifest = 'PR report'; raw_bundle = 'PENDING user attachment; no existing workflow uploader used' }
         failures = $failureRows.ToArray()
         sessions = $runRows.ToArray()
-        disposition = if ($exitCode -eq 0) { 'collected; leader review required for performance gates' } else { 'one or more cases failed; leader review required' }
+        disposition = if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -eq 0) { 'collected; leader review required for performance gates' } else { 'one or more cases failed; leader review required' }
     }
     $summary | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
     $runRows | Select-Object run_id,stage,cell_id,pair_id,pair_order,role,source_revision,source_tree_sha,control_kind,control_label,base_source_revision,base_source_tree_sha,base_source_archive_sha256,base_source_file_sha256,overlay_sha256,derived_source_file_sha256,source_changes_sha256,derived_source_inventory_sha256,harness_sha256,profile,features,observer_mode,guard_mode,workload,scenario,load,game_fps,timing_margin_us,sample_seconds,started_utc,ended_utc,case_exit_code,status,reason,evidence_directory,expected_sink_event_count,observed_sink_event_count,sink_window_match,active_count,possibly_active_count,final_release_obligation_mask,production_hold_floor_violation_count,production_release_floor_violation_count,production_forensics_anomaly_count,production_structural_anomaly_count,production_same_key_overlap_forensics_count,production_anchor_overwrite_count,production_unmatched_up_count,missed_down_boundaries,missed_down_keys,missed_physical_window_boundaries,keys_dropped,chord_split_events,sendinput_partial_events,sendinput_zero_progress_failures,generation_total,generation_activated,generation_released,generation_cancelled,generation_scheduled,expected_down_key_count,expected_up_key_count,precision_packet_attempts,authored_lateness_samples,residual_lateness_samples,sendinput_envelope_samples,qpc_read_count_available,qpc_read_count,native_timing_telemetry_available,native_timing_telemetry_unavailable_reason,telemetry_trace_records,observed_down_chords,attempted_down_send_calls,completed_down_chords,failed_down_chords,actual_sendinput_calls,telemetry_generation_mismatch,telemetry_negative_order,telemetry_dropped,observer_queue_dropped,worker_cpu_time_us,process_cpu_time_us,spin_time_us,spin_time_available,spin_time_complete,spin_duty_cycle_ppm,spin_expected_samples,spin_dropped_samples,spin_missing_samples,timing_metrics_json | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
@@ -830,12 +836,13 @@ try {
     $markdown = @(
         '# Dispatch Core qualification ' + $Stage,
         '',
-        $(if ($Stage -eq 'Compare') { '**Comparison: C1-TIMED vs A. C0 is not timed-qualified.**' } else { $null }),
+        $(if ($Stage -eq 'Compare') { '**Comparison: C1-TIMED-R2 vs Candidate-R2. C0 is not timed-qualified.**' } else { $null }),
         '- Run: `' + $runId + '`',
         '- Source: `' + $head + '` tree `' + $tree + '` (clean)',
-        '- Candidate: `' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`',
-        ('- Control: ' + $(if ($control) { $(if ($control.c1_timed_verified) { 'C1-TIMED derived from frozen C0 A1; C0 not timed-qualified; ' } else { 'C0; ' }) + '`' + $control.source_revision + '` / `' + $control.cargo_profile + '` / SHA-256 `' + $control.binary_sha256 + '`' } else { 'not applicable' })),
+        '- Candidate-R2: `' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`',
+        ('- Control: ' + $(if ($control) { $(if ($control.c1_timed_verified) { 'C1-TIMED-R2 derived from frozen C0 A1; C0 not timed-qualified; ' } else { 'C0; ' }) + '`' + $control.source_revision + '` / `' + $control.cargo_profile + '` / SHA-256 `' + $control.binary_sha256 + '`' } else { 'not applicable' })),
         '- Sessions: ' + $runRows.Count + '; PASS: ' + $passed + '; failed/inconclusive: ' + $failureRows.Count,
+        '- Disposition: ' + $(if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -ne 0) { 'FAILED' } else { 'COMPLETED' }),
         '- Paired order: AB/BA alternating; six pairs per workload/load cell; 15 seconds per timed session.',
         '- Contention: two hidden PowerShell CPU workers at BelowNormal priority. Sink: identity-verified ReceiveOnly.',
         '- Percentiles use nearest-rank ceiling. No p99.9 is inferred.',
@@ -870,20 +877,20 @@ try {
     Copy-Item -LiteralPath $manifestValidator -Destination (Join-Path $evidenceRoot 'dispatch_harness_manifest.psm1')
     $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
-    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = if ($Stage -eq 'Compare') { 'C1-TIMED vs A; C0 not timed-qualified' } else { $null } }
+    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null } }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8
     [ordered]@{
         schema_version = 1
         run_id = $runId
         stage = $Stage
-        comparison = if ($Stage -eq 'Compare') { 'C1-TIMED vs A; C0 not timed-qualified' } else { $null }
+        comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null }
         created_utc = [DateTimeOffset]::UtcNow.ToString('O')
         source_branch = $source.branch
         source_revision = $source.revision
         source_tree_sha = $source.tree
         source_tree_clean = $source.clean
-        control_manifest = if ($control) { [ordered]@{ control_label = if ($control.c1_timed_verified) { 'C1-TIMED' } else { 'C0' }; control_kind = Get-OptionalProperty $control 'control_kind'; sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
-        candidate_manifest = [ordered]@{ sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
+        control_manifest = if ($control) { [ordered]@{ control_label = if ($control.c1_timed_verified) { 'C1-TIMED-R2' } else { 'C0' }; control_kind = Get-OptionalProperty $control 'control_kind'; sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
+        candidate_manifest = [ordered]@{ label = 'Candidate-R2'; sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { 6 }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { 15 }; timing_margin_us = $TimingMarginUs; workload_version = $candidate.workload_version; observer_mode = $candidate.observer_mode; guard_mode = $candidate.guard_mode; quiet_load = 'no extra qualification workers'; contention_load = 'two BelowNormal CPU workers'; pair_order = 'alternating AB/BA' }
         rustc_version = $rustcVersion.Trim()
         windows_caption = $os.Caption
