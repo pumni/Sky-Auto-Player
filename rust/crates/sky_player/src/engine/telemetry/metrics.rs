@@ -219,7 +219,16 @@ pub struct WorkerMetricsLocal {
     pub wake_error_p95_us: u64,
     pub wake_error_p99_us: u64,
     pub wake_error_max_us: u64,
+    /// Wall span spent in the waiter's final spin window. This is not CPU time.
     pub spin_time_us: u64,
+    /// Physical waits whose observation was queued for the diagnostic consumer.
+    pub spin_observation_expected_samples: u64,
+    /// Wait observations rejected by the fixed diagnostic queue.
+    pub spin_observation_dropped_samples: u64,
+    /// Wait results not recorded because the diagnostic observer was disabled.
+    pub spin_observation_missing_samples: u64,
+    /// Queued wait observations not yet drained into the observer-owned slot.
+    pub spin_observation_pending_samples: u64,
     pub playback_wall_time_us: u64,
     pub spin_duty_cycle_ppm: u64,
     pub worker_cpu_time_us: u64,
@@ -416,6 +425,18 @@ impl WorkerMetricsLocal {
     /// dispatch snapshot projection. Each source snapshot starts from its own
     /// zero state, so producer-owned counters remain separate until readout.
     pub(crate) fn merge_observer(&mut self, observer: &Self) {
+        // Spin duration and wake count have one owner: the observer consumer.
+        // The producer owns expected, dropped, and missing wait provenance.
+        self.spin_time_us = self.spin_time_us.saturating_add(observer.spin_time_us);
+        self.idle_wake_count = self
+            .idle_wake_count
+            .saturating_add(observer.idle_wake_count);
+        self.spin_observation_pending_samples =
+            self.spin_observation_expected_samples.saturating_sub(
+                self.idle_wake_count
+                    .saturating_add(self.spin_observation_dropped_samples)
+                    .saturating_add(self.spin_observation_missing_samples),
+            );
         self.total_us = self.total_us.saturating_add(observer.total_us);
         self.lateness_us = observer.lateness_us;
         self.max_lateness_us = self.max_lateness_us.max(observer.max_lateness_us);

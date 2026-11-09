@@ -48,6 +48,11 @@ fn record_with_packet_index(
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: Some(TimelineTicks::ZERO),
             wake_qpc_ticks: Some(0),
+            physical_eligibility_qpc_ticks: Some(1),
+            timer_arm_target_qpc_ticks: Some(1),
+            timer_return_qpc_ticks: Some(2),
+            waiter_deadline_crossing_qpc_ticks: Some(3),
+            waiter_return_qpc_ticks: Some(4),
             pre_call_qpc_ticks: Some(1),
             sendinput_completion_qpc_ticks: Some(2),
             physical_target_qpc_ticks: None,
@@ -114,6 +119,21 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["wake_offset_provenance"], "derived_from_wake_qpc");
     assert_eq!(value["wake_offset_available"], true);
     assert_eq!(value["wake_qpc_provenance"], "measured");
+    assert_eq!(value["physical_eligibility_qpc_ticks"], 1);
+    assert_eq!(
+        value["physical_eligibility_qpc_provenance"],
+        "configured_target"
+    );
+    assert_eq!(
+        value["timer_arm_target_qpc_provenance"],
+        "configured_target"
+    );
+    assert_eq!(value["timer_return_qpc_ticks"], 2);
+    assert_eq!(value["timer_return_qpc_provenance"], "measured");
+    assert_eq!(value["waiter_deadline_crossing_qpc_ticks"], 3);
+    assert_eq!(value["waiter_deadline_crossing_qpc_provenance"], "measured");
+    assert_eq!(value["waiter_return_qpc_ticks"], 4);
+    assert_eq!(value["waiter_return_qpc_provenance"], "measured");
     assert_eq!(value["pre_call_qpc_provenance"], "measured");
     assert_eq!(value["sendinput_completion_qpc_provenance"], "measured");
     assert_eq!(
@@ -127,6 +147,7 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
+    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 21);
 }
 
 #[test]

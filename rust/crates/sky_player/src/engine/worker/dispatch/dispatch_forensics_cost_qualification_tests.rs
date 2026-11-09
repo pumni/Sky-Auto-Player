@@ -127,6 +127,8 @@ fn dispatch_cost_qualification() {
                         outcome: WaitOutcome::Deadline,
                         wake_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
                         spin_ticks: DurationTicks::ZERO,
+                        #[cfg(feature = "test-support")]
+                        timer_return_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
                     }),
                     QpcTicks::from_raw(sample.target_ticks),
                     DurationTicks::from_raw(
@@ -134,6 +136,8 @@ fn dispatch_cost_qualification() {
                     ),
                     TimelineTicks::from_raw(sample.target_ticks),
                     QpcTicks::ZERO,
+                    Some(QpcTicks::from_raw(sample.pre_call_ticks)),
+                    &mut wait_metrics,
                 );
                 wait_runtime.pending_wait_observation = wait;
                 publish_pending_wait_observation(

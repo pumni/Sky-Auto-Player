@@ -664,7 +664,7 @@ pub(super) fn update_deferred_worker_metrics(
         timing.last_cpu_metrics_sample_us = wall_now_us;
     }
     local_metrics.playback_wall_time_us = wall_now_us.saturating_sub(timing.start_wall_time_us);
-    if local_metrics.playback_wall_time_us > 0 {
+    if local_metrics.idle_wake_count > 0 && local_metrics.playback_wall_time_us > 0 {
         local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
             / local_metrics.playback_wall_time_us as u128)
             as u64;

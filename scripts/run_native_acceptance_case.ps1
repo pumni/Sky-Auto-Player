@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep')]
+[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle')]
     [string]$Scenario,
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
@@ -8,16 +8,29 @@ param(
     [ValidateSet('Baseline', 'Candidate')]
     [string]$CalibrationPlacement = 'Baseline',
     [switch]$TimingObserverForQualification,
-    [switch]$CpuContention
+    [switch]$CpuContention,
+    [switch]$HistoricalSourceAllowed,
+    [string]$HarnessPath,
+    [string]$HarnessManifestPath,
+    [string]$OutputRoot,
+    [ValidateRange(15, 15)]
+    [int]$SampleSeconds,
+    [ValidateSet(60, 120)]
+    [int]$GameFps = 60
 )
 
 $ErrorActionPreference = 'Stop'
-$root = (Get-Location).Path
+$root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
 $pwshPath = (Get-Command pwsh.exe).Source
 $pwshExecutablePath = (Get-Process -Id $PID).Path
 $runId = 'native-case-' + (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-$runDir = Join-Path $root (Join-Path '.benchmarks\physical-native-cases' $runId)
+$evidenceRoot = if ($OutputRoot) {
+    [System.IO.Path]::GetFullPath($OutputRoot)
+} else {
+    Join-Path $root '.benchmarks\physical-native-cases'
+}
+$runDir = Join-Path $evidenceRoot $runId
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $readyPath = Join-Path $runDir 'sink-ready.json'
 $eventsPath = Join-Path $runDir 'sink-events.jsonl'
@@ -29,7 +42,13 @@ $windowPath = Join-Path $runDir 'sink-event-window.json'
 $probeReadyPath = Join-Path $runDir 'focus-probe-ready.json'
 $probeEventsPath = Join-Path $runDir 'focus-probe-events.jsonl'
 $focusRestoreRequestPath = Join-Path $runDir 'focus-restore.request'
-$harness = Join-Path $root 'rust\target\release\rt-native-acceptance.exe'
+$harness = if ($HarnessPath) {
+    [System.IO.Path]::GetFullPath($HarnessPath)
+} else {
+    Join-Path $root 'rust\target\release\rt-native-acceptance.exe'
+}
+$harnessManifest = $null
+$harnessManifestHash = $null
 $sinkProcess = $null
 $probeProcess = $null
 $contentionProcesses = @()
@@ -100,18 +119,73 @@ function Get-Sha256 {
     }
 }
 
+function Assert-PathOutsideRepository {
+    param([string]$Path, [string]$Label)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootPrefix = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    if ([string]::Equals($fullPath.TrimEnd('\'), [System.IO.Path]::GetFullPath($root).TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ($Label + ' must be outside the source checkout')
+    }
+}
+
 try {
     if (-not [Environment]::UserInteractive) {
         throw 'Windows is not interactive; refusing physical acceptance'
     }
-    if (-not (Test-Path -LiteralPath $harness)) {
+    if ([bool]$HarnessPath -ne [bool]$HarnessManifestPath) {
+        throw 'immutable harness runs require both -HarnessPath and -HarnessManifestPath'
+    }
+    if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle')) {
+        throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, and long-idle'
+    }
+    if ($HarnessPath) {
+        Assert-PathOutsideRepository $harness 'immutable harness binary'
+        Assert-PathOutsideRepository $HarnessManifestPath 'immutable harness manifest'
+    }
+    if ($OutputRoot) { Assert-PathOutsideRepository ([System.IO.Path]::GetFullPath($OutputRoot)) 'native evidence output root' }
+    if (-not (Test-Path -LiteralPath $harness -PathType Leaf)) {
         throw 'feature-gated release acceptance harness is missing; build it before the run'
     }
-    $head = (& git rev-parse HEAD).Trim()
+    $head = (& git -C $root rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve source revision' }
-    $trackedChanges = (& git status --porcelain --untracked-files=no) -join ''
+    $sourceTree = (& git -C $root rev-parse 'HEAD^{tree}').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'could not resolve source tree identity' }
+    $treeChanges = (& git -C $root status --porcelain --untracked-files=all) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'could not verify source-tree cleanliness' }
-    $sourceTreeClean = [string]::IsNullOrWhiteSpace($trackedChanges)
+    $sourceTreeClean = [string]::IsNullOrWhiteSpace($treeChanges)
+    if ($HarnessManifestPath) {
+        if (-not $sourceTreeClean) { throw 'immutable harness acceptance requires a clean source checkout' }
+        $harnessManifest = (Get-Content -LiteralPath $HarnessManifestPath -Raw) | ConvertFrom-Json
+        $harnessManifestHash = Get-Sha256 $HarnessManifestPath
+        $manifestFeatures = @($harnessManifest.cargo_features)
+        $manifestBinaryPath = [System.IO.Path]::GetFullPath([string]$harnessManifest.binary_path)
+        $expectedObserverMode = if ($TimingObserverForQualification) { 'qualification-on' } else { 'off' }
+        $rustcVersion = (& rustc -Vv) -join [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
+        $sourceRevisionMatches = $harnessManifest.source_revision -eq $head -and $harnessManifest.source_tree_sha -eq $sourceTree
+        if ($harnessManifest.schema_version -ne 1 -or
+            (-not $HistoricalSourceAllowed -and -not $sourceRevisionMatches) -or
+            $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
+            $harnessManifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
+            $harnessManifest.source_branch -ne 'perf/dispatch-core-20261109' -or
+            -not [bool]$harnessManifest.source_tree_clean -or
+            -not [bool]$harnessManifest.clean_build -or
+            $harnessManifest.cargo_profile -ne 'dist' -or
+            $manifestFeatures.Count -ne 1 -or
+            $manifestFeatures[0] -ne 'real-input-acceptance' -or
+            [bool]$harnessManifest.qpc_read_counting -or
+            $harnessManifest.observer_mode -ne $expectedObserverMode -or
+            $harnessManifest.guard_mode -ne 'frozen' -or
+            $harnessManifest.workload_version -ne 'dispatch-core-646-a1' -or
+            $harnessManifest.target -ne 'x86_64-pc-windows-msvc' -or
+            $harnessManifest.rustc_version -ne $rustcVersion.Trim() -or
+            -not [string]::Equals($manifestBinaryPath, $harness, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $harnessManifest.binary_name -ne 'rt-native-acceptance.exe' -or
+            $harnessManifest.binary_sha256 -ne (Get-Sha256 $harness)) {
+            throw 'immutable harness manifest source, profile, features, path, name, or SHA-256 mismatch'
+        }
+    }
     $sessionId = (Get-Process -Id $PID).SessionId
     $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
     $sinkProcess = Start-Process -FilePath $pwshPath -ArgumentList $sinkArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'sink.stdout.log') -RedirectStandardError (Join-Path $runDir 'sink.stderr.log')
@@ -144,6 +218,7 @@ try {
     $runConfig = [ordered]@{
         run_id = $runId
         source_revision = $head
+        source_tree_sha = $sourceTree
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
         calibration_placement = $CalibrationPlacement.ToLowerInvariant()
@@ -151,9 +226,17 @@ try {
         cpu_contention_processes = $contentionProcesses.Count
         cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
-        expected_hold_us = 16667 + $TimingMarginUs
-        expected_release_gap_us = 16667 + $TimingMarginUs
+        game_fps = $GameFps
+        sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+        expected_hold_us = [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs
+        expected_release_gap_us = [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs
         profile = 'production'
+        cargo_profile = if ($harnessManifest) { $harnessManifest.cargo_profile } else { 'legacy-checkout-release' }
+        cargo_features = if ($harnessManifest) { @($harnessManifest.cargo_features) } else { @() }
+        qpc_read_counting = [bool]($harnessManifest -and $harnessManifest.qpc_read_counting)
+        observer_mode = if ($TimingObserverForQualification) { 'qualification-on' } else { 'off' }
+        guard_mode = if ($harnessManifest) { $harnessManifest.guard_mode } else { 'unknown' }
+        workload_version = if ($harnessManifest) { $harnessManifest.workload_version } else { 'legacy' }
         telemetry_mode = 'ring'
         telemetry_capacity = 1024
         timing_observer_for_qualification = [bool]$TimingObserverForQualification
@@ -162,6 +245,8 @@ try {
         priority_mode = 'auto'
         harness_path = $harness
         harness_sha256 = $harnessHash
+        harness_manifest_path = if ($HarnessManifestPath) { [System.IO.Path]::GetFullPath($HarnessManifestPath) } else { $null }
+        harness_manifest_sha256 = $harnessManifestHash
         runner_sha256 = $runnerHash
         rust_version = $rustVersion
         windows_caption = $operatingSystem.Caption
@@ -188,14 +273,19 @@ try {
         '--target-hwnd', ([long]$sink.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture),
         '--scenario', $Scenario, '--evidence', $reportPath,
         '--calibration-placement', $CalibrationPlacement.ToLowerInvariant(),
-        '--timing-margin-us', [string]$TimingMarginUs
+        '--timing-margin-us', [string]$TimingMarginUs,
+        '--game-fps', [string]$GameFps
     )
+    if ($SampleSeconds) { $harnessArgs += @('--sample-seconds', [string]$SampleSeconds) }
     if ($TimingObserverForQualification) { $harnessArgs += '--timing-observer-for-qualification' }
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
     }
     $captured = @(& $harness @harnessArgs 2>&1)
     $nativeExit = $LASTEXITCODE
+    if ($harnessManifest -and (Get-Sha256 $harness) -ne $harnessManifest.binary_sha256) {
+        throw 'immutable harness binary changed during acceptance run'
+    }
     $endedUtc = [DateTimeOffset]::UtcNow.ToString('O')
     $capturedText = ($captured | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
     Set-Content -LiteralPath $stdoutPath -Value $capturedText -Encoding UTF8
@@ -203,7 +293,8 @@ try {
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
-    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs) {
+    $expectedSampleSeconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.sample_seconds -ne $expectedSampleSeconds -or $report.game_fps -ne $GameFps) {
         throw 'native report identity does not match this invocation'
     }
     if ($report.status -eq 'PASS' -and ($report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification)) {
@@ -247,6 +338,7 @@ try {
     $invocation = [ordered]@{
         run_id = $runId
         source_revision = $head
+        source_tree_sha = $sourceTree
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
         calibration_placement = $CalibrationPlacement.ToLowerInvariant()
@@ -254,6 +346,8 @@ try {
         cpu_contention_processes = $contentionProcesses.Count
         cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
+        game_fps = $GameFps
+        sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
         started_utc = $startedUtc
         ended_utc = $endedUtc
         exit_code = $nativeExit
@@ -285,6 +379,8 @@ try {
         run_id = $runId
         scenario = $Scenario
         timing_margin_us = $TimingMarginUs
+        game_fps = $GameFps
+        sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
         source_revision = if ($head) { $head } else { $null }
         error = $_.Exception.Message
     }

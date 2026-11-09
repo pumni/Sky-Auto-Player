@@ -826,7 +826,7 @@ fn baseline_observation_timing(
         DispatchObservation::Down(value) => {
             let crossing_qpc = value
                 .precision_handoff
-                .map(|handoff| handoff.target_crossing_qpc.as_u64());
+                .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64()));
             let wake_qpc = value
                 .wake_qpc
                 .or_else(|| {
@@ -861,7 +861,7 @@ fn baseline_observation_timing(
         DispatchObservation::Up(value) => {
             let crossing_qpc = value
                 .precision_handoff
-                .map(|handoff| handoff.target_crossing_qpc.as_u64());
+                .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64()));
             let wake_qpc = value
                 .wake_qpc
                 .or_else(|| {
@@ -1415,33 +1415,35 @@ fn record_precision_handoff(
     let Some(handoff) = handoff else {
         return;
     };
-    if let Some(admission_wake_qpc) = handoff.admission_wake_qpc {
-        samples
-            .admission_wake_to_precision_wake_us
-            .push(signed_qpc_us(
-                qpc_clock,
-                handoff.target_crossing_qpc,
-                admission_wake_qpc,
-            ));
-    }
-    samples.target_crossing_error_us.push(signed_qpc_us(
-        qpc_clock,
-        handoff.target_crossing_qpc,
-        physical_target_qpc,
-    ));
-    if let Some(final_policy_qpc) = handoff.final_policy_qpc {
-        samples
-            .target_crossing_to_final_policy_us
-            .push(signed_qpc_us(
-                qpc_clock,
-                final_policy_qpc,
-                handoff.target_crossing_qpc,
-            ));
-        samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
+    if let Some(target_crossing_qpc) = handoff.target_crossing_qpc {
+        if let Some(admission_wake_qpc) = handoff.admission_wake_qpc {
+            samples
+                .admission_wake_to_precision_wake_us
+                .push(signed_qpc_us(
+                    qpc_clock,
+                    target_crossing_qpc,
+                    admission_wake_qpc,
+                ));
+        }
+        samples.target_crossing_error_us.push(signed_qpc_us(
             qpc_clock,
-            pre_call_qpc,
-            final_policy_qpc,
+            target_crossing_qpc,
+            physical_target_qpc,
         ));
+        if let Some(final_policy_qpc) = handoff.final_policy_qpc {
+            samples
+                .target_crossing_to_final_policy_us
+                .push(signed_qpc_us(
+                    qpc_clock,
+                    final_policy_qpc,
+                    target_crossing_qpc,
+                ));
+            samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
+                qpc_clock,
+                pre_call_qpc,
+                final_policy_qpc,
+            ));
+        }
     }
     if let Some(dispatch_ready_qpc) = dispatch_ready_qpc {
         samples.completion_to_rt_ready_us.push(signed_qpc_us(

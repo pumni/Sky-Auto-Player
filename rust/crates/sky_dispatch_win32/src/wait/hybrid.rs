@@ -172,6 +172,9 @@ impl HybridWaiter {
         // Deadline; final control/target/focus/lease admission decides
         // whether transport is still allowed.
         let mut spin_started_ticks = None;
+        #[cfg(any(test, feature = "test-support"))]
+        let mut timer_return_pending = false;
+        let mut timer_return_qpc = None;
         let mut observed_generation = interrupt.signal_generation();
         if self.event_wait_enabled {
             if interrupt.try_take() {
@@ -195,8 +198,17 @@ impl HybridWaiter {
                     return WaitResult::failed(WaitFailure::Clock);
                 }
             };
+            #[cfg(any(test, feature = "test-support"))]
+            if timer_return_pending {
+                timer_return_qpc = Some(now_ticks);
+                timer_return_pending = false;
+            }
             if now_ticks >= target_ticks {
-                return deadline_wait_result(spin_started_ticks, now_ticks);
+                return deadline_wait_result_with_timer_return(
+                    spin_started_ticks,
+                    now_ticks,
+                    timer_return_qpc,
+                );
             }
             let remaining_ticks = match target_ticks.as_u64().checked_sub(now_ticks.as_u64()) {
                 Some(remaining) => remaining,
@@ -214,7 +226,11 @@ impl HybridWaiter {
                         }
                     };
                     if now_ticks >= target_ticks {
-                        return deadline_wait_result(spin_started_ticks, now_ticks);
+                        return deadline_wait_result_with_timer_return(
+                            spin_started_ticks,
+                            now_ticks,
+                            timer_return_qpc,
+                        );
                     }
                     if self.event_wait_enabled {
                         if spin_iterations & 31 == 0
@@ -276,6 +292,10 @@ impl HybridWaiter {
                     let result =
                         unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, u32::MAX) };
                     if result == WAIT_OBJECT_0 {
+                        #[cfg(any(test, feature = "test-support"))]
+                        {
+                            timer_return_pending = true;
+                        }
                         continue;
                     }
                     if result == WAIT_OBJECT_0 + 1 {
@@ -296,7 +316,13 @@ impl HybridWaiter {
             // long gap into a polling loop and distorts wake metrics.
             {
                 match timer.sleep_us(kernel_wait_us.get()) {
-                    Ok(()) => continue,
+                    Ok(()) => {
+                        #[cfg(any(test, feature = "test-support"))]
+                        {
+                            timer_return_pending = true;
+                        }
+                        continue;
+                    }
                     Err(error) => {
                         return WaitResult::failed(WaitFailure::TimerWait { win32_error: error });
                     }
@@ -314,8 +340,16 @@ impl HybridWaiter {
                     return WaitResult::failed(WaitFailure::Clock);
                 }
             };
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                timer_return_qpc = Some(wake_ticks);
+            }
             if wake_ticks >= target_ticks {
-                return deadline_wait_result(spin_started_ticks, wake_ticks);
+                return deadline_wait_result_with_timer_return(
+                    spin_started_ticks,
+                    wake_ticks,
+                    timer_return_qpc,
+                );
             }
             if self.event_wait_enabled && interrupt.signal_generation() != observed_generation {
                 if interrupt.try_take() {
@@ -417,6 +451,19 @@ fn classify_kernel_wait_us(
         .duration_to_us(DurationTicks::from_raw(kernel_wait_ticks))
         .map_err(|_| WaitFailure::Clock)?;
     Ok(NonZeroU64::new(kernel_wait_us))
+}
+
+fn deadline_wait_result_with_timer_return(
+    started_ticks: Option<QpcTicks>,
+    completed_ticks: QpcTicks,
+    _timer_return_qpc: Option<QpcTicks>,
+) -> WaitResult {
+    let mut result = deadline_wait_result(started_ticks, completed_ticks);
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        result.timer_return_qpc = _timer_return_qpc;
+    }
+    result
 }
 
 fn classify_interrupt_with_fresh_qpc(

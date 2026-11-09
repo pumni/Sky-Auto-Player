@@ -3206,6 +3206,8 @@ impl ProductionDispatchTestHarness {
             planned_wait_ticks,
             frame.view.prepared_batch.effective_scheduled_ticks,
             self.resources.playback.epoch,
+            Some(dispatch_qpc),
+            &mut self.local_metrics,
         );
         self.runtime.pending_wait_observation = self.last_wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
@@ -3584,6 +3586,8 @@ impl ProductionDispatchTestHarness {
             planned_wait_ticks,
             wait_deadline_ticks,
             self.resources.playback.epoch,
+            Some(dispatch_qpc),
+            &mut self.local_metrics,
         );
         self.runtime.pending_wait_observation = self.last_wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(

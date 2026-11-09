@@ -1104,6 +1104,8 @@ pub(super) fn dispatch(
                                     planned_wait_ticks,
                                     offset_ticks,
                                     resources.playback.epoch,
+                                    Some(dispatch_qpc),
+                                    &mut core.metrics,
                                 );
                             Some((wait_result, authored_target_qpc, dispatch_qpc))
                         }
@@ -1120,6 +1122,8 @@ pub(super) fn dispatch(
                                     planned_wait_ticks,
                                     offset_ticks,
                                     resources.playback.epoch,
+                                    wait_result.wake_qpc,
+                                    &mut core.metrics,
                                 );
                             super::dispatch::publish_pending_wait_observation(
                                 &mut core.runtime,
@@ -1513,6 +1517,8 @@ pub(super) fn dispatch(
                         planned_wait_ticks,
                         wait_deadline_ticks,
                         resources.playback.epoch,
+                        Some(dispatch_qpc),
+                        &mut core.metrics,
                     );
                     core.runtime.future_physical_wait_target_qpc = None;
                     let dispatch_now_ticks = dispatch_qpc;
@@ -1604,6 +1610,8 @@ pub(super) fn dispatch(
                         planned_wait_ticks,
                         wait_deadline_ticks,
                         resources.playback.epoch,
+                        wait_result.wake_qpc,
+                        &mut core.metrics,
                     );
                     super::dispatch::publish_pending_wait_observation(
                         &mut core.runtime,

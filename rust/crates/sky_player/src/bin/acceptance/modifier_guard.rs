@@ -47,14 +47,16 @@ pub(super) fn native_session_options(
     profile: Option<InstrumentKeyProfileSpec>,
     timing_margin_us: u64,
     scenario: Scenario,
+    game_fps: u16,
 ) -> (NativeSessionOptions, Arc<AtomicU64>) {
     let query_count = Arc::new(AtomicU64::new(0));
-    let options = super::scenarios::production_options(
+    let options = super::scenarios::production_options_for_fps(
         schedule,
         profile,
         timing_margin_us,
         scenario,
         Arc::clone(&query_count),
+        game_fps,
     );
     (options, query_count)
 }

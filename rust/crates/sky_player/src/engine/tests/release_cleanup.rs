@@ -1329,6 +1329,7 @@ fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
 }
 
 #[test]
+#[cfg(feature = "qpc-read-counting")]
 fn frozen_dispatch_qpc_probe_has_no_redundant_effective_now_sample() {
     use super::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_win32::clock::{qpc_read_count, reset_qpc_read_count};

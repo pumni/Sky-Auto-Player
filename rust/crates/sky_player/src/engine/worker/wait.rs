@@ -30,6 +30,14 @@ pub struct WaitObservation {
     pub deadline_ticks: TimelineTicks,
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_target_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_return_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub deadline_crossing_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub waiter_return_qpc: Option<QpcTicks>,
 }
 
 pub(crate) struct WaitDeadline {

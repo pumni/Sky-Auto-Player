@@ -152,8 +152,16 @@ pub struct DownTraceObservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrecisionHandoffEvidence {
     pub admission_wake_qpc: Option<QpcTicks>,
-    pub target_crossing_qpc: QpcTicks,
+    pub target_crossing_qpc: Option<QpcTicks>,
     pub final_policy_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub waiter_deadline_crossing_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_target_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_return_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub waiter_return_qpc: Option<QpcTicks>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -457,9 +465,43 @@ pub(super) fn record_down_send_telemetry(
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks,
                 wake_qpc_ticks: observation.wake_qpc.map(|ticks| ticks.as_u64()),
+                physical_eligibility_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .packet_not_before_qpc
+                        .as_u64(),
+                ),
+                #[cfg(any(test, feature = "test-support"))]
+                waiter_deadline_crossing_qpc_ticks: observation.precision_handoff.and_then(
+                    |handoff| {
+                        handoff
+                            .waiter_deadline_crossing_qpc
+                            .map(|ticks| ticks.as_u64())
+                    },
+                ),
+                #[cfg(not(any(test, feature = "test-support")))]
+                waiter_deadline_crossing_qpc_ticks: None,
+                #[cfg(any(test, feature = "test-support"))]
+                timer_arm_target_qpc_ticks: observation
+                    .precision_handoff
+                    .and_then(|handoff| handoff.timer_arm_target_qpc.map(|ticks| ticks.as_u64())),
+                #[cfg(not(any(test, feature = "test-support")))]
+                timer_arm_target_qpc_ticks: None,
+                #[cfg(any(test, feature = "test-support"))]
+                timer_return_qpc_ticks: observation
+                    .precision_handoff
+                    .and_then(|handoff| handoff.timer_return_qpc.map(|ticks| ticks.as_u64())),
+                #[cfg(not(any(test, feature = "test-support")))]
+                timer_return_qpc_ticks: None,
+                #[cfg(any(test, feature = "test-support"))]
+                waiter_return_qpc_ticks: observation
+                    .precision_handoff
+                    .and_then(|handoff| handoff.waiter_return_qpc.map(|ticks| ticks.as_u64())),
+                #[cfg(not(any(test, feature = "test-support")))]
+                waiter_return_qpc_ticks: None,
                 target_crossing_qpc_ticks: observation
                     .precision_handoff
-                    .map(|handoff| handoff.target_crossing_qpc.as_u64()),
+                    .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64())),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: Some(
                     observation
@@ -567,9 +609,14 @@ pub(super) fn record_release_telemetry(
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: Some(trace.wake_ticks),
                 wake_qpc_ticks: observation.wake_qpc.map(|ticks| ticks.as_u64()),
+                physical_eligibility_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                waiter_deadline_crossing_qpc_ticks: None,
+                timer_arm_target_qpc_ticks: None,
+                timer_return_qpc_ticks: None,
+                waiter_return_qpc_ticks: None,
                 target_crossing_qpc_ticks: observation
                     .precision_handoff
-                    .map(|handoff| handoff.target_crossing_qpc.as_u64()),
+                    .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64())),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
@@ -795,6 +842,10 @@ mod tests {
             deadline_ticks: TimelineTicks::from_raw(1_000),
             epoch_qpc: QpcTicks::from_raw(1_000),
             allow_pre_epoch_startup_dispatch: false,
+            timer_arm_target_qpc: Some(QpcTicks::from_raw(2_000)),
+            timer_return_qpc: Some(QpcTicks::from_raw(2_400)),
+            deadline_crossing_qpc: Some(QpcTicks::from_raw(2_500)),
+            waiter_return_qpc: Some(QpcTicks::from_raw(2_500)),
         };
 
         drain_wait_observation(&observation, &mut health, &mut local_metrics, qpc_clock)
@@ -845,6 +896,10 @@ mod tests {
             deadline_ticks: TimelineTicks::from_raw(1_000),
             epoch_qpc: QpcTicks::from_raw(1_000),
             allow_pre_epoch_startup_dispatch: false,
+            timer_arm_target_qpc: Some(QpcTicks::from_raw(2_000)),
+            timer_return_qpc: None,
+            deadline_crossing_qpc: None,
+            waiter_return_qpc: None,
         };
 
         drain_wait_observation(&observation, &mut health, &mut local_metrics, qpc_clock)

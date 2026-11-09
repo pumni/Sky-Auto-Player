@@ -1598,9 +1598,19 @@ impl NativeDispatchSession {
             wake_error_p95_us: local.wake_error_p95_us,
             wake_error_p99_us: local.wake_error_p99_us,
             wake_error_max_us: local.wake_error_max_us,
-            spin_time_us: local.spin_time_us,
+            spin_time_us: (local.idle_wake_count > 0).then_some(local.spin_time_us),
+            spin_time_available: local.idle_wake_count > 0,
+            spin_time_complete: local.spin_observation_expected_samples > 0
+                && local.spin_observation_pending_samples == 0
+                && local.spin_observation_dropped_samples == 0
+                && local.spin_observation_missing_samples == 0,
+            spin_observation_expected_samples: local.spin_observation_expected_samples,
+            spin_observation_dropped_samples: local.spin_observation_dropped_samples,
+            spin_observation_missing_samples: local.spin_observation_missing_samples,
+            spin_observation_pending_samples: local.spin_observation_pending_samples,
             playback_wall_time_us: local.playback_wall_time_us,
-            spin_duty_cycle_ppm: local.spin_duty_cycle_ppm,
+            spin_duty_cycle_ppm: (local.idle_wake_count > 0 && local.playback_wall_time_us > 0)
+                .then_some(local.spin_duty_cycle_ppm),
             worker_cpu_time_us: local.worker_cpu_time_us,
             process_cpu_time_us: local.process_cpu_time_us,
             wait_strategy_acquired: self

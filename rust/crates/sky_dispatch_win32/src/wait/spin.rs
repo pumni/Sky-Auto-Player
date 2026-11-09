@@ -22,11 +22,15 @@ pub(crate) fn wait_result_with_spin(
             outcome,
             wake_qpc: Some(completed_ticks),
             spin_ticks,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_return_qpc: None,
         },
         Err(failure) => WaitResult {
             outcome: WaitOutcome::Failed(failure),
             wake_qpc: Some(completed_ticks),
             spin_ticks: crate::clock::DurationTicks::ZERO,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_return_qpc: None,
         },
     }
 }

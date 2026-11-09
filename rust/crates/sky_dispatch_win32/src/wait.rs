@@ -24,6 +24,10 @@ pub struct WaitResult {
     pub outcome: WaitOutcome,
     pub wake_qpc: Option<crate::clock::QpcTicks>,
     pub spin_ticks: crate::clock::DurationTicks,
+    /// Reuses the waiter's first QPC sample after a timer return. This
+    /// qualification timestamp adds no QPC read to the wait loop.
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_return_qpc: Option<crate::clock::QpcTicks>,
 }
 
 impl WaitResult {
@@ -32,6 +36,8 @@ impl WaitResult {
             outcome: WaitOutcome::Failed(failure),
             wake_qpc: None,
             spin_ticks: crate::clock::DurationTicks::ZERO,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_return_qpc: None,
         }
     }
 
@@ -40,6 +46,8 @@ impl WaitResult {
             outcome: WaitOutcome::Interrupted,
             wake_qpc: None,
             spin_ticks: crate::clock::DurationTicks::ZERO,
+            #[cfg(any(test, feature = "test-support"))]
+            timer_return_qpc: None,
         }
     }
 }

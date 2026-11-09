@@ -1,9 +1,53 @@
 use super::super::WorkerRuntime;
 use super::super::wait::WaitObservation;
+use super::observation::PrecisionHandoffEvidence;
 use super::observer::PendingObservationQueue;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcTicks;
+
+pub(crate) fn precision_handoff(
+    runtime: &WorkerRuntime,
+    admission_wake_qpc: Option<QpcTicks>,
+    target_crossing_qpc: Option<QpcTicks>,
+    final_policy_qpc: Option<QpcTicks>,
+) -> Option<PrecisionHandoffEvidence> {
+    #[cfg(not(any(test, feature = "test-support")))]
+    let _ = runtime;
+    #[cfg(any(test, feature = "test-support"))]
+    let pending_wait = runtime.pending_wait_observation;
+    #[cfg(any(test, feature = "test-support"))]
+    let waiter_deadline_crossing_qpc = pending_wait.and_then(|wait| wait.deadline_crossing_qpc);
+    #[cfg(any(test, feature = "test-support"))]
+    let timer_arm_target_qpc = pending_wait.and_then(|wait| wait.timer_arm_target_qpc);
+    #[cfg(any(test, feature = "test-support"))]
+    let timer_return_qpc = pending_wait.and_then(|wait| wait.timer_return_qpc);
+    #[cfg(any(test, feature = "test-support"))]
+    let waiter_return_qpc = pending_wait.and_then(|wait| wait.waiter_return_qpc);
+    let base_handoff_available =
+        admission_wake_qpc.is_some() || target_crossing_qpc.is_some() || final_policy_qpc.is_some();
+    #[cfg(any(test, feature = "test-support"))]
+    let has_precision_handoff = base_handoff_available
+        || waiter_deadline_crossing_qpc.is_some()
+        || timer_arm_target_qpc.is_some()
+        || timer_return_qpc.is_some()
+        || waiter_return_qpc.is_some();
+    #[cfg(not(any(test, feature = "test-support")))]
+    let has_precision_handoff = base_handoff_available;
+    has_precision_handoff.then_some(PrecisionHandoffEvidence {
+        admission_wake_qpc,
+        target_crossing_qpc,
+        final_policy_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        waiter_deadline_crossing_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_target_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_return_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        waiter_return_qpc,
+    })
+}
 
 pub(crate) fn take_deadline_wake_qpc(runtime: &mut WorkerRuntime) -> Option<QpcTicks> {
     runtime.last_dispatch_deadline_wake_qpc.take()
@@ -13,6 +57,7 @@ pub(crate) fn take_deadline_wake_qpc(runtime: &mut WorkerRuntime) -> Option<QpcT
 /// replace its deadline attribution. Queue insertion happens after dispatch,
 /// except interrupted replans, which have no following dispatch attempt. An
 /// already-due target has no wait result; failed waits are not observer samples.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_wait_attempt(
     observer: Option<&PendingObservationQueue>,
     wait_result: Option<sky_dispatch_win32::wait::WaitResult>,
@@ -20,13 +65,23 @@ pub(crate) fn record_wait_attempt(
     planned_wait_ticks: DurationTicks,
     deadline_ticks: TimelineTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+    waiter_return_qpc: Option<QpcTicks>,
+    local_metrics: &mut WorkerMetricsLocal,
 ) -> Option<WaitObservation> {
-    observer?;
     let result = wait_result?;
     if matches!(
         result.outcome,
         sky_dispatch_win32::wait::WaitOutcome::Failed(_)
     ) {
+        return None;
+    }
+    local_metrics.spin_observation_expected_samples = local_metrics
+        .spin_observation_expected_samples
+        .saturating_add(1);
+    if observer.is_none() {
+        local_metrics.spin_observation_missing_samples = local_metrics
+            .spin_observation_missing_samples
+            .saturating_add(1);
         return None;
     }
     let observation = WaitObservation {
@@ -38,6 +93,16 @@ pub(crate) fn record_wait_attempt(
         deadline_ticks,
         epoch_qpc,
         allow_pre_epoch_startup_dispatch: true,
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_target_qpc: Some(physical_target_qpc),
+        #[cfg(any(test, feature = "test-support"))]
+        timer_return_qpc: result.timer_return_qpc,
+        #[cfg(any(test, feature = "test-support"))]
+        deadline_crossing_qpc: (result.outcome == sky_dispatch_win32::wait::WaitOutcome::Deadline)
+            .then_some(result.wake_qpc)
+            .flatten(),
+        #[cfg(any(test, feature = "test-support"))]
+        waiter_return_qpc,
     };
     Some(observation)
 }
@@ -57,6 +122,7 @@ pub(crate) fn publish_pending_wait_observation(
         observation,
         &mut local_metrics.observer_dropped_samples,
         &mut local_metrics.observer_queue_high_watermark,
+        &mut local_metrics.spin_observation_dropped_samples,
     );
 }
 
@@ -119,6 +185,8 @@ mod tests {
             DurationTicks::from_raw(9_000),
             TimelineTicks::from_raw(22_000),
             QpcTicks::from_raw(10_000),
+            None,
+            &mut wait_metrics,
         )
         .expect("wait observation should be captured before handoff");
         let mut runtime = WorkerRuntime {
@@ -130,6 +198,10 @@ mod tests {
             wait_metrics.observer_dropped_samples, 1,
             "full queue uses drop-new semantics for wait observations"
         );
+        assert_eq!(wait_metrics.spin_observation_expected_samples, 1);
+        assert_eq!(wait_metrics.spin_observation_dropped_samples, 1);
+        assert_eq!(wait_metrics.spin_observation_missing_samples, 0);
+        assert_eq!(wait_metrics.spin_observation_pending_samples, 0);
         assert_eq!(
             wait_metrics.observer_queue_high_watermark,
             OBSERVATION_QUEUE_CAPACITY as u64
@@ -152,6 +224,8 @@ mod tests {
             planned,
             deadline,
             epoch,
+            None,
+            &mut metrics,
         )
         .expect("interrupted wait attempt should be observed");
 
@@ -184,14 +258,24 @@ mod tests {
     #[test]
     fn no_wait_result_and_failed_wait_do_not_claim_a_sample() {
         let queue = PendingObservationQueue::default();
-        let metrics = WorkerMetricsLocal::default();
+        let mut metrics = WorkerMetricsLocal::default();
         let target = QpcTicks::from_raw(31_000);
         let planned = DurationTicks::ZERO;
         let deadline = TimelineTicks::from_raw(22_000);
         let epoch = QpcTicks::from_raw(10_000);
 
         assert!(
-            record_wait_attempt(Some(&queue), None, target, planned, deadline, epoch,).is_none()
+            record_wait_attempt(
+                Some(&queue),
+                None,
+                target,
+                planned,
+                deadline,
+                epoch,
+                None,
+                &mut metrics,
+            )
+            .is_none()
         );
         assert!(
             record_wait_attempt(
@@ -203,12 +287,47 @@ mod tests {
                 planned,
                 deadline,
                 epoch,
+                None,
+                &mut metrics,
             )
             .is_none()
         );
         assert!(queue.is_empty());
         assert_eq!(metrics.observer_dropped_samples, 0);
         assert_eq!(metrics.observer_queue_high_watermark, 0);
+        assert_eq!(metrics.spin_observation_expected_samples, 0);
+        assert_eq!(metrics.spin_observation_missing_samples, 0);
+    }
+
+    #[test]
+    fn observer_disabled_marks_spin_sample_missing_instead_of_zero() {
+        let mut metrics = WorkerMetricsLocal::default();
+        let result = WaitResult {
+            outcome: WaitOutcome::Deadline,
+            wake_qpc: Some(QpcTicks::from_raw(4_100)),
+            spin_ticks: DurationTicks::from_raw(100),
+            #[cfg(feature = "test-support")]
+            timer_return_qpc: Some(QpcTicks::from_raw(4_000)),
+        };
+
+        assert!(
+            record_wait_attempt(
+                None,
+                Some(result),
+                QpcTicks::from_raw(4_000),
+                DurationTicks::from_raw(2_000),
+                TimelineTicks::from_raw(3_000),
+                QpcTicks::from_raw(1_000),
+                Some(QpcTicks::from_raw(4_100)),
+                &mut metrics,
+            )
+            .is_none()
+        );
+
+        assert_eq!(metrics.spin_observation_expected_samples, 1);
+        assert_eq!(metrics.spin_observation_missing_samples, 1);
+        assert_eq!(metrics.spin_time_us, 0);
+        assert_eq!(metrics.idle_wake_count, 0);
     }
 
     #[test]
@@ -223,6 +342,8 @@ mod tests {
             DurationTicks::from_raw(1_500),
             TimelineTicks::from_raw(2_020),
             QpcTicks::from_raw(1_000),
+            None,
+            &mut metrics,
         )
         .expect("interrupted pre-pause wait should remain observable");
         let mut runtime = WorkerRuntime {
@@ -236,11 +357,15 @@ mod tests {
                 outcome: WaitOutcome::Deadline,
                 wake_qpc: Some(QpcTicks::from_raw(5_010)),
                 spin_ticks: DurationTicks::from_raw(8),
+                #[cfg(feature = "test-support")]
+                timer_return_qpc: Some(QpcTicks::from_raw(5_000)),
             }),
             QpcTicks::from_raw(5_000),
             DurationTicks::from_raw(2_400),
             TimelineTicks::from_raw(2_500),
             QpcTicks::from_raw(2_000),
+            Some(QpcTicks::from_raw(5_005)),
+            &mut metrics,
         )
         .expect("restored mixed-boundary wait should remain observable");
         runtime.pending_wait_observation = Some(restored);

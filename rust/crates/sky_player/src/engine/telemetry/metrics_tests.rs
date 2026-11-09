@@ -164,6 +164,8 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     let observer = WorkerMetricsLocal {
         observer_degraded_samples: 3,
         wait_window_sample_count: 5,
+        spin_time_us: 17,
+        idle_wake_count: 2,
         ..WorkerMetricsLocal::default()
     };
     assert!(shared.snapshot.try_publish_dispatch(dispatch.clone()));
@@ -171,6 +173,8 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     let live = shared.snapshot.load();
     assert_eq!(live.observer_degraded_samples, 3);
     assert_eq!(live.wait_window_sample_count, 5);
+    assert_eq!(live.spin_time_us, 17);
+    assert_eq!(live.idle_wake_count, 2);
 
     let mut terminal = dispatch;
     terminal.merge_observer(&observer);
@@ -181,6 +185,10 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     assert_eq!(published.total_us, 11);
     assert_eq!(published.observer_degraded_samples, 3);
     assert_eq!(published.wait_window_sample_count, 5);
+    assert_eq!(published.spin_time_us, 17);
+    assert_eq!(published.idle_wake_count, 2);
+    assert_eq!(shared.snapshot.load().spin_time_us, 17);
+    assert_eq!(shared.snapshot.load().idle_wake_count, 2);
 }
 
 #[test]

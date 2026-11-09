@@ -61,6 +61,7 @@ pub(super) enum Scenario {
     LeaseAgeWatchdogDelayed,
     NoncanonicalProfile,
     TimingMarginSweep,
+    LongIdle,
 }
 
 impl Scenario {
@@ -96,6 +97,7 @@ impl Scenario {
             "lease-age-watchdog-delayed" => Ok(Self::LeaseAgeWatchdogDelayed),
             "noncanonical-profile" => Ok(Self::NoncanonicalProfile),
             "timing-margin-sweep" => Ok(Self::TimingMarginSweep),
+            "long-idle" => Ok(Self::LongIdle),
             _ => Err(format!("unsupported scenario: {value}")),
         }
     }
@@ -132,11 +134,23 @@ impl Scenario {
             Self::LeaseAgeWatchdogDelayed => "lease-age-watchdog-delayed",
             Self::NoncanonicalProfile => "noncanonical-profile",
             Self::TimingMarginSweep => "timing-margin-sweep",
+            Self::LongIdle => "long-idle",
         }
     }
 
     pub(super) const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
+    }
+
+    pub(super) const fn supports_timed_sample(self) -> bool {
+        matches!(
+            self,
+            Self::CanonicalMaxChord
+                | Self::DenseAlternating
+                | Self::MixedUpDown
+                | Self::NearMinimumRetrigger
+                | Self::LongIdle
+        )
     }
 }
 
@@ -151,6 +165,8 @@ pub(super) struct RunArgs {
     pub(super) timing_observer_for_qualification: bool,
     pub(super) evidence: PathBuf,
     pub(super) timing_margin_us: u64,
+    pub(super) sample_seconds: Option<u8>,
+    pub(super) game_fps: u16,
     pub(super) focus_probe_ready: Option<PathBuf>,
     pub(super) focus_probe_events: Option<PathBuf>,
     pub(super) focus_probe_hwnd: Option<isize>,
@@ -239,6 +255,8 @@ where
     let mut timing_observer_for_qualification = false;
     let mut evidence = None;
     let mut timing_margin_us = None;
+    let mut sample_seconds = None;
+    let mut game_fps = None;
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
@@ -313,6 +331,30 @@ where
                     "--timing-margin-us"
                 ))?);
             }
+            "--sample-seconds" => {
+                unique!(sample_seconds, "--sample-seconds");
+                let value = next_value!("--sample-seconds");
+                let parsed = value.parse::<u8>().map_err(|_| {
+                    "--sample-seconds must be 15 for timed benchmark workloads".to_string()
+                })?;
+                if parsed != 15 {
+                    return Err(
+                        "--sample-seconds must be 15 for timed benchmark workloads".to_string(),
+                    );
+                }
+                sample_seconds = Some(parsed);
+            }
+            "--game-fps" => {
+                unique!(game_fps, "--game-fps");
+                let value = next_value!("--game-fps");
+                let parsed = value
+                    .parse::<u16>()
+                    .map_err(|_| "--game-fps must be 60 or 120".to_string())?;
+                if !matches!(parsed, 60 | 120) {
+                    return Err("--game-fps must be 60 or 120".to_string());
+                }
+                game_fps = Some(parsed);
+            }
             "--focus-probe-ready" => {
                 unique!(focus_probe_ready, "--focus-probe-ready");
                 let value = next_value!("--focus-probe-ready");
@@ -350,6 +392,8 @@ where
         timing_observer_for_qualification,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
         timing_margin_us: timing_margin_us.unwrap_or(ACCEPTANCE_TIMING_MARGIN_US),
+        sample_seconds,
+        game_fps: game_fps.unwrap_or(60),
         focus_probe_ready,
         focus_probe_events,
         focus_probe_hwnd,
@@ -377,6 +421,12 @@ where
     }
     if !run.scenario.needs_focus_probe() && probe_count != 0 {
         return Err("focus-probe arguments are valid only for focus-loss".to_string());
+    }
+    if run.sample_seconds.is_some() && !run.scenario.supports_timed_sample() {
+        return Err(
+            "--sample-seconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, and long-idle"
+                .to_string(),
+        );
     }
     Ok(ParsedCommand::Run(Box::new(run)))
 }

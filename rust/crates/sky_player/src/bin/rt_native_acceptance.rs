@@ -29,7 +29,9 @@ use evidence_report::{Verdict, write_report};
 use acceptance_limits::*;
 pub(super) use entrypoint::main;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
-use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
+use scenarios::{action, expected_physical_keys, scenario_plan_for_settings};
+#[cfg(test)]
+use scenarios::{acceptance_min_hold_us, acceptance_min_release_gap_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
 pub(super) use scenarios::noncanonical_profile_spec;
@@ -47,6 +49,8 @@ use serde_json::{Value, json};
 use sky_dispatch_win32::focus::{
     WindowIdentity, focus_window_and_verify, foreground_window_matches, inspect_window_identity,
 };
+#[cfg(feature = "qpc-read-counting")]
+use sky_dispatch_win32::clock::{qpc_read_count, reset_qpc_read_count};
 #[cfg(test)]
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
 use sky_dispatch_win32::input::InstrumentKeyProfileSpec;
@@ -98,7 +102,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--sample-seconds 15] [--game-fps <60|120>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
 fn protocol_expectation(role: &str) -> Result<(&'static str, &'static str, &'static str), String> {
     match role {
@@ -359,14 +363,25 @@ fn run_windows(args: RunArgs) -> i32 {
     {
         inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({}));
     }
-    let plan = match scenario_plan(args.scenario, args.timing_margin_us) {
+    let plan = match scenario_plan_for_settings(
+        args.scenario,
+        args.timing_margin_us,
+        args.game_fps,
+        args.sample_seconds,
+    ) {
         Ok(plan) => plan,
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),
     };
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let (mut options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
+    let (mut options, modifier_query_count) = modifier_guard::native_session_options(
+        plan.schedule,
+        plan.profile,
+        args.timing_margin_us,
+        args.scenario,
+        args.game_fps,
+    );
     options.startup_calibration_placement = match args.calibration_placement {
         CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,
@@ -389,6 +404,8 @@ fn run_windows(args: RunArgs) -> i32 {
         Ok(cursor) => cursor,
         Err(error) => inconclusive!(&error, json!({})),
     };
+    #[cfg(feature = "qpc-read-counting")]
+    reset_qpc_read_count();
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
@@ -524,7 +541,23 @@ fn run_windows(args: RunArgs) -> i32 {
     } else {
         false
     };
-    let joined = session.join(Duration::from_secs(if args.scenario == Scenario::ReleaseGapStress { 60 } else { 10 })).unwrap_or(false);
+    let join_timeout_seconds = args.sample_seconds.map_or_else(
+        || {
+            if args.scenario == Scenario::ReleaseGapStress {
+                60
+            } else {
+                10
+            }
+        },
+        |seconds| u64::from(seconds).saturating_add(15),
+    );
+    let joined = session
+        .join(Duration::from_secs(join_timeout_seconds))
+        .unwrap_or(false);
+    #[cfg(feature = "qpc-read-counting")]
+    let qpc_read_count = Some(qpc_read_count());
+    #[cfg(not(feature = "qpc-read-counting"))]
+    let qpc_read_count: Option<u64> = None;
     let independent_helper_liveness_ticks = independent_helper_probe
         .map(release_gap_stress::IndependentHelperLivenessProbe::stop_and_read)
         .unwrap_or(0);
@@ -573,6 +606,8 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Value::Object(object) = &mut details {
         object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
         object.insert("timing_observer_for_qualification".to_string(), json!(args.timing_observer_for_qualification));
+        object.insert("qpc_read_count_available".to_string(), json!(qpc_read_count.is_some()));
+        object.insert("qpc_read_count".to_string(), json!(qpc_read_count));
         object.insert("native_timing_telemetry".to_string(), timing_telemetry);
         if args.scenario == Scenario::SupervisorLeaseExpiry {
             object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));

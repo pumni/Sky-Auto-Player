@@ -411,7 +411,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     local_metrics.worker_cpu_time_us = final_worker_cpu_time_us;
     local_metrics.process_cpu_time_us =
         current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
-    if local_metrics.playback_wall_time_us > 0 {
+    if local_metrics.idle_wake_count > 0 && local_metrics.playback_wall_time_us > 0 {
         local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
             / local_metrics.playback_wall_time_us as u128)
             as u64;

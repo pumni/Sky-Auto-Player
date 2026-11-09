@@ -13,9 +13,9 @@ use super::super::{
 use super::authored::resolve_slo_terminal_step;
 use super::observation::{
     DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-    PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation, down_effective_ticks,
-    down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
-    record_release_telemetry, up_dispatch_evidence, up_transport_counts,
+    StaleMetadataObservation, UpObservation, down_effective_ticks, down_observer_evidence,
+    record_down_recovery_metrics, record_down_send_telemetry, record_release_telemetry,
+    up_dispatch_evidence, up_transport_counts,
 };
 use super::observer_wake::take_deadline_wake_qpc;
 use super::recovery::record_physical_floor_delays;
@@ -72,14 +72,12 @@ pub(crate) fn publisher_down_send_outcome(
     let strict_completion_late = timing_proof.strict_completion_late;
     let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
     let wake_qpc = take_deadline_wake_qpc(runtime);
-    let precision_handoff =
-        timing_proof
-            .target_crossing_qpc
-            .map(|target_crossing_qpc| PrecisionHandoffEvidence {
-                admission_wake_qpc: wake_qpc,
-                target_crossing_qpc,
-                final_policy_qpc,
-            });
+    let precision_handoff = super::observer_wake::precision_handoff(
+        runtime,
+        wake_qpc,
+        timing_proof.target_crossing_qpc,
+        final_policy_qpc,
+    );
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
         match qpc_clock.now() {
             Ok(ticks) => Some(ticks),
@@ -212,6 +210,7 @@ impl PendingObservationQueue {
         observation: WaitObservation,
         dropped_samples: &mut u64,
         high_watermark: &mut u64,
+        spin_dropped_samples: &mut u64,
     ) {
         if self
             .queue
@@ -219,6 +218,7 @@ impl PendingObservationQueue {
             .is_err()
         {
             *dropped_samples = dropped_samples.saturating_add(1);
+            *spin_dropped_samples = spin_dropped_samples.saturating_add(1);
         } else {
             self.observe_occupancy(high_watermark);
         }
