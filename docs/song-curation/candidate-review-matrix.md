@@ -1,7 +1,8 @@
 # Candidate review matrix
 
-This is a screening record for the priority cases named in Issue #579. It is
-not a song-selection or replacement recommendation. Exact candidate paths,
+This is a screening record for the priority cases named in Issue #579. Its
+metrics do not make song-selection or replacement decisions. The owner later
+authorized the two P0 replacements recorded below. Exact candidate paths,
 input hashes, format/pitch/event counts and comparison signals are in
 [`candidate-review-matrix.csv`](candidate-review-matrix.csv).
 
@@ -32,6 +33,7 @@ completeness remain unreviewed for every row.
 | Yoru ni kakeru / Racing Into the Night | Haruma and NRSPlays | Haruma has 27 physical events vs 851 in active `Racing into the Night` (interval 0.043); NRSPlays has 2,321 vs 1,035 in the second active variant (interval 0.432, normalized timing 0.600). |
 | Comedy | Kigeki | 483 candidate physical events vs 477 active; interval similarity 0.654 and normalized timing overlap 0.687. |
 | Last Christmas | NRSPlays easy version | Both have 305 physical events; interval and normalized timing signals are 1.0, but offset-relative time/key overlap is 0.01 and subset is false. |
+| Only_LeeHi / Stay with me Goblin (P0 repairs) | Han / AkiCutieGamingMusic | The owner authorized the pinned Han and Aki sources. Active catalog analysis now reports `ready` for both. The structural comparisons against legacy projections below remain historical screening evidence; neither they nor this inventory establish musical fidelity or redistribution rights. |
 
 ## Baseline clue outcomes
 
@@ -51,18 +53,21 @@ completeness remain unreviewed for every row.
 - The `easy on me.json` 363-event count is reproduced, while its 363 events do
   not form a strict onset-relative subset of the tested 447-event NRSPlays
   candidate.
-- `Stay with me Goblin.json` has no decoded events and planner status
-  `unsupported` (`NoPlayableNotes`). It has no physical collision events to
-  count. `Only_LeeHi.json` has the same planner status. Both remain visible in
-  the complete inventory.
+- Before the P0 repair, `Stay with me Goblin.json` and `Only_LeeHi.json` had
+  empty authoritative Composed v3 columns, no decoded events, and planner
+  status `unsupported` (`NoPlayableNotes`). Their byte-identical historical
+  sources remain under `tests/fixtures/song_planning/historical_sources/`.
+  The active catalog now uses the pinned Han and Aki sources and reports both
+  as `ready`; the original-projection comparisons are historical evidence.
 
 ## Listening gaps
 
-No human listening verdicts are recorded. For each candidate, a reviewer still
-needs to compare the same named intro/verse/chorus/outro sections, note
-timestamps and pitch, and confirm whether meaningful composition sections are
-present. The automated report intentionally cannot label any candidate
-`best`, `correct`, or `faithful`.
+No human listening verdicts are recorded for the comparisons in this matrix,
+including the two owner-selected P0 replacements. A reviewer still needs to
+compare the same named intro/verse/chorus/outro sections, note timestamps and
+pitch, and confirm whether meaningful composition sections are present. The
+automated report intentionally cannot label any candidate `best`, `correct`,
+or `faithful`. File-specific redistribution rights also remain unverified.
 
 ## Reproduction
 

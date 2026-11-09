@@ -1314,6 +1314,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn approved_song_replacements_are_ready_in_builtin_catalog_analysis() {
+        let (manifest, sources) =
+            builtin_catalog::verified_sources(&crate::repo::root()).expect("verified catalog");
+        assert_eq!(manifest.songs.len(), 112);
+
+        let expected = [
+            (
+                "f1202b16cbe968dc58dfad9992a0b2a6",
+                "sheets/Only_LeeHi.json",
+                "ade78bdd82e3b382d4801e44d9e075b06833f645f7410b92bf1fb7398b7d1a57",
+                714,
+                1194,
+            ),
+            (
+                "9504c4aa4e4530dc91331a67fcdbf2df",
+                "sheets/Stay with me Goblin.json",
+                "f46508ffdec9f29407868105de0ecc76361d3019f546ad471ad2a965faba7af0",
+                810,
+                1046,
+            ),
+        ];
+
+        for (id, path, sha256, note_count, action_count) in expected {
+            let source = sources
+                .iter()
+                .find(|source| source.id == id)
+                .expect("existing stable catalog ID");
+            assert_eq!(source.path, path);
+            assert_eq!(source.sha256, sha256);
+
+            let fallback = Path::new(path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .expect("catalog path file stem");
+            let analysis = analyze_sheet(&source.bytes, fallback).expect("strict plan analysis");
+            assert_eq!(analysis.metrics.source_format, "composed_v3");
+            assert!(analysis.metrics.decoded_canonical_event_count > 0);
+            assert_eq!(analysis.metrics.plan_status, "ready");
+            assert_eq!(analysis.metrics.plan_loss_count, 0);
+            assert!(
+                !analysis
+                    .metrics
+                    .planner_loss_reasons
+                    .iter()
+                    .any(|reason| reason == "NoPlayableNotes")
+            );
+            assert_eq!(
+                analysis.metrics.output_physical_note_count,
+                Some(note_count)
+            );
+            assert_eq!(analysis.metrics.output_action_count, Some(action_count));
+        }
+    }
+
+    #[test]
+    fn archived_empty_composed_sources_still_obey_authoritative_columns() {
+        let historical_sources: [(&str, &[u8]); 2] = [
+            (
+                "Only_LeeHi.json",
+                include_bytes!(
+                    "../../../tests/fixtures/song_planning/historical_sources/Only_LeeHi.json"
+                ),
+            ),
+            (
+                "Stay with me Goblin.json",
+                include_bytes!(
+                    "../../../tests/fixtures/song_planning/historical_sources/Stay with me Goblin.json"
+                ),
+            ),
+        ];
+
+        for (name, bytes) in historical_sources {
+            let analysis = analyze_sheet(bytes, name).expect("historical source strict analysis");
+            assert_eq!(analysis.metrics.source_format, "composed_v3");
+            assert_eq!(analysis.metrics.source_note_count, 0);
+            assert_eq!(analysis.metrics.decoded_canonical_event_count, 0);
+            assert_eq!(analysis.metrics.plan_status, "unsupported");
+            assert_eq!(analysis.metrics.planner_loss_reasons, ["NoPlayableNotes"]);
+        }
+    }
+
+    #[test]
     fn layer_collisions_and_zero_duration_are_reported_without_dropping_source_events() {
         let bytes = br#"{"name":"Zero","author":"Arranger","songNotes":[{"time":0,"key":"Key0","l":3},{"time":0,"key":"Key0"}]}"#;
         let analysis = analyze_sheet(bytes, "zero").expect("valid flat sheet");

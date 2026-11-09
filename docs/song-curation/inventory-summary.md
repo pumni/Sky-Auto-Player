@@ -1,7 +1,7 @@
 # Built-in song inventory summary
 
 - Active manifest entries audited: 112
-- Manifest SHA-256: `560f9d6b3d405b42c5ff688839f53e4a1794b160636e253a9d8fa319a44705c4`
+- Manifest SHA-256: `1d1d0ac0f7d707504abfaf9449a52af3e6867a48b7abf497f65ea650323452a1`
 - Generated with: `cargo xtask song-audit inventory`
 - Runtime/parser policy: existing source decoder, planner and frozen 60 FPS / one-frame / zero-margin policy.
 
@@ -16,9 +16,8 @@
 ## Validation coverage
 
 - Strict source decoding: 112/112 passed.
-- Planner status `ready`: 16.
+- Planner status `ready`: 18.
 - Planner status `ready_legacy_compatibility`: 94.
-- Planner status `unsupported`: 2.
 
 ## Screening flags
 
