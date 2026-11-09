@@ -65,6 +65,13 @@ impl QpcTicks {
             .ok_or(TimeArithmeticError::Overflow)
     }
 
+    #[inline]
+    pub const fn saturating_add_duration(self, duration: DurationTicks) -> Self {
+        Self {
+            value: self.value.saturating_add(duration.value),
+        }
+    }
+
     pub fn checked_duration_since(
         self,
         earlier: Self,
@@ -95,6 +102,13 @@ impl TimelineTicks {
             .checked_add(duration.as_u64())
             .map(|value| Self { value })
             .ok_or(TimeArithmeticError::Overflow)
+    }
+
+    #[inline]
+    pub const fn saturating_add_duration(self, duration: DurationTicks) -> Self {
+        Self {
+            value: self.value.saturating_add(duration.value),
+        }
     }
 
     pub fn checked_sub_duration(
