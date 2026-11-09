@@ -879,6 +879,9 @@ fn run_windows(args: RunArgs) -> i32 {
     )
 }
 #[cfg(test)]
+#[path = "suspend_terminal_tests.rs"]
+mod suspend_terminal_tests;
+#[cfg(test)]
 #[path = "rt_native_acceptance_tests.rs"]
 mod tests;
 }
