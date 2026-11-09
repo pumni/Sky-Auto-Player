@@ -419,6 +419,116 @@ fn fixture_5_mixed_up_down_combined_when_coincident_split_when_divergent() {
 }
 
 #[test]
+fn fixture_hol_stalled_down_does_not_block_independent_slot() {
+    // Key A authored at 10 ms, Up at 20 ms.
+    // Key B authored at 16 ms, Up at 30 ms.
+    // Worker stall of 5,000 us delays Key A Down to 15 ms!
+    let allowed = vec![0x15, 0x16];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down A".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Down,
+            scheduled_us: 16_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "down B".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up A".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 30_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "up B".into(),
+        },
+    ];
+
+    let sched = compile_actions(&actions, &allowed);
+    let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
+    let frame_time = DurationTicks::from_raw(16_000);
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, frame_time, TimelineTicks::from_raw).unwrap();
+
+    // 10 ms: Key A is dispatched
+    let step10 = executor.evaluate(TimelineTicks::from_raw(10_000));
+    assert!(matches!(
+        step10,
+        DispatchAction::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+        } if chord.down_mask == 0x01
+    ));
+
+    // A 5,000 us worker stall delays Down completion to 15,000 us
+    executor
+        .on_send_completed(0, 0x01, TimelineTicks::from_raw(15_000))
+        .unwrap();
+
+    // Key A's release obligation is now due at max(20 ms, 15 ms + 10 ms) = 25 ms.
+    // At 16 ms: Key B's authored Down is due.
+    // In Phase A, Key A's release floor at 25 ms would Head-of-Line block Key B.
+    // In Phase B, Key B is independent and emitted IMMEDIATELY at 16 ms!
+    let step16 = executor.evaluate(TimelineTicks::from_raw(16_000));
+    assert!(
+        matches!(
+            step16,
+            DispatchAction::Send {
+                up_mask: 0,
+                down_chord: Some(chord),
+            } if chord.down_mask == 0x02
+        ),
+        "Key B must be dispatched at 16 ms without HOL blocking behind Key A release floor"
+    );
+
+    // Key B completes on time at 16 ms
+    executor
+        .on_send_completed(0, 0x02, TimelineTicks::from_raw(16_000))
+        .unwrap();
+
+    // At 25 ms: Key A's release obligation is due and emitted
+    let step25 = executor.evaluate(TimelineTicks::from_raw(25_000));
+    assert_eq!(
+        step25,
+        DispatchAction::Send {
+            up_mask: 0x01,
+            down_chord: None,
+        }
+    );
+    executor
+        .on_send_completed(0x01, 0, TimelineTicks::from_raw(25_000))
+        .unwrap();
+
+    // At 30 ms: Key B's release obligation is due and emitted
+    let step30 = executor.evaluate(TimelineTicks::from_raw(30_000));
+    assert_eq!(
+        step30,
+        DispatchAction::Send {
+            up_mask: 0x02,
+            down_chord: None,
+        }
+    );
+    executor
+        .on_send_completed(0x02, 0, TimelineTicks::from_raw(30_000))
+        .unwrap();
+
+    // Episode ends cleanly
+    let end = executor.evaluate(TimelineTicks::from_raw(30_001));
+    assert_eq!(end, DispatchAction::Finished);
+}
+
+#[test]
 fn fixture_6_down_delayed_past_authored_up_creates_valid_release() {
     // Down authored at 10 ms, Up authored at 20 ms.
     // Worker stall delays Down to 35 ms!
