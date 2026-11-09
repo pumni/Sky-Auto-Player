@@ -632,6 +632,8 @@ fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
                 generation_count: GENERATIONS,
                 key_registry: KeyRegistry::new(&[]),
                 reason_table: Vec::new(),
+                down_chords: Vec::new(),
+                schedule_end_offset_us: 0,
             },
             0,
             DurationTicks::ZERO,

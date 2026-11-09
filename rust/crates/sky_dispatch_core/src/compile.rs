@@ -100,6 +100,8 @@ pub fn compile_runtime_intents(
         generation_id: GenerationId,
         down_action_index: u32,
         down_scheduled_us: u64,
+        down_chord_index: usize,
+        down_intent_index: usize,
     }
     let mut open_generation_by_slot: [Option<OpenGeneration>; MAX_KEYS] = [None; MAX_KEYS];
 
@@ -112,6 +114,7 @@ pub fn compile_runtime_intents(
     let mut batches = Vec::with_capacity(actions.len());
     let mut intents = Vec::with_capacity(intent_capacity);
     let mut packets = Vec::with_capacity(actions.len());
+    let mut down_chords: Vec<CompiledDownChord> = Vec::with_capacity(actions.len());
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
         if let Some(&id) = reason_map.get(reason) {
@@ -225,13 +228,14 @@ pub fn compile_runtime_intents(
                     });
                 }
                 seen_up_mask |= bit;
-                let generation_id =
-                    open_generation_by_slot[key_slot as usize].map(|g| g.generation_id);
-                open_generation_by_slot[key_slot as usize] = None;
-                if generation_id.is_some() {
+                let open = open_generation_by_slot[key_slot as usize].take();
+                let generation_id = open.map(|g| g.generation_id);
+                if let Some(open) = open {
                     up_mask |= bit;
                     physical_up_source_action_index_by_slot[key_slot as usize] =
                         Some(action.source_action_index);
+                    down_chords[open.down_chord_index].intents[open.down_intent_index]
+                        .paired_up_offset_us = scheduled_us;
                 }
                 intents.push(CompactIntent::new(
                     generation_id.unwrap_or(NO_GENERATION_ID),
@@ -265,6 +269,9 @@ pub fn compile_runtime_intents(
                 u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
             let mut sorted_scan_codes = action.scan_codes.clone();
             sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
+            let chord_index = down_chords.len();
+            let mut chord_intents: smallvec::SmallVec<[CompiledDownIntent; MAX_KEYS]> =
+                smallvec::SmallVec::new();
             for &scan_code in &sorted_scan_codes {
                 let key_slot = key_registry
                     .slot_for(scan_code)
@@ -296,14 +303,33 @@ pub fn compile_runtime_intents(
                 next_generation_id = next_generation_id
                     .checked_add(1)
                     .ok_or(CompileError::GenerationOverflow)?;
+                let down_intent_index = chord_intents.len();
                 open_generation_by_slot[key_slot as usize] = Some(OpenGeneration {
                     generation_id,
                     down_action_index: action.source_action_index,
                     down_scheduled_us: scheduled_us,
+                    down_chord_index: chord_index,
+                    down_intent_index,
                 });
                 down_mask |= bit;
                 intents.push(CompactIntent::new(generation_id, key_slot));
+                chord_intents.push(CompiledDownIntent {
+                    generation_id,
+                    key_slot,
+                    scan_code,
+                    source_action_index: action.source_action_index,
+                    reason_id,
+                    paired_up_offset_us: 0,
+                });
             }
+            down_chords.push(CompiledDownChord {
+                chord_index,
+                scheduled_us,
+                down_mask,
+                source_action_index: action.source_action_index,
+                reason_id,
+                intents: chord_intents,
+            });
             group_batches.push(CompiledBatch {
                 source_action_index: action.source_action_index,
                 kind: ActionKind::Down,
@@ -358,6 +384,12 @@ pub fn compile_runtime_intents(
         }
     }
 
+    let schedule_end_offset_us = actions
+        .iter()
+        .map(|action| action.scheduled_us)
+        .max()
+        .unwrap_or(0);
+
     Ok(RuntimeSchedule {
         packets,
         batches,
@@ -365,6 +397,8 @@ pub fn compile_runtime_intents(
         generation_count: next_generation_id,
         key_registry,
         reason_table,
+        down_chords,
+        schedule_end_offset_us,
     })
 }
 

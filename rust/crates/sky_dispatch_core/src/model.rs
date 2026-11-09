@@ -150,6 +150,30 @@ pub struct CompiledBatch {
     pub packet_id: PacketId,
 }
 
+/// A single musical Down intent within an immutable Down chord.
+///
+/// Pairs each Down generation with its exact authored Up counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledDownIntent {
+    pub generation_id: GenerationId,
+    pub key_slot: KeySlot,
+    pub scan_code: u16,
+    pub source_action_index: u32,
+    pub reason_id: ReasonId,
+    pub paired_up_offset_us: u64,
+}
+
+/// One immutable Down chord representing an atomic transport batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledDownChord {
+    pub chord_index: usize,
+    pub scheduled_us: u64,
+    pub down_mask: u16,
+    pub source_action_index: u32,
+    pub reason_id: ReasonId,
+    pub intents: SmallVec<[CompiledDownIntent; MAX_KEYS]>,
+}
+
 /// One physical dispatch boundary for every authored timestamp.
 ///
 /// The intent arena ranges are canonicalized: all release intents are stored
@@ -188,9 +212,21 @@ pub struct RuntimeSchedule {
     pub generation_count: u64,
     pub key_registry: KeyRegistry,
     pub reason_table: Vec<String>,
+    pub down_chords: Vec<CompiledDownChord>,
+    pub schedule_end_offset_us: u64,
 }
 
 impl RuntimeSchedule {
+    #[inline]
+    pub fn down_chords(&self) -> &[CompiledDownChord] {
+        &self.down_chords
+    }
+
+    #[inline]
+    pub fn schedule_end_offset_us(&self) -> u64 {
+        self.schedule_end_offset_us
+    }
+
     pub fn view_packet_ticks(
         &self,
         index: usize,
