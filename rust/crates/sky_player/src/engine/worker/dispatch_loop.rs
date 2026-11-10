@@ -1319,6 +1319,7 @@ pub(super) fn dispatch(
                             }
                         };
 
+                        #[cfg(any(test, feature = "test-support"))]
                         if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                         {
                             hook.record_down_window(
