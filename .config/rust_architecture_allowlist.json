@@ -55,7 +55,7 @@
       "rule": "regular_module_lines",
       "reason": "worker loop with Phase B 15-slot executor and Phase C adaptive waiter integration exceeds the hard line budget; split only with timing proof",
       "review_trigger": "review before the next real-time path expansion",
-      "baseline": 3804
+      "baseline": 3826
     },
     {
       "path": "rust/crates/sky_player/src/engine/worker/wait.rs",

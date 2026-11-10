@@ -1021,24 +1021,6 @@ pub(super) fn dispatch(
                 continue;
             }
 
-            if let Some(wake) = core.runtime.pending_adaptive_timer_wake.take()
-                && let Some(controller) = core.runtime.adaptive_wait_controller.as_mut()
-                && controller.record_timer_wake(wake, qpc_clock)
-            {
-                let new_guard_us = controller.current_guard_us();
-                core.metrics.effective_spin_threshold_us = new_guard_us;
-                match qpc_clock.duration_from_us(new_guard_us) {
-                    Ok(ticks) => {
-                        timing.effective_spin_threshold_ticks = ticks;
-                    }
-                    Err(error) => {
-                        core.runtime.terminal_error =
-                            Some(format!("spin threshold conversion failure: {error:?}"));
-                        break;
-                    }
-                }
-            }
-
             if resources.coordinator.executor.is_some() {
                 let effective_now_ticks = if now_ticks < resources.playback.epoch {
                     TimelineTicks::ZERO
@@ -1157,6 +1139,14 @@ pub(super) fn dispatch(
                         break;
                     }
                     sky_dispatch_core::executor::DispatchAction::Wait { deadline_ticks } => {
+                        let is_physical_work = resources
+                            .coordinator
+                            .executor
+                            .as_ref()
+                            .is_some_and(|exec| exec.has_physical_work());
+                        if !is_physical_work {
+                            core.runtime.pending_adaptive_timer_wake = None;
+                        }
                         let wait_target_qpc =
                             match resources.playback.epoch.checked_add_duration(
                                 DurationTicks::from_raw(deadline_ticks.as_u64()),
@@ -1196,15 +1186,19 @@ pub(super) fn dispatch(
                                         wait_result.wake_qpc;
                                     core.runtime.last_dispatch_deadline_target_qpc =
                                         Some(target_qpc);
-                                    if let (Some(return_qpc), Some(arm_target_qpc)) = (
-                                        wait_result.timer_return_qpc,
-                                        wait_result.timer_arm_target_qpc,
-                                    ) {
+                                    if is_physical_work
+                                        && let (Some(return_qpc), Some(arm_target_qpc)) = (
+                                            wait_result.timer_return_qpc,
+                                            wait_result.timer_arm_target_qpc,
+                                        )
+                                    {
                                         core.runtime.pending_adaptive_timer_wake =
                                             Some(sky_dispatch_win32::wait::KernelTimerWake::new(
                                                 return_qpc,
                                                 arm_target_qpc,
                                             ));
+                                    } else {
+                                        core.runtime.pending_adaptive_timer_wake = None;
                                     }
                                 }
                                 continue;
@@ -1292,6 +1286,8 @@ pub(super) fn dispatch(
                         }
 
                         if timing_window.packet_not_before_qpc > now_ticks {
+                            // Floor displacement occurred: discard timer wake from adaptive learning.
+                            core.runtime.pending_adaptive_timer_wake = None;
                             if has_down {
                                 let expected =
                                     preflight_target.expect("target stamp checked above");
@@ -1318,7 +1314,10 @@ pub(super) fn dispatch(
                                     &mut core.metrics,
                                 ) {
                                     FinalDownAdmissionResult::Allowed => {}
-                                    FinalDownAdmissionResult::Replan => continue,
+                                    FinalDownAdmissionResult::Replan => {
+                                        core.runtime.pending_adaptive_timer_wake = None;
+                                        continue;
+                                    }
                                     FinalDownAdmissionResult::Terminal(err) => {
                                         core.runtime.terminal_error = Some(err);
                                         break;
@@ -1343,6 +1342,7 @@ pub(super) fn dispatch(
                             }) {
                                 WaitBoundary::Due { .. } => {}
                                 WaitBoundary::Replan { .. } => {
+                                    core.runtime.pending_adaptive_timer_wake = None;
                                     let _ = interrupt.try_take();
                                     continue;
                                 }
@@ -1406,7 +1406,10 @@ pub(super) fn dispatch(
                                 &mut core.metrics,
                             ) {
                                 FinalDownAdmissionResult::Allowed => {}
-                                FinalDownAdmissionResult::Replan => continue,
+                                FinalDownAdmissionResult::Replan => {
+                                    core.runtime.pending_adaptive_timer_wake = None;
+                                    continue;
+                                }
                                 FinalDownAdmissionResult::Terminal(err) => {
                                     core.runtime.terminal_error = Some(err);
                                     break;
@@ -1636,6 +1639,25 @@ pub(super) fn dispatch(
                                 qpc_clock,
                                 completion_qpc,
                             );
+                        }
+
+                        if let Some(wake) = core.runtime.pending_adaptive_timer_wake.take()
+                            && let Some(controller) = core.runtime.adaptive_wait_controller.as_mut()
+                            && controller.record_timer_wake(wake, qpc_clock)
+                        {
+                            let new_guard_us = controller.current_guard_us();
+                            core.metrics.effective_spin_threshold_us = new_guard_us;
+                            match qpc_clock.duration_from_us(new_guard_us) {
+                                Ok(ticks) => {
+                                    timing.effective_spin_threshold_ticks = ticks;
+                                }
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(format!(
+                                        "spin threshold conversion failure: {error:?}"
+                                    ));
+                                    break;
+                                }
+                            }
                         }
 
                         continue;

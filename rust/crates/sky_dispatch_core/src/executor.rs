@@ -209,6 +209,13 @@ impl DispatchExecutor {
         mask
     }
 
+    /// Whether there is any pending or active physical work (chords remaining or active key slots held).
+    /// When false, any subsequent wait is purely the metadata-only tail.
+    #[inline]
+    pub fn has_physical_work(&self) -> bool {
+        self.remaining_chords() > 0 || self.active_mask() != 0
+    }
+
     #[inline]
     pub fn schedule_end_offset_ticks(&self) -> TimelineTicks {
         self.schedule_end_offset_ticks

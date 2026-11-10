@@ -3,7 +3,7 @@
 //! Adapts wake guard based on real kernel timer return behavior without changing
 //! authored musical targets or adding a second scheduler.
 
-use crate::clock::{DurationTicks, QpcClock, QpcTicks};
+use crate::clock::{QpcClock, QpcTicks};
 
 pub const MIN_GUARD_US: u64 = 250;
 pub const MAX_GUARD_US: u64 = 1_500;
@@ -140,20 +140,46 @@ impl AdaptiveWaitController {
         self.window_start_qpc = resume_qpc;
     }
 
-    /// Record a valid kernel timer wake for physical work and evaluate controller adjustments.
+    /// Record a verified real kernel timer return sample for physical work.
+    ///
+    /// Validates evidence strictly without masking QPC conversion failures.
+    /// If conversion fails or evidence is invalid, rejects the sample (returns false
+    /// without incrementing valid wake counters or mutating the controller).
+    ///
     /// Returns true if `current_guard_us` changed.
     pub fn record_timer_wake(&mut self, wake: KernelTimerWake, clock: QpcClock) -> bool {
-        self.total_valid_wakes = self.total_valid_wakes.saturating_add(1);
-
         let overshoot_us = if wake.timer_return_qpc > wake.timer_arm_target_qpc {
-            let delta_ticks = wake
+            let Ok(delta_ticks) = wake
                 .timer_return_qpc
                 .checked_duration_since(wake.timer_arm_target_qpc)
-                .unwrap_or(DurationTicks::ZERO);
-            clock.duration_to_us(delta_ticks).unwrap_or(0)
+            else {
+                return false;
+            };
+            let Ok(us) = clock.duration_to_us(delta_ticks) else {
+                return false;
+            };
+            us
         } else {
             0
         };
+
+        let elapsed_window_us = if wake.timer_return_qpc >= self.window_start_qpc {
+            let Ok(delta_ticks) = wake
+                .timer_return_qpc
+                .checked_duration_since(self.window_start_qpc)
+            else {
+                return false;
+            };
+            let Ok(us) = clock.duration_to_us(delta_ticks) else {
+                return false;
+            };
+            us
+        } else {
+            0
+        };
+
+        // Evidence is strictly verified valid!
+        self.total_valid_wakes = self.total_valid_wakes.saturating_add(1);
 
         if self.mode != WaitGuardMode::Adaptive {
             return false;
@@ -176,16 +202,6 @@ impl AdaptiveWaitController {
         self.window_wake_count = self.window_wake_count.saturating_add(1);
 
         // Learning window: 64 valid timer wakes and minimum 1 second.
-        let elapsed_window_us = if wake.timer_return_qpc >= self.window_start_qpc {
-            let delta = wake
-                .timer_return_qpc
-                .checked_duration_since(self.window_start_qpc)
-                .unwrap_or(DurationTicks::ZERO);
-            clock.duration_to_us(delta).unwrap_or(0)
-        } else {
-            0
-        };
-
         if self.window_wake_count >= LEARNING_WINDOW_SAMPLES
             && elapsed_window_us >= LEARNING_WINDOW_MIN_DURATION_US
         {
@@ -385,5 +401,24 @@ mod tests {
         assert_eq!(controller.window_peak_overshoot_us(), 0);
         assert_eq!(controller.baseline_guard_us(), 600);
         assert_eq!(controller.current_guard_us(), 600);
+    }
+
+    #[test]
+    fn invalid_qpc_evidence_rejected_without_mutating_controller() {
+        let clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(100_000).unwrap());
+        let start_ticks = QpcTicks::from_raw(1_000);
+        let mut controller = AdaptiveWaitController::new(WaitGuardMode::Adaptive, 500, start_ticks);
+
+        // Wake where timer_return has huge delta over arm_target causing duration_to_us overflow (ticks * 10 > u64::MAX):
+        let arm_target = QpcTicks::from_raw(1);
+        let return_ticks = QpcTicks::from_raw(u64::MAX);
+        let changed =
+            controller.record_timer_wake(KernelTimerWake::new(return_ticks, arm_target), clock);
+
+        assert!(!changed);
+        // Valid wakes must NOT increment on rejected evidence
+        assert_eq!(controller.total_valid_wakes(), 0);
+        assert_eq!(controller.window_wake_count(), 0);
+        assert_eq!(controller.current_guard_us(), 500);
     }
 }
