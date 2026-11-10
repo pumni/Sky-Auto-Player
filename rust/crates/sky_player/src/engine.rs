@@ -30,8 +30,9 @@ pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot,
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use telemetry::TRACE_FLAG_DEFERRED;
 pub use telemetry::{
-    NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,
-    TelemetryMode, TimestampProvenance, TimingSemantics, WorkerMetricsLocal,
+    NATIVE_TELEMETRY_SCHEMA_VERSION, NATIVE_UP_SLOT_TRACE_CAPACITY, NativeTelemetryOutput,
+    NativeTelemetrySummary, RtTraceRecord, TelemetryMode, TimestampProvenance, TimingSemantics,
+    UpSlotTrace, WorkerMetricsLocal,
 };
 pub(crate) use telemetry::{
     SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,

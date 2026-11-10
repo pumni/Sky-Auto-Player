@@ -120,7 +120,14 @@ fn up_slot_timings_preserves_exact_authored_and_floor() {
 #[test]
 fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
     let allowed = vec![0x15];
-    for &chord_count in &[100, 1_000, 10_000] {
+    let selected = std::env::var("SKY_MEMORY_CHORD_COUNT")
+        .ok()
+        .map(|value| value.parse::<usize>().expect("valid memory workload"));
+    assert!(selected.is_none_or(|count| [100, 1_000, 10_000, 100_000].contains(&count)));
+    for &chord_count in &[100, 1_000, 10_000, 100_000] {
+        if selected.is_some_and(|count| count != chord_count) {
+            continue;
+        }
         let mut actions = Vec::with_capacity(chord_count * 2);
         for i in 0..chord_count {
             let t = (i as u64 + 1) * 20_000;
@@ -164,6 +171,35 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
         let executor_heap_bytes = mem.chord_heap_bytes;
         let combined_retained_bytes =
             compiled_down_heap_bytes + executor_heap_bytes + executor_struct_size;
+        let schedule_heap_bytes = compiled_down_heap_bytes
+            + sched.packets.capacity() * std::mem::size_of::<crate::model::CompiledPacket>()
+            + sched.batches.capacity() * std::mem::size_of::<crate::model::CompiledBatch>()
+            + sched.intents.capacity() * std::mem::size_of::<crate::model::CompactIntent>()
+            + sched.reason_table.capacity() * std::mem::size_of::<String>()
+            + sched
+                .reason_table
+                .iter()
+                .map(String::capacity)
+                .sum::<usize>();
+        let coordinator = crate::coordinator::RuntimeDispatchCoordinator::new(
+            sched,
+            0,
+            0,
+            TimelineTicks::from_raw,
+        );
+        let coordinator_heap_bytes = coordinator.heap_payload_bytes_for_test_support();
+        eprintln!(
+            "chords={chord_count} schedule_heap={schedule_heap_bytes} schedule_struct={} coordinator_heap={coordinator_heap_bytes} coordinator_struct={}",
+            std::mem::size_of::<crate::model::RuntimeSchedule>(),
+            std::mem::size_of::<crate::coordinator::RuntimeDispatchCoordinator>()
+        );
+        eprintln!(
+            "chords={chord_count} compiled_size={compiled_chord_size} compiled_len={} compiled_capacity={} executor_chord_size={ticks_chord_size} executor_len={} executor_capacity={} executor_struct={executor_struct_size} compiled_heap={compiled_down_heap_bytes} executor_heap={executor_heap_bytes} combined={combined_retained_bytes}",
+            coordinator.schedule.down_chords.len(),
+            coordinator.schedule.down_chords.capacity(),
+            mem.chord_count,
+            mem.chord_capacity
+        );
 
         assert!(
             combined_retained_bytes <= MAX_EXECUTOR_BYTES,
@@ -259,4 +295,63 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
         .as_u64()
         .saturating_sub(timing1.authored_up_offset_ticks.as_u64());
     assert_eq!(floor_disp1, 0);
+}
+#[test]
+fn executor_storage_admission_rejects_overflow_and_budget_excess() {
+    let chord_size = std::mem::size_of::<DownChordTicks>();
+    let largest_admitted = MAX_EXECUTOR_BYTES / chord_size;
+    assert!(checked_executor_storage_bytes(largest_admitted).is_ok());
+    assert!(
+        checked_executor_storage_bytes(largest_admitted + 1)
+            .unwrap_err()
+            .contains("exceeds budget")
+    );
+    assert!(
+        checked_executor_storage_bytes(usize::MAX)
+            .unwrap_err()
+            .contains("overflow")
+    );
+}
+
+#[test]
+fn executor_cancellation_interrupts_large_materialization() {
+    let mut actions = Vec::new();
+    for index in 0..1_000u32 {
+        actions.push(KeyActionInput {
+            source_action_index: index * 2,
+            kind: ActionKind::Down,
+            scheduled_us: u64::from(index) * 20_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: index * 2 + 1,
+            kind: ActionKind::Up,
+            scheduled_us: u64::from(index) * 20_000 + 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up".into(),
+        });
+    }
+    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("schedule");
+    let mut checks = 0;
+    let result = DispatchExecutor::new_with_cancellation(
+        &schedule,
+        DurationTicks::from_raw(8_000),
+        DurationTicks::from_raw(16_667),
+        |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
+        || {
+            checks += 1;
+            if checks == 2 {
+                Err("cancelled during materialization".into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .contains("cancelled during materialization")
+    );
+    assert_eq!(checks, 2);
 }

@@ -810,6 +810,7 @@ impl NativePlaybackService {
                 &variant.config,
                 &variant.timing_policy,
                 settings,
+                &event_delivery_failure,
             )
             .and_then(|(player, target)| {
                 let result: Result<_, String> = (|| {
@@ -1274,6 +1275,7 @@ impl NativePlaybackService {
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
         settings: &ApplicationSettings,
+        cancelled: &AtomicBool,
     ) -> Result<(Arc<NativeDispatchSession>, isize), String> {
         #[cfg(test)]
         if let Some(error) = &self.startup_failure {
@@ -1283,7 +1285,7 @@ impl NativePlaybackService {
         if let Some(player) = &self.test_player {
             return Ok((Arc::clone(player), 0));
         }
-        let runtime_schedule = compile_dispatch_schedule(schedule)?;
+        let runtime_schedule = compile_dispatch_schedule(schedule, cancelled)?;
         let target = sky_dispatch_win32::focus::find_sky_window(
             &settings.sky_process_names,
             settings.allow_title_fallback,
@@ -2480,28 +2482,55 @@ fn recommended_schedule(
 
 pub(super) fn compile_dispatch_schedule(
     schedule: &ScheduleMetadata,
+    cancelled: &AtomicBool,
 ) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
-    let actions = schedule
-        .actions
-        .iter()
-        .enumerate()
-        .map(|(index, action)| KeyActionInput {
-            source_action_index: index as u32,
+    if cancelled.load(Ordering::Acquire) {
+        return Err("native schedule compilation cancelled".into());
+    }
+    if schedule.actions.len() > sky_player::adapter_support::MAX_COMPILED_ACTIONS {
+        return Err("native schedule exceeds compiler action limit".into());
+    }
+    let mut actions = Vec::new();
+    actions
+        .try_reserve(schedule.actions.len())
+        .map_err(|error| format!("native action allocation failed: {error}"))?;
+    for (index, action) in schedule.actions.iter().enumerate() {
+        if index.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
+            return Err("native schedule compilation cancelled".into());
+        }
+        if action.scan_codes.is_empty()
+            || action.scan_codes.len() > sky_app_core::song::SKY_SCAN_CODES.len()
+        {
+            return Err(format!("native action {index} has invalid scan code count"));
+        }
+        if action.reason.len() > sky_player::adapter_support::MAX_COMPILED_REASON_BYTES {
+            return Err(format!(
+                "native action {index} reason exceeds compiler limit"
+            ));
+        }
+        let mut scan_codes = SmallVec::<[u16; 4]>::new();
+        scan_codes
+            .try_reserve(action.scan_codes.len())
+            .map_err(|error| format!("native scan code allocation failed: {error}"))?;
+        scan_codes.extend_from_slice(&action.scan_codes);
+        actions.push(KeyActionInput {
+            source_action_index: u32::try_from(index)
+                .map_err(|_| "native action index overflow")?,
             kind: match action.kind {
                 ActionKind::Down => DispatchActionKind::Down,
                 ActionKind::Up => DispatchActionKind::Up,
             },
             scheduled_us: action.at_us,
-            scan_codes: action
-                .scan_codes
-                .iter()
-                .copied()
-                .collect::<SmallVec<[u16; 4]>>(),
+            scan_codes,
             reason: Arc::<str>::from(action.reason.as_str()),
-        })
-        .collect::<Vec<_>>();
-    compile_runtime_intents(&actions, &sky_app_core::song::SKY_SCAN_CODES)
-        .map_err(|error| format!("native schedule compilation failed: {error}"))
+        });
+    }
+    sky_player::adapter_support::compile_runtime_intents_with_cancellation(
+        &actions,
+        &sky_app_core::song::SKY_SCAN_CODES,
+        || cancelled.load(Ordering::Acquire),
+    )
+    .map_err(|error| format!("native schedule compilation failed: {error}"))
 }
 
 #[cfg(test)]
@@ -2567,6 +2596,16 @@ mod preparation_cancellation_tests {
             plan_source: None,
             source_epoch: 0,
         }
+    }
+
+    #[test]
+    fn native_schedule_compilation_honors_cancelled_request() {
+        let prepared = input(1, "cancelled");
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let error = super::compile_dispatch_schedule(&prepared.schedule, &cancelled).unwrap_err();
+        assert!(error.contains("cancelled"));
+        cancelled.store(false, std::sync::atomic::Ordering::Release);
+        assert!(super::compile_dispatch_schedule(&prepared.schedule, &cancelled).is_ok());
     }
 
     #[test]

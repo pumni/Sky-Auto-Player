@@ -1563,7 +1563,7 @@ impl ProductionDispatchTestHarness {
         }
     }
 
-    fn create_harness(actions: &[KeyActionInput]) -> Self {
+    pub(crate) fn create_harness(actions: &[KeyActionInput]) -> Self {
         Self::create_harness_with_min_hold(actions, 0)
     }
 

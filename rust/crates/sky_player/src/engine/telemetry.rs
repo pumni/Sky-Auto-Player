@@ -31,9 +31,27 @@ pub enum TimestampProvenance {
 /// microsecond projections are deliberately materialized only after the
 /// worker has stopped.  This is the only representation kept in the bounded
 /// native ring.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct UpSlotTrace {
+    pub trace_record_index: u32,
+    pub slot: u8,
+    pub scan_code: u16,
+    pub source_action_index: u32,
+    pub authored_offset_ticks: u64,
+    pub release_floor_offset_ticks: u64,
+    pub floor_displacement_ticks: u64,
+    pub pre_call_qpc_ticks: Option<u64>,
+    pub completion_qpc_ticks: u64,
+    pub residual_ticks: Option<i64>,
+    pub confirmed: bool,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct RtTraceRecord {
+    pub up_slot_attribution_missing: bool,
+    pub wait_sequence: Option<u64>,
+    pub wait_spin_ticks: Option<u64>,
     pub compiled_packet_index: u64,
     /// Authored and effective positions relative to the immutable playback
     /// epoch. These are schedule offsets, not sampled wall-clock timestamps.
@@ -148,7 +166,8 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 22;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 23;
+pub const NATIVE_UP_SLOT_TRACE_CAPACITY: usize = 4_096;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -346,6 +365,9 @@ impl RtTraceRecord {
             .sendinput_completion_qpc_ticks
             .and(timing.sendinput_completion_ticks);
         Ok(Self {
+            up_slot_attribution_missing: false,
+            wait_sequence: None,
+            wait_spin_ticks: None,
             trace_record_index: 0,
             compiled_packet_index: context.compiled_packet_index.unwrap_or_default(),
             compiled_packet_index_available: context.compiled_packet_index.is_some(),
@@ -722,6 +744,8 @@ pub struct NativeTelemetryOutput {
     pub schema_version: u32,
     pub qpc_frequency_hz: u64,
     pub records: VecDeque<RtTraceRecord>,
+    pub up_slot_records: Vec<UpSlotTrace>,
+    pub up_slot_records_dropped: u64,
     pub summary: NativeTelemetrySummary,
     pub attempted: u64,
     pub accepted: u64,
@@ -745,6 +769,8 @@ impl NativeTelemetryOutput {
             schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
             qpc_frequency_hz: 0,
             records,
+            up_slot_records: Vec::new(),
+            up_slot_records_dropped: 0,
             summary: NativeTelemetrySummary::default(),
             attempted: 0,
             accepted: 0,
@@ -769,6 +795,8 @@ impl NativeTelemetryOutput {
             } else {
                 VecDeque::new()
             },
+            up_slot_records: Vec::new(),
+            up_slot_records_dropped: 0,
             summary: NativeTelemetrySummary::default(),
             attempted: 0,
             accepted: 0,
@@ -795,6 +823,7 @@ pub(crate) struct TelemetryCollector {
 
 impl TelemetryCollector {
     pub(crate) const MAX_RING_CAPACITY: usize = 65_536;
+    pub(crate) const MAX_UP_SLOT_RECORDS: usize = NATIVE_UP_SLOT_TRACE_CAPACITY;
 
     pub(crate) fn try_new(mode: TelemetryMode, capacity: usize) -> Result<Self, String> {
         if matches!(mode, TelemetryMode::Ring) && capacity > Self::MAX_RING_CAPACITY {

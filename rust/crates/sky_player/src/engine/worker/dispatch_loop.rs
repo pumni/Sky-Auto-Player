@@ -894,9 +894,38 @@ pub(crate) fn dispatch_staged_candidate(
     );
 
     if let Some(observer) = observer {
+        let mut up_slots = if candidate.up_slot_timings.is_empty() {
+            None
+        } else {
+            observer.acquire_up_slots()
+        };
+        if !candidate.up_slot_timings.is_empty() && up_slots.is_none() {
+            local_metrics.observer_dropped_samples =
+                local_metrics.observer_dropped_samples.saturating_add(1);
+        }
+        if let Some(storage) = up_slots.as_mut() {
+            for (slot, timing) in storage
+                .slots
+                .as_mut()
+                .expect("owned slot storage")
+                .iter_mut()
+                .zip(&candidate.up_slot_timings)
+            {
+                *slot = *timing;
+            }
+        }
         let wake_qpc = super::dispatch::take_deadline_wake_qpc(runtime);
         let precision_handoff = super::dispatch::precision_handoff(runtime, wake_qpc, None, None);
         let observation = crate::engine::worker::dispatch::observation::DownObservation {
+            wait_sequence: runtime
+                .pending_wait_observation
+                .map_or(0, |wait| wait.sequence),
+            wait_spin_ticks: runtime
+                .pending_wait_observation
+                .map_or(0, |wait| wait.spin_ticks.as_u64()),
+            up_slots,
+            up_slot_count: candidate.up_slot_timings.len() as u8,
+            up_pre_call_available: send_result.evidence.started_ticks.is_some(),
             epoch_qpc: resources.playback.epoch,
             allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
             physical_target_qpc: candidate.authored_target_qpc,
@@ -3551,212 +3580,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn completion_qpc_missing_and_clock_error_fails_closed() {
-        let mut harness = ProductionDispatchTestHarness::new_down_only();
-        harness.resources.backend.set_packet_emitter(|packet| {
-            sky_dispatch_win32::clock::set_qpc_now_fault_for_test(true);
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask: packet.up_mask | packet.down_mask,
-                    confirmed_mask: packet.up_mask | packet.down_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: None,
-                    completed_ticks: None,
-                    timing_error: None,
-                },
-            }
-        });
-        harness.attach_executor_for_test().expect("attach executor");
-
-        let chord = harness.current_executor_chord_for_test();
-        let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-            .expect("stage candidate")
-            .expect("some candidate");
-
-        let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-        sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
-
-        assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
-        assert!(
-            harness
-                .runtime
-                .terminal_error
-                .as_ref()
-                .unwrap()
-                .contains("SendInput completion QPC unavailable")
-        );
-        assert_eq!(
-            harness
-                .resources
-                .coordinator
-                .executor
-                .as_ref()
-                .unwrap()
-                .chord_cursor(),
-            0
-        );
-    }
-
-    #[test]
-    fn completion_qpc_missing_and_clock_success_dispatches() {
-        let mut harness = ProductionDispatchTestHarness::new_down_only();
-        harness
-            .resources
-            .backend
-            .set_packet_emitter(|packet| SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask: packet.up_mask | packet.down_mask,
-                    confirmed_mask: packet.up_mask | packet.down_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: None,
-                    completed_ticks: None,
-                    timing_error: None,
-                },
-            });
-        harness.attach_executor_for_test().expect("attach executor");
-
-        let chord = harness.current_executor_chord_for_test();
-        let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-            .expect("stage candidate")
-            .expect("some candidate");
-
-        sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
-        let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-
-        assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
-        assert!(harness.runtime.terminal_error.is_none());
-        assert_eq!(
-            harness
-                .resources
-                .coordinator
-                .executor
-                .as_ref()
-                .unwrap()
-                .chord_cursor(),
-            1
-        );
-    }
-
-    #[test]
-    fn wait_observation_is_published_promptly_on_dispatch() {
-        let mut harness = ProductionDispatchTestHarness::new_down_only();
-        harness.configure_mock_packet_sender_for_test(&[0, 0]);
-        harness.attach_executor_for_test().expect("attach executor");
-
-        let target_qpc = harness.qpc_now_for_test().expect("target");
-        harness.runtime.pending_wait_observation =
-            crate::engine::worker::dispatch::record_wait_attempt(
-                Some(&harness.observer),
-                Some(sky_dispatch_win32::wait::WaitResult {
-                    outcome: sky_dispatch_win32::wait::WaitOutcome::Deadline,
-                    wake_qpc: Some(target_qpc),
-                    spin_ticks: DurationTicks::from_raw(123),
-                    timer_return_qpc: Some(target_qpc),
-                    timer_arm_target_qpc: Some(target_qpc),
-                    #[cfg(any(test, feature = "test-support"))]
-                    timer_arm_qpc: Some(target_qpc),
-                    #[cfg(any(test, feature = "test-support"))]
-                    timer_arm_generation: Some(1),
-                    #[cfg(any(test, feature = "test-support"))]
-                    timer_return_generation: Some(1),
-                }),
-                target_qpc,
-                DurationTicks::from_raw(10_000),
-                TimelineTicks::ZERO,
-                harness.resources.playback.epoch,
-                None,
-                &mut harness.local_metrics,
-            );
-        assert!(harness.runtime.pending_wait_observation.is_some());
-
-        let chord = harness.current_executor_chord_for_test();
-        let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-            .expect("stage candidate")
-            .expect("some candidate");
-
-        let outcome = harness.dispatch_staged_candidate_for_test(candidate, true);
-        assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
-
-        assert!(harness.runtime.pending_wait_observation.is_none());
-        let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
-        let waits: Vec<_> = observations
-            .iter()
-            .filter_map(|observation| match observation {
-                crate::engine::worker::dispatch::observation::DispatchObservation::Wait(wait) => {
-                    Some(wait)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(waits.len(), 1);
-        assert_eq!(waits[0].wake_qpc, Some(target_qpc));
-        assert_eq!(waits[0].physical_target_qpc, target_qpc);
-        assert_eq!(waits[0].spin_ticks, DurationTicks::from_raw(123));
-        assert_eq!(waits[0].timer_arm_generation, Some(1));
-        assert_eq!(waits[0].timer_return_generation, Some(1));
-
-        let second_target = harness.qpc_now_for_test().expect("second target");
-        harness.runtime.pending_wait_observation =
-            crate::engine::worker::dispatch::record_wait_attempt(
-                Some(&harness.observer),
-                Some(sky_dispatch_win32::wait::WaitResult {
-                    outcome: sky_dispatch_win32::wait::WaitOutcome::Deadline,
-                    wake_qpc: Some(second_target),
-                    spin_ticks: DurationTicks::from_raw(456),
-                    timer_return_qpc: Some(second_target),
-                    timer_arm_target_qpc: Some(second_target),
-                    timer_arm_qpc: Some(second_target),
-                    timer_arm_generation: Some(2),
-                    timer_return_generation: Some(2),
-                }),
-                second_target,
-                DurationTicks::from_raw(20_000),
-                TimelineTicks::from_raw(20_000),
-                harness.resources.playback.epoch,
-                None,
-                &mut harness.local_metrics,
-            );
-        let candidate = harness
-            .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
-            .expect("stage Up")
-            .expect("Up candidate");
-        assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(candidate, true),
-            super::StagedDispatchOutcome::Dispatched
-        ));
-        let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
-        let waits: Vec<_> = observations
-            .iter()
-            .filter_map(|observation| match observation {
-                crate::engine::worker::dispatch::observation::DispatchObservation::Wait(wait) => {
-                    Some(wait)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(waits.len(), 1);
-        assert_eq!(waits[0].wake_qpc, Some(second_target));
-        assert_eq!(waits[0].physical_target_qpc, second_target);
-        assert_eq!(waits[0].spin_ticks, DurationTicks::from_raw(456));
-        assert_eq!(waits[0].timer_arm_generation, Some(2));
-        assert_eq!(waits[0].timer_return_generation, Some(2));
-    }
+    include!("dispatch_loop_observer_tests.rs");
 }

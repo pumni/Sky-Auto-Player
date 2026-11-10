@@ -24,11 +24,25 @@ pub mod adapter_support {
     pub use sky_dispatch_win32::mmcss::PriorityMode;
 
     pub const SCHEMA_VERSION: u32 = sky_dispatch_core::SCHEMA_VERSION;
+    pub const MAX_COMPILED_ACTIONS: usize = sky_dispatch_core::compile::MAX_ACTIONS;
+    pub const MAX_COMPILED_REASON_BYTES: usize = sky_dispatch_core::compile::MAX_REASON_BYTES;
     pub fn compile_runtime_intents(
         actions: &[KeyActionInput],
         allowed_scan_codes: &[u16],
     ) -> Result<RuntimeSchedule, CompileError> {
         sky_dispatch_core::compile::compile_runtime_intents(actions, allowed_scan_codes)
+    }
+
+    pub fn compile_runtime_intents_with_cancellation(
+        actions: &[KeyActionInput],
+        allowed_scan_codes: &[u16],
+        cancelled: impl FnMut() -> bool,
+    ) -> Result<RuntimeSchedule, CompileError> {
+        sky_dispatch_core::compile::compile_runtime_intents_with_cancellation(
+            actions,
+            allowed_scan_codes,
+            cancelled,
+        )
     }
 
     pub fn validate_min_hold_and_release_gap_feasibility(

@@ -121,6 +121,11 @@ pub(crate) fn publisher_down_send_outcome(
     }
     if let Some(observer) = observer {
         let observation = DownObservation {
+            wait_sequence: 0,
+            wait_spin_ticks: 0,
+            up_slots: None,
+            up_slot_count: 0,
+            up_pre_call_available: false,
             epoch_qpc: timing_proof.epoch_qpc,
             allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
             physical_target_qpc,
@@ -198,15 +203,47 @@ pub(crate) fn dispatch_stale_packet(
 #[derive(Clone, Debug)]
 pub struct PendingObservationQueue {
     queue: Arc<ArrayQueue<DispatchObservation>>,
+    up_slot_pool: Arc<ArrayQueue<Box<[sky_dispatch_core::executor::UpSlotTiming; 15]>>>,
+}
+#[derive(Debug)]
+pub struct PooledUpSlots {
+    pub slots: Option<Box<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
+    pool: Arc<ArrayQueue<Box<[sky_dispatch_core::executor::UpSlotTiming; 15]>>>,
+}
+impl Drop for PooledUpSlots {
+    fn drop(&mut self) {
+        if let Some(slots) = self.slots.take() {
+            self.pool
+                .push(slots)
+                .expect("checked-out Up slot has pool capacity");
+        }
+    }
 }
 impl Default for PendingObservationQueue {
     fn default() -> Self {
+        let up_slot_pool = Arc::new(ArrayQueue::new(OBSERVATION_QUEUE_CAPACITY + 2));
+        for _ in 0..OBSERVATION_QUEUE_CAPACITY + 2 {
+            assert!(
+                up_slot_pool
+                    .push(Box::new(
+                        [sky_dispatch_core::executor::UpSlotTiming::EMPTY; 15]
+                    ))
+                    .is_ok()
+            );
+        }
         Self {
             queue: Arc::new(ArrayQueue::new(OBSERVATION_QUEUE_CAPACITY)),
+            up_slot_pool,
         }
     }
 }
 impl PendingObservationQueue {
+    pub fn acquire_up_slots(&self) -> Option<PooledUpSlots> {
+        self.up_slot_pool.pop().map(|slots| PooledUpSlots {
+            slots: Some(slots),
+            pool: Arc::clone(&self.up_slot_pool),
+        })
+    }
     pub fn push(
         &self,
         observation: DispatchObservation,
@@ -247,7 +284,6 @@ impl PendingObservationQueue {
         self.queue.pop()
     }
     #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.queue.len()
     }

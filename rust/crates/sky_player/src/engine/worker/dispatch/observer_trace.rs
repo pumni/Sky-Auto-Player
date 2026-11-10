@@ -1,13 +1,97 @@
 use super::super::DispatchStep;
-use super::observation::StaleMetadataObservation;
 #[cfg(any(test, feature = "test-support"))]
 use super::observation::{
     BlockedUnfocusedObservation, DownMissObservation, DownMissTimingEvidence,
 };
+use super::observation::{DownObservation, StaleMetadataObservation, UpSlotObservation};
 use crate::engine::{
     RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_UP, TRACE_SEND_STATUS_NOT_ATTEMPTED,
     TelemetryCollector, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
 };
+
+pub(in crate::engine::worker) fn attach_up_slot_traces(
+    telemetry: &mut TelemetryCollector,
+    observation: &DownObservation,
+) -> Result<(), DispatchStep> {
+    let trace_record_index = u32::try_from(telemetry.output.accepted - 1)
+        .map_err(|error| DispatchStep::Terminate(format!("Up trace index overflow: {error}")))?;
+    for timing in observation
+        .up_slots
+        .iter()
+        .flat_map(|storage| storage.slots.iter().flat_map(|slots| slots.iter()))
+        .take(usize::from(observation.up_slot_count))
+    {
+        if telemetry.output.up_slot_records.len() == TelemetryCollector::MAX_UP_SLOT_RECORDS {
+            telemetry.output.up_slot_records_dropped =
+                telemetry.output.up_slot_records_dropped.saturating_add(1);
+            if let Some(record) = telemetry.output.records.back_mut() {
+                record.up_slot_attribution_missing = true;
+            }
+            continue;
+        }
+        let slot = UpSlotObservation {
+            timing: *timing,
+            epoch_qpc: observation.epoch_qpc,
+            pre_call_qpc: observation
+                .up_pre_call_available
+                .then_some(observation.pre_call_qpc),
+            packet_not_before_qpc: observation.physical_timing_window.packet_not_before_qpc,
+            completion_qpc: observation.sendinput_completion_qpc,
+            confirmed: observation.confirmed_mask & (1 << timing.slot) != 0,
+        };
+        let mut trace = up_slot_trace(&slot)
+            .map_err(|error| DispatchStep::Terminate(format!("Up timing overflow: {error:?}")))?;
+        trace.trace_record_index = trace_record_index;
+        telemetry
+            .output
+            .up_slot_records
+            .try_reserve(1)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("Up trace allocation failed: {error}"))
+            })?;
+        telemetry.output.up_slot_records.push(trace);
+    }
+    Ok(())
+}
+
+pub(super) fn up_slot_trace(
+    observation: &UpSlotObservation,
+) -> Result<crate::engine::telemetry::UpSlotTrace, sky_dispatch_core::time::TimeArithmeticError> {
+    use sky_dispatch_core::time::TimeArithmeticError;
+    let timing = observation.timing;
+    let target = observation
+        .epoch_qpc
+        .as_u64()
+        .checked_add(timing.authored_up_offset_ticks.as_u64())
+        .ok_or(TimeArithmeticError::Overflow)?;
+    let floor = observation
+        .epoch_qpc
+        .as_u64()
+        .checked_add(timing.release_not_before_ticks.as_u64())
+        .ok_or(TimeArithmeticError::Overflow)?
+        .max(target)
+        .max(observation.packet_not_before_qpc.as_u64());
+    let residual = observation
+        .pre_call_qpc
+        .map(|qpc| {
+            i64::try_from(i128::from(qpc.as_u64()) - i128::from(floor))
+                .map_err(|_| TimeArithmeticError::Overflow)
+        })
+        .transpose()?;
+    Ok(crate::engine::telemetry::UpSlotTrace {
+        trace_record_index: 0,
+        slot: timing.slot,
+        scan_code: timing.scan_code,
+        source_action_index: timing.source_action_index,
+        authored_offset_ticks: timing.authored_up_offset_ticks.as_u64(),
+        release_floor_offset_ticks: timing.release_not_before_ticks.as_u64(),
+        floor_displacement_ticks: floor - target,
+        pre_call_qpc_ticks: observation.pre_call_qpc.map(|qpc| qpc.as_u64()),
+        completion_qpc_ticks: observation.completion_qpc.as_u64(),
+        residual_ticks: residual,
+        confirmed: observation.confirmed,
+    })
+}
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::{TRACE_KIND_DOWN, TRACE_KIND_MIXED};
 #[cfg(test)]
@@ -470,6 +554,88 @@ mod tests {
             hold_floor_mask,
             release_floor_mask,
         }
+    }
+
+    #[test]
+    fn coalesced_up_slots_retain_individual_timing() {
+        let mut records = Vec::new();
+        for (slot, scan, source, authored, floor) in [(0, 21, 7, 100, 120), (1, 22, 8, 110, 145)] {
+            let observation = UpSlotObservation {
+                timing: sky_dispatch_core::executor::UpSlotTiming {
+                    slot,
+                    scan_code: scan,
+                    source_action_index: source,
+                    authored_up_offset_ticks: TimelineTicks::from_raw(authored),
+                    release_not_before_ticks: TimelineTicks::from_raw(floor),
+                },
+                epoch_qpc: QpcTicks::from_raw(1_000),
+                pre_call_qpc: Some(QpcTicks::from_raw(1_150)),
+                packet_not_before_qpc: QpcTicks::from_raw(1_000),
+                completion_qpc: QpcTicks::from_raw(1_155),
+                confirmed: true,
+            };
+            records.push(up_slot_trace(&observation).expect("record Up"));
+        }
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            (
+                records[0].source_action_index,
+                Some(records[0].scan_code),
+                1u16 << records[0].slot
+            ),
+            (7, Some(21), 1)
+        );
+        assert_eq!(
+            (
+                records[1].source_action_index,
+                Some(records[1].scan_code),
+                1u16 << records[1].slot
+            ),
+            (8, Some(22), 2)
+        );
+        assert_eq!(
+            (
+                records[0].authored_offset_ticks,
+                records[0].floor_displacement_ticks,
+                records[0].residual_ticks
+            ),
+            (100, 20, Some(30))
+        );
+        assert_eq!(
+            (
+                records[1].authored_offset_ticks,
+                records[1].floor_displacement_ticks,
+                records[1].residual_ticks
+            ),
+            (110, 35, Some(5))
+        );
+    }
+
+    #[test]
+    fn up_slot_sidecar_is_bounded_and_counts_drops() {
+        let queue = super::super::observer::PendingObservationQueue::default();
+        let mut observation = super::super::observation::DownObservation::test_fixture(0);
+        let mut storage = queue.acquire_up_slots().expect("slot storage");
+        storage.slots.as_mut().expect("owned storage")[0] =
+            sky_dispatch_core::executor::UpSlotTiming {
+                slot: 0,
+                scan_code: 21,
+                source_action_index: 7,
+                authored_up_offset_ticks: TimelineTicks::from_raw(100),
+                release_not_before_ticks: TimelineTicks::from_raw(120),
+            };
+        observation.up_slots = Some(storage);
+        observation.up_slot_count = 1;
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 1);
+        collector.output.accepted = 1;
+        for _ in 0..=TelemetryCollector::MAX_UP_SLOT_RECORDS {
+            attach_up_slot_traces(&mut collector, &observation).expect("bounded trace");
+        }
+        assert_eq!(
+            collector.output.up_slot_records.len(),
+            TelemetryCollector::MAX_UP_SLOT_RECORDS
+        );
+        assert_eq!(collector.output.up_slot_records_dropped, 1);
     }
 
     #[test]

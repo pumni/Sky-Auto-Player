@@ -1056,6 +1056,9 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
 fn trailing_stale_packet_after_many_physical_packets_is_committed_without_early_finish() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
+    // Other tests deliberately delay the process-wide observer. This test
+    // requires normal observer throughput to inspect the bounded trace.
+    let _observer_hooks = crate::engine::observer_test_hooks::observer_test_hook_guard();
     let allowed: Vec<u16> = (0x15..0x15 + 15).collect();
     let mut actions = Vec::with_capacity(69);
     let mut action_idx = 0u32;

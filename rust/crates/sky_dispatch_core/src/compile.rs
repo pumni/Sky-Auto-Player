@@ -11,6 +11,8 @@ pub const MAX_REASON_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CompileError {
+    #[error("runtime compilation cancelled")]
+    Cancelled,
     #[error("allowed_scan_codes must contain between 1 and {MAX_KEYS} entries")]
     InvalidAllowedScanCodeCount,
     #[error("allowed_scan_codes contains duplicate scan code {0}")]
@@ -82,6 +84,17 @@ pub fn compile_runtime_intents(
     actions: &[KeyActionInput],
     allowed_scan_codes: &[u16],
 ) -> Result<RuntimeSchedule, CompileError> {
+    compile_runtime_intents_with_cancellation(actions, allowed_scan_codes, || false)
+}
+
+pub fn compile_runtime_intents_with_cancellation(
+    actions: &[KeyActionInput],
+    allowed_scan_codes: &[u16],
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<RuntimeSchedule, CompileError> {
+    if cancelled() {
+        return Err(CompileError::Cancelled);
+    }
     if allowed_scan_codes.is_empty() || allowed_scan_codes.len() > MAX_KEYS {
         return Err(CompileError::InvalidAllowedScanCodeCount);
     }
@@ -109,10 +122,17 @@ pub fn compile_runtime_intents(
 
     let mut reason_table: Vec<String> = Vec::new();
     let mut reason_map: HashMap<String, ReasonId> = HashMap::new();
-    let intent_capacity = actions
-        .iter()
-        .map(|action| action.scan_codes.len())
-        .sum::<usize>();
+    let mut intent_capacity = 0usize;
+    let mut down_action_count = 0usize;
+    for (index, action) in actions.iter().enumerate() {
+        if index.is_multiple_of(256) && cancelled() {
+            return Err(CompileError::Cancelled);
+        }
+        intent_capacity = intent_capacity
+            .checked_add(action.scan_codes.len())
+            .ok_or(CompileError::TooManyActions)?;
+        down_action_count += usize::from(action.kind == ActionKind::Down);
+    }
     let mut batches = Vec::new();
     batches
         .try_reserve(actions.len())
@@ -125,10 +145,6 @@ pub fn compile_runtime_intents(
     packets
         .try_reserve(actions.len())
         .map_err(|e| CompileError::MemoryBudgetExceeded(format!("packets reservation: {e}")))?;
-    let down_action_count = actions
-        .iter()
-        .filter(|action| action.kind == ActionKind::Down)
-        .count();
     let mut down_chords: Vec<CompiledDownChord> = Vec::new();
     down_chords
         .try_reserve(down_action_count)
@@ -140,8 +156,24 @@ pub fn compile_runtime_intents(
         } else {
             let id =
                 ReasonId::try_from(reason_table.len()).map_err(|_| CompileError::TooManyReasons)?;
-            reason_table.push(reason.into());
-            reason_map.insert(reason.into(), id);
+            reason_table.try_reserve(1).map_err(|e| {
+                CompileError::MemoryBudgetExceeded(format!("reason table reservation: {e}"))
+            })?;
+            reason_map.try_reserve(1).map_err(|e| {
+                CompileError::MemoryBudgetExceeded(format!("reason map reservation: {e}"))
+            })?;
+            let mut table_reason = String::new();
+            table_reason.try_reserve(reason.len()).map_err(|e| {
+                CompileError::MemoryBudgetExceeded(format!("reason string reservation: {e}"))
+            })?;
+            table_reason.push_str(reason);
+            let mut map_reason = String::new();
+            map_reason.try_reserve(reason.len()).map_err(|e| {
+                CompileError::MemoryBudgetExceeded(format!("reason key reservation: {e}"))
+            })?;
+            map_reason.push_str(reason);
+            reason_table.push(table_reason);
+            reason_map.insert(map_reason, id);
             Ok(id)
         }
     };
@@ -151,9 +183,15 @@ pub fn compile_runtime_intents(
     let mut group_start = 0usize;
 
     while group_start < actions.len() {
+        if cancelled() {
+            return Err(CompileError::Cancelled);
+        }
         let scheduled_us = actions[group_start].scheduled_us;
         let mut group_end = group_start + 1;
         while group_end < actions.len() && actions[group_end].scheduled_us == scheduled_us {
+            if (group_end - group_start).is_multiple_of(256) && cancelled() {
+                return Err(CompileError::Cancelled);
+            }
             group_end += 1;
         }
 
@@ -163,6 +201,9 @@ pub fn compile_runtime_intents(
             u32::try_from(batches.len()).map_err(|_| CompileError::TooManyActions)?;
         let mut down_action: Option<usize> = None;
         for (offset, action) in actions[group_start..group_end].iter().enumerate() {
+            if offset.is_multiple_of(256) && cancelled() {
+                return Err(CompileError::Cancelled);
+            }
             if let Some(previous) = previous_source_index
                 && action.source_action_index <= previous
             {
@@ -224,15 +265,24 @@ pub fn compile_runtime_intents(
         let mut up_mask = 0u16;
         let mut seen_up_mask = 0u16;
         let mut physical_up_source_action_index_by_slot: [Option<u32>; MAX_KEYS] = [None; MAX_KEYS];
-        let mut group_batches: Vec<CompiledBatch> = Vec::with_capacity(group_end - group_start);
-        for action in &actions[group_start..group_end] {
+        let mut group_batches: Vec<CompiledBatch> = Vec::new();
+        group_batches
+            .try_reserve(group_end - group_start)
+            .map_err(|e| {
+                CompileError::MemoryBudgetExceeded(format!("group batches reservation: {e}"))
+            })?;
+        for (offset, action) in actions[group_start..group_end].iter().enumerate() {
+            if offset.is_multiple_of(256) && cancelled() {
+                return Err(CompileError::Cancelled);
+            }
             if action.kind != ActionKind::Up {
                 continue;
             }
             let reason_id = get_or_insert_reason(&action.reason)?;
             let intent_start =
                 u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
-            let mut sorted_scan_codes = action.scan_codes.clone();
+            let mut sorted_scan_codes = smallvec::SmallVec::<[u16; MAX_KEYS]>::new();
+            sorted_scan_codes.extend_from_slice(&action.scan_codes);
             sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
             for &scan_code in &sorted_scan_codes {
                 let key_slot = key_registry
@@ -287,7 +337,8 @@ pub fn compile_runtime_intents(
             let reason_id = get_or_insert_reason(&action.reason)?;
             let intent_start =
                 u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
-            let mut sorted_scan_codes = action.scan_codes.clone();
+            let mut sorted_scan_codes = smallvec::SmallVec::<[u16; MAX_KEYS]>::new();
+            sorted_scan_codes.extend_from_slice(&action.scan_codes);
             sorted_scan_codes.sort_by_key(|&sc| key_registry.slot_for(sc).unwrap_or(0xFF));
             let chord_index = down_chords.len();
             let mut chord_intents: smallvec::SmallVec<[CompiledDownIntent; MAX_KEYS]> =

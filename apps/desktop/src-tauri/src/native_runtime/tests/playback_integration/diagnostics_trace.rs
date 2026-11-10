@@ -277,7 +277,9 @@ fn sender_trace_failed_session_b_extraction_does_not_restore_session_a() {
 #[test]
 fn sender_trace_capture_memory_stays_under_two_mib() {
     let record_bytes = std::mem::size_of::<sky_player::engine::RtTraceRecord>();
-    let capture_bytes = record_bytes * SENDER_TRACE_CAPTURE_CAPACITY;
+    let sidecar_bytes = std::mem::size_of::<sky_player::engine::UpSlotTrace>()
+        * sky_player::engine::NATIVE_UP_SLOT_TRACE_CAPACITY;
+    let capture_bytes = record_bytes * SENDER_TRACE_CAPTURE_CAPACITY + sidecar_bytes;
     assert!(capture_bytes <= 2 * 1024 * 1024);
     println!(
         "sender trace ring: {record_bytes} bytes/record, {SENDER_TRACE_CAPTURE_CAPACITY} records, {capture_bytes} bytes total"

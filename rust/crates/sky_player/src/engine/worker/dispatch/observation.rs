@@ -43,7 +43,7 @@ pub enum ObserverLifecycle {
     ResetAll,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum DispatchObservation {
     Down(DownObservation),
     #[cfg(any(test, feature = "test-support"))]
@@ -54,6 +54,16 @@ pub enum DispatchObservation {
     StaleMetadata(StaleMetadataObservation),
     #[cfg(any(test, feature = "test-support"))]
     BlockedUnfocused(BlockedUnfocusedObservation),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UpSlotObservation {
+    pub timing: sky_dispatch_core::executor::UpSlotTiming,
+    pub epoch_qpc: QpcTicks,
+    pub pre_call_qpc: Option<QpcTicks>,
+    pub packet_not_before_qpc: QpcTicks,
+    pub completion_qpc: QpcTicks,
+    pub confirmed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -174,8 +184,13 @@ pub struct PrecisionHandoffEvidence {
     pub waiter_return_qpc: Option<QpcTicks>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct DownObservation {
+    pub wait_sequence: u64,
+    pub wait_spin_ticks: u64,
+    pub up_slots: Option<super::observer::PooledUpSlots>,
+    pub up_slot_count: u8,
+    pub up_pre_call_available: bool,
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
     pub physical_target_qpc: QpcTicks,
@@ -189,7 +204,6 @@ pub struct DownObservation {
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
     /// Retained as raw handoff evidence for diagnostics and test-support inspection.
-    #[allow(dead_code)]
     pub precision_handoff: Option<PrecisionHandoffEvidence>,
     pub requested_packet: PhysicalPacket,
     pub confirmed_mask: u16,
@@ -205,10 +219,14 @@ impl DownTraceObservation {
 
 impl DownObservation {
     #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
+            wait_sequence: 0,
+            wait_spin_ticks: 0,
+            up_slots: None,
+            up_slot_count: 0,
+            up_pre_call_available: false,
             epoch_qpc: QpcTicks::ZERO,
             allow_pre_epoch_startup_dispatch: false,
             physical_target_qpc: authored_target_qpc,
@@ -246,7 +264,7 @@ impl DownObservation {
         }
     }
 
-    pub(super) const fn path(self) -> DispatchPath {
+    pub(super) const fn path(&self) -> DispatchPath {
         match (
             self.requested_packet.up_mask != 0,
             self.requested_packet.down_mask != 0,
@@ -265,7 +283,7 @@ impl DownObservation {
         }
     }
 
-    pub(super) const fn requested_count(self) -> usize {
+    pub(super) const fn requested_count(&self) -> usize {
         down_transport_counts(
             self.requested_packet,
             self.confirmed_mask,
@@ -275,7 +293,7 @@ impl DownObservation {
         .0
     }
 
-    pub(super) const fn confirmed_count(self) -> usize {
+    pub(super) const fn confirmed_count(&self) -> usize {
         down_transport_counts(
             self.requested_packet,
             self.confirmed_mask,
@@ -285,7 +303,7 @@ impl DownObservation {
         .1
     }
 
-    pub(super) const fn skipped_count(self) -> usize {
+    pub(super) const fn skipped_count(&self) -> usize {
         down_transport_counts(
             self.requested_packet,
             self.confirmed_mask,
@@ -455,8 +473,9 @@ pub(super) fn record_down_send_telemetry(
     if down_outcome != "sent" {
         trace_flags |= TRACE_FLAG_ANOMALY;
     }
+    let accepted_before = telemetry.output.accepted;
     if let Err(error) = telemetry.try_push(|| {
-        RtTraceRecord::dispatched(
+        let mut record = RtTraceRecord::dispatched(
             TraceContext {
                 event_index: trace.event_index,
                 source_action_index: trace.event_index,
@@ -574,11 +593,20 @@ pub(super) fn record_down_send_telemetry(
                 skipped: observation.skipped_count(),
                 send_attempts: usize::from(trace.send_attempts),
             },
-        )
+        )?;
+        record.up_slot_attribution_missing =
+            observation.up_slot_count != 0 && observation.up_slots.is_none();
+        record.wait_sequence =
+            (observation.wait_sequence != 0).then_some(observation.wait_sequence);
+        record.wait_spin_ticks = record.wait_sequence.map(|_| observation.wait_spin_ticks);
+        Ok(record)
     }) {
         return Err(DispatchStep::Terminate(format!(
             "native telemetry record overflow: {error}"
         )));
+    }
+    if telemetry.output.accepted != accepted_before {
+        super::observer_trace::attach_up_slot_traces(telemetry, observation)?;
     }
     Ok((down_outcome, force_publish))
 }

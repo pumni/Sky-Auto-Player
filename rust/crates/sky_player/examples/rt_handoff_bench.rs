@@ -739,7 +739,7 @@ fn baseline_down_miss_name(kind: DownMissKind) -> &'static str {
 fn baseline_observed_disposition(
     step: &DispatchStep,
     outcome: Option<SendTransactionOutcome>,
-    observation: Option<DispatchObservation>,
+    observation: Option<&DispatchObservation>,
     final_gate_control_rejections: u64,
 ) -> (
     &'static str,
@@ -812,7 +812,7 @@ fn baseline_observed_disposition(
 
 #[allow(clippy::type_complexity)]
 fn baseline_observation_timing(
-    observation: DispatchObservation,
+    observation: &DispatchObservation,
 ) -> (
     Option<u64>,
     Option<u64>,
@@ -954,12 +954,12 @@ fn baseline_record_boundary(
         ),
     };
     let observation = harness.pop_observation();
-    let observation_timing = observation.map(baseline_observation_timing);
+    let observation_timing = observation.as_ref().map(baseline_observation_timing);
     let control_rejections = harness
         .final_gate_control_rejections_for_test()
         .saturating_sub(prior_control_rejections);
     let (observed_disposition, observed_reason, observed_send_status, observed_success) =
-        baseline_observed_disposition(&step, outcome, observation, control_rejections);
+        baseline_observed_disposition(&step, outcome, observation.as_ref(), control_rejections);
     let delivery = if observed_success {
         evidence.successful_sendinput_transactions =
             evidence.successful_sendinput_transactions.saturating_add(1);
@@ -1296,7 +1296,6 @@ fn baseline_semantic_expectation(
 /// consumer. Observation construction/copying and queue draining are outside
 /// the timed regions.
 fn observation_enqueue_ab() -> serde_json::Value {
-    let template = representative_observation();
     let available = PendingObservationQueue::default();
     let saturated = PendingObservationQueue::default();
     let mut available_dropped = 0;
@@ -1305,7 +1304,7 @@ fn observation_enqueue_ab() -> serde_json::Value {
     let mut saturated_high_watermark = 0;
     for _ in 0..OBSERVATION_QUEUE_CAPACITY {
         saturated.push(
-            template,
+            representative_observation(),
             &mut saturated_dropped,
             &mut saturated_high_watermark,
         );
@@ -1316,12 +1315,12 @@ fn observation_enqueue_ab() -> serde_json::Value {
     let mut available_ns = Vec::with_capacity(sample_count);
     let mut saturated_ns = Vec::with_capacity(sample_count);
     for _ in 0..sample_count {
-        let bypass_observation = template;
+        let bypass_observation = representative_observation();
         let started = Instant::now();
         black_box(&bypass_observation);
         bypass_ns.push(elapsed_ns(started));
 
-        let available_observation = template;
+        let available_observation = representative_observation();
         let started = Instant::now();
         available.push(
             available_observation,
@@ -1331,7 +1330,7 @@ fn observation_enqueue_ab() -> serde_json::Value {
         available_ns.push(elapsed_ns(started));
         black_box(available.pop_front()).expect("available queue sample must be present");
 
-        let saturated_observation = template;
+        let saturated_observation = representative_observation();
         let started = Instant::now();
         saturated.push(
             saturated_observation,

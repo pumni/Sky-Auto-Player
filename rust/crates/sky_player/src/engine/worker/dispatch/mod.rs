@@ -20,6 +20,8 @@ pub(crate) mod hold_forensics;
 pub(crate) mod observation;
 pub(crate) mod observer;
 mod observer_trace;
+#[cfg(test)]
+pub(super) use observer_trace::attach_up_slot_traces;
 mod observer_wake;
 #[cfg(any(test, feature = "test-support"))]
 mod prepared;

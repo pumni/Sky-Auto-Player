@@ -57,9 +57,7 @@ use sky_native_adapters::{
     CatalogCacheStore, CatalogComposer, CatalogComposition, FileCatalogSource,
     ImportedSourceCatalogStatus, JsonLibraryManifestStore, JsonSettingsStore,
 };
-use sky_player::adapter_support::{
-    ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
-};
+use sky_player::adapter_support::{ActionKind as DispatchActionKind, KeyActionInput, PriorityMode};
 use sky_player::engine::{
     BackendConfig, DispatchProfile, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot,
     FocusOptions, NativeDispatchSession, NativeSessionOptions, PriorityOptions, TelemetryMode,

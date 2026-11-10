@@ -566,14 +566,13 @@ pub struct CoordinatorOperationEvidence {
 }
 
 #[cfg(test)]
-#[allow(unused_must_use)]
 mod tests;
 
 impl RuntimeDispatchCoordinator {
     /// Approximate the coordinator-owned heap payload for test-support
     /// characterization. This excludes allocator metadata and the schedule's
     /// own backing vectors; it is not a process RSS measurement.
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn heap_payload_bytes_for_test_support(&self) -> usize {
         self.batch_scheduled_ticks.len() * std::mem::size_of::<TimelineTicks>()
             + self.generation_states.len() * std::mem::size_of::<GenerationStatus>()

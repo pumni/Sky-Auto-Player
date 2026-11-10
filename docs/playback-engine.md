@@ -129,6 +129,25 @@ The production wait strategy is the **Frozen waiter** implemented in
 4. **Strict Conversions:** All time and QPC tick conversions fail closed. Arithmetic
    overflows or invalid timer returns immediately abort rather than masking errors.
 
+## Observation and memory boundaries
+
+Valid waits are captured once and published after a successful physical packet or
+before a replan. Packet traces carry the associated wait sequence and spin ticks;
+missing observers and bounded-queue drops are counted separately. A missing QPC
+sample remains unavailable rather than being reconstructed from another timestamp.
+
+Schema 23 keeps one packet trace per physical send. Per-slot Up evidence is stored
+in a separate bounded sidecar, linked by `trace_record_index`; it retains each
+source action, slot, scan code, authored offset, release floor and residual. Its
+4,096-entry capacity has a separate dropped-record count. Residual is measured from
+the later of the authored target, slot release floor and packet not-before floor to
+the sampled pre-call QPC; it is unavailable when that sample is missing.
+
+`MAX_EXECUTOR_BYTES` limits the estimated `DownChordTicks` backing array to
+512 MiB. It does not limit the combined schedule, coordinator, input, telemetry
+or process peak. Allocation failures are not universally recoverable: in
+particular, constructing shared reason strings still uses infallible allocation.
+
 ## Implementation Map
 
 - [`rust/crates/sky_dispatch_core/src/executor.rs`](../rust/crates/sky_dispatch_core/src/executor.rs):

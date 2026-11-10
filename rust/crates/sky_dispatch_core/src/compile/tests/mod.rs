@@ -2,6 +2,30 @@ use super::*;
 use crate::time::TimelineTicks;
 
 #[test]
+fn compilation_cancellation_is_checked_before_and_during_work() {
+    let actions: Vec<_> = (0..1_000)
+        .map(|index| KeyActionInput {
+            source_action_index: index,
+            kind: ActionKind::Up,
+            scheduled_us: u64::from(index),
+            scan_codes: smallvec::smallvec![1],
+            reason: "unmatched".into(),
+        })
+        .collect();
+    assert_eq!(
+        compile_runtime_intents_with_cancellation(&actions, &[1], || true).unwrap_err(),
+        CompileError::Cancelled
+    );
+    let mut checks = 0;
+    let result = compile_runtime_intents_with_cancellation(&actions, &[1], || {
+        checks += 1;
+        checks == 8
+    });
+    assert_eq!(result.unwrap_err(), CompileError::Cancelled);
+    assert_eq!(checks, 8);
+}
+
+#[test]
 fn test_compile_basic_pairing() {
     let allowed = vec![1, 2, 3];
     let actions = vec![

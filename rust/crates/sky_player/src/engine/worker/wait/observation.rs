@@ -4,6 +4,7 @@ use sky_dispatch_win32::wait::WaitOutcome;
 
 #[derive(Clone, Copy, Debug)]
 pub struct WaitObservation {
+    pub sequence: u64,
     pub outcome: WaitOutcome,
     pub wake_qpc: Option<QpcTicks>,
     pub spin_ticks: DurationTicks,

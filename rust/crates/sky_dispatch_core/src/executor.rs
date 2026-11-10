@@ -94,6 +94,18 @@ pub struct DispatchExecutor {
 }
 
 pub const MAX_EXECUTOR_BYTES: usize = 512 * 1024 * 1024;
+
+fn checked_executor_storage_bytes(chord_count: usize) -> Result<usize, String> {
+    let estimated_bytes = chord_count
+        .checked_mul(std::mem::size_of::<DownChordTicks>())
+        .ok_or_else(|| "executor memory size overflow".to_string())?;
+    if estimated_bytes > MAX_EXECUTOR_BYTES {
+        return Err(format!(
+            "executor memory requirement ({estimated_bytes} bytes) exceeds budget of {MAX_EXECUTOR_BYTES} bytes"
+        ));
+    }
+    Ok(estimated_bytes)
+}
 pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
 
 /// Measured memory footprint of the `DispatchExecutor`.
@@ -161,14 +173,7 @@ impl DispatchExecutor {
         C: FnMut() -> Result<(), String>,
     {
         let chord_count = schedule.down_chords.len();
-        let estimated_bytes = chord_count
-            .checked_mul(std::mem::size_of::<DownChordTicks>())
-            .ok_or_else(|| "executor memory size overflow".to_string())?;
-        if estimated_bytes > MAX_EXECUTOR_BYTES {
-            return Err(format!(
-                "executor memory requirement ({estimated_bytes} bytes) exceeds budget of {MAX_EXECUTOR_BYTES} bytes"
-            ));
-        }
+        checked_executor_storage_bytes(chord_count)?;
 
         checkpoint()?;
 
@@ -572,6 +577,10 @@ impl DispatchExecutor {
 
 #[cfg(test)]
 mod memory_tests;
+
+#[cfg(test)]
+#[path = "executor/metadata_tests.rs"]
+mod metadata_tests;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]

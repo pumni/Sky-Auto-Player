@@ -29,7 +29,7 @@ fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
         .pop_next_due_authored(0, 0)
         .expect("down batch is due");
 
-    coordinator.drop_expired_downs(&batch.intents);
+    assert!(coordinator.drop_expired_downs(&batch.intents).is_ok());
 
     assert!(coordinator.pop_next_due_authored(0, 0).is_none());
     assert_eq!(

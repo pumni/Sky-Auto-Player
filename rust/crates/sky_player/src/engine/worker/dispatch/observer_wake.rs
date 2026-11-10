@@ -100,6 +100,7 @@ pub(crate) fn record_wait_attempt(
         return None;
     }
     let observation = WaitObservation {
+        sequence: local_metrics.spin_observation_expected_samples,
         outcome: result.outcome,
         wake_qpc: result.wake_qpc,
         spin_ticks: result.spin_ticks,
@@ -137,6 +138,9 @@ pub(crate) fn publish_pending_wait_observation(
         return;
     };
     let Some(observer) = observer else {
+        local_metrics.spin_observation_missing_samples = local_metrics
+            .spin_observation_missing_samples
+            .saturating_add(1);
         return;
     };
     observer.push_wait(
@@ -311,6 +315,31 @@ mod tests {
         assert_eq!(metrics.spin_observation_expected_samples, 2);
         assert_eq!(metrics.spin_observation_dropped_samples, 0);
         assert_eq!(metrics.spin_observation_missing_samples, 0);
+    }
+
+    #[test]
+    fn observer_removed_after_capture_counts_missing_once() {
+        let queue = PendingObservationQueue::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        let mut runtime = WorkerRuntime {
+            pending_wait_observation: record_wait_attempt(
+                Some(&queue),
+                Some(WaitResult::interrupted()),
+                QpcTicks::from_raw(31_000),
+                DurationTicks::from_raw(9_000),
+                TimelineTicks::from_raw(22_000),
+                QpcTicks::from_raw(10_000),
+                None,
+                &mut metrics,
+            ),
+            ..WorkerRuntime::default()
+        };
+        publish_pending_wait_observation(&mut runtime, None, &mut metrics);
+        publish_pending_wait_observation(&mut runtime, None, &mut metrics);
+        assert_eq!(metrics.spin_observation_expected_samples, 1);
+        assert_eq!(metrics.spin_observation_missing_samples, 1);
+        assert_eq!(metrics.spin_observation_dropped_samples, 0);
+        assert!(queue.is_empty());
     }
 
     #[test]

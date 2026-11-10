@@ -30,6 +30,7 @@ fn wait_observation_defers_conversion_and_health_updates() {
     let mut health = WorkerHealthState::new(DispatchHealthOptions::default());
     let mut local_metrics = WorkerMetricsLocal::default();
     let observation = WaitObservation {
+        sequence: 1,
         outcome: WaitOutcome::Deadline,
         wake_qpc: Some(QpcTicks::from_raw(2_500)),
         spin_ticks: DurationTicks::from_raw(100),
@@ -86,6 +87,7 @@ fn interrupted_wait_is_excluded_from_deadline_gap_population() {
     let mut health = WorkerHealthState::new(DispatchHealthOptions::default());
     let mut local_metrics = WorkerMetricsLocal::default();
     let observation = WaitObservation {
+        sequence: 1,
         outcome: WaitOutcome::Interrupted,
         wake_qpc: None,
         spin_ticks: DurationTicks::from_raw(100),
@@ -114,4 +116,36 @@ fn interrupted_wait_is_excluded_from_deadline_gap_population() {
     assert_eq!(local_metrics.physical_target_to_wake_max_ticks, 0);
     assert_eq!(local_metrics.wait_degraded_samples, 0);
     assert_eq!(local_metrics.wait_window_sample_count, 0);
+}
+#[test]
+fn report_observation_layout_sizes() {
+    use super::{DispatchObservation, DownMissObservation, DownObservation, UpObservation};
+    use crate::engine::worker::wait::WaitObservation;
+    use sky_dispatch_core::executor::UpSlotTiming;
+    eprintln!(
+        "DispatchObservation={} DownObservation={} DownMissObservation={} UpObservation={} WaitObservation={} UpSlotTiming={}",
+        std::mem::size_of::<DispatchObservation>(),
+        std::mem::size_of::<DownObservation>(),
+        std::mem::size_of::<DownMissObservation>(),
+        std::mem::size_of::<UpObservation>(),
+        std::mem::size_of::<WaitObservation>(),
+        std::mem::size_of::<UpSlotTiming>()
+    );
+}
+
+#[test]
+fn up_slot_pool_is_bounded_and_returns_storage_on_drop() {
+    use super::super::observer::PendingObservationQueue;
+    let queue = PendingObservationQueue::default();
+    let mut borrowed = Vec::new();
+    for _ in 0..super::OBSERVATION_QUEUE_CAPACITY + 2 {
+        borrowed.push(queue.acquire_up_slots().expect("preallocated slot"));
+    }
+    assert!(queue.acquire_up_slots().is_none());
+    drop(borrowed.pop());
+    assert!(queue.acquire_up_slots().is_some());
+    borrowed.clear();
+    for _ in 0..super::OBSERVATION_QUEUE_CAPACITY + 2 {
+        borrowed.push(queue.acquire_up_slots().expect("returned slot"));
+    }
 }
