@@ -57,12 +57,13 @@ use control::{
 };
 pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch::dispatch_prepared_normal_frame;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryState, PendingUpRecovery,
-    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_prepared_normal_frame,
-    dispatch_stale_packet,
+    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_resumable_lifecycle_transition_for_test;
@@ -623,7 +624,6 @@ pub(crate) struct WorkerResources {
     pub(super) waiter: HybridWaiter,
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
-    pub(super) prepared_stream: Option<PreparedDispatchStream>,
     pub(super) playback: PlaybackClockState,
     pub(super) telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
     pub(super) scheduling: WorkerSchedulingGuards,

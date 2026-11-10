@@ -57,25 +57,30 @@ Synthetic handle invalidation is explicitly rejected.
 ## 3. Zero-Allocation (Noalloc) Qualification
 
 Realtime dispatch loops must never perform heap allocations during healthy playback:
-- The `noalloc_qualification` suite in `rust/crates/sky_dispatch_core/tests/` verifies
-  that `DispatchExecutor` operations (chord iteration, release due calculation,
-  disjoint batch collection) execute with zero heap allocations.
+- The zero-allocation qualification suite in `rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs`
+  verifies that the critical playback dispatch path (planning, preparation, preflight, Down/Up/Mixed SendInput execution, and publication) executes with zero heap allocations.
 - Dynamic structures (e.g. song streams) are compiled ahead of playback; runtime
   state operates on fixed 15-slot stack/inline buffers.
+- Verification command:
+  ```powershell
+  cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc
+  ```
 
 ## 4. Execution Workflow
 
-Qualification is run using immutable harness executables:
+Qualification is run using immutable harness executables outside the source checkout:
 
 ```powershell
-# 1. Build immutable qualification harness
-powershell -NoProfile -File scripts/build_dispatch_core_harness.ps1 -Profile dist -GuardMode frozen
+# 1. Build immutable qualification harness outside checkout
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -OutputRoot 'D:\Dispatch-D-Harness' `
+  -GuardMode frozen
 
 # 2. Run automated native qualification suite
-powershell -NoProfile -File scripts/qualify_dispatch_core.ps1 `
+pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 `
   -Stage Smoke `
-  -HarnessPath path\to\rt-native-acceptance.exe `
-  -HarnessManifestPath path\to\rt-native-acceptance.manifest.json
+  -CandidateManifest 'D:\Dispatch-D-Harness\manifest.json' `
+  -OutputRoot 'D:\Dispatch-D-Smoke'
 ```
 
 Reports, CSV session ledgers, and telemetry traces are generated in

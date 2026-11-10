@@ -19,39 +19,6 @@ use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
 use std::sync::atomic::AtomicBool;
 
-pub(crate) fn prove_prepared_authored_entry<'a>(
-    coordinator: &RuntimeDispatchCoordinator,
-    entry: Option<&'a super::super::PreparedDispatchEntry>,
-    has_physical: bool,
-    terminal_error: &mut Option<String>,
-) -> Option<PreparedAuthoredCommitProof<'a>> {
-    if !has_physical {
-        return None;
-    }
-    let Some(super::super::PreparedDispatchEntry::Physical(frame)) = entry else {
-        *terminal_error =
-            Some("prepared physical cursor changed before authored proof".to_string());
-        return None;
-    };
-    let commit = match &frame.view.commit {
-        super::PhysicalCommit::Authored(commit) => commit,
-        super::PhysicalCommit::PendingRelease { .. } | super::PhysicalCommit::Coalesced { .. } => {
-            *terminal_error =
-                Some("normal prepared frame has no authored-only commit proof".to_string());
-            return None;
-        }
-    };
-    coordinator
-        .prove_prepared_authored_commit(commit)
-        .map(Some)
-        .unwrap_or_else(|error| {
-            *terminal_error = Some(format!(
-                "prepared authored identity proof failed before wait: {error}"
-            ));
-            None
-        })
-}
-
 enum PreparedNormalPrecisionResult {
     Rejected(FinalDownVerdict),
     Sent {

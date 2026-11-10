@@ -201,7 +201,8 @@ pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
 pub(crate) use observer_wake::{publish_pending_wait_observation, record_wait_attempt};
-pub(crate) use prepared::{dispatch_prepared_normal_frame, prove_prepared_authored_entry};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use prepared::dispatch_prepared_normal_frame;
 
 use super::super::{ActionKind, QpcTicks, TimelineTicks};
 use super::DispatchPath;

@@ -15,6 +15,7 @@ pub(crate) enum WaitBoundary {
         dispatch_qpc: QpcTicks,
         planned_wait_ticks: DurationTicks,
     },
+    #[allow(dead_code)]
     Replan {
         wait_result: WaitResult,
         target_qpc: QpcTicks,

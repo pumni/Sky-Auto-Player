@@ -338,8 +338,8 @@ fn slow_preparation_does_not_consume_published_preroll_or_shift_authored_onset()
 #[test]
 fn accepted_quit_cannot_arm_from_preparation_ready_arming_or_epoch_staging() {
     let cases = [
-        (StartupCheckpoint::StreamMaterialization, 2),
-        (StartupCheckpoint::CoordinatorReset, 2),
+        (StartupCheckpoint::StreamBuild, 1),
+        (StartupCheckpoint::StreamBuild, 2),
         (StartupCheckpoint::BeforeReady, 1),
         (StartupCheckpoint::ReadyToArmed, 1),
         (StartupCheckpoint::ReadyToArmed, 2),

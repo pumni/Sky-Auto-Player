@@ -18,9 +18,9 @@ use super::super::{
 };
 use super::admission::focus_matches_hwnd;
 use super::{
-    DispatchHealthOptions, HealthWindow, PreparedDispatchStream, StartupResources, Worker,
-    WorkerHealthState, WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target,
-    initialize_startup, load_target_stamp,
+    DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
+    WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target, initialize_startup,
+    load_target_stamp,
 };
 use crate::engine::config::{CALIBRATION_SAMPLES, StartupCalibrationPlacement};
 use startup_calibration::{
@@ -283,53 +283,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             format!("executor construction failed: {error}"),
         );
     }
-    #[cfg(any(test, feature = "test-support"))]
-    let needs_prepared_stream_for_checkpoint =
-        startup_hook.is_some_and(|h| h.is_armed_for_prepared_stream_test());
-    #[cfg(not(any(test, feature = "test-support")))]
-    let needs_prepared_stream_for_checkpoint = false;
-
-    let prepared_stream = if needs_prepared_stream_for_checkpoint {
-        coordinator.executor = None;
-        match PreparedDispatchStream::build_with_checkpoints(
-            coordinator,
-            qpc_clock,
-            &core.runtime.preparation_probe,
-            backend.instrument_key_profile(),
-            || {
-                startup_checkpoint(
-                    shared,
-                    config.focus.require_focus && schedule_has_down,
-                    StartupCheckpoint::StreamMaterialization,
-                    #[cfg(any(test, feature = "test-support"))]
-                    startup_hook,
-                )
-            },
-            || {
-                startup_checkpoint(
-                    shared,
-                    config.focus.require_focus && schedule_has_down,
-                    StartupCheckpoint::CoordinatorReset,
-                    #[cfg(any(test, feature = "test-support"))]
-                    startup_hook,
-                )
-            },
-        ) {
-            Ok((stream, restored_coordinator)) => {
-                coordinator = restored_coordinator;
-                Some(stream)
-            }
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("normal prepared stream admission failed: {error}"),
-                );
-            }
-        }
-    } else {
-        None
-    };
     core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
         match coordinator.effective_total_ticks() {
             Ok(ticks) => ticks.as_u64(),
@@ -855,7 +808,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         waiter,
         backend,
         coordinator,
-        prepared_stream,
         playback,
         telemetry,
         scheduling,

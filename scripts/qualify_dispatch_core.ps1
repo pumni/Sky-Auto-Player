@@ -97,6 +97,9 @@ function Read-And-VerifyManifest {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw ($Role + ' manifest does not exist: ' + $Path) }
     $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $manifest -RepositoryRoot $root -Role $Role -AllowHistoricalControl:($Role -eq 'control')
+    if ($manifest.guard_mode -eq 'adaptive') {
+        throw ($Role + ' manifest uses retired adaptive guard mode (#646); only frozen is accepted for qualification')
+    }
     if ($manifest.schema_version -ne 1 -or
         $manifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
         $manifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
@@ -108,7 +111,7 @@ function Read-And-VerifyManifest {
         @($manifest.cargo_features)[0] -ne 'real-input-acceptance' -or
         [bool]$manifest.qpc_read_counting -or
         $manifest.observer_mode -ne 'qualification-on' -or
-        ($manifest.guard_mode -ne 'frozen' -and $manifest.guard_mode -ne 'adaptive') -or
+        $manifest.guard_mode -ne 'frozen' -or
         $manifest.workload_version -ne 'dispatch-core-646-a1' -or
         $manifest.target -ne 'x86_64-pc-windows-msvc' -or
         $manifest.cargo_clean_exit_code -ne 0 -or

@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)]
     [string]$OutputRoot,
-    [ValidateSet('frozen', 'adaptive')]
+    [ValidateSet('frozen')]
     [string]$GuardMode = 'frozen',
     [switch]$QpcReadCounting
 )

@@ -32,6 +32,7 @@ impl PreparedDispatchFrame {
 #[derive(Debug)]
 // Inline entries keep the pre-reserved stream contiguous and avoid one heap
 // allocation per authored boundary during startup preparation.
+#[allow(dead_code)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum PreparedDispatchEntry {
     Physical(PreparedDispatchFrame),
@@ -41,6 +42,7 @@ pub(crate) enum PreparedDispatchEntry {
     },
 }
 
+#[allow(dead_code)]
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn record_down_window_before_wait(
     hook: Option<&crate::engine::config::StartupOrderingHook>,
@@ -64,6 +66,7 @@ pub(crate) fn record_down_window_before_wait(
     down_mask
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct PreparedDispatchStream {
     entries: Vec<PreparedDispatchEntry>,
@@ -264,6 +267,7 @@ impl PreparedDispatchStream {
         Ok(())
     }
 
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn is_exhausted(&self) -> bool {
         self.cursor >= self.entries.len()

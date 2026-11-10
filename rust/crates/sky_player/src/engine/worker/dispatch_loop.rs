@@ -6,14 +6,12 @@ use super::super::{
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
-    FinalControlSignals, FinalDownAdmissionResult, PlanningInput, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
-    focus_matches, focus_matches_hwnd, load_target_stamp, plan_next_dispatch_projected,
-    process_command_control, publish_backend_counters, publish_backend_metrics,
-    record_wait_failure, suspend_live_input, target_stamp_still_current,
-    verify_final_down_admission, wait_for_next_boundary,
+    FinalControlSignals, FinalDownAdmissionResult, WaitBoundary, WaitBoundaryInput, WaitDeadline,
+    WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
+    focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
+    publish_backend_counters, publish_backend_metrics, record_wait_failure, suspend_live_input,
+    target_stamp_still_current, verify_final_down_admission, wait_for_next_boundary,
 };
-use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -28,16 +26,6 @@ fn physical_target_qpc_for_work(
         return Ok(None);
     };
     Ok((allow_pre_deadline || target <= now).then_some(target))
-}
-
-#[inline]
-fn normal_prepared_target_qpc(
-    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-    offset_ticks: TimelineTicks,
-) -> Result<sky_dispatch_win32::clock::QpcTicks, String> {
-    epoch_qpc
-        .checked_add_duration(DurationTicks::from_raw(offset_ticks.as_u64()))
-        .map_err(|error| format!("prepared frame target arithmetic failure: {error}"))
 }
 
 #[inline]
@@ -495,7 +483,7 @@ pub(crate) fn apply_resumable_lifecycle_transition_for_test(
 
 pub(super) fn dispatch(
     worker: &mut Worker<'_>,
-    focus_loss_fault: bool,
+    _focus_loss_fault: bool,
 ) -> Result<(), Box<dyn Any + Send>> {
     let shared = worker.shared;
     let core = &mut worker.core;
@@ -564,7 +552,6 @@ pub(super) fn dispatch(
             .as_mut()
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
-        let mut prepared_stream = resources.prepared_stream.take();
         while core.runtime.terminal_error.is_none() {
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
@@ -1012,940 +999,38 @@ pub(super) fn dispatch(
                 continue;
             }
 
-            if resources.coordinator.executor.is_some() {
-                let effective_now_ticks = if now_ticks < resources.playback.epoch {
-                    TimelineTicks::ZERO
-                } else {
-                    match resources
-                        .playback
-                        .get_elapsed_allow_pre_epoch(now_ticks, false)
-                    {
-                        Ok(ticks) => ticks,
-                        Err(error) => {
-                            core.runtime.terminal_error =
-                                Some(format!("playback clock failure: {error}"));
-                            break;
-                        }
-                    }
-                };
-
-                if resources.coordinator.is_finished_at(effective_now_ticks) {
-                    break;
-                }
-
-                // Drain stale metadata packets at or before current playback time.
-                match resources
-                    .coordinator
-                    .prepare_current_stale_packet_at(effective_now_ticks)
-                {
-                    Ok(Some(prepared)) => {
-                        match super::dispatch_stale_packet(
-                            prepared,
-                            &mut resources.coordinator,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics.observer_dropped_samples,
-                            &mut core.metrics.observer_queue_high_watermark,
-                        ) {
-                            super::DispatchStep::Dispatched => {
-                                #[cfg(any(test, feature = "test-support"))]
-                                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                                    hook.mark_stale_packet_committed();
-                                }
-                                continue;
-                            }
-                            super::DispatchStep::Terminate(error) => {
-                                core.runtime.terminal_error = Some(error);
-                                break;
-                            }
-                            super::DispatchStep::TerminateStatic(error) => {
-                                core.runtime.terminal_error = Some((*error).to_string());
-                                break;
-                            }
-                            super::DispatchStep::Continue | super::DispatchStep::NoWork => {
-                                core.runtime.terminal_error = Some(
-                                    "stale packet did not complete its metadata commit".to_string(),
-                                );
-                                break;
-                            }
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        core.runtime.terminal_error = Some(format!(
-                            "coordinator stale-packet preparation failure: {error}"
-                        ));
-                        break;
-                    }
-                }
-
-                let action = resources
-                    .coordinator
-                    .executor
-                    .as_ref()
-                    .unwrap()
-                    .evaluate(effective_now_ticks);
-
-                match action {
-                    sky_dispatch_core::executor::DispatchAction::Finished => {
-                        if resources.coordinator.cursor
-                            < resources.coordinator.schedule.batches.len()
-                            && let Some(stale_ticks) =
-                                resources.coordinator.next_stale_packet_target_ticks()
-                        {
-                            let wait_target_qpc =
-                                match resources.playback.epoch.checked_add_duration(
-                                    DurationTicks::from_raw(stale_ticks.as_u64()),
-                                ) {
-                                    Ok(target) => target,
-                                    Err(error) => {
-                                        core.runtime.terminal_error =
-                                            Some(format!("deadline arithmetic failure: {error}"));
-                                        break;
-                                    }
-                                };
-                            if wait_target_qpc > now_ticks {
-                                match wait_for_next_boundary(WaitBoundaryInput {
-                                    deadline: WaitDeadline {
-                                        physical_target_qpc: Some(wait_target_qpc),
-                                        spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                                        qpc_clock,
-                                    },
-                                    signals: WaitSignals {
-                                        waiter: &resources.waiter,
-                                        interrupt,
-                                    },
-                                    mutable: WaitMutable {
-                                        local_metrics: &mut core.metrics,
-                                        terminal_error: &mut core.runtime.terminal_error,
-                                    },
-                                }) {
-                                    WaitBoundary::Due { .. } | WaitBoundary::Replan { .. } => {
-                                        continue;
-                                    }
-                                    WaitBoundary::Exit => break,
-                                }
-                            }
-                            continue;
-                        }
-                        break;
-                    }
-                    sky_dispatch_core::executor::DispatchAction::Wait { deadline_ticks } => {
-                        let wait_target_qpc =
-                            match resources.playback.epoch.checked_add_duration(
-                                DurationTicks::from_raw(deadline_ticks.as_u64()),
-                            ) {
-                                Ok(target) => target,
-                                Err(error) => {
-                                    core.runtime.terminal_error =
-                                        Some(format!("deadline arithmetic failure: {error}"));
-                                    break;
-                                }
-                            };
-                        if wait_target_qpc <= now_ticks {
-                            continue;
-                        }
-                        match wait_for_next_boundary(WaitBoundaryInput {
-                            deadline: WaitDeadline {
-                                physical_target_qpc: Some(wait_target_qpc),
-                                spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                                qpc_clock,
-                            },
-                            signals: WaitSignals {
-                                waiter: &resources.waiter,
-                                interrupt,
-                            },
-                            mutable: WaitMutable {
-                                local_metrics: &mut core.metrics,
-                                terminal_error: &mut core.runtime.terminal_error,
-                            },
-                        }) {
-                            WaitBoundary::Due {
-                                wait_result,
-                                target_qpc,
-                                ..
-                            } => {
-                                if let Some(wait_result) = wait_result {
-                                    core.runtime.last_dispatch_deadline_wake_qpc =
-                                        wait_result.wake_qpc;
-                                    core.runtime.last_dispatch_deadline_target_qpc =
-                                        Some(target_qpc);
-                                }
-                                continue;
-                            }
-                            WaitBoundary::Replan { .. } => {
-                                let _ = interrupt.try_take();
-                                continue;
-                            }
-                            WaitBoundary::Exit => break,
-                        }
-                    }
-                    sky_dispatch_core::executor::DispatchAction::Send {
-                        up_mask,
-                        down_chord,
-                    } => {
-                        let down_chord = down_chord.cloned();
-                        let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
-                        let has_down = down_mask != 0;
-                        let physical_packet =
-                            sky_dispatch_win32::input::PhysicalPacket::new(up_mask, down_mask);
-                        let packet_masks = physical_packet;
-
-                        let preflight_target = if has_down {
-                            core.runtime.preparation_probe.record_preflight();
-                            let Some(target_stamp) = load_target_stamp(target) else {
-                                core.runtime.verified_target = None;
-                                core.runtime.invalidate_down_authorization();
-                                continue;
-                            };
-                            if let Err(error) = ensure_preflight_for_target(
-                                &resources.backend,
-                                target_stamp,
-                                &mut core.runtime.verified_target,
-                            ) {
-                                core.runtime.verified_target = None;
-                                core.runtime.terminal_error = Some(format!(
-                                    "instrument key preflight failed before SendInput: {error}"
-                                ));
-                                break;
-                            }
-                            if !target_stamp_still_current(target, target_stamp) {
-                                core.runtime.verified_target = None;
-                                core.runtime.invalidate_down_authorization();
-                                continue;
-                            }
-                            Some(target_stamp)
-                        } else {
-                            None
-                        };
-
-                        let authored_target_ticks = down_chord
-                            .as_ref()
-                            .map_or(effective_now_ticks, |c| c.scheduled_ticks);
-                        let authored_target_qpc =
-                            match resources.playback.epoch.checked_add_duration(
-                                DurationTicks::from_raw(authored_target_ticks.as_u64()),
-                            ) {
-                                Ok(qpc) => qpc,
-                                Err(error) => {
-                                    core.runtime.terminal_error =
-                                        Some(format!("authored target overflow: {error}"));
-                                    break;
-                                }
-                            };
-                        let timing_window = match physical_timing_window_for_dispatch(
-                            authored_target_qpc,
-                            packet_masks,
-                            &core.runtime,
-                        ) {
-                            Ok(w) => w,
-                            Err(error) => {
-                                core.runtime.terminal_error = Some(error);
-                                break;
-                            }
-                        };
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        {
-                            hook.record_down_window(
-                                timing_window.authored_target_qpc.as_u64(),
-                                timing_window.packet_not_before_qpc.as_u64(),
-                            );
-                        }
-
-                        if timing_window.packet_not_before_qpc > now_ticks {
-                            if has_down {
-                                let expected =
-                                    preflight_target.expect("target stamp checked above");
-                                let control_signals = FinalControlSignals {
-                                    quit_requested,
-                                    skip_requested,
-                                    panic_requested,
-                                    desired_pause,
-                                    supervisor_expired,
-                                    system_power: Some(system_power),
-                                };
-                                match verify_final_down_admission(
-                                    target,
-                                    expected,
-                                    config.focus.require_focus,
-                                    focus_active,
-                                    control_signals,
-                                    timing.lease_timeout_ticks,
-                                    qpc_clock,
-                                    &shared.publication.progress_clock,
-                                    &resources.backend,
-                                    &mut resources.playback,
-                                    &mut core.runtime,
-                                    &mut core.metrics,
-                                ) {
-                                    FinalDownAdmissionResult::Allowed => {}
-                                    FinalDownAdmissionResult::Replan => {
-                                        continue;
-                                    }
-                                    FinalDownAdmissionResult::Terminal(err) => {
-                                        core.runtime.terminal_error = Some(err);
-                                        break;
-                                    }
-                                }
-                            }
-                            let wait_target_qpc = timing_window.packet_not_before_qpc;
-                            match wait_for_next_boundary(WaitBoundaryInput {
-                                deadline: WaitDeadline {
-                                    physical_target_qpc: Some(wait_target_qpc),
-                                    spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                                    qpc_clock,
-                                },
-                                signals: WaitSignals {
-                                    waiter: &resources.waiter,
-                                    interrupt,
-                                },
-                                mutable: WaitMutable {
-                                    local_metrics: &mut core.metrics,
-                                    terminal_error: &mut core.runtime.terminal_error,
-                                },
-                            }) {
-                                WaitBoundary::Due { .. } => {}
-                                WaitBoundary::Replan { .. } => {
-                                    let _ = interrupt.try_take();
-                                    continue;
-                                }
-                                WaitBoundary::Exit => break,
-                            }
-                        }
-
-                        let prepared_packet = match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
-                            physical_packet,
-                            resources.backend.instrument_key_profile(),
-                        ) {
-                            Ok(p) => p,
-                            Err(err) => {
-                                core.runtime.terminal_error =
-                                    Some(format!("failed to prepare physical packet: {err}"));
-                                break;
-                            }
-                        };
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        {
-                            hook.record_down_window(
-                                timing_window.authored_target_qpc.as_u64(),
-                                timing_window.packet_not_before_qpc.as_u64(),
-                            );
-                            hook.visit_startup_checkpoint(
-                                super::super::config::StartupCheckpoint::FirstDownAdmission,
-                            );
-                            hook.mark_first_physical_send_started();
-                            let source_idx =
-                                down_chord.as_ref().map_or(0, |c| c.source_action_index);
-                            hook.maybe_inject_hol_stall(down_mask, source_idx, qpc_clock);
-                        }
-
-                        // Re-validate final Down authority immediately before physical send.
-                        // Executing this AFTER any post-wait hooks or stalls guarantees that authority
-                        // is truly fresh at physical SendInput and can never be invalidated during hook delays.
-                        if has_down {
-                            let expected = preflight_target.expect("target stamp checked above");
-                            let control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            match verify_final_down_admission(
-                                target,
-                                expected,
-                                config.focus.require_focus,
-                                focus_active,
-                                control_signals,
-                                timing.lease_timeout_ticks,
-                                qpc_clock,
-                                &shared.publication.progress_clock,
-                                &resources.backend,
-                                &mut resources.playback,
-                                &mut core.runtime,
-                                &mut core.metrics,
-                            ) {
-                                FinalDownAdmissionResult::Allowed => {}
-                                FinalDownAdmissionResult::Replan => {
-                                    continue;
-                                }
-                                FinalDownAdmissionResult::Terminal(err) => {
-                                    core.runtime.terminal_error = Some(err);
-                                    break;
-                                }
-                            }
-                        }
-
-                        let send_result = resources
-                            .backend
-                            .send_prepared_physical_packet_at_final_boundary(
-                                &prepared_packet,
-                                None,
-                            );
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if has_down
-                            && send_result.evidence.attempts != 0
-                            && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        {
-                            hook.record_down_sender_attempt(
-                                send_result
-                                    .evidence
-                                    .started_ticks
-                                    .map(|ticks| ticks.as_u64()),
-                            );
-                        }
-
-                        if system_power.system_suspend_terminal() {
-                            core.runtime.terminal_trigger =
-                                Some(super::control::TerminalTrigger::SystemSuspend);
-                            break;
-                        }
-
-                        if matches!(
-                            send_result.status,
-                            sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
-                        ) {
-                            core.runtime.verified_target = None;
-                            core.runtime.terminal_error =
-                                Some("SendInput split authored chord".to_string());
-                            break;
-                        }
-                        if !send_result.is_success() {
-                            core.runtime.terminal_error = Some(format!(
-                                "SendInput transport failure: status {:?}",
-                                send_result.status
-                            ));
-                            break;
-                        }
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if up_mask != 0
-                            && down_mask == 0
-                            && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        {
-                            hook.wait_after_successful_up();
-                        }
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        {
-                            hook.visit_startup_checkpoint(
-                                super::super::config::StartupCheckpoint::FirstDownCommitted,
-                            );
-                        }
-
-                        if send_result.evidence.attempts != 0 {
-                            core.metrics.observe_precision_packet_timing(
-                                crate::engine::telemetry::metrics::PrecisionPacketTimingObservation {
-                                    authored_target_qpc: timing_window.authored_target_qpc.as_u64(),
-                                    packet_not_before_qpc: timing_window.packet_not_before_qpc.as_u64(),
-                                    pre_call_qpc: send_result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
-                                    sendinput_completion_qpc: send_result.evidence.completed_ticks.map(|ticks| ticks.as_u64()),
-                                    previous_sendinput_completion_qpc: core.runtime.last_physical_send_completion_qpc.map(|ticks| ticks.as_u64()),
-                                    previous_sender_completion_known: core.runtime.last_physical_send_completion_qpc.is_some(),
-                                    transport_anomaly: !send_result.is_success()
-                                        || send_result.evidence.last_win32_error.is_some()
-                                        || send_result.evidence.skipped_mask != 0
-                                        || send_result.evidence.attempts != 1,
-                                },
-                            );
-                        }
-                        if let Some(started_qpc) = send_result.evidence.started_ticks {
-                            let _ = super::health::record_sendinput_pre_call_lateness(
-                                authored_target_qpc,
-                                started_qpc,
-                                &timing,
-                                &mut core.metrics,
-                            );
-                        }
-                        core.runtime.last_physical_send_completion_qpc =
-                            send_result.evidence.completed_ticks;
-
-                        let completion_qpc = match send_result.evidence.completed_ticks {
-                            Some(qpc) => qpc,
-                            None => qpc_ticks_or_terminal!(),
-                        };
-                        let completion_ticks = match resources
-                            .playback
-                            .get_elapsed_allow_pre_epoch(completion_qpc, true)
-                        {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.terminal_error =
-                                    Some(format!("playback clock failure after send: {error}"));
-                                break;
-                            }
-                        };
-
-                        let confirmed_up_mask = send_result.evidence.confirmed_mask & up_mask;
-                        let confirmed_down_mask = send_result.evidence.confirmed_mask & down_mask;
-
-                        if let Some(exec) = resources.coordinator.executor.as_mut()
-                            && let Err(err) = exec.on_send_completed(
-                                confirmed_up_mask,
-                                confirmed_down_mask,
-                                completion_ticks,
-                            )
-                        {
-                            core.runtime.terminal_error =
-                                Some(format!("executor completion error: {err}"));
-                            break;
-                        }
-
-                        resources
-                            .coordinator
-                            .record_executor_completion(confirmed_up_mask, down_chord.as_ref());
-
-                        if has_down {
-                            core.runtime.musical_physical_commit_started = true;
-                        }
-
-                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut()
-                            && let Err(error) = guard.observe_successful_packet(
-                                completion_qpc,
-                                confirmed_up_mask,
-                                confirmed_down_mask,
-                            )
-                        {
-                            core.runtime.terminal_error = Some(format!(
-                                "physical timing guard completion update failed: {error:?}"
-                            ));
-                            break;
-                        }
-
-                        let trace_kind = match (up_mask != 0, down_mask != 0) {
-                            (true, true) => crate::engine::TRACE_KIND_MIXED,
-                            (false, true) => crate::engine::TRACE_KIND_DOWN,
-                            _ => crate::engine::TRACE_KIND_UP,
-                        };
-                        let source_action_index = if has_down {
-                            down_chord.as_ref().map_or(0, |c| c.source_action_index)
-                        } else {
-                            resources
-                                .coordinator
-                                .executor
-                                .as_ref()
-                                .and_then(|exec| exec.up_source_action_index(up_mask))
-                                .unwrap_or(0)
-                        };
-                        let pre_call_qpc =
-                            send_result.evidence.started_ticks.unwrap_or(completion_qpc);
-
-                        core.runtime.production_forensics.observe_packet_result(
-                            packet_masks,
-                            source_action_index,
-                            authored_target_qpc,
-                            pre_call_qpc,
-                            completion_qpc,
-                            send_result.status,
-                            &mut core.metrics,
-                        );
-
-                        if let Some(observer) = core.observer.pending.as_ref() {
-                            let observation = crate::engine::worker::dispatch::observation::DownObservation {
-                                epoch_qpc: resources.playback.epoch,
-                                allow_pre_epoch_startup_dispatch: core
-                                    .runtime
-                                    .allow_pre_epoch_startup_dispatch,
-                                physical_target_qpc: authored_target_qpc,
-                                physical_timing_window: timing_window,
-                                final_policy_qpc: None,
-                                pre_call_qpc,
-                                sendinput_completion_qpc: completion_qpc,
-                                previous_sendinput_completion_qpc: core
-                                    .runtime
-                                    .previous_sendinput_completion_qpc,
-                                previous_sender_completion_known: core
-                                    .runtime
-                                    .previous_sender_completion_known,
-                                dispatch_ready_qpc: None,
-                                wake_qpc: core.runtime.last_dispatch_deadline_wake_qpc,
-                                precision_handoff: None,
-                                requested_packet: packet_masks,
-                                confirmed_mask: send_result.evidence.confirmed_mask,
-                                skipped_mask: send_result.evidence.skipped_mask,
-                                trace: crate::engine::worker::dispatch::observation::DownTraceObservation {
-                                    event_index: source_action_index,
-                                    compiled_packet_index: down_chord.as_ref().map(|c| c.chord_index as u64),
-                                    trace_kind,
-                                    result_status: send_result.status,
-                                    send_attempts: send_result.evidence.attempts,
-                                    retry_reason: send_result.evidence.retry_reason,
-                                    chord_integrity_lost: false,
-                                    last_win32_error: send_result
-                                        .evidence
-                                        .last_win32_error
-                                        .unwrap_or(0),
-                                    authored_ticks: authored_target_ticks,
-                                    effective_deadline_ticks: authored_target_ticks,
-                                },
-                            };
-                            observer.push(
-                                crate::engine::worker::dispatch::observation::DispatchObservation::Down(
-                                    observation,
-                                ),
-                                &mut core.metrics.observer_dropped_samples,
-                                &mut core.metrics.observer_queue_high_watermark,
-                            );
-                        }
-
-                        if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
-                            publish_backend_counters(&resources.backend, &mut core.metrics);
-                            publish_live_metrics_after_dispatch(
-                                &core.metrics,
-                                metrics,
-                                qpc_clock,
-                                completion_qpc,
-                            );
-                        }
-
-                        continue;
-                    }
-                }
-            }
-
-            if prepared_stream
-                .as_ref()
-                .is_some_and(|stream| !stream.is_exhausted())
-            {
-                let (offset_ticks, has_physical) = {
-                    let stream = prepared_stream
-                        .as_ref()
-                        .expect("prepared stream is present");
-                    match stream.current().expect("prepared stream cursor is valid") {
-                        PreparedDispatchEntry::Physical(frame) => (frame.offset_ticks(), true),
-                        PreparedDispatchEntry::Metadata { offset_ticks, .. } => {
-                            (*offset_ticks, false)
-                        }
-                    }
-                };
-                let target_qpc =
-                    match normal_prepared_target_qpc(resources.playback.epoch, offset_ticks) {
-                        Ok(target) => target,
-                        Err(error) => {
-                            core.runtime.terminal_error = Some(error);
-                            break;
-                        }
-                    };
-                let authored_target_qpc = target_qpc;
-                let preflight_target = if has_physical {
-                    let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
-                        Some(PreparedDispatchEntry::Physical(frame)) => frame,
-                        _ => {
-                            core.runtime.terminal_error = Some(
-                                "prepared physical cursor changed before preflight".to_string(),
-                            );
-                            break;
-                        }
-                    };
-                    if frame.view.packet_masks.down_mask == 0 {
-                        None
-                    } else {
-                        core.runtime.preparation_probe.record_preflight();
-                        let Some(target_stamp) = load_target_stamp(target) else {
-                            core.runtime.verified_target = None;
-                            core.runtime.invalidate_down_authorization();
-                            continue;
-                        };
-                        if let Err(error) = ensure_preflight_for_target(
-                            &resources.backend,
-                            target_stamp,
-                            &mut core.runtime.verified_target,
-                        ) {
-                            core.runtime.verified_target = None;
-                            core.runtime.terminal_error = Some(format!(
-                                "instrument key preflight failed before prepared wait; release the 15 instrument keys before playback: {error}"
-                            ));
-                            break;
-                        }
-                        if !target_stamp_still_current(target, target_stamp) {
-                            core.runtime.verified_target = None;
-                            core.runtime.invalidate_down_authorization();
-                            continue;
-                        }
-                        Some(target_stamp)
-                    }
-                } else {
-                    None
-                };
-                let authored_commit_proof = super::dispatch::prove_prepared_authored_entry(
-                    &resources.coordinator,
-                    prepared_stream.as_ref().and_then(|stream| stream.current()),
-                    has_physical,
-                    &mut core.runtime.terminal_error,
-                );
-                if has_physical && authored_commit_proof.is_none() {
-                    break;
-                }
-                let prepared_physical_timing_window = if has_physical {
-                    let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
-                        Some(PreparedDispatchEntry::Physical(frame)) => frame,
-                        _ => {
-                            core.runtime.terminal_error = Some(
-                                "prepared physical cursor changed before timing query".to_string(),
-                            );
-                            break;
-                        }
-                    };
-                    let window = match physical_timing_window_for_dispatch(
-                        authored_target_qpc,
-                        frame.view.packet_masks,
-                        &core.runtime,
-                    ) {
-                        Ok(window) => window,
-                        Err(error) => {
-                            core.runtime.terminal_error = Some(error);
-                            break;
-                        }
-                    };
-                    Some(window)
-                } else {
-                    None
-                };
-                #[cfg(any(test, feature = "test-support"))]
-                let packet_down_mask = super::prepared::record_down_window_before_wait(
-                    core.runtime.startup_ordering_hook.as_deref(),
-                    prepared_stream.as_ref().and_then(|stream| stream.current()),
-                    authored_target_qpc,
-                    prepared_physical_timing_window,
-                );
-                let wait_target_qpc = prepared_physical_timing_window
-                    .map_or(target_qpc, |window| window.packet_not_before_qpc);
-                core.runtime.future_physical_wait_target_qpc =
-                    has_physical.then_some(wait_target_qpc);
-
-                let dispatch_result = if wait_target_qpc <= now_ticks {
-                    Some((None, authored_target_qpc, now_ticks))
-                } else {
-                    match wait_for_next_boundary(WaitBoundaryInput {
-                        deadline: WaitDeadline {
-                            physical_target_qpc: Some(wait_target_qpc),
-                            spin_threshold_ticks: if has_physical {
-                                timing.effective_spin_threshold_ticks
-                            } else {
-                                DurationTicks::ZERO
-                            },
-                            qpc_clock,
-                        },
-                        signals: WaitSignals {
-                            waiter: &resources.waiter,
-                            interrupt,
-                        },
-                        mutable: WaitMutable {
-                            local_metrics: &mut core.metrics,
-                            terminal_error: &mut core.runtime.terminal_error,
-                        },
-                    }) {
-                        WaitBoundary::Due {
-                            wait_result,
-                            target_qpc,
-                            dispatch_qpc,
-                            planned_wait_ticks,
-                        } => {
-                            if let Some(wait_result) = wait_result {
-                                core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
-                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                            }
-                            core.runtime.pending_wait_observation =
-                                super::dispatch::record_wait_attempt(
-                                    core.observer.pending.as_ref(),
-                                    wait_result,
-                                    target_qpc,
-                                    planned_wait_ticks,
-                                    offset_ticks,
-                                    resources.playback.epoch,
-                                    Some(dispatch_qpc),
-                                    &mut core.metrics,
-                                );
-                            Some((wait_result, authored_target_qpc, dispatch_qpc))
-                        }
-                        WaitBoundary::Replan {
-                            wait_result,
-                            target_qpc,
-                            planned_wait_ticks,
-                        } => {
-                            core.runtime.pending_wait_observation =
-                                super::dispatch::record_wait_attempt(
-                                    core.observer.pending.as_ref(),
-                                    Some(wait_result),
-                                    target_qpc,
-                                    planned_wait_ticks,
-                                    offset_ticks,
-                                    resources.playback.epoch,
-                                    wait_result.wake_qpc,
-                                    &mut core.metrics,
-                                );
-                            super::dispatch::publish_pending_wait_observation(
-                                &mut core.runtime,
-                                core.observer.pending.as_ref(),
-                                &mut core.metrics,
-                            );
-                            let _ = interrupt.try_take();
-                            None
-                        }
-                        WaitBoundary::Exit => {
-                            core.runtime.future_physical_wait_target_qpc = None;
-                            break;
-                        }
-                    }
-                };
-                let Some((_wait_result, target_qpc, dispatch_qpc)) = dispatch_result else {
-                    continue;
-                };
-                core.runtime.future_physical_wait_target_qpc = None;
-                let effective_now_ticks = match resources
-                    .playback
-                    .get_elapsed_allow_pre_epoch(dispatch_qpc, true)
-                {
-                    Ok(ticks) => ticks,
-                    Err(error) => {
-                        core.runtime.terminal_error = Some(format!(
-                            "playback clock failure at prepared boundary: {error}"
-                        ));
-                        break;
-                    }
-                };
-                let step = if !has_physical {
-                    let stream = prepared_stream
-                        .as_mut()
-                        .expect("prepared stream is present");
-                    let commit = match stream.current() {
-                        Some(PreparedDispatchEntry::Metadata { commit, .. }) => commit,
-                        _ => {
-                            core.runtime.terminal_error =
-                                Some("prepared metadata cursor changed before commit".to_string());
-                            break;
-                        }
-                    };
-                    match resources
-                        .coordinator
-                        .commit_prepared_authored_frame_metadata_frozen(commit)
-                    {
-                        Ok(()) => match stream.advance() {
-                            Ok(()) => super::DispatchStep::Dispatched,
-                            Err(error) => super::DispatchStep::TerminateStatic(error),
-                        },
-                        Err(error) => super::DispatchStep::Terminate(format!(
-                            "prepared metadata commit failure: {error}"
-                        )),
-                    }
-                } else {
-                    let stream = prepared_stream
-                        .as_ref()
-                        .expect("prepared stream is present");
-                    let Some(PreparedDispatchEntry::Physical(frame)) = stream.current() else {
-                        core.runtime.terminal_error =
-                            Some("prepared physical cursor changed before dispatch".to_string());
-                        break;
-                    };
-                    #[cfg(any(test, feature = "test-support"))]
-                    if frame.view.packet_masks.down_mask != 0
-                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                    {
-                        hook.visit_startup_checkpoint(
-                            super::super::config::StartupCheckpoint::FirstDownAdmission,
-                        );
-                    }
-                    let proof = authored_commit_proof.expect("missing prepared authored proof");
-                    dispatch_prepared_normal_frame(
-                        frame,
-                        Some(proof),
-                        config,
-                        resources,
-                        core.health.as_mut().unwrap(),
-                        &timing,
-                        &mut core.runtime,
-                        &mut core.metrics,
-                        focus_active,
-                        target,
-                        quit_requested,
-                        skip_requested,
-                        panic_requested,
-                        desired_pause,
-                        supervisor_expired,
-                        system_power,
-                        &shared.publication.progress_clock,
-                        core.observer.pending.as_ref(),
-                        preflight_target,
-                        target_qpc,
-                        prepared_physical_timing_window.expect("prepared physical timing window"),
-                        effective_now_ticks,
-                        dispatch_qpc,
-                        focus_loss_fault,
-                        Some(dispatch_qpc),
-                        #[cfg(any(test, feature = "test-support"))]
-                        false,
-                    )
-                };
-                super::dispatch::publish_pending_wait_observation(
-                    &mut core.runtime,
-                    core.observer.pending.as_ref(),
-                    &mut core.metrics,
-                );
-                if matches!(&step, super::DispatchStep::Dispatched) && has_physical {
-                    if let Some(stream) = prepared_stream.as_mut()
-                        && let Err(error) = stream.advance()
-                    {
-                        core.runtime.terminal_error = Some(error.to_string());
-                        break;
-                    }
-                    if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
-                        publish_backend_counters(&resources.backend, &mut core.metrics);
-                        publish_live_metrics_after_dispatch(
-                            &core.metrics,
-                            metrics,
-                            qpc_clock,
-                            dispatch_qpc,
-                        );
-                    }
-                }
-                #[cfg(any(test, feature = "test-support"))]
-                if matches!(&step, super::DispatchStep::Dispatched)
-                    && packet_down_mask != 0
-                    && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                {
-                    hook.visit_startup_checkpoint(
-                        super::super::config::StartupCheckpoint::FirstDownCommitted,
-                    );
-                }
-                match step {
-                    super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
-                    super::DispatchStep::NoWork => {
-                        core.runtime.terminal_error =
-                            Some("prepared frame did not complete its dispatch step".to_string());
-                        break;
-                    }
-                    super::DispatchStep::Terminate(error) => {
-                        core.runtime.terminal_error = Some(error);
-                        break;
-                    }
-                    super::DispatchStep::TerminateStatic(error) => {
-                        core.runtime.terminal_error = Some(error.to_string());
-                        break;
-                    }
-                }
-            }
-
-            if prepared_stream_requires_terminal(
-                prepared_stream.as_ref(),
-                resources.coordinator.is_finished(),
-            ) {
+            if resources.coordinator.executor.is_none() {
                 core.runtime.terminal_error = Some(
-                    "prepared stream exhausted before coordinator finished; dynamic planner fallback is forbidden"
+                    "coordinator executor is not attached; dynamic fallback is forbidden"
                         .to_string(),
                 );
                 break;
             }
+            let effective_now_ticks = if now_ticks < resources.playback.epoch {
+                TimelineTicks::ZERO
+            } else {
+                match resources
+                    .playback
+                    .get_elapsed_allow_pre_epoch(now_ticks, false)
+                {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        core.runtime.terminal_error =
+                            Some(format!("playback clock failure: {error}"));
+                        break;
+                    }
+                }
+            };
 
-            // Stale metadata is globally non-physical. Commit at most one
-            // compiled packet per outer iteration, regardless of startup
-            // phase, so every control/focus/pause/lease gate is re-admitted.
-            match resources.coordinator.prepare_current_stale_packet() {
+            if resources.coordinator.is_finished_at(effective_now_ticks) {
+                break;
+            }
+
+            // Drain stale metadata packets at or before current playback time.
+            match resources
+                .coordinator
+                .prepare_current_stale_packet_at(effective_now_ticks)
+            {
                 Ok(Some(prepared)) => {
                     match super::dispatch_stale_packet(
                         prepared,
@@ -1986,276 +1071,535 @@ pub(super) fn dispatch(
                 }
             }
 
-            let effective_now_ticks = if now_ticks < resources.playback.epoch {
-                TimelineTicks::ZERO
-            } else {
-                match resources
-                    .playback
-                    .get_elapsed_allow_pre_epoch(now_ticks, false)
-                {
-                    Ok(ticks) => ticks,
-                    Err(error) => {
-                        core.runtime.terminal_error =
-                            Some(format!("playback clock failure: {error}"));
-                        break;
-                    }
-                }
-            };
-            let mut dispatch_plan = super::planning::NextDispatchPlan::default();
-            match plan_next_dispatch_projected(
-                PlanningInput {
-                    coordinator: &resources.coordinator,
-                    epoch_qpc: resources.playback.epoch,
-                    preparation_probe: &core.runtime.preparation_probe,
-                    instrument_key_profile: resources.backend.instrument_key_profile(),
-                },
-                &mut dispatch_plan,
-            ) {
-                Ok(()) => {}
-                Err(error) => {
-                    core.runtime.terminal_error = Some(format!("planning failure: {error}"));
-                    break;
-                }
-            };
-            match preflight_prepared_plan(
-                &mut dispatch_plan,
-                &mut resources.backend,
-                &mut core.runtime,
-                target,
-            ) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(super::DispatchStep::Terminate(error)) => {
-                    core.runtime.terminal_error = Some(error);
-                    break;
-                }
-                Err(step) => {
-                    core.runtime.terminal_error = Some(format!(
-                        "unexpected preflight preparation outcome: {step:?}"
-                    ));
-                    break;
-                }
-            }
-            let authored_step = dispatch_due_from_plan(
-                &dispatch_plan,
-                effective_now_ticks,
-                now_ticks,
-                focus_loss_fault,
-                config,
-                resources,
-                core.health.as_mut().unwrap(),
-                &timing,
-                &mut core.runtime,
-                &mut core.metrics,
-                focus_active,
-                target,
-                quit_requested,
-                skip_requested,
-                panic_requested,
-                supervisor_expired,
-                desired_pause,
-                system_power,
-                &shared.publication.progress_clock,
-                core.observer.pending.as_ref(),
-                None,
-                false,
-                #[cfg(any(test, feature = "test-support"))]
-                None,
-                #[cfg(any(test, feature = "test-support"))]
-                false,
-            );
-            if matches!(&authored_step, super::DispatchStep::Dispatched)
-                && metrics.live_diagnostics_enabled.load(Ordering::Relaxed)
-            {
-                publish_backend_counters(&resources.backend, &mut core.metrics);
-                publish_live_metrics_after_dispatch(&core.metrics, metrics, qpc_clock, now_ticks);
-            }
-            match authored_step {
-                super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
-                super::DispatchStep::NoWork => {}
-                super::DispatchStep::Terminate(err) => {
-                    core.runtime.terminal_error = Some(err);
-                    break;
-                }
-                super::DispatchStep::TerminateStatic(err) => {
-                    core.runtime.terminal_error = Some(err.to_string());
-                    break;
-                }
-            }
+            let action = resources
+                .coordinator
+                .executor
+                .as_ref()
+                .unwrap()
+                .evaluate(effective_now_ticks);
 
-            let deadline_ticks = dispatch_plan.deadline_ticks();
-            let physical_wait_target_qpc =
-                match physical_wait_target_for_plan(&dispatch_plan, &core.runtime) {
-                    Ok(target) => target,
-                    Err(error) => {
-                        core.runtime.terminal_error = Some(error);
-                        break;
-                    }
-                };
-            core.runtime.future_physical_wait_target_qpc = if matches!(
-                &dispatch_plan,
-                super::planning::NextDispatchPlan::Physical(_)
-            ) {
-                dispatch_plan.physical_target_qpc()
-            } else {
-                None
-            };
-
-            match wait_for_next_boundary(WaitBoundaryInput {
-                deadline: WaitDeadline {
-                    physical_target_qpc: physical_wait_target_qpc,
-                    spin_threshold_ticks: if matches!(
-                        dispatch_plan,
-                        super::planning::NextDispatchPlan::Physical(_)
-                    ) {
-                        timing.effective_spin_threshold_ticks
-                    } else {
-                        DurationTicks::ZERO
-                    },
-                    qpc_clock,
-                },
-                signals: WaitSignals {
-                    waiter: &resources.waiter,
-                    interrupt,
-                },
-                mutable: WaitMutable {
-                    local_metrics: &mut core.metrics,
-                    terminal_error: &mut core.runtime.terminal_error,
-                },
-            }) {
-                WaitBoundary::Due {
-                    wait_result,
-                    target_qpc,
-                    dispatch_qpc,
-                    planned_wait_ticks,
-                } => {
-                    // This is the global wait boundary only. Physical target
-                    // attribution is resolved from the selected work below.
-                    let _wait_boundary_target_qpc = target_qpc;
-                    let Some(wait_deadline_ticks) = deadline_ticks else {
-                        core.runtime.terminal_error =
-                            Some("wait returned a result without a dispatch deadline".to_string());
-                        break;
-                    };
-                    if let Some(wait_result) = wait_result {
-                        core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
-                        core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                    }
-                    core.runtime.pending_wait_observation = super::dispatch::record_wait_attempt(
-                        core.observer.pending.as_ref(),
-                        wait_result,
-                        target_qpc,
-                        planned_wait_ticks,
-                        wait_deadline_ticks,
-                        resources.playback.epoch,
-                        Some(dispatch_qpc),
-                        &mut core.metrics,
-                    );
-                    core.runtime.future_physical_wait_target_qpc = None;
-                    let dispatch_now_ticks = dispatch_qpc;
-                    let dispatch_effective_now = match resources
-                        .playback
-                        .get_elapsed_allow_pre_epoch(dispatch_now_ticks, true)
+            match action {
+                sky_dispatch_core::executor::DispatchAction::Finished => {
+                    if resources.coordinator.cursor < resources.coordinator.schedule.batches.len()
+                        && let Some(stale_ticks) =
+                            resources.coordinator.next_stale_packet_target_ticks()
                     {
-                        Ok(ticks) => ticks,
+                        let wait_target_qpc = match resources
+                            .playback
+                            .epoch
+                            .checked_add_duration(DurationTicks::from_raw(stale_ticks.as_u64()))
+                        {
+                            Ok(target) => target,
+                            Err(error) => {
+                                core.runtime.terminal_error =
+                                    Some(format!("deadline arithmetic failure: {error}"));
+                                break;
+                            }
+                        };
+                        if wait_target_qpc > now_ticks {
+                            match wait_for_next_boundary(WaitBoundaryInput {
+                                deadline: WaitDeadline {
+                                    physical_target_qpc: Some(wait_target_qpc),
+                                    spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                                    qpc_clock,
+                                },
+                                signals: WaitSignals {
+                                    waiter: &resources.waiter,
+                                    interrupt,
+                                },
+                                mutable: WaitMutable {
+                                    local_metrics: &mut core.metrics,
+                                    terminal_error: &mut core.runtime.terminal_error,
+                                },
+                            }) {
+                                WaitBoundary::Due { .. } | WaitBoundary::Replan { .. } => {
+                                    continue;
+                                }
+                                WaitBoundary::Exit => break,
+                            }
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                sky_dispatch_core::executor::DispatchAction::Wait { deadline_ticks } => {
+                    let wait_target_qpc = match resources
+                        .playback
+                        .epoch
+                        .checked_add_duration(DurationTicks::from_raw(deadline_ticks.as_u64()))
+                    {
+                        Ok(target) => target,
                         Err(error) => {
-                            core.runtime.terminal_error = Some(format!(
-                                "playback clock failure after deadline wake: {error}"
-                            ));
+                            core.runtime.terminal_error =
+                                Some(format!("deadline arithmetic failure: {error}"));
                             break;
                         }
                     };
-                    let authored_step = dispatch_due_from_plan(
-                        &dispatch_plan,
-                        dispatch_effective_now,
-                        dispatch_now_ticks,
-                        focus_loss_fault,
-                        config,
-                        resources,
-                        core.health.as_mut().unwrap(),
-                        &timing,
-                        &mut core.runtime,
-                        &mut core.metrics,
-                        focus_active,
-                        target,
-                        quit_requested,
-                        skip_requested,
-                        panic_requested,
-                        supervisor_expired,
-                        desired_pause,
-                        system_power,
-                        &shared.publication.progress_clock,
-                        core.observer.pending.as_ref(),
-                        Some(dispatch_qpc),
-                        true,
-                        #[cfg(any(test, feature = "test-support"))]
-                        None,
-                        #[cfg(any(test, feature = "test-support"))]
-                        false,
-                    );
-                    super::dispatch::publish_pending_wait_observation(
-                        &mut core.runtime,
-                        core.observer.pending.as_ref(),
-                        &mut core.metrics,
-                    );
-                    if matches!(&authored_step, super::DispatchStep::Dispatched)
-                        && metrics.live_diagnostics_enabled.load(Ordering::Relaxed)
+                    if wait_target_qpc <= now_ticks {
+                        continue;
+                    }
+                    match wait_for_next_boundary(WaitBoundaryInput {
+                        deadline: WaitDeadline {
+                            physical_target_qpc: Some(wait_target_qpc),
+                            spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                            qpc_clock,
+                        },
+                        signals: WaitSignals {
+                            waiter: &resources.waiter,
+                            interrupt,
+                        },
+                        mutable: WaitMutable {
+                            local_metrics: &mut core.metrics,
+                            terminal_error: &mut core.runtime.terminal_error,
+                        },
+                    }) {
+                        WaitBoundary::Due {
+                            wait_result,
+                            target_qpc,
+                            ..
+                        } => {
+                            if let Some(wait_result) = wait_result {
+                                core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
+                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            }
+                            continue;
+                        }
+                        WaitBoundary::Replan { .. } => {
+                            let _ = interrupt.try_take();
+                            continue;
+                        }
+                        WaitBoundary::Exit => break,
+                    }
+                }
+                sky_dispatch_core::executor::DispatchAction::Send {
+                    up_mask,
+                    down_chord,
+                } => {
+                    let down_chord = down_chord.cloned();
+                    let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
+                    let has_down = down_mask != 0;
+                    let physical_packet =
+                        sky_dispatch_win32::input::PhysicalPacket::new(up_mask, down_mask);
+                    let packet_masks = physical_packet;
+
+                    let preflight_target = if has_down {
+                        core.runtime.preparation_probe.record_preflight();
+                        let Some(target_stamp) = load_target_stamp(target) else {
+                            core.runtime.verified_target = None;
+                            core.runtime.invalidate_down_authorization();
+                            continue;
+                        };
+                        if let Err(error) = ensure_preflight_for_target(
+                            &resources.backend,
+                            target_stamp,
+                            &mut core.runtime.verified_target,
+                        ) {
+                            core.runtime.verified_target = None;
+                            core.runtime.terminal_error = Some(format!(
+                                "instrument key preflight failed before SendInput: {error}"
+                            ));
+                            break;
+                        }
+                        if !target_stamp_still_current(target, target_stamp) {
+                            core.runtime.verified_target = None;
+                            core.runtime.invalidate_down_authorization();
+                            continue;
+                        }
+                        Some(target_stamp)
+                    } else {
+                        None
+                    };
+
+                    let authored_target_ticks = down_chord
+                        .as_ref()
+                        .map_or(effective_now_ticks, |c| c.scheduled_ticks);
+                    let authored_target_qpc = match resources.playback.epoch.checked_add_duration(
+                        DurationTicks::from_raw(authored_target_ticks.as_u64()),
+                    ) {
+                        Ok(qpc) => qpc,
+                        Err(error) => {
+                            core.runtime.terminal_error =
+                                Some(format!("authored target overflow: {error}"));
+                            break;
+                        }
+                    };
+                    let timing_window = match physical_timing_window_for_dispatch(
+                        authored_target_qpc,
+                        packet_masks,
+                        &core.runtime,
+                    ) {
+                        Ok(w) => w,
+                        Err(error) => {
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                    };
+
+                    #[cfg(any(test, feature = "test-support"))]
+                    if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                        hook.record_down_window(
+                            timing_window.authored_target_qpc.as_u64(),
+                            timing_window.packet_not_before_qpc.as_u64(),
+                        );
+                    }
+
+                    if timing_window.packet_not_before_qpc > now_ticks {
+                        if has_down {
+                            let expected = preflight_target.expect("target stamp checked above");
+                            let control_signals = FinalControlSignals {
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                                supervisor_expired,
+                                system_power: Some(system_power),
+                            };
+                            match verify_final_down_admission(
+                                target,
+                                expected,
+                                config.focus.require_focus,
+                                focus_active,
+                                control_signals,
+                                timing.lease_timeout_ticks,
+                                qpc_clock,
+                                &shared.publication.progress_clock,
+                                &resources.backend,
+                                &mut resources.playback,
+                                &mut core.runtime,
+                                &mut core.metrics,
+                            ) {
+                                FinalDownAdmissionResult::Allowed => {}
+                                FinalDownAdmissionResult::Replan => {
+                                    continue;
+                                }
+                                FinalDownAdmissionResult::Terminal(err) => {
+                                    core.runtime.terminal_error = Some(err);
+                                    break;
+                                }
+                            }
+                        }
+                        let wait_target_qpc = timing_window.packet_not_before_qpc;
+                        match wait_for_next_boundary(WaitBoundaryInput {
+                            deadline: WaitDeadline {
+                                physical_target_qpc: Some(wait_target_qpc),
+                                spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                                qpc_clock,
+                            },
+                            signals: WaitSignals {
+                                waiter: &resources.waiter,
+                                interrupt,
+                            },
+                            mutable: WaitMutable {
+                                local_metrics: &mut core.metrics,
+                                terminal_error: &mut core.runtime.terminal_error,
+                            },
+                        }) {
+                            WaitBoundary::Due { .. } => {}
+                            WaitBoundary::Replan { .. } => {
+                                let _ = interrupt.try_take();
+                                continue;
+                            }
+                            WaitBoundary::Exit => break,
+                        }
+                    }
+
+                    let prepared_packet = match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
+                            physical_packet,
+                            resources.backend.instrument_key_profile(),
+                        ) {
+                            Ok(p) => p,
+                            Err(err) => {
+                                core.runtime.terminal_error =
+                                    Some(format!("failed to prepare physical packet: {err}"));
+                                break;
+                            }
+                        };
+
+                    #[cfg(any(test, feature = "test-support"))]
+                    if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                        hook.record_down_window(
+                            timing_window.authored_target_qpc.as_u64(),
+                            timing_window.packet_not_before_qpc.as_u64(),
+                        );
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::FirstDownAdmission,
+                        );
+                        hook.mark_first_physical_send_started();
+                        let source_idx = down_chord.as_ref().map_or(0, |c| c.source_action_index);
+                        hook.maybe_inject_hol_stall(down_mask, source_idx, qpc_clock);
+                    }
+
+                    // Re-validate final Down authority immediately before physical send.
+                    // Executing this AFTER any post-wait hooks or stalls guarantees that authority
+                    // is truly fresh at physical SendInput and can never be invalidated during hook delays.
+                    if has_down {
+                        let expected = preflight_target.expect("target stamp checked above");
+                        let control_signals = FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        };
+                        match verify_final_down_admission(
+                            target,
+                            expected,
+                            config.focus.require_focus,
+                            focus_active,
+                            control_signals,
+                            timing.lease_timeout_ticks,
+                            qpc_clock,
+                            &shared.publication.progress_clock,
+                            &resources.backend,
+                            &mut resources.playback,
+                            &mut core.runtime,
+                            &mut core.metrics,
+                        ) {
+                            FinalDownAdmissionResult::Allowed => {}
+                            FinalDownAdmissionResult::Replan => {
+                                continue;
+                            }
+                            FinalDownAdmissionResult::Terminal(err) => {
+                                core.runtime.terminal_error = Some(err);
+                                break;
+                            }
+                        }
+                    }
+
+                    let send_result = resources
+                        .backend
+                        .send_prepared_physical_packet_at_final_boundary(&prepared_packet, None);
+
+                    #[cfg(any(test, feature = "test-support"))]
+                    if has_down
+                        && send_result.evidence.attempts != 0
+                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                     {
+                        hook.record_down_sender_attempt(
+                            send_result
+                                .evidence
+                                .started_ticks
+                                .map(|ticks| ticks.as_u64()),
+                        );
+                    }
+
+                    if system_power.system_suspend_terminal() {
+                        core.runtime.terminal_trigger =
+                            Some(super::control::TerminalTrigger::SystemSuspend);
+                        break;
+                    }
+
+                    if matches!(
+                        send_result.status,
+                        sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
+                    ) {
+                        core.runtime.verified_target = None;
+                        core.runtime.terminal_error =
+                            Some("SendInput split authored chord".to_string());
+                        break;
+                    }
+                    if !send_result.is_success() {
+                        core.runtime.terminal_error = Some(format!(
+                            "SendInput transport failure: status {:?}",
+                            send_result.status
+                        ));
+                        break;
+                    }
+
+                    #[cfg(any(test, feature = "test-support"))]
+                    if up_mask != 0
+                        && down_mask == 0
+                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                    {
+                        hook.wait_after_successful_up();
+                    }
+
+                    #[cfg(any(test, feature = "test-support"))]
+                    if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::FirstDownCommitted,
+                        );
+                    }
+
+                    if send_result.evidence.attempts != 0 {
+                        core.metrics.observe_precision_packet_timing(
+                            crate::engine::telemetry::metrics::PrecisionPacketTimingObservation {
+                                authored_target_qpc: timing_window.authored_target_qpc.as_u64(),
+                                packet_not_before_qpc: timing_window.packet_not_before_qpc.as_u64(),
+                                pre_call_qpc: send_result
+                                    .evidence
+                                    .started_ticks
+                                    .map(|ticks| ticks.as_u64()),
+                                sendinput_completion_qpc: send_result
+                                    .evidence
+                                    .completed_ticks
+                                    .map(|ticks| ticks.as_u64()),
+                                previous_sendinput_completion_qpc: core
+                                    .runtime
+                                    .last_physical_send_completion_qpc
+                                    .map(|ticks| ticks.as_u64()),
+                                previous_sender_completion_known: core
+                                    .runtime
+                                    .last_physical_send_completion_qpc
+                                    .is_some(),
+                                transport_anomaly: !send_result.is_success()
+                                    || send_result.evidence.last_win32_error.is_some()
+                                    || send_result.evidence.skipped_mask != 0
+                                    || send_result.evidence.attempts != 1,
+                            },
+                        );
+                    }
+                    if let Some(started_qpc) = send_result.evidence.started_ticks {
+                        let _ = super::health::record_sendinput_pre_call_lateness(
+                            authored_target_qpc,
+                            started_qpc,
+                            &timing,
+                            &mut core.metrics,
+                        );
+                    }
+                    core.runtime.last_physical_send_completion_qpc =
+                        send_result.evidence.completed_ticks;
+
+                    let completion_qpc = match send_result.evidence.completed_ticks {
+                        Some(qpc) => qpc,
+                        None => qpc_ticks_or_terminal!(),
+                    };
+                    let completion_ticks = match resources
+                        .playback
+                        .get_elapsed_allow_pre_epoch(completion_qpc, true)
+                    {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            core.runtime.terminal_error =
+                                Some(format!("playback clock failure after send: {error}"));
+                            break;
+                        }
+                    };
+
+                    let confirmed_up_mask = send_result.evidence.confirmed_mask & up_mask;
+                    let confirmed_down_mask = send_result.evidence.confirmed_mask & down_mask;
+
+                    if let Some(exec) = resources.coordinator.executor.as_mut()
+                        && let Err(err) = exec.on_send_completed(
+                            confirmed_up_mask,
+                            confirmed_down_mask,
+                            completion_ticks,
+                        )
+                    {
+                        core.runtime.terminal_error =
+                            Some(format!("executor completion error: {err}"));
+                        break;
+                    }
+
+                    resources
+                        .coordinator
+                        .record_executor_completion(confirmed_up_mask, down_chord.as_ref());
+
+                    if has_down {
+                        core.runtime.musical_physical_commit_started = true;
+                    }
+
+                    if let Some(guard) = core.runtime.physical_timing_guard.as_mut()
+                        && let Err(error) = guard.observe_successful_packet(
+                            completion_qpc,
+                            confirmed_up_mask,
+                            confirmed_down_mask,
+                        )
+                    {
+                        core.runtime.terminal_error = Some(format!(
+                            "physical timing guard completion update failed: {error:?}"
+                        ));
+                        break;
+                    }
+
+                    let trace_kind = match (up_mask != 0, down_mask != 0) {
+                        (true, true) => crate::engine::TRACE_KIND_MIXED,
+                        (false, true) => crate::engine::TRACE_KIND_DOWN,
+                        _ => crate::engine::TRACE_KIND_UP,
+                    };
+                    let source_action_index = if has_down {
+                        down_chord.as_ref().map_or(0, |c| c.source_action_index)
+                    } else {
+                        resources
+                            .coordinator
+                            .executor
+                            .as_ref()
+                            .and_then(|exec| exec.up_source_action_index(up_mask))
+                            .unwrap_or(0)
+                    };
+                    let pre_call_qpc = send_result.evidence.started_ticks.unwrap_or(completion_qpc);
+
+                    core.runtime.production_forensics.observe_packet_result(
+                        packet_masks,
+                        source_action_index,
+                        authored_target_qpc,
+                        pre_call_qpc,
+                        completion_qpc,
+                        send_result.status,
+                        &mut core.metrics,
+                    );
+
+                    if let Some(observer) = core.observer.pending.as_ref() {
+                        let observation = crate::engine::worker::dispatch::observation::DownObservation {
+                                epoch_qpc: resources.playback.epoch,
+                                allow_pre_epoch_startup_dispatch: core
+                                    .runtime
+                                    .allow_pre_epoch_startup_dispatch,
+                                physical_target_qpc: authored_target_qpc,
+                                physical_timing_window: timing_window,
+                                final_policy_qpc: None,
+                                pre_call_qpc,
+                                sendinput_completion_qpc: completion_qpc,
+                                previous_sendinput_completion_qpc: core
+                                    .runtime
+                                    .previous_sendinput_completion_qpc,
+                                previous_sender_completion_known: core
+                                    .runtime
+                                    .previous_sender_completion_known,
+                                dispatch_ready_qpc: None,
+                                wake_qpc: core.runtime.last_dispatch_deadline_wake_qpc,
+                                precision_handoff: None,
+                                requested_packet: packet_masks,
+                                confirmed_mask: send_result.evidence.confirmed_mask,
+                                skipped_mask: send_result.evidence.skipped_mask,
+                                trace: crate::engine::worker::dispatch::observation::DownTraceObservation {
+                                    event_index: source_action_index,
+                                    compiled_packet_index: down_chord.as_ref().map(|c| c.chord_index as u64),
+                                    trace_kind,
+                                    result_status: send_result.status,
+                                    send_attempts: send_result.evidence.attempts,
+                                    retry_reason: send_result.evidence.retry_reason,
+                                    chord_integrity_lost: false,
+                                    last_win32_error: send_result
+                                        .evidence
+                                        .last_win32_error
+                                        .unwrap_or(0),
+                                    authored_ticks: authored_target_ticks,
+                                    effective_deadline_ticks: authored_target_ticks,
+                                },
+                            };
+                        observer.push(
+                            crate::engine::worker::dispatch::observation::DispatchObservation::Down(
+                                observation,
+                            ),
+                            &mut core.metrics.observer_dropped_samples,
+                            &mut core.metrics.observer_queue_high_watermark,
+                        );
+                    }
+
+                    if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
                         publish_backend_counters(&resources.backend, &mut core.metrics);
                         publish_live_metrics_after_dispatch(
                             &core.metrics,
                             metrics,
                             qpc_clock,
-                            dispatch_now_ticks,
+                            completion_qpc,
                         );
                     }
-                    match authored_step {
-                        super::DispatchStep::Terminate(error) => {
-                            core.runtime.terminal_error = Some(error);
-                            break;
-                        }
-                        super::DispatchStep::TerminateStatic(error) => {
-                            core.runtime.terminal_error = Some(error.to_string());
-                            break;
-                        }
-                        super::DispatchStep::Dispatched
-                        | super::DispatchStep::Continue
-                        | super::DispatchStep::NoWork => continue,
-                    }
-                }
-                WaitBoundary::Replan {
-                    wait_result,
-                    target_qpc,
-                    planned_wait_ticks,
-                } => {
-                    core.runtime.future_physical_wait_target_qpc = None;
-                    let Some(wait_deadline_ticks) = deadline_ticks else {
-                        core.runtime.terminal_error =
-                            Some("replan wait result without a dispatch deadline".to_string());
-                        break;
-                    };
-                    core.runtime.pending_wait_observation = super::dispatch::record_wait_attempt(
-                        core.observer.pending.as_ref(),
-                        Some(wait_result),
-                        target_qpc,
-                        planned_wait_ticks,
-                        wait_deadline_ticks,
-                        resources.playback.epoch,
-                        wait_result.wake_qpc,
-                        &mut core.metrics,
-                    );
-                    super::dispatch::publish_pending_wait_observation(
-                        &mut core.runtime,
-                        core.observer.pending.as_ref(),
-                        &mut core.metrics,
-                    );
-                    // Event consumption is intentionally outside the
-                    // precision boundary.  A signal racing this drain is
-                    // harmless; the next blocking wait will replan.
-                    let _ = interrupt.try_take();
+
                     continue;
                 }
-                WaitBoundary::Exit => break,
             }
         }
         super::dispatch::publish_pending_wait_observation(
@@ -2266,18 +1610,11 @@ pub(super) fn dispatch(
     }))
 }
 
-fn prepared_stream_requires_terminal(
-    prepared_stream: Option<&PreparedDispatchStream>,
-    coordinator_finished: bool,
-) -> bool {
-    prepared_stream.is_some_and(PreparedDispatchStream::is_exhausted) && !coordinator_finished
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         physical_target_qpc_for_work, physical_wait_target_for_plan,
-        prepared_stream_requires_terminal, publish_live_metrics_after_dispatch,
+        publish_live_metrics_after_dispatch,
     };
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
@@ -2343,53 +1680,6 @@ mod tests {
         let snapshot = shared.snapshot.load();
         assert_eq!(snapshot.pre_call_lt_250us, 1);
         assert_eq!(snapshot.max_sendinput_pre_call_lateness_us, 25);
-    }
-
-    #[test]
-    fn exhausted_prepared_stream_cannot_fall_back_to_dynamic_planner() {
-        let harness = ProductionDispatchTestHarness::new_down_only();
-        let mut stream = harness.build_prepared_stream_for_test();
-        while !stream.is_exhausted() {
-            stream.advance().expect("prepared stream advance");
-        }
-
-        assert!(prepared_stream_requires_terminal(Some(&stream), false));
-        assert!(!prepared_stream_requires_terminal(Some(&stream), true));
-        assert!(!prepared_stream_requires_terminal(None, false));
-    }
-
-    #[test]
-    fn prepared_stream_terminal_guard_precedes_dynamic_planner_source() {
-        let source = include_str!("dispatch_loop.rs");
-        let guard = source
-            .find("prepared stream exhausted before coordinator finished")
-            .expect("prepared stream terminal guard");
-        let planner = source
-            .find("let mut dispatch_plan = super::planning::NextDispatchPlan::default()")
-            .expect("dynamic planner fallback");
-        assert!(
-            guard < planner,
-            "prepared path must fail before planner fallback"
-        );
-    }
-
-    #[test]
-    fn normal_prepared_source_has_no_future_authorization_gate() {
-        let loop_source = include_str!("dispatch_loop.rs");
-        let loop_production = loop_source
-            .split_once("#[cfg(test)]")
-            .map(|(production, _)| production)
-            .expect("dispatch loop production source");
-        assert!(!loop_production.contains("prepared_down_is_authorized"));
-        assert!(!loop_production.contains("record_prepared_future_authorization"));
-        let prepared_source = include_str!("dispatch/prepared.rs");
-        let prepared_production = prepared_source
-            .split_once("#[cfg(test)]")
-            .map(|(production, _)| production)
-            .expect("prepared dispatch production source");
-        assert!(!prepared_production.contains("PreparedDownAuthorization"));
-        assert!(!prepared_production.contains("prepared_down_is_authorized"));
-        assert!(!prepared_production.contains("UnobservedBacklog"));
     }
 
     #[test]

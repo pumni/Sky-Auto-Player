@@ -180,6 +180,9 @@ try {
         $rustcVersion = (& rustc -Vv) -join [Environment]::NewLine
         if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
         $sourceRevisionMatches = $harnessManifest.source_revision -eq $head -and $harnessManifest.source_tree_sha -eq $sourceTree
+        if ($harnessManifest.guard_mode -eq 'adaptive') {
+            throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
+        }
         if ($harnessManifest.schema_version -ne 1 -or
             (-not $HistoricalSourceAllowed -and -not $sourceRevisionMatches) -or
             $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
@@ -191,7 +194,7 @@ try {
             (($manifestFeatures -join ',') -ne ($expectedManifestFeatures -join ',')) -or
             ([bool]$harnessManifest.qpc_read_counting -ne [bool]$QpcReadCountingEvidenceOnly) -or
             $harnessManifest.observer_mode -ne $expectedObserverMode -or
-            ($harnessManifest.guard_mode -ne 'frozen' -and $harnessManifest.guard_mode -ne 'adaptive') -or
+            $harnessManifest.guard_mode -ne 'frozen' -or
             $harnessManifest.workload_version -ne 'dispatch-core-646-a1' -or
             $harnessManifest.target -ne 'x86_64-pc-windows-msvc' -or
             $harnessManifest.rustc_version -ne $rustcVersion.Trim() -or

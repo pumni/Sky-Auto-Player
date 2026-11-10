@@ -1524,7 +1524,6 @@ impl ProductionDispatchTestHarness {
             waiter,
             backend,
             coordinator,
-            prepared_stream: None,
             playback,
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling,
