@@ -159,3 +159,68 @@ fn scale_fixture_1000_generations_width_5_noncanonical() {
     let sched = generate_scale_schedule(1_000, 5, &noncanonical);
     execute_scale_scenario(&sched);
 }
+
+#[test]
+fn cleanup_overflow_preflights_without_mutation() {
+    let canonical = vec![0x15, 0x16];
+    let sched = generate_scale_schedule(2, 1, &canonical);
+    let mut exec = DispatchExecutor::new(
+        &sched,
+        DurationTicks::from_raw(500),
+        DurationTicks::from_raw(16_667),
+        test_ticks,
+    )
+    .unwrap();
+
+    exec.on_send_completed(0, 0x01, TimelineTicks::from_raw(10_000))
+        .unwrap();
+    assert_eq!(exec.active_mask(), 0x01);
+
+    exec.counters.cancelled = u64::MAX;
+    assert!(exec.check_cleanup_overflow().is_err());
+
+    let res = exec.on_verified_cleanup(TimelineTicks::from_raw(20_000));
+    assert!(res.is_err());
+    assert_eq!(
+        exec.active_mask(),
+        0x01,
+        "slots must not be cleared on overflow"
+    );
+}
+
+#[test]
+fn divergent_coordinator_executor_active_mask_fails_closed() {
+    let canonical = vec![0x15, 0x16];
+    let sched = generate_scale_schedule(2, 1, &canonical);
+    let mut coord = crate::coordinator::RuntimeDispatchCoordinator::new(
+        sched.clone(),
+        0,
+        0,
+        TimelineTicks::from_raw,
+    );
+    let mut exec = DispatchExecutor::new(
+        &sched,
+        DurationTicks::from_raw(500),
+        DurationTicks::from_raw(16_667),
+        test_ticks,
+    )
+    .unwrap();
+
+    exec.on_send_completed(0, 0x01, TimelineTicks::from_raw(10_000))
+        .unwrap();
+    coord.executor = Some(exec);
+
+    let res = coord.cancel_live_generations_after_verified_resumable_cleanup_with_time(
+        TimelineTicks::from_raw(20_000),
+    );
+    assert!(res.is_err(), "divergent active mask must fail closed");
+}
+
+#[test]
+fn next_stale_packet_target_ticks_is_bounded_by_32() {
+    let canonical = vec![0x15];
+    let sched = generate_scale_schedule(40, 1, &canonical);
+    let coord =
+        crate::coordinator::RuntimeDispatchCoordinator::new(sched, 0, 0, TimelineTicks::from_raw);
+    assert_eq!(coord.next_stale_packet_target_ticks(), None);
+}

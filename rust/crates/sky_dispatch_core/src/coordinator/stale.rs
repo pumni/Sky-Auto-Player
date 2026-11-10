@@ -176,9 +176,16 @@ impl RuntimeDispatchCoordinator {
 
     /// Return the scheduled offset in timeline ticks of the earliest remaining
     /// stale packet, if any.
+    ///
+    /// The scan is bounded to at most [`Self::MAX_STALE_PACKETS_SCANNED_PER_STEP`]
+    /// packets to prevent unbounded scanning during high-frequency dispatch ticks.
     pub fn next_stale_packet_target_ticks(&self) -> Option<TimelineTicks> {
         let mut cursor = self.cursor;
-        while cursor < self.schedule.batches.len() {
+        let mut scanned = 0usize;
+        while cursor < self.schedule.batches.len()
+            && scanned < Self::MAX_STALE_PACKETS_SCANNED_PER_STEP
+        {
+            scanned += 1;
             let batch = self.schedule.batches.get(cursor)?;
             let packet_index = usize::try_from(batch.packet_id).ok()?;
             let packet = self.schedule.packets.get(packet_index)?;

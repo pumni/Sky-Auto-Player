@@ -713,10 +713,14 @@ fn run_windows(args: RunArgs) -> i32 {
         let power = session.system_power_snapshot();
         object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
         if let Some(hook) = acceptance_hook.as_ref() {
-            let (count, pre_qpc, post_qpc) = hook.hol_stall_evidence();
+            let (count, pre_qpc, post_qpc, clock_error) = hook.hol_stall_evidence();
             object.insert("hol_stall_count".to_string(), json!(count));
             object.insert("hol_last_stall_pre_qpc".to_string(), json!(pre_qpc));
             object.insert("hol_last_stall_post_qpc".to_string(), json!(post_qpc));
+            object.insert("hol_clock_error".to_string(), json!(clock_error));
+            if clock_error {
+                return write_report(&args, Verdict::Inconclusive, "HOL stall encountered QPC clock error", details);
+            }
         }
     }
     if args.scenario == Scenario::PreflightUserHeld {

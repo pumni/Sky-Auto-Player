@@ -457,24 +457,36 @@ impl RuntimeDispatchCoordinator {
         &mut self,
         completion_ticks: TimelineTicks,
     ) -> Result<usize, CoordinatorError> {
-        let exec_cancelled = if let Some(exec) = self.executor.as_mut() {
-            Some(exec.on_verified_cleanup(completion_ticks).map_err(|e| {
+        if let Some(exec) = self.executor.as_ref() {
+            let exec_mask = exec.active_mask();
+            let coord_mask = self.active_mask;
+            if exec_mask != coord_mask {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(format!(
+                        "executor active mask {exec_mask:#x} does not match coordinator active mask {coord_mask:#x}"
+                    )),
+                ));
+            }
+            exec.check_cleanup_overflow().map_err(|e| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(format!(
+                    "executor cleanup preflight overflow: {e}"
+                )))
+            })?;
+        }
+        let coord_cancelled = self.cancel_live_generations_after_verified_resumable_cleanup()?;
+        if let Some(exec) = self.executor.as_mut() {
+            let exec_cancelled = exec.on_verified_cleanup(completion_ticks).map_err(|e| {
                 CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(format!(
                     "executor verified cleanup barrier failed: {e}"
                 )))
-            })?)
-        } else {
-            None
-        };
-        let coord_cancelled = self.cancel_live_generations_after_verified_resumable_cleanup()?;
-        if let Some(ec) = exec_cancelled
-            && ec as usize != coord_cancelled
-        {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(format!(
-                    "executor cancelled count {ec} does not match coordinator cancelled count {coord_cancelled}"
-                )),
-            ));
+            })?;
+            if exec_cancelled as usize != coord_cancelled {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(format!(
+                        "executor cancelled count {exec_cancelled} does not match coordinator cancelled count {coord_cancelled}"
+                    )),
+                ));
+            }
         }
         Ok(coord_cancelled)
     }

@@ -723,3 +723,48 @@ fn unrepresentable_preroll_qpc_conversion_is_rejected_before_worker_start() {
     assert_eq!(session.snapshot().status, EnginePollStatus::Ready.as_str());
     assert_eq!(session.terminal_outcome(), None);
 }
+
+#[test]
+fn focus_loss_during_post_wait_hook_never_sends_physical_down() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 1);
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.focus.focus_restore_grace_us = 0;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = Arc::new(NativeDispatchSession::new(options).expect("session created"));
+    let session_for_hook = Arc::clone(&session);
+
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    session.set_target_hwnd(123);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    session.arm(0).expect("session arm");
+
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(1)));
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    session_for_hook.set_focus_hint(false);
+    hook.release_startup_checkpoint();
+
+    let _ = session.quit();
+    let _ = session.join(Duration::from_millis(500));
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    assert_eq!(
+        send_calls.load(Ordering::Acquire),
+        0,
+        "physical send must NEVER be called when focus is lost during the post-wait hook"
+    );
+}

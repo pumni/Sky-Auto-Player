@@ -369,27 +369,43 @@ impl DispatchExecutor {
         Ok(())
     }
 
+    /// Check that cancelling all currently active generations would not overflow
+    /// the cancelled counter.
+    pub fn check_cleanup_overflow(&self) -> Result<(), String> {
+        let active_count = self
+            .slots
+            .iter()
+            .filter(|s| s.active_generation.is_some())
+            .count() as u64;
+        self.counters
+            .cancelled
+            .checked_add(active_count)
+            .ok_or_else(|| "cancelled counter overflow during resumable cleanup".to_string())?;
+        Ok(())
+    }
+
     /// Apply verified resumable cleanup at timestamp `completion_ticks`.
     ///
     /// Clears active musical owners in all 15 slots without physical replay,
     /// marks cancelled generations in accounting, and sets the session-wide
     /// resume barrier to `completion_ticks + T`.
     pub fn on_verified_cleanup(&mut self, completion_ticks: TimelineTicks) -> Result<u64, String> {
-        let mut cancelled_count = 0u64;
-        for slot_idx in 0..MAX_KEYS {
-            let slot = &mut self.slots[slot_idx];
-            if slot.active_generation.take().is_some() {
-                cancelled_count += 1;
-                self.counters.cancelled = self
-                    .counters
-                    .cancelled
-                    .checked_add(1)
-                    .ok_or("counter overflow")?;
-            }
+        let active_count = self
+            .slots
+            .iter()
+            .filter(|s| s.active_generation.is_some())
+            .count() as u64;
+        self.counters.cancelled = self
+            .counters
+            .cancelled
+            .checked_add(active_count)
+            .ok_or("cancelled counter overflow")?;
+        for slot in &mut self.slots {
+            slot.active_generation = None;
         }
         let barrier = completion_ticks.saturating_add_duration(self.frame_ticks);
         self.resume_barrier_ticks = self.resume_barrier_ticks.max(barrier);
-        Ok(cancelled_count)
+        Ok(active_count)
     }
 
     /// True when all chords have been dispatched, all slots are empty, and

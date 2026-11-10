@@ -1,6 +1,6 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
 use super::super::{
-    DurationTicks, QpcError, QpcTicks, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
+    DurationTicks, QpcError, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
     try_publish_metrics,
 };
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
@@ -565,15 +565,7 @@ pub(super) fn dispatch(
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
         let mut prepared_stream = resources.prepared_stream.take();
-        while !resources.coordinator.is_finished_at(
-            resources
-                .playback
-                .get_elapsed_allow_pre_epoch(
-                    resources.clock.now().unwrap_or(QpcTicks::ZERO),
-                    core.runtime.allow_pre_epoch_startup_dispatch,
-                )
-                .unwrap_or(TimelineTicks::ZERO),
-        ) {
+        while core.runtime.terminal_error.is_none() {
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
             // after interrupts, replans, command transitions, or failures.
@@ -1037,6 +1029,10 @@ pub(super) fn dispatch(
                     }
                 };
 
+                if resources.coordinator.is_finished_at(effective_now_ticks) {
+                    break;
+                }
+
                 // Drain stale metadata packets at or before current playback time.
                 match resources
                     .coordinator
@@ -1306,8 +1302,39 @@ pub(super) fn dispatch(
                             }
                         }
 
+                        let prepared_packet = match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
+                            physical_packet,
+                            resources.backend.instrument_key_profile(),
+                        ) {
+                            Ok(p) => p,
+                            Err(err) => {
+                                core.runtime.terminal_error =
+                                    Some(format!("failed to prepare physical packet: {err}"));
+                                break;
+                            }
+                        };
+
+                        #[cfg(any(test, feature = "test-support"))]
+                        if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                        {
+                            hook.record_down_window(
+                                timing_window.authored_target_qpc.as_u64(),
+                                timing_window.packet_not_before_qpc.as_u64(),
+                            );
+                            hook.visit_startup_checkpoint(
+                                super::super::config::StartupCheckpoint::FirstDownAdmission,
+                            );
+                        }
+
+                        #[cfg(any(test, feature = "test-support"))]
+                        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                            hook.mark_first_physical_send_started();
+                            hook.maybe_inject_hol_stall(down_mask, qpc_clock);
+                        }
+
                         // Re-validate final Down authority immediately before physical send.
-                        // This guarantees authority is fresh at SendInput and never stale across waits.
+                        // Executing this AFTER any post-wait hooks or stalls guarantees that authority
+                        // is truly fresh at physical SendInput and can never be invalidated during hook delays.
                         if has_down {
                             let expected = preflight_target.expect("target stamp checked above");
                             let control_signals = FinalControlSignals {
@@ -1339,36 +1366,6 @@ pub(super) fn dispatch(
                                     break;
                                 }
                             }
-                        }
-
-                        let prepared_packet = match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
-                            physical_packet,
-                            resources.backend.instrument_key_profile(),
-                        ) {
-                            Ok(p) => p,
-                            Err(err) => {
-                                core.runtime.terminal_error =
-                                    Some(format!("failed to prepare physical packet: {err}"));
-                                break;
-                            }
-                        };
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        {
-                            hook.record_down_window(
-                                timing_window.authored_target_qpc.as_u64(),
-                                timing_window.packet_not_before_qpc.as_u64(),
-                            );
-                            hook.visit_startup_checkpoint(
-                                super::super::config::StartupCheckpoint::FirstDownAdmission,
-                            );
-                        }
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                            hook.mark_first_physical_send_started();
-                            hook.maybe_inject_hol_stall(down_mask, qpc_clock);
                         }
 
                         let send_result = resources
