@@ -145,8 +145,8 @@ try {
     if ([bool]$HarnessPath -ne [bool]$HarnessManifestPath) {
         throw 'immutable harness runs require both -HarnessPath and -HarnessManifestPath'
     }
-    if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle')) {
-        throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, and long-idle'
+    if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle', 'hol-interleaved')) {
+        throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, long-idle, and hol-interleaved'
     }
     if ($QpcReadCountingEvidenceOnly -and (-not $HarnessManifestPath -or $Scenario -ne 'canonical-single' -or $SampleSeconds -or -not $TimingObserverForQualification)) {
         throw 'QPC counting evidence requires an immutable counted harness, one canonical-single ReceiveOnly case, no timed sample, and the qualification observer'
