@@ -268,10 +268,10 @@ pub(crate) fn record_sendinput_pre_call_lateness(
     started_qpc: sky_dispatch_win32::clock::QpcTicks,
     timing: &WorkerTimingState,
     local_metrics: &mut WorkerMetricsLocal,
-) -> Result<(), String> {
+) -> Result<(), &'static str> {
     let lateness_ticks = started_qpc
         .checked_duration_since(target_qpc)
-        .map_err(|_| "SendInput pre-call preceded authored target".to_string())?;
+        .map_err(|_| "SendInput pre-call preceded authored target")?;
     local_metrics.max_sendinput_pre_call_lateness_ticks = local_metrics
         .max_sendinput_pre_call_lateness_ticks
         .max(lateness_ticks.as_u64());

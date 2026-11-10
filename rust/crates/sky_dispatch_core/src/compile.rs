@@ -74,6 +74,8 @@ pub enum CompileError {
     },
     #[error("runtime simulation failed: {0}")]
     Simulation(String),
+    #[error("memory budget exceeded or allocation failed: {0}")]
+    MemoryBudgetExceeded(String),
 }
 
 pub fn compile_runtime_intents(
@@ -111,14 +113,26 @@ pub fn compile_runtime_intents(
         .iter()
         .map(|action| action.scan_codes.len())
         .sum::<usize>();
-    let mut batches = Vec::with_capacity(actions.len());
-    let mut intents = Vec::with_capacity(intent_capacity);
-    let mut packets = Vec::with_capacity(actions.len());
+    let mut batches = Vec::new();
+    batches
+        .try_reserve(actions.len())
+        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("batches reservation: {e}")))?;
+    let mut intents = Vec::new();
+    intents
+        .try_reserve(intent_capacity)
+        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("intents reservation: {e}")))?;
+    let mut packets = Vec::new();
+    packets
+        .try_reserve(actions.len())
+        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("packets reservation: {e}")))?;
     let down_action_count = actions
         .iter()
         .filter(|action| action.kind == ActionKind::Down)
         .count();
-    let mut down_chords: Vec<CompiledDownChord> = Vec::with_capacity(down_action_count);
+    let mut down_chords: Vec<CompiledDownChord> = Vec::new();
+    down_chords
+        .try_reserve(down_action_count)
+        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("down_chords reservation: {e}")))?;
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
         if let Some(&id) = reason_map.get(reason) {

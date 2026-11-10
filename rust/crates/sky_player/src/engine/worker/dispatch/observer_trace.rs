@@ -257,17 +257,27 @@ pub(super) fn drain_blocked_unfocused_observation(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct UpObservationDrainContext<'a> {
+    pub(crate) health: &'a mut crate::engine::worker::WorkerHealthState,
+    pub(crate) local_metrics: &'a mut crate::engine::WorkerMetricsLocal,
+    pub(crate) metrics: &'a crate::engine::SharedMetrics,
+    pub(crate) telemetry: &'a mut TelemetryCollector,
+    pub(crate) qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    pub(crate) now_us: u64,
+}
+
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn drain_up_send_outcome(
     observation: &super::observation::UpObservation,
-    health: &mut crate::engine::worker::WorkerHealthState,
-    local_metrics: &mut crate::engine::WorkerMetricsLocal,
-    metrics: &crate::engine::SharedMetrics,
-    telemetry: &mut TelemetryCollector,
-    qpc_clock: sky_dispatch_win32::clock::QpcClock,
-    now_us: u64,
+    ctx: UpObservationDrainContext<'_>,
 ) -> Result<(), DispatchStep> {
+    let health = ctx.health;
+    let local_metrics = ctx.local_metrics;
+    let metrics = ctx.metrics;
+    let telemetry = ctx.telemetry;
+    let qpc_clock = ctx.qpc_clock;
+    let now_us = ctx.now_us;
     let health_budget = crate::engine::worker::health::build_dispatch_budget(
         crate::engine::worker::DispatchPath::UpOnly {
             up_count: observation.requested_mask.count_ones() as usize,

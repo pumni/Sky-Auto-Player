@@ -267,6 +267,62 @@ impl ProductionDispatchTestHarness {
             )
     }
 
+    pub fn stage_candidate_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<sky_dispatch_core::executor::DownChordTicks>,
+        fallback_ticks: TimelineTicks,
+    ) -> Result<Option<crate::engine::worker::StagedCandidate>, String> {
+        crate::engine::worker::stage_candidate(
+            up_mask,
+            down_chord,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
+            fallback_ticks,
+        )
+    }
+
+    pub fn dispatch_staged_candidate_for_test(
+        &mut self,
+        candidate: crate::engine::worker::StagedCandidate,
+        with_observer: bool,
+    ) -> crate::engine::worker::StagedDispatchOutcome {
+        let qpc_clock = self.resources.clock;
+        let ctx = crate::engine::worker::StagedDispatchContext {
+            target: &self.target,
+            config: &self.config,
+            control: crate::engine::worker::StagedControlSignals {
+                focus_active: &self.focus_active,
+                quit_requested: &self.quit_requested,
+                skip_requested: &self.skip_requested,
+                panic_requested: &self.panic_requested,
+                desired_pause: &self.desired_pause,
+                supervisor_expired: &self.supervisor_expired,
+                system_power: &self.system_power,
+            },
+            timing: &self.timing,
+            qpc_clock,
+            progress_clock: &self.progress_clock,
+            metrics: &self.metrics,
+        };
+
+        let observer_ref = if with_observer {
+            Some(&self.observer)
+        } else {
+            None
+        };
+
+        crate::engine::worker::dispatch_staged_candidate(
+            candidate,
+            ctx,
+            &mut self.resources,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            observer_ref,
+        )
+    }
+
     pub fn execute_shipping_b_sendinput_suffix_for_test(
         &mut self,
         prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,

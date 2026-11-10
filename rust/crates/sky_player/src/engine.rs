@@ -50,6 +50,8 @@ pub use test_support::{FaultInjectionScript, InjectedSendOutcome, MockSendInputC
 #[cfg(test)]
 pub(crate) use worker::*;
 #[cfg(any(test, feature = "test-support"))]
+pub use worker::{StagedCandidate, StagedDispatchOutcome};
+#[cfg(any(test, feature = "test-support"))]
 pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.

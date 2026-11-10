@@ -85,6 +85,12 @@ pub(crate) use dispatch_loop::physical_wait_target_for_plan;
 pub(crate) use dispatch_loop::preflight_prepared_plan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::publish_live_metrics_after_dispatch;
+#[cfg(any(test, feature = "test-support"))]
+pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::{
+    StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate, stage_candidate,
+};
 #[cfg(test)]
 pub(crate) use dispatch_loop::{preroll_manual_pause_cancels, startup_focus_loss_is_terminal};
 #[cfg(any(test, feature = "test-support"))]

@@ -673,12 +673,14 @@ pub(crate) fn drain_one_observer(
         #[cfg(any(test, feature = "test-support"))]
         DispatchObservation::Up(up) => super::observer_trace::drain_up_send_outcome(
             up,
-            health,
-            local_metrics,
-            metrics,
-            telemetry,
-            qpc_clock,
-            now_us,
+            super::observer_trace::UpObservationDrainContext {
+                health,
+                local_metrics,
+                metrics,
+                telemetry,
+                qpc_clock,
+                now_us,
+            },
         )?,
         DispatchObservation::Wait(wait) => {
             super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;

@@ -458,7 +458,7 @@ pub(super) fn record_down_send_result(
             local_metrics,
         )
     {
-        return DispatchStep::Terminate(error);
+        return DispatchStep::TerminateStatic(error);
     }
     runtime.previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
     runtime.previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();

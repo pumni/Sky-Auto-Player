@@ -107,13 +107,23 @@ pub struct ExecutorMemoryMetrics {
 }
 
 /// Timing and authored metadata for an active key slot being released.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UpSlotTiming {
     pub slot: u8,
     pub scan_code: u16,
     pub source_action_index: u32,
     pub authored_up_offset_ticks: TimelineTicks,
     pub release_not_before_ticks: TimelineTicks,
+}
+
+impl UpSlotTiming {
+    pub const EMPTY: Self = Self {
+        slot: 0xFF,
+        scan_code: 0,
+        source_action_index: 0,
+        authored_up_offset_ticks: TimelineTicks::ZERO,
+        release_not_before_ticks: TimelineTicks::ZERO,
+    };
 }
 
 impl DispatchExecutor {

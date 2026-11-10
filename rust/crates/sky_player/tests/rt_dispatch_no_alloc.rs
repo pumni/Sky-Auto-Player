@@ -992,3 +992,105 @@ fn shipping_executor_b_sendinput_suffix_no_alloc() {
     );
     assert!(res.is_ok(), "suffix failed: {res:?}");
 }
+
+#[test]
+fn shipping_b_dispatch_staged_candidate_down_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("some candidate");
+
+    enable_counting();
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "actual production dispatch_staged_candidate Down allocated memory"
+    );
+    assert!(
+        matches!(
+            outcome,
+            sky_player::engine::StagedDispatchOutcome::Dispatched
+        ),
+        "outcome={outcome:?}"
+    );
+}
+
+#[test]
+fn shipping_b_dispatch_staged_candidate_up_only_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    // First complete down
+    let chord = harness.current_executor_chord_for_test();
+    let candidate_down = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("some candidate");
+    let outcome_down = harness.dispatch_staged_candidate_for_test(candidate_down, false);
+    assert!(matches!(
+        outcome_down,
+        sky_player::engine::StagedDispatchOutcome::Dispatched
+    ));
+
+    // Now stage Up
+    let candidate_up = harness
+        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .expect("stage candidate")
+        .expect("some candidate");
+
+    enable_counting();
+    let outcome_up = harness.dispatch_staged_candidate_for_test(candidate_up, true);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "actual production dispatch_staged_candidate Up allocated memory"
+    );
+    assert!(
+        matches!(
+            outcome_up,
+            sky_player::engine::StagedDispatchOutcome::Dispatched
+        ),
+        "outcome={outcome_up:?}"
+    );
+}
+
+#[test]
+fn shipping_b_dispatch_staged_candidate_15_slot_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_chord(15);
+    harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let chord = harness.current_executor_chord_for_test();
+    let candidate_15 = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("some candidate");
+
+    enable_counting();
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate_15, true);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "actual production dispatch_staged_candidate 15-slot allocated memory"
+    );
+    assert!(
+        matches!(
+            outcome,
+            sky_player::engine::StagedDispatchOutcome::Dispatched
+        ),
+        "outcome={outcome:?}"
+    );
+}
