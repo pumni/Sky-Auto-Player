@@ -930,10 +930,8 @@ pub(crate) fn dispatch_staged_candidate(
             &mut local_metrics.observer_dropped_samples,
             &mut local_metrics.observer_queue_high_watermark,
         );
-        runtime.pending_wait_observation = None;
-    } else {
-        runtime.pending_wait_observation = None;
     }
+    super::dispatch::publish_pending_wait_observation(runtime, observer, local_metrics);
 
     if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
         publish_backend_counters(&resources.backend, local_metrics);
@@ -3669,7 +3667,7 @@ mod tests {
                 Some(sky_dispatch_win32::wait::WaitResult {
                     outcome: sky_dispatch_win32::wait::WaitOutcome::Deadline,
                     wake_qpc: Some(target_qpc),
-                    spin_ticks: DurationTicks::ZERO,
+                    spin_ticks: DurationTicks::from_raw(123),
                     timer_return_qpc: Some(target_qpc),
                     timer_arm_target_qpc: Some(target_qpc),
                     #[cfg(any(test, feature = "test-support"))]
@@ -3698,5 +3696,67 @@ mod tests {
         assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
 
         assert!(harness.runtime.pending_wait_observation.is_none());
+        let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
+        let waits: Vec<_> = observations
+            .iter()
+            .filter_map(|observation| match observation {
+                crate::engine::worker::dispatch::observation::DispatchObservation::Wait(wait) => {
+                    Some(wait)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(waits.len(), 1);
+        assert_eq!(waits[0].wake_qpc, Some(target_qpc));
+        assert_eq!(waits[0].physical_target_qpc, target_qpc);
+        assert_eq!(waits[0].spin_ticks, DurationTicks::from_raw(123));
+        assert_eq!(waits[0].timer_arm_generation, Some(1));
+        assert_eq!(waits[0].timer_return_generation, Some(1));
+
+        let second_target = harness.qpc_now_for_test().expect("second target");
+        harness.runtime.pending_wait_observation =
+            crate::engine::worker::dispatch::record_wait_attempt(
+                Some(&harness.observer),
+                Some(sky_dispatch_win32::wait::WaitResult {
+                    outcome: sky_dispatch_win32::wait::WaitOutcome::Deadline,
+                    wake_qpc: Some(second_target),
+                    spin_ticks: DurationTicks::from_raw(456),
+                    timer_return_qpc: Some(second_target),
+                    timer_arm_target_qpc: Some(second_target),
+                    timer_arm_qpc: Some(second_target),
+                    timer_arm_generation: Some(2),
+                    timer_return_generation: Some(2),
+                }),
+                second_target,
+                DurationTicks::from_raw(20_000),
+                TimelineTicks::from_raw(20_000),
+                harness.resources.playback.epoch,
+                None,
+                &mut harness.local_metrics,
+            );
+        let candidate = harness
+            .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+            .expect("stage Up")
+            .expect("Up candidate");
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, true),
+            super::StagedDispatchOutcome::Dispatched
+        ));
+        let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
+        let waits: Vec<_> = observations
+            .iter()
+            .filter_map(|observation| match observation {
+                crate::engine::worker::dispatch::observation::DispatchObservation::Wait(wait) => {
+                    Some(wait)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(waits.len(), 1);
+        assert_eq!(waits[0].wake_qpc, Some(second_target));
+        assert_eq!(waits[0].physical_target_qpc, second_target);
+        assert_eq!(waits[0].spin_ticks, DurationTicks::from_raw(456));
+        assert_eq!(waits[0].timer_arm_generation, Some(2));
+        assert_eq!(waits[0].timer_return_generation, Some(2));
     }
 }

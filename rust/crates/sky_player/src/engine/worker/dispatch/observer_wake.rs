@@ -277,6 +277,43 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_interrupted_waits_keep_separate_deadlines() {
+        let queue = PendingObservationQueue::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        let mut runtime = WorkerRuntime::default();
+        for target in [31_000, 42_000] {
+            runtime.pending_wait_observation = record_wait_attempt(
+                Some(&queue),
+                Some(WaitResult::interrupted()),
+                QpcTicks::from_raw(target),
+                DurationTicks::from_raw(9_000),
+                TimelineTicks::from_raw(target - 10_000),
+                QpcTicks::from_raw(10_000),
+                None,
+                &mut metrics,
+            );
+            publish_pending_wait_observation(&mut runtime, Some(&queue), &mut metrics);
+            publish_pending_wait_observation(&mut runtime, Some(&queue), &mut metrics);
+        }
+        for target in [31_000, 42_000] {
+            match queue.pop_front() {
+                Some(DispatchObservation::Wait(wait)) => {
+                    assert_eq!(wait.physical_target_qpc, QpcTicks::from_raw(target));
+                    assert_eq!(
+                        wait.deadline_ticks,
+                        TimelineTicks::from_raw(target - 10_000)
+                    );
+                }
+                other => panic!("expected wait observation, got {other:?}"),
+            }
+        }
+        assert!(queue.is_empty());
+        assert_eq!(metrics.spin_observation_expected_samples, 2);
+        assert_eq!(metrics.spin_observation_dropped_samples, 0);
+        assert_eq!(metrics.spin_observation_missing_samples, 0);
+    }
+
+    #[test]
     fn no_wait_result_and_failed_wait_do_not_claim_a_sample() {
         let queue = PendingObservationQueue::default();
         let mut metrics = WorkerMetricsLocal::default();
