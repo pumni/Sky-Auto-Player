@@ -33,7 +33,7 @@ impl Verdict {
 }
 
 pub(super) fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
-    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "timing_margin_us": args.timing_margin_us, "sample_seconds": args.sample_seconds, "game_fps": args.game_fps, "min_hold_us": super::scenarios::acceptance_min_hold_us_for_fps(args.timing_margin_us, args.game_fps), "min_release_gap_us": super::scenarios::acceptance_min_release_gap_us_for_fps(args.timing_margin_us, args.game_fps), "reason": reason, "details": details});
+    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "timing_margin_us": args.timing_margin_us, "sample_seconds": args.sample_seconds, "game_fps": args.game_fps, "min_hold_us": super::scenarios::scenario_min_hold_us_for_fps(args.scenario, args.timing_margin_us, args.game_fps), "min_release_gap_us": super::scenarios::acceptance_min_release_gap_us_for_fps(args.timing_margin_us, args.game_fps), "reason": reason, "details": details});
     let serialized = serde_json::to_string(&report).unwrap_or_else(|_| {
         format!(
             r#"{{"status":"{}","reason":"report serialization failed"}}"#,

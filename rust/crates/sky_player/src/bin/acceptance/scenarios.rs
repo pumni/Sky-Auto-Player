@@ -551,6 +551,11 @@ pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u1
     ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
 }
 
+pub(super) fn scenario_min_hold_us_for_fps(scenario: Scenario, timing_margin_us: u64, game_fps: u16) -> u64 {
+    let frames = if scenario == Scenario::HolInterleaved { 2 } else { ACCEPTANCE_HOLD_FRAMES };
+    frames * frame_period_us(game_fps) + timing_margin_us
+}
+
 pub(super) fn acceptance_min_release_gap_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
     frame_period_us(game_fps) + timing_margin_us
 }
@@ -598,10 +603,14 @@ pub(super) fn production_options_for_fps(
         },
         timing: TimingOptions {
             game_fps,
-            min_hold_us: acceptance_min_hold_us_for_fps(timing_margin_us, game_fps),
+            min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
             min_release_gap_us: acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps),
             frame_us,
-            frame_base_hold_us: frame_us,
+            frame_base_hold_us: if scenario == Scenario::HolInterleaved {
+                2 * frame_us
+            } else {
+                frame_us
+            },
             timing_margin_us,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
