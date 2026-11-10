@@ -278,7 +278,7 @@ impl PreparedDispatchStream {
         self.entries.len()
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn prepared_storage_evidence_for_test(&self) -> (usize, usize, usize, usize) {
         let mut physical_count = 0usize;
         let mut metadata_count = 0usize;
@@ -334,7 +334,7 @@ impl PreparedDispatchStream {
             .count()
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn cancellation_ledger_bytes_for_test(&self) -> usize {
         // Resumable cancellation provenance is owned by the coordinator's
         // fixed fifteen-slot token table, never by a song-sized stream list.

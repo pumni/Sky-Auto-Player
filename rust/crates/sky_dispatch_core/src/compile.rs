@@ -114,7 +114,11 @@ pub fn compile_runtime_intents(
     let mut batches = Vec::with_capacity(actions.len());
     let mut intents = Vec::with_capacity(intent_capacity);
     let mut packets = Vec::with_capacity(actions.len());
-    let mut down_chords: Vec<CompiledDownChord> = Vec::with_capacity(actions.len());
+    let down_action_count = actions
+        .iter()
+        .filter(|action| action.kind == ActionKind::Down)
+        .count();
+    let mut down_chords: Vec<CompiledDownChord> = Vec::with_capacity(down_action_count);
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
         if let Some(&id) = reason_map.get(reason) {

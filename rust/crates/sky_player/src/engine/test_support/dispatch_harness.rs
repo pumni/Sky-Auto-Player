@@ -235,6 +235,66 @@ impl ProductionDispatchTestHarness {
         })
     }
 
+    pub fn current_executor_chord_for_test(
+        &self,
+    ) -> Option<sky_dispatch_core::executor::DownChordTicks> {
+        self.resources
+            .coordinator
+            .executor
+            .as_ref()
+            .and_then(|e| e.current_chord().cloned())
+    }
+
+    pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
+        let frame_ticks = self
+            .resources
+            .clock
+            .duration_from_us(16_667)
+            .map_err(|e| format!("{e:?}"))?;
+        let min_hold_ticks = self
+            .resources
+            .clock
+            .duration_from_us(10_000)
+            .map_err(|e| format!("{e:?}"))?;
+        let clock = self.resources.clock;
+        self.resources
+            .coordinator
+            .attach_executor_with_cancellation(
+                min_hold_ticks,
+                frame_ticks,
+                |us| clock.timeline_from_us(us).map_err(|e| format!("{e:?}")),
+                || Ok(()),
+            )
+    }
+
+    pub fn execute_shipping_b_sendinput_suffix_for_test(
+        &mut self,
+        prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
+        up_mask: u16,
+        down_chord: Option<&sky_dispatch_core::executor::DownChordTicks>,
+        target_qpc: QpcTicks,
+    ) -> Result<(), String> {
+        let completion_qpc = target_qpc;
+        let completion_ticks = TimelineTicks::from_raw(completion_qpc.as_u64());
+        let send_result = self
+            .resources
+            .backend
+            .send_prepared_physical_packet_at_final_boundary(prepared_packet, None);
+        if !send_result.is_success() {
+            return Err("send failed".to_string());
+        }
+        let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
+        let confirmed_up_mask = send_result.evidence.confirmed_mask & up_mask;
+        let confirmed_down_mask = send_result.evidence.confirmed_mask & down_mask;
+        if let Some(exec) = self.resources.coordinator.executor.as_mut() {
+            exec.on_send_completed(confirmed_up_mask, confirmed_down_mask, completion_ticks)?;
+        }
+        self.resources
+            .coordinator
+            .record_executor_completion(confirmed_up_mask, down_chord);
+        Ok(())
+    }
+
     pub fn new_down_only() -> Self {
         Self::create_harness(&[
             KeyActionInput {
@@ -3228,7 +3288,7 @@ impl ProductionDispatchTestHarness {
                 dispatch_qpc,
                 planned_wait_ticks,
             } => (wait_result, dispatch_qpc, planned_wait_ticks, target_qpc),
-            WaitBoundary::Replan { .. } => {
+            WaitBoundary::Replan => {
                 return Err("prepared wait unexpectedly required a replan".to_string());
             }
             WaitBoundary::Exit => {
@@ -3610,7 +3670,7 @@ impl ProductionDispatchTestHarness {
                 planned_wait_ticks,
                 ..
             } => (None, dispatch_qpc, planned_wait_ticks, target_qpc),
-            WaitBoundary::Replan { .. } => {
+            WaitBoundary::Replan => {
                 return Err("benchmark wait unexpectedly required replan".to_string());
             }
             WaitBoundary::Exit => {

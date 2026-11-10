@@ -6,9 +6,9 @@ use crate::engine::shared::{
     SupervisorLeaseState,
 };
 use crate::engine::target::OwnerIdentityStatus;
-use crate::engine::telemetry::{
-    TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
-};
+use crate::engine::telemetry::WorkerMetricsLocal;
+#[cfg(any(test, feature = "test-support"))]
+use crate::engine::telemetry::{TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP};
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcError, QpcTicks};
@@ -123,6 +123,7 @@ pub(crate) fn record_final_gate_rejection(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn trace_kind_for_packet_kind(
     packet_kind: sky_dispatch_core::model::PhysicalPacketKind,
 ) -> u8 {

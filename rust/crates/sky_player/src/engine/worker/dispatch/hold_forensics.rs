@@ -140,6 +140,7 @@ impl ProductionHoldForensics {
     /// existing start/completion timestamps. Failed or uncertain transport
     /// must never create an optimistic physical anchor.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn observe_recovery_up(
         &mut self,
         up_mask: u16,

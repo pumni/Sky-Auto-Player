@@ -155,6 +155,7 @@ pub(crate) const TRACE_KIND_UP: u8 = 1;
 pub(crate) const TRACE_KIND_MIXED: u8 = 2;
 pub(crate) const TRACE_FLAG_SENT_FULL: u8 = 1 << 0;
 pub(crate) const TRACE_FLAG_RECOVERY: u8 = 1 << 1;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) const TRACE_FLAG_DEFERRED: u8 = 1 << 2;
 pub(crate) const TRACE_FLAG_ANOMALY: u8 = 1 << 3;
 

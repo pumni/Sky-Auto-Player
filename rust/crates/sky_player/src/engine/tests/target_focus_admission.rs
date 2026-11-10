@@ -1585,3 +1585,29 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
         "the same frozen compiled packet must be readmitted"
     );
 }
+
+#[test]
+fn ordinary_up_packet_respects_final_control_admission_without_down_checks() {
+    let panic_requested = AtomicBool::new(true);
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let supervisor_expired =
+        crate::engine::shared::SupervisorLeaseState::new(sky_dispatch_win32::clock::QpcTicks::ZERO);
+    let system_power = crate::engine::shared::SystemPowerState::default();
+
+    let signals = crate::engine::worker::FinalControlSignals {
+        quit_requested: &quit_requested,
+        skip_requested: &skip_requested,
+        panic_requested: &panic_requested,
+        desired_pause: &desired_pause,
+        supervisor_expired: &supervisor_expired,
+        system_power: Some(&system_power),
+    };
+
+    let admission = crate::engine::final_control_precheck(signals);
+    assert_eq!(
+        admission,
+        crate::engine::FinalControlAdmission::PanicRequested
+    );
+}

@@ -957,3 +957,38 @@ fn lifecycle_resume_barrier_healthy_down_dispatch_no_alloc() {
     assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
     assert_eq!(packets.lock().expect("packet capture").len(), 1);
 }
+
+#[test]
+fn shipping_executor_b_sendinput_suffix_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let physical_packet = PhysicalPacket::new(0, 0b1);
+    let profile = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
+    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
+        physical_packet,
+        &profile,
+    )
+    .expect("prepared packet");
+
+    let chord = harness.current_executor_chord_for_test();
+
+    let target_qpc = harness.qpc_now_for_test().expect("target QPC");
+
+    enable_counting();
+    let res = harness.execute_shipping_b_sendinput_suffix_for_test(
+        &prepared_packet,
+        0,
+        chord.as_ref(),
+        target_qpc,
+    );
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "actual shipping executor B SendInput suffix allocated"
+    );
+    assert!(res.is_ok(), "suffix failed: {res:?}");
+}

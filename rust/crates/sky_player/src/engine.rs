@@ -27,16 +27,17 @@ pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
 pub use shared::SystemPowerState;
 pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use telemetry::TRACE_FLAG_DEFERRED;
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,
     TelemetryMode, TimestampProvenance, TimingSemantics, WorkerMetricsLocal,
 };
 pub(crate) use telemetry::{
-    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP,
-    TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
-    cpu_metrics_sample_due, publish_lifecycle_metrics, trace_outcome_code, trace_send_status_code,
-    try_publish_metrics, try_publish_observer_metrics,
+    SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
+    TRACE_KIND_MIXED, TRACE_KIND_UP, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector,
+    TraceContext, TraceDelivery, TraceTiming, cpu_metrics_sample_due, publish_lifecycle_metrics,
+    trace_outcome_code, trace_send_status_code, try_publish_metrics, try_publish_observer_metrics,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use test_support::CommandTimingResult;
@@ -48,7 +49,7 @@ pub(crate) use test_support::{CommandTimingCleanup, CommandTimingState, PauseTim
 pub use test_support::{FaultInjectionScript, InjectedSendOutcome, MockSendInputCapture};
 #[cfg(test)]
 pub(crate) use worker::*;
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
@@ -131,7 +132,8 @@ pub mod observer_test_hooks {
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
-use sky_dispatch_core::model::ActionKind;
+#[cfg(any(test, feature = "test-support"))]
+pub use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};

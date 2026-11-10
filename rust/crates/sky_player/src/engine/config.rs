@@ -283,7 +283,6 @@ pub struct StartupOrderingHook {
 #[repr(u8)]
 pub enum StartupCheckpoint {
     StreamBuild = 1,
-    CoordinatorReset = 2,
     BeforeReady = 3,
     ReadyToArmed = 4,
     EpochPrepared = 5,
@@ -642,6 +641,7 @@ pub(crate) struct WorkerConfig {
 }
 
 impl WorkerConfig {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn observer_enabled(&self) -> bool {
         let qualification_observer = {
             #[cfg(any(test, feature = "test-support"))]

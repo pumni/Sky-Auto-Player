@@ -1,13 +1,16 @@
+#[cfg(any(test, feature = "test-support"))]
+use super::super::super::{QpcClock, TRACE_FLAG_DEFERRED};
 use super::super::super::{
-    QpcClock, RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
-    trace_outcome_code, trace_send_status_code,
+    RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL,
+    TelemetryCollector, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+    trace_send_status_code,
 };
 use super::super::physical_timing_guard::PhysicalTimingWindow;
+#[cfg(any(test, feature = "test-support"))]
+use super::super::release_runtime_outcome;
 use super::super::wait::WaitObservation;
 use super::super::{
-    DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, release_runtime_outcome,
-    wake_lateness_ticks,
+    DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, wake_lateness_ticks,
 };
 use super::timing::DispatchObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
@@ -43,13 +46,13 @@ pub enum ObserverLifecycle {
 #[derive(Clone, Copy, Debug)]
 pub enum DispatchObservation {
     Down(DownObservation),
+    #[cfg(any(test, feature = "test-support"))]
     DownMiss(DownMissObservation),
-    // Retained for the observer schema and test/support scenarios; the
-    // production path currently does not construct this variant.
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-support"))]
     Up(UpObservation),
     Wait(WaitObservation),
     StaleMetadata(StaleMetadataObservation),
+    #[cfg(any(test, feature = "test-support"))]
     BlockedUnfocused(BlockedUnfocusedObservation),
 }
 
@@ -60,6 +63,7 @@ pub struct StaleMetadataObservation {
     pub suppressed_intent_count: usize,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct BlockedUnfocusedObservation {
     pub event_index: u32,
@@ -73,16 +77,19 @@ pub struct BlockedUnfocusedObservation {
     pub down_mask: u16,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DownMissKind {
     UnobservedBacklog,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DownMissTimingEvidence {
     Physical(PhysicalTimingWindow),
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct DownMissObservation {
     pub source_action_index: u32,
@@ -96,17 +103,14 @@ pub struct DownMissObservation {
     pub kind: DownMissKind,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl DownMissObservation {
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn physical_authored_target_qpc(&self) -> QpcTicks {
         match self.timing_evidence {
             DownMissTimingEvidence::Physical(window) => window.authored_target_qpc,
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
@@ -365,6 +369,7 @@ pub(super) fn record_down_recovery_metrics(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct UpTraceObservation {
     pub event_index: u32,
@@ -383,18 +388,17 @@ pub struct UpTraceObservation {
     pub recovery_required: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct UpObservation {
     pub physical_target_qpc: QpcTicks,
     pub final_policy_qpc: QpcTicks,
-    #[allow(dead_code)]
     pub pre_call_qpc: QpcTicks,
     pub sendinput_completion_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
     pub pre_call_to_completion_ticks: DurationTicks,
     pub wake_qpc: Option<QpcTicks>,
     /// Retained as raw handoff evidence for diagnostics and test-support inspection.
-    #[allow(dead_code)]
     pub precision_handoff: Option<PrecisionHandoffEvidence>,
     pub requested_mask: u16,
     pub confirmed_mask: u16,
@@ -579,6 +583,7 @@ pub(super) fn record_down_send_telemetry(
     Ok((down_outcome, force_publish))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn record_release_telemetry(
     telemetry: &mut TelemetryCollector,
     observation: &UpObservation,
@@ -680,6 +685,7 @@ pub(super) fn record_release_telemetry(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const fn up_transport_counts(observation: &UpObservation) -> (usize, usize, usize) {
     up_transport_counts_from_masks(
         observation.requested_mask,
@@ -688,6 +694,7 @@ pub(super) const fn up_transport_counts(observation: &UpObservation) -> (usize, 
     )
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const fn up_transport_counts_from_masks(
     requested_mask: u16,
     confirmed_mask: u16,
@@ -700,6 +707,7 @@ pub(super) const fn up_transport_counts_from_masks(
     )
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn up_dispatch_evidence(observation: &UpObservation) -> DispatchObservationEvidence {
     let (requested_count, confirmed_count, skipped_count) = up_transport_counts(observation);
     DispatchObservationEvidence {

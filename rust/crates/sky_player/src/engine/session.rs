@@ -969,7 +969,7 @@ impl NativeDispatchSession {
                 .cancel_prearm(StartupAbortReason::TargetInvalidated);
         }
         if self.shared.target.publish(hwnd) {
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             {
                 let mock_focus_session = self.config.lock().as_ref().is_some_and(|admitted| {
                     admitted.options.focus.require_focus
@@ -1017,7 +1017,7 @@ impl NativeDispatchSession {
         self.bind_window_identity_authority_with_pid(authority, owner_pid)
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn bind_window_identity_authority_for_test(
         &self,
         authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
@@ -1054,7 +1054,7 @@ impl NativeDispatchSession {
         Ok(())
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn invalidate_window_identity_authority_for_test(&self) {
         if self.startup_active() {
             self.shared

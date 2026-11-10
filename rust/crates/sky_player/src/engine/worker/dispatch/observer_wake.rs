@@ -369,11 +369,11 @@ mod tests {
             spin_ticks: DurationTicks::from_raw(100),
             timer_return_qpc: Some(QpcTicks::from_raw(4_000)),
             timer_arm_target_qpc: Some(QpcTicks::from_raw(3_900)),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             timer_arm_qpc: Some(QpcTicks::from_raw(3_890)),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             timer_arm_generation: Some(1),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             timer_return_generation: Some(1),
         };
 
@@ -426,11 +426,11 @@ mod tests {
                 spin_ticks: DurationTicks::from_raw(8),
                 timer_return_qpc: Some(QpcTicks::from_raw(5_000)),
                 timer_arm_target_qpc: Some(QpcTicks::from_raw(4_990)),
-                #[cfg(feature = "test-support")]
+                #[cfg(any(test, feature = "test-support"))]
                 timer_arm_qpc: Some(QpcTicks::from_raw(4_980)),
-                #[cfg(feature = "test-support")]
+                #[cfg(any(test, feature = "test-support"))]
                 timer_arm_generation: Some(1),
-                #[cfg(feature = "test-support")]
+                #[cfg(any(test, feature = "test-support"))]
                 timer_return_generation: Some(1),
             }),
             QpcTicks::from_raw(5_000),

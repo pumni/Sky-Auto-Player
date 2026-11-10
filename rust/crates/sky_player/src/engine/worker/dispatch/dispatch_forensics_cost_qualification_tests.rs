@@ -22,11 +22,11 @@ fn observed_timer_wait_result(sample: &PacketSample) -> WaitResult {
         spin_ticks: DurationTicks::ZERO,
         timer_return_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
         timer_arm_target_qpc: Some(QpcTicks::from_raw(sample.target_ticks)),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         timer_arm_qpc: Some(QpcTicks::from_raw(sample.target_ticks.saturating_sub(10))),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         timer_arm_generation: Some(1),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         timer_return_generation: Some(1),
     }
 }

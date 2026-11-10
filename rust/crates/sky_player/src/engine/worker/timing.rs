@@ -1,8 +1,10 @@
 use crate::engine::shared::SupervisorLeaseState;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_win32::clock::QpcClock;
+use sky_dispatch_win32::clock::QpcError;
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
-use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use sky_dispatch_win32::wait::{WaitFailure, WakeErrorStats};
 
 pub(crate) fn supervisor_lease_expired(
@@ -52,6 +54,7 @@ pub(crate) fn wake_lateness_ticks(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn signed_ticks_to_us(qpc_clock: QpcClock, delta_ticks: i64) -> Result<i64, String> {
     let magnitude = delta_ticks.unsigned_abs();
     let microseconds = qpc_clock

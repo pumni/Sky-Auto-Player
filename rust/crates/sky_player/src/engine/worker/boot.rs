@@ -272,11 +272,26 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    if let Err(error) = coordinator.attach_executor(min_hold_ticks, frame_ticks, |us| {
-        qpc_clock
-            .timeline_from_us(us)
-            .map_err(|e| format!("QPC conversion failure: {e:?}"))
-    }) {
+    if let Err(error) = coordinator.attach_executor_with_cancellation(
+        min_hold_ticks,
+        frame_ticks,
+        |us| {
+            qpc_clock
+                .timeline_from_us(us)
+                .map_err(|e| format!("QPC conversion failure: {e:?}"))
+        },
+        || {
+            startup_checkpoint(
+                shared,
+                config.focus.require_focus && schedule_has_down,
+                StartupCheckpoint::StreamMaterialization,
+                #[cfg(any(test, feature = "test-support"))]
+                startup_hook,
+            )
+            .map_err(|_| "executor construction cancelled during startup".to_string())?;
+            Ok(())
+        },
+    ) {
         return admission_failure(
             &mut backend,
             metrics,

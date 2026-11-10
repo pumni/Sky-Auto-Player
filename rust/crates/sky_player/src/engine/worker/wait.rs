@@ -15,12 +15,7 @@ pub(crate) enum WaitBoundary {
         dispatch_qpc: QpcTicks,
         planned_wait_ticks: DurationTicks,
     },
-    #[allow(dead_code)]
-    Replan {
-        wait_result: WaitResult,
-        target_qpc: QpcTicks,
-        planned_wait_ticks: DurationTicks,
-    },
+    Replan,
     Exit,
 }
 
@@ -127,11 +122,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
                 local_metrics.wait_interrupted_count.saturating_add(1);
-            WaitBoundary::Replan {
-                wait_result,
-                target_qpc: physical_target_qpc,
-                planned_wait_ticks,
-            }
+            WaitBoundary::Replan
         }
     }
 }
@@ -286,11 +277,7 @@ mod tests {
         });
         signaler.join().expect("signal thread");
 
-        assert!(matches!(
-            boundary,
-            WaitBoundary::Replan { wait_result, .. }
-                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
-        ));
+        assert!(matches!(boundary, WaitBoundary::Replan));
         assert_eq!(system_power.take_pending(), SYSTEM_POWER_SUSPEND_PENDING);
         assert!(system_power.down_blocked());
         assert!(terminal_error.is_none());
@@ -331,11 +318,7 @@ mod tests {
             },
         });
 
-        assert!(matches!(
-            boundary,
-            WaitBoundary::Replan { wait_result, .. }
-                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
-        ));
+        assert!(matches!(boundary, WaitBoundary::Replan));
         assert!(system_power.down_blocked());
         assert!(terminal_error.is_none());
     }

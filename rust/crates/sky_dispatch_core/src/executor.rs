@@ -93,20 +93,84 @@ pub struct DispatchExecutor {
     activated_generations: u64,
 }
 
+pub const MAX_EXECUTOR_BYTES: usize = 512 * 1024 * 1024;
+pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
+
+/// Measured memory footprint of the `DispatchExecutor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutorMemoryMetrics {
+    pub chord_count: usize,
+    pub chord_capacity: usize,
+    pub chord_heap_bytes: usize,
+    pub struct_bytes: usize,
+    pub total_bytes: usize,
+}
+
+/// Timing and authored metadata for an active key slot being released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpSlotTiming {
+    pub slot: u8,
+    pub scan_code: u16,
+    pub source_action_index: u32,
+    pub authored_up_offset_ticks: TimelineTicks,
+    pub release_not_before_ticks: TimelineTicks,
+}
+
 impl DispatchExecutor {
     /// Construct a new 15-slot executor from a validated `RuntimeSchedule`.
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
-        mut us_to_ticks: F,
+        us_to_ticks: F,
     ) -> Result<Self, String>
     where
         F: FnMut(u64) -> Result<TimelineTicks, E>,
         E: std::fmt::Display,
     {
-        let mut down_chords = Vec::with_capacity(schedule.down_chords.len());
-        for chord in &schedule.down_chords {
+        Self::new_with_cancellation(
+            schedule,
+            min_hold_ticks,
+            frame_ticks,
+            us_to_ticks,
+            || Ok(()),
+        )
+    }
+
+    /// Construct a new 15-slot executor with bounded memory admission and periodic cancellation checkpoints.
+    pub fn new_with_cancellation<F, E, C>(
+        schedule: &RuntimeSchedule,
+        min_hold_ticks: DurationTicks,
+        frame_ticks: DurationTicks,
+        mut us_to_ticks: F,
+        mut checkpoint: C,
+    ) -> Result<Self, String>
+    where
+        F: FnMut(u64) -> Result<TimelineTicks, E>,
+        E: std::fmt::Display,
+        C: FnMut() -> Result<(), String>,
+    {
+        let chord_count = schedule.down_chords.len();
+        let estimated_bytes = chord_count
+            .checked_mul(std::mem::size_of::<DownChordTicks>())
+            .ok_or_else(|| "executor memory size overflow".to_string())?;
+        if estimated_bytes > MAX_EXECUTOR_BYTES {
+            return Err(format!(
+                "executor memory requirement ({estimated_bytes} bytes) exceeds budget of {MAX_EXECUTOR_BYTES} bytes"
+            ));
+        }
+
+        checkpoint()?;
+
+        let mut down_chords = Vec::new();
+        down_chords
+            .try_reserve(chord_count)
+            .map_err(|e| format!("executor chord capacity allocation failed: {e}"))?;
+
+        for (idx, chord) in schedule.down_chords.iter().enumerate() {
+            if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
             let scheduled_ticks = us_to_ticks(chord.scheduled_us).map_err(|e| {
                 format!(
                     "scheduled timestamp conversion failed for chord at {}us: {e}",
@@ -144,6 +208,8 @@ impl DispatchExecutor {
             });
         }
 
+        checkpoint()?;
+
         let schedule_end_offset_ticks =
             us_to_ticks(schedule.schedule_end_offset_us).map_err(|e| {
                 format!(
@@ -166,6 +232,37 @@ impl DispatchExecutor {
             total_generations: schedule.generation_count,
             activated_generations: 0,
         })
+    }
+
+    /// Return measured memory metrics for this executor instance.
+    pub fn memory_metrics(&self) -> ExecutorMemoryMetrics {
+        let chord_heap_bytes = self.down_chords.capacity() * std::mem::size_of::<DownChordTicks>();
+        let struct_bytes = std::mem::size_of::<Self>();
+        ExecutorMemoryMetrics {
+            chord_count: self.down_chords.len(),
+            chord_capacity: self.down_chords.capacity(),
+            chord_heap_bytes,
+            struct_bytes,
+            total_bytes: chord_heap_bytes + struct_bytes,
+        }
+    }
+
+    /// Extract per-slot authored Up metadata for the keys active in `up_mask`.
+    pub fn up_slot_timings(&self, up_mask: u16) -> SmallVec<[UpSlotTiming; MAX_KEYS]> {
+        let mut timings = SmallVec::new();
+        for (i, slot) in self.slots.iter().enumerate() {
+            if (up_mask & (1 << i)) != 0 && slot.active_generation.is_some() {
+                let scan_code = self.key_registry.scan_code_for(i as u8).unwrap_or(0);
+                timings.push(UpSlotTiming {
+                    slot: i as u8,
+                    scan_code,
+                    source_action_index: slot.paired_up_source_action_index,
+                    authored_up_offset_ticks: slot.authored_up_offset_ticks,
+                    release_not_before_ticks: slot.release_not_before_ticks,
+                });
+            }
+        }
+        timings
     }
 
     #[inline]
@@ -463,6 +560,8 @@ impl DispatchExecutor {
     }
 }
 
+#[cfg(test)]
+mod memory_tests;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]

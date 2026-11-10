@@ -578,13 +578,17 @@ pub(crate) fn suspend_live_input(
     debug_assert!(release_state_verified(backend, &release));
     if let Some(pending) = runtime.pending_up_recovery.as_ref() {
         let frame = pending.authored_commit.frame;
+        #[cfg(any(test, feature = "test-support"))]
+        let admission_mismatch = !pending.admission.is_missed();
+        #[cfg(not(any(test, feature = "test-support")))]
+        let admission_mismatch = false;
         if pending.boundary.first_batch_index != frame.first_batch_index
             || pending.boundary.packet_index != frame.packet_index
             || pending.boundary.packet_batch_count != frame.packet_batch_count
             || pending.boundary.down_mask != frame.down_mask
             || pending.boundary.up_mask & frame.immediate_up_mask != frame.immediate_up_mask
             || pending.boundary.down_mask == 0
-            || !pending.admission.is_missed()
+            || admission_mismatch
         {
             return Err("pending Up recovery no longer matches its frozen authored miss".into());
         }
@@ -610,6 +614,7 @@ pub(crate) fn suspend_live_input(
     Ok(cancelled)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn release_runtime_outcome(
     deferred_by_us: u64,
     sent_count: usize,

@@ -1,13 +1,15 @@
 use super::super::DispatchStep;
+use super::observation::StaleMetadataObservation;
+#[cfg(any(test, feature = "test-support"))]
 use super::observation::{
     BlockedUnfocusedObservation, DownMissObservation, DownMissTimingEvidence,
-    StaleMetadataObservation,
 };
 use crate::engine::{
-    RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP,
-    TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
-    trace_outcome_code,
+    RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_UP, TRACE_SEND_STATUS_NOT_ATTEMPTED,
+    TelemetryCollector, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
 };
+#[cfg(any(test, feature = "test-support"))]
+use crate::engine::{TRACE_KIND_DOWN, TRACE_KIND_MIXED};
 #[cfg(test)]
 use sky_dispatch_core::time::TimelineTicks;
 
@@ -80,6 +82,7 @@ pub(super) fn drain_stale_metadata_observation(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn drain_down_miss(
     observation: &DownMissObservation,
     telemetry: &mut TelemetryCollector,
@@ -178,6 +181,7 @@ pub(super) fn drain_down_miss(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn drain_blocked_unfocused_observation(
     observation: &BlockedUnfocusedObservation,
     telemetry: &mut TelemetryCollector,
@@ -250,6 +254,186 @@ pub(super) fn drain_blocked_unfocused_observation(
             "native telemetry record overflow: {error}"
         )));
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn drain_up_send_outcome(
+    observation: &super::observation::UpObservation,
+    health: &mut crate::engine::worker::WorkerHealthState,
+    local_metrics: &mut crate::engine::WorkerMetricsLocal,
+    metrics: &crate::engine::SharedMetrics,
+    telemetry: &mut TelemetryCollector,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    now_us: u64,
+) -> Result<(), DispatchStep> {
+    let health_budget = crate::engine::worker::health::build_dispatch_budget(
+        crate::engine::worker::DispatchPath::UpOnly {
+            up_count: observation.requested_mask.count_ones() as usize,
+        },
+        health.options,
+    );
+    let send_warn_us = health_budget.send_warn_us;
+    let core_post_send_warn_us = health_budget.core_post_send_warn_us;
+    let (scan_count, _sent_count, _skipped_count) =
+        super::observation::up_transport_counts(observation);
+    let pre_call_to_completion_us = qpc_clock
+        .duration_to_us(observation.pre_call_to_completion_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
+        })?;
+    let completion_residual_us = qpc_clock
+        .duration_to_us(
+            observation
+                .sendinput_completion_qpc
+                .checked_duration_since(observation.physical_target_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "note-off completion precedes physical target: {error:?}"
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "note-off completion-residual conversion failure: {error:?}"
+            ))
+        })?;
+    let completed_effective_us = qpc_clock
+        .timeline_to_us(observation.completed_effective_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-off completion conversion failure: {error:?}"))
+        })?;
+    let scheduled_us = qpc_clock
+        .timeline_to_us(observation.scheduled_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-off scheduled conversion failure: {error:?}"))
+        })?;
+    let deferred_by_us = qpc_clock
+        .duration_to_us(observation.deferred_ticks)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!("note-off deferral conversion failure: {error:?}"))
+        })?;
+    let _up_completion_error_us =
+        crate::engine::worker::signed_ticks_to_us(qpc_clock, observation.up_completion_error_ticks)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("note-off error conversion failure: {error:?}"))
+            })?;
+    let core_post_send_us = observation
+        .dispatch_ready_qpc
+        .map(|ready| {
+            ready
+                .checked_duration_since(observation.sendinput_completion_qpc)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!(
+                        "note-off observer QPC ordering failure: {error:?}"
+                    ))
+                })
+                .and_then(|ticks| {
+                    qpc_clock.duration_to_us(ticks).map_err(|error| {
+                        DispatchStep::Terminate(format!(
+                            "note-off observer post-send conversion failure: {error:?}"
+                        ))
+                    })
+                })
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let wake_to_final_policy_us = observation
+        .wake_qpc
+        .map(|wake| {
+            super::observer::qpc_span_us(
+                qpc_clock,
+                wake,
+                observation.final_policy_qpc,
+                "note-off wake-to-final-policy",
+            )
+        })
+        .transpose()?;
+    let final_policy_to_pre_call_us = super::observer::qpc_span_us(
+        qpc_clock,
+        observation.final_policy_qpc,
+        observation.pre_call_qpc,
+        "note-off final-policy-to-pre-call",
+    )?;
+    let wake_to_send_start_us = observation
+        .wake_qpc
+        .map(|wake| {
+            super::observer::qpc_span_us(
+                qpc_clock,
+                wake,
+                observation.pre_call_qpc,
+                "note-off wake-to-pre-call",
+            )
+        })
+        .transpose()?;
+    local_metrics.sendinput_warn_threshold_us = send_warn_us;
+    local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
+    local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
+    local_metrics.send_up_warn_threshold_us = send_warn_us;
+    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
+    super::observation::record_release_telemetry(
+        telemetry,
+        observation,
+        qpc_clock,
+        core_post_send_us,
+        completion_residual_us,
+        observation.dispatch_ready_qpc.is_some(),
+    )?;
+    if let Some(wake_to_send_us) = wake_to_send_start_us {
+        local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
+    }
+    if let Some(pause_ticks) = observation.recovery_pause_ticks {
+        let recovery_pause_us = qpc_clock.duration_to_us(pause_ticks).map_err(|error| {
+            DispatchStep::Terminate(format!("recovery telemetry conversion failure: {error:?}"))
+        })?;
+        local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
+    }
+    local_metrics.core_post_send_max_us =
+        local_metrics.core_post_send_max_us.max(core_post_send_us);
+    local_metrics.sendinput_duration_max_us = local_metrics
+        .sendinput_duration_max_us
+        .max(pre_call_to_completion_us);
+    local_metrics.final_policy_to_pre_call_max_us = local_metrics
+        .final_policy_to_pre_call_max_us
+        .max(final_policy_to_pre_call_us);
+    if let Some(wake_to_final_policy_us) = wake_to_final_policy_us {
+        local_metrics.wake_to_final_policy_max_us = local_metrics
+            .wake_to_final_policy_max_us
+            .max(wake_to_final_policy_us);
+    }
+    crate::engine::worker::record_lateness(
+        crate::engine::worker::signed_delta(completed_effective_us, scheduled_us),
+        true,
+        deferred_by_us > 0,
+        local_metrics,
+    );
+    crate::engine::worker::observe_dispatch_health(
+        crate::engine::worker::DispatchHealthObservation {
+            send_duration_us: pre_call_to_completion_us,
+            post_send_duration_us: core_post_send_us,
+            post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
+            path: crate::engine::worker::DispatchPath::UpOnly {
+                up_count: scan_count,
+            },
+            send_warn_us,
+            core_post_send_warn_us,
+            elapsed_us: completed_effective_us,
+        },
+        health.options.window_policy(),
+        &mut health.sendinput_window,
+        &mut health.core_post_send_window,
+        local_metrics,
+    );
+    crate::engine::try_publish_observer_metrics(
+        local_metrics,
+        metrics,
+        qpc_clock,
+        now_us,
+        !super::timing::is_clean_dispatch_observation(super::observation::up_dispatch_evidence(
+            observation,
+        )) || observation.trace.recovery_required,
+    );
     Ok(())
 }
 
