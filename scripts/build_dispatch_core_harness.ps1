@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $rustRoot = Join-Path $root 'rust'
 $targetTriple = 'x86_64-pc-windows-msvc'
