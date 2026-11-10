@@ -367,12 +367,10 @@ mod tests {
             outcome: WaitOutcome::Deadline,
             wake_qpc: Some(QpcTicks::from_raw(4_100)),
             spin_ticks: DurationTicks::from_raw(100),
-            #[cfg(feature = "test-support")]
             timer_return_qpc: Some(QpcTicks::from_raw(4_000)),
+            timer_arm_target_qpc: Some(QpcTicks::from_raw(3_900)),
             #[cfg(feature = "test-support")]
             timer_arm_qpc: Some(QpcTicks::from_raw(3_890)),
-            #[cfg(feature = "test-support")]
-            timer_arm_target_qpc: Some(QpcTicks::from_raw(3_900)),
             #[cfg(feature = "test-support")]
             timer_arm_generation: Some(1),
             #[cfg(feature = "test-support")]
@@ -426,12 +424,10 @@ mod tests {
                 outcome: WaitOutcome::Deadline,
                 wake_qpc: Some(QpcTicks::from_raw(5_010)),
                 spin_ticks: DurationTicks::from_raw(8),
-                #[cfg(feature = "test-support")]
                 timer_return_qpc: Some(QpcTicks::from_raw(5_000)),
+                timer_arm_target_qpc: Some(QpcTicks::from_raw(4_990)),
                 #[cfg(feature = "test-support")]
                 timer_arm_qpc: Some(QpcTicks::from_raw(4_980)),
-                #[cfg(feature = "test-support")]
-                timer_arm_target_qpc: Some(QpcTicks::from_raw(4_990)),
                 #[cfg(feature = "test-support")]
                 timer_arm_generation: Some(1),
                 #[cfg(feature = "test-support")]

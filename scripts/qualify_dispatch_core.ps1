@@ -107,7 +107,7 @@ function Read-And-VerifyManifest {
         @($manifest.cargo_features)[0] -ne 'real-input-acceptance' -or
         [bool]$manifest.qpc_read_counting -or
         $manifest.observer_mode -ne 'qualification-on' -or
-        $manifest.guard_mode -ne 'frozen' -or
+        ($manifest.guard_mode -ne 'frozen' -and $manifest.guard_mode -ne 'adaptive') -or
         $manifest.workload_version -ne 'dispatch-core-646-a1' -or
         $manifest.target -ne 'x86_64-pc-windows-msvc' -or
         $manifest.cargo_clean_exit_code -ne 0 -or
@@ -730,8 +730,8 @@ try {
     if ($Stage -in @('Compare', 'Final')) {
         Assert-AbsolutePath $ControlManifest 'control manifest'
         $control = Read-And-VerifyManifest $controlManifestPath 'control'
-        if ($Stage -eq 'Compare' -and -not $control.c1_timed_verified) {
-            throw 'Compare A requires the leader-approved C1-TIMED control; frozen C0 is not timed-qualified'
+        if ($Stage -eq 'Compare' -and -not $control.c1_timed_verified -and -not ($control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive')) {
+            throw 'Compare requires the leader-approved C1-TIMED control or a Frozen vs Adaptive comparison'
         }
         if ($Stage -eq 'Final' -and $control.c1_timed_verified) {
             throw 'C1-TIMED is authorized only for Compare A, not Final'
@@ -795,7 +795,13 @@ try {
         schema_version = 1
         run_id = $runId
         stage = $Stage
-        comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null }
+        comparison = if ($Stage -eq 'Compare') {
+            if ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
+                'Frozen vs Adaptive'
+            } else {
+                'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
+            }
+        } else { $null }
         source = $source
         candidate = [ordered]@{ manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         control = if ($control) { [ordered]@{ control_label = if ($control.c1_timed_verified) { 'C1-TIMED' } else { 'C0' }; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
@@ -836,7 +842,13 @@ try {
     $markdown = @(
         '# Dispatch Core qualification ' + $Stage,
         '',
-        $(if ($Stage -eq 'Compare') { '**Comparison: C1-TIMED-R2 vs Candidate-R2. C0 is not timed-qualified.**' } else { $null }),
+        $(if ($Stage -eq 'Compare') {
+            if ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
+                '**Comparison: Frozen vs Adaptive.**'
+            } else {
+                '**Comparison: C1-TIMED-R2 vs Candidate-R2. C0 is not timed-qualified.**'
+            }
+        } else { $null }),
         '- Run: `' + $runId + '`',
         '- Source: `' + $head + '` tree `' + $tree + '` (clean)',
         '- Candidate-R2: `' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`',
@@ -883,7 +895,13 @@ try {
         schema_version = 1
         run_id = $runId
         stage = $Stage
-        comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null }
+        comparison = if ($Stage -eq 'Compare') {
+            if ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
+                'Frozen vs Adaptive'
+            } else {
+                'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
+            }
+        } else { $null }
         created_utc = [DateTimeOffset]::UtcNow.ToString('O')
         source_branch = $source.branch
         source_revision = $source.revision

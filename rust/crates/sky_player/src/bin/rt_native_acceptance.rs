@@ -405,6 +405,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let (mut options, modifier_query_count) = modifier_guard::native_session_options(
         plan.schedule, plan.profile, args.timing_margin_us, args.scenario, args.game_fps,
     );
+    options.wait.guard_mode = args.guard_mode;
     options.startup_calibration_placement = match args.calibration_placement {
         CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,

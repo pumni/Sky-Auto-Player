@@ -177,6 +177,7 @@ pub(super) struct RunArgs {
     pub(super) focus_restore_request: Option<PathBuf>,
     pub(super) hol_stall_us: u64,
     pub(super) hol_cycles: Option<u32>,
+    pub(super) guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,6 +270,7 @@ where
     let mut focus_restore_request = None;
     let mut hol_stall_us = 0u64;
     let mut hol_cycles = None;
+    let mut guard_mode = None;
     let mut arguments = arguments.peekable();
     while let Some(flag) = arguments.next() {
         macro_rules! next_value {
@@ -396,6 +398,12 @@ where
                         .map_err(|_| "--hol-cycles must be an integer".to_string())?,
                 );
             }
+            "--guard-mode" => {
+                unique!(guard_mode, "--guard-mode");
+                guard_mode = Some(sky_dispatch_win32::wait::WaitGuardMode::parse(
+                    &next_value!("--guard-mode"),
+                )?);
+            }
             "--help" | "-h" => return Ok(ParsedCommand::Help),
             _ => return Err(format!("unknown argument {flag:?}")),
         }
@@ -403,6 +411,13 @@ where
     if !allow_real_input {
         return Err("--allow-real-input is required".to_string());
     }
+    let guard_mode = match guard_mode {
+        Some(mode) => mode,
+        None => match std::env::var("SHIPPING_WAIT") {
+            Ok(val) => sky_dispatch_win32::wait::WaitGuardMode::parse(&val).unwrap_or_default(),
+            Err(_) => sky_dispatch_win32::wait::WaitGuardMode::default(),
+        },
+    };
     let scenario = scenario.ok_or_else(|| "--scenario is required".to_string())?;
     let run = RunArgs {
         run_id: run_id.ok_or_else(|| "--run-id is required".to_string())?,
@@ -422,6 +437,7 @@ where
         focus_restore_request,
         hol_stall_us,
         hol_cycles,
+        guard_mode,
     };
     let probe_count = [
         run.focus_probe_ready.is_some(),

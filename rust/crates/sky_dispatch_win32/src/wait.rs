@@ -1,8 +1,10 @@
 //! Interruptible wait strategy with physical-deadline priority.
 
+pub mod adaptive;
 mod calibration;
 mod result;
 mod spin;
+pub use adaptive::{AdaptiveWaitController, KernelTimerWake, WaitGuardMode};
 pub use result::WaitResult;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -621,6 +621,7 @@ pub(super) fn production_options_for_fps(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
             #[cfg(feature = "test-support")]
             test_spin_threshold_us: None,
             #[cfg(feature = "test-support")]

@@ -7,13 +7,11 @@ pub struct WaitResult {
     pub spin_ticks: crate::clock::DurationTicks,
     /// Reuses the waiter's first QPC sample after a timer return. This
     /// qualification timestamp adds no QPC read to the wait loop.
-    #[cfg(any(test, feature = "test-support"))]
     pub timer_return_qpc: Option<crate::clock::QpcTicks>,
     /// Requested target of the most recent successful relative timer arm.
+    pub timer_arm_target_qpc: Option<crate::clock::QpcTicks>,
     #[cfg(any(test, feature = "test-support"))]
     pub timer_arm_qpc: Option<crate::clock::QpcTicks>,
-    #[cfg(any(test, feature = "test-support"))]
-    pub timer_arm_target_qpc: Option<crate::clock::QpcTicks>,
     /// Local wait-call identity used to pair a timer return with its arm.
     #[cfg(any(test, feature = "test-support"))]
     pub timer_arm_generation: Option<u64>,
@@ -27,12 +25,10 @@ impl WaitResult {
             outcome: WaitOutcome::Failed(failure),
             wake_qpc: None,
             spin_ticks: crate::clock::DurationTicks::ZERO,
-            #[cfg(any(test, feature = "test-support"))]
             timer_return_qpc: None,
+            timer_arm_target_qpc: None,
             #[cfg(any(test, feature = "test-support"))]
             timer_arm_qpc: None,
-            #[cfg(any(test, feature = "test-support"))]
-            timer_arm_target_qpc: None,
             #[cfg(any(test, feature = "test-support"))]
             timer_arm_generation: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -45,12 +41,10 @@ impl WaitResult {
             outcome: WaitOutcome::Interrupted,
             wake_qpc: None,
             spin_ticks: crate::clock::DurationTicks::ZERO,
-            #[cfg(any(test, feature = "test-support"))]
             timer_return_qpc: None,
+            timer_arm_target_qpc: None,
             #[cfg(any(test, feature = "test-support"))]
             timer_arm_qpc: None,
-            #[cfg(any(test, feature = "test-support"))]
-            timer_arm_target_qpc: None,
             #[cfg(any(test, feature = "test-support"))]
             timer_arm_generation: None,
             #[cfg(any(test, feature = "test-support"))]

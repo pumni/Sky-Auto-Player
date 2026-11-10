@@ -1351,6 +1351,7 @@ impl NativePlaybackService {
                     enable_event_wait: true,
                     supervisor_lease_timeout_us:
                         sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     #[cfg(feature = "tauri-test")]
                     test_spin_threshold_us: None,
                     #[cfg(feature = "tauri-test")]

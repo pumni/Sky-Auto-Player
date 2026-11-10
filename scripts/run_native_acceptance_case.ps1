@@ -190,7 +190,7 @@ try {
             (($manifestFeatures -join ',') -ne ($expectedManifestFeatures -join ',')) -or
             ([bool]$harnessManifest.qpc_read_counting -ne [bool]$QpcReadCountingEvidenceOnly) -or
             $harnessManifest.observer_mode -ne $expectedObserverMode -or
-            $harnessManifest.guard_mode -ne 'frozen' -or
+            ($harnessManifest.guard_mode -ne 'frozen' -and $harnessManifest.guard_mode -ne 'adaptive') -or
             $harnessManifest.workload_version -ne 'dispatch-core-646-a1' -or
             $harnessManifest.target -ne 'x86_64-pc-windows-msvc' -or
             $harnessManifest.rustc_version -ne $rustcVersion.Trim() -or
@@ -313,6 +313,9 @@ try {
         if ($HolCycles -gt 0) {
             $harnessArgs += @('--hol-cycles', [string]$HolCycles)
         }
+    }
+    if ($harnessManifest -and $harnessManifest.guard_mode) {
+        $harnessArgs += @('--guard-mode', [string]$harnessManifest.guard_mode)
     }
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)

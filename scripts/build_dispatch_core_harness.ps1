@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory)]
     [string]$OutputRoot,
+    [ValidateSet('frozen', 'adaptive')]
+    [string]$GuardMode = 'frozen',
     [switch]$QpcReadCounting
 )
 
@@ -100,7 +102,7 @@ $manifest = [ordered]@{
     cargo_features = $features.ToArray()
     qpc_read_counting = [bool]$QpcReadCounting
     observer_mode = 'qualification-on'
-    guard_mode = 'frozen'
+    guard_mode = $GuardMode
     workload_version = $workloadVersion
     target = $targetTriple
     rustc_version = $rustcVersion.Trim()

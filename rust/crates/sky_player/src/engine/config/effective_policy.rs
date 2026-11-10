@@ -9,6 +9,7 @@ pub(crate) struct EffectiveRuntimePolicy {
     pub(crate) strict_failure_policy: bool,
     pub(crate) observer_enabled: bool,
     pub(crate) production_wait: bool,
+    pub(crate) wait_guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
     pub(crate) telemetry_mode: TelemetryMode,
     pub(crate) telemetry_capacity: usize,
 }
@@ -34,6 +35,7 @@ impl EffectiveRuntimePolicy {
             strict_failure_policy: strict_timing,
             observer_enabled,
             production_wait: wait.production_wait_policy(backend_is_production),
+            wait_guard_mode: wait.guard_mode,
             telemetry_mode,
             telemetry_capacity,
         }
@@ -105,6 +107,7 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
             test_spin_threshold_us: None,
             test_wait_policy,
         }

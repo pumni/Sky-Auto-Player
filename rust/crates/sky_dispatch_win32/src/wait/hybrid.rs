@@ -13,7 +13,6 @@ pub struct HybridWaiter {
     _timer_resolution: Option<TimerResolutionGuard>,
     event_wait_enabled: bool,
     initial_failure: Option<WaitFailure>,
-    #[cfg(any(test, feature = "test-support"))]
     capture_timer_provenance: bool,
 }
 
@@ -26,8 +25,6 @@ impl HybridWaiter {
     }
 
     pub fn production_with_timer_provenance(capture_timer_provenance: bool) -> Self {
-        #[cfg(not(any(test, feature = "test-support")))]
-        let _ = capture_timer_provenance;
         let (timer, initial_failure) = match WaitableTimer::new_with_error() {
             Ok(timer) => (Some(timer), None),
             Err(win32_error) => (None, Some(WaitFailure::TimerCreate { win32_error })),
@@ -37,7 +34,6 @@ impl HybridWaiter {
             _timer_resolution: None,
             event_wait_enabled: true,
             initial_failure,
-            #[cfg(any(test, feature = "test-support"))]
             capture_timer_provenance,
         }
     }
@@ -55,8 +51,6 @@ impl HybridWaiter {
         event_wait_enabled: bool,
         capture_timer_provenance: bool,
     ) -> Self {
-        #[cfg(not(any(test, feature = "test-support")))]
-        let _ = capture_timer_provenance;
         let (timer, initial_failure) = if waitable_timer_enabled {
             match WaitableTimer::new_with_error() {
                 Ok(timer) => (Some(timer), None),
@@ -74,7 +68,6 @@ impl HybridWaiter {
             _timer_resolution: timer_resolution,
             event_wait_enabled,
             initial_failure,
-            #[cfg(any(test, feature = "test-support"))]
             capture_timer_provenance,
         }
     }
@@ -194,11 +187,11 @@ impl HybridWaiter {
         // Deadline; final control/target/focus/lease admission decides
         // whether transport is still allowed.
         let mut spin_started_ticks = None;
+        let mut timer_return_pending = false;
         #[cfg(any(test, feature = "test-support"))]
         let mut timer_return_pending_generation = None;
         #[cfg(any(test, feature = "test-support"))]
         let mut timer_generation = 0_u64;
-        #[cfg(any(test, feature = "test-support"))]
         let mut timer_evidence = TimerEvidence::default();
         let mut observed_generation = interrupt.signal_generation();
         if self.event_wait_enabled {
@@ -223,16 +216,18 @@ impl HybridWaiter {
                     return WaitResult::failed(WaitFailure::Clock);
                 }
             };
+            if timer_return_pending {
+                timer_evidence.timer_return_qpc = Some(now_ticks);
+                timer_return_pending = false;
+            }
             #[cfg(any(test, feature = "test-support"))]
             if let Some(returned_generation) = timer_return_pending_generation.take() {
-                timer_evidence.timer_return_qpc = Some(now_ticks);
                 timer_evidence.timer_return_generation = Some(returned_generation);
             }
             if now_ticks >= target_ticks {
                 return deadline_wait_result_with_timer_evidence(
                     spin_started_ticks,
                     now_ticks,
-                    #[cfg(any(test, feature = "test-support"))]
                     timer_evidence,
                 );
             }
@@ -255,7 +250,6 @@ impl HybridWaiter {
                         return deadline_wait_result_with_timer_evidence(
                             spin_started_ticks,
                             now_ticks,
-                            #[cfg(any(test, feature = "test-support"))]
                             timer_evidence,
                         );
                     }
@@ -270,7 +264,6 @@ impl HybridWaiter {
                                     target_ticks,
                                     true,
                                 ),
-                                #[cfg(any(test, feature = "test-support"))]
                                 timer_evidence,
                             );
                         }
@@ -306,17 +299,14 @@ impl HybridWaiter {
             #[cfg(windows)]
             if self.event_wait_enabled {
                 if let Some(timer) = &self.timer {
-                    #[cfg(any(test, feature = "test-support"))]
                     let timer_arm_delta = self
                         .capture_timer_provenance
                         .then(|| qpc_clock.duration_from_us(kernel_wait_us.get()).ok())
                         .flatten();
-                    #[cfg(any(test, feature = "test-support"))]
                     let arm_qpc = self
                         .capture_timer_provenance
                         .then(|| qpc_clock.now().ok())
                         .flatten();
-                    #[cfg(any(test, feature = "test-support"))]
                     let arm_target_qpc = arm_qpc.and_then(|arm| {
                         timer_arm_delta.and_then(|delta| arm.checked_add_duration(delta).ok())
                     });
@@ -339,6 +329,11 @@ impl HybridWaiter {
                     } else {
                         None
                     };
+                    #[cfg(not(any(test, feature = "test-support")))]
+                    if self.capture_timer_provenance {
+                        timer_evidence.timer_arm_target_qpc = arm_target_qpc;
+                        timer_evidence.timer_return_qpc = None;
+                    }
 
                     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
                     use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
@@ -352,9 +347,12 @@ impl HybridWaiter {
                     let result =
                         unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, u32::MAX) };
                     if result == WAIT_OBJECT_0 {
-                        #[cfg(any(test, feature = "test-support"))]
-                        {
-                            timer_return_pending_generation = armed_generation;
+                        if self.capture_timer_provenance {
+                            timer_return_pending = true;
+                            #[cfg(any(test, feature = "test-support"))]
+                            {
+                                timer_return_pending_generation = armed_generation;
+                            }
                         }
                         continue;
                     }
@@ -366,7 +364,6 @@ impl HybridWaiter {
                                 target_ticks,
                                 false,
                             ),
-                            #[cfg(any(test, feature = "test-support"))]
                             timer_evidence,
                         );
                     }
@@ -408,7 +405,6 @@ impl HybridWaiter {
                 return deadline_wait_result_with_timer_evidence(
                     spin_started_ticks,
                     wake_ticks,
-                    #[cfg(any(test, feature = "test-support"))]
                     timer_evidence,
                 );
             }
@@ -421,7 +417,6 @@ impl HybridWaiter {
                             target_ticks,
                             false,
                         ),
-                        #[cfg(any(test, feature = "test-support"))]
                         timer_evidence,
                     );
                 }
@@ -518,39 +513,37 @@ fn classify_kernel_wait_us(
     Ok(NonZeroU64::new(kernel_wait_us))
 }
 
-#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Default)]
 struct TimerEvidence {
+    #[cfg(any(test, feature = "test-support"))]
     timer_arm_qpc: Option<QpcTicks>,
     timer_arm_target_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
     timer_arm_generation: Option<u64>,
     timer_return_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
     timer_return_generation: Option<u64>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 fn attach_timer_evidence(mut result: WaitResult, evidence: TimerEvidence) -> WaitResult {
-    result.timer_arm_qpc = evidence.timer_arm_qpc;
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        result.timer_arm_qpc = evidence.timer_arm_qpc;
+        result.timer_arm_generation = evidence.timer_arm_generation;
+        result.timer_return_generation = evidence.timer_return_generation;
+    }
     result.timer_arm_target_qpc = evidence.timer_arm_target_qpc;
-    result.timer_arm_generation = evidence.timer_arm_generation;
     result.timer_return_qpc = evidence.timer_return_qpc;
-    result.timer_return_generation = evidence.timer_return_generation;
-    result
-}
-
-#[cfg(not(any(test, feature = "test-support")))]
-fn attach_timer_evidence(result: WaitResult) -> WaitResult {
     result
 }
 
 fn deadline_wait_result_with_timer_evidence(
     started_ticks: Option<QpcTicks>,
     completed_ticks: QpcTicks,
-    #[cfg(any(test, feature = "test-support"))] evidence: TimerEvidence,
+    evidence: TimerEvidence,
 ) -> WaitResult {
     attach_timer_evidence(
         deadline_wait_result(started_ticks, completed_ticks),
-        #[cfg(any(test, feature = "test-support"))]
         evidence,
     )
 }

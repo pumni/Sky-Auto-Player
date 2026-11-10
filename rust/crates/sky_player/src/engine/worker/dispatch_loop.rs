@@ -513,7 +513,7 @@ pub(super) fn dispatch(
     #[cfg(any(test, feature = "test-support"))]
     let command_timing = &shared.commands.command_timing;
 
-    let timing = *core.timing.as_ref().expect("worker timing initialized");
+    let mut timing = *core.timing.as_ref().expect("worker timing initialized");
     let qpc_clock = core
         .resources
         .as_ref()
@@ -782,6 +782,10 @@ pub(super) fn dispatch(
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
+                    if let Some(controller) = core.runtime.adaptive_wait_controller.as_mut() {
+                        controller.on_resume(resumed_ticks);
+                    }
+                    core.runtime.pending_adaptive_timer_wake = None;
                     if let Err(error) = resources
                         .playback
                         .exit_pause(PauseReason::Focus, resumed_ticks)
@@ -937,6 +941,10 @@ pub(super) fn dispatch(
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
+                    if let Some(controller) = core.runtime.adaptive_wait_controller.as_mut() {
+                        controller.on_resume(resumed_ticks);
+                    }
+                    core.runtime.pending_adaptive_timer_wake = None;
                     if let Err(error) = resources
                         .playback
                         .exit_pause(PauseReason::Manual, resumed_ticks)
@@ -984,6 +992,7 @@ pub(super) fn dispatch(
             let paused = resources.playback.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
+                core.runtime.pending_adaptive_timer_wake = None;
                 let pause_target = match now_ticks.checked_add_duration(timing.paused_poll_ticks) {
                     Ok(target) => target,
                     Err(error) => {
@@ -1010,6 +1019,24 @@ pub(super) fn dispatch(
                     break;
                 }
                 continue;
+            }
+
+            if let Some(wake) = core.runtime.pending_adaptive_timer_wake.take()
+                && let Some(controller) = core.runtime.adaptive_wait_controller.as_mut()
+                && controller.record_timer_wake(wake, qpc_clock)
+            {
+                let new_guard_us = controller.current_guard_us();
+                core.metrics.effective_spin_threshold_us = new_guard_us;
+                match qpc_clock.duration_from_us(new_guard_us) {
+                    Ok(ticks) => {
+                        timing.effective_spin_threshold_ticks = ticks;
+                    }
+                    Err(error) => {
+                        core.runtime.terminal_error =
+                            Some(format!("spin threshold conversion failure: {error:?}"));
+                        break;
+                    }
+                }
             }
 
             if resources.coordinator.executor.is_some() {
@@ -1169,10 +1196,21 @@ pub(super) fn dispatch(
                                         wait_result.wake_qpc;
                                     core.runtime.last_dispatch_deadline_target_qpc =
                                         Some(target_qpc);
+                                    if let (Some(return_qpc), Some(arm_target_qpc)) = (
+                                        wait_result.timer_return_qpc,
+                                        wait_result.timer_arm_target_qpc,
+                                    ) {
+                                        core.runtime.pending_adaptive_timer_wake =
+                                            Some(sky_dispatch_win32::wait::KernelTimerWake::new(
+                                                return_qpc,
+                                                arm_target_qpc,
+                                            ));
+                                    }
                                 }
                                 continue;
                             }
                             WaitBoundary::Replan { .. } => {
+                                core.runtime.pending_adaptive_timer_wake = None;
                                 let _ = interrupt.try_take();
                                 continue;
                             }

@@ -7,6 +7,7 @@ mod effective_policy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod hol;
 pub(crate) use effective_policy::EffectiveRuntimePolicy;
+pub use sky_dispatch_win32::wait::WaitGuardMode;
 
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
@@ -690,6 +691,7 @@ impl Default for WorkerConfig {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
                 supervisor_lease_timeout_us: 0,
+                guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
                 #[cfg(any(test, feature = "test-support"))]
                 test_spin_threshold_us: None,
                 #[cfg(any(test, feature = "test-support"))]
@@ -734,6 +736,7 @@ pub struct WaitOptions {
     pub enable_waitable_timer: bool,
     pub enable_event_wait: bool,
     pub supervisor_lease_timeout_us: u64,
+    pub guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
     /// Test-only early handoff margin. This seam keeps mock-session tests
     /// independent from host timer overshoot without changing authored
     /// targets or the production wait policy.
@@ -741,6 +744,21 @@ pub struct WaitOptions {
     pub test_spin_threshold_us: Option<u64>,
     #[cfg(any(test, feature = "test-support"))]
     pub test_wait_policy: TestWaitPolicy,
+}
+
+impl Default for WaitOptions {
+    fn default() -> Self {
+        Self {
+            enable_waitable_timer: true,
+            enable_event_wait: true,
+            supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            test_spin_threshold_us: None,
+            #[cfg(any(test, feature = "test-support"))]
+            test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+        }
+    }
 }
 
 impl WaitOptions {
@@ -818,6 +836,7 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
             test_spin_threshold_us: None,
             test_wait_policy: TestWaitPolicy::ProductionCalibrated,
         };

@@ -93,13 +93,15 @@ pub(super) fn initialize_startup(
     *metrics.requested_priority_mode.lock() = priority_mode.requested_label().to_string();
     *metrics.requested_wait_policy.lock() = requested_wait_policy.to_string();
     *metrics.effective_wait_policy.lock() = effective_wait_policy.to_string();
+    let capture_timer_provenance = effective_policy.observer_enabled
+        || effective_policy.wait_guard_mode == sky_dispatch_win32::wait::WaitGuardMode::Adaptive;
     let waiter = if production_wait {
-        HybridWaiter::production_with_timer_provenance(effective_policy.observer_enabled)
+        HybridWaiter::production_with_timer_provenance(capture_timer_provenance)
     } else {
         HybridWaiter::with_options_and_timer_provenance(
             enable_waitable_timer,
             enable_event_wait,
-            effective_policy.observer_enabled,
+            capture_timer_provenance,
         )
     };
     *metrics.wait_strategy_acquired.lock() = waiter.mode().to_string();
