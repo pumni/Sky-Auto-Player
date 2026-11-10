@@ -24,8 +24,8 @@ evidence:
     label: README — FAQ section
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
-    label: Timing principles
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/timing-principles.md
+    label: Playback engine architecture
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
   - category: distribution
     label: Distribution and update documentation
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/distribution-and-update.md

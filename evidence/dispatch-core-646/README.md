@@ -30,7 +30,7 @@ All native harness traffic used the project's identity-verified **ReceiveOnly** 
 
 ### C0 failures and inconclusives — individually reproduced
 
-The direct reproductions used the unchanged C0 binary and manifest. The [external requalification report](./c0-requalification-b52106b4-r4.md) yields 21 PASS and 1 BLOCKED; it retains each original native verdict and does not upgrade the original `FAIL` or `INCONCLUSIVE` records. The full JSON/CSV/script bundle `c0-requalification-b52106b4-r4.redacted.zip` is in the Actions artifact.
+The direct reproductions used the unchanged C0 binary and manifest. The [external requalification report](../../docs/HISTORY.md#issue-646-qualification-evidence-phase-a2--c0) yields 21 PASS and 1 BLOCKED; it retains each original native verdict and does not upgrade the original `FAIL` or `INCONCLUSIVE` records. The full JSON/CSV/script bundle `c0-requalification-b52106b4-r4.redacted.zip` is in the Actions artifact.
 
 | Scenario | C0 recorded result | Raw evidence and diagnosis |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ The four C0 raw reproductions (`c0-targeted-p0-fbe703ab.redacted.zip`), immutabl
 
 ### Candidate Smoke findings
 
-The latest candidate Smoke at `4b1cec7` records **22/22 PASS**. Its [readable summary](./a2-smoke-4b1cec7-summary.md) and raw bundle `a2-smoke-4b1cec7.redacted.zip` preserve all case evidence in the Actions artifact. The owner-process test independently verified `TerminateProcess` on the identity-bound ReceiveOnly sink (exit code `0x646`), zero sink events and sender attempts, no release obligations, and fail-closed terminal `focus_lost_during_preroll`. The release-floor case completed 20 cycles; each resumed authored target was observed due before its Q+T barrier, no Down sender attempt occurred before the barrier, and all 20 Down/Up pairs completed. First-cycle QPCs: target `2908233817555`, due checkpoint `2908233863456`, barrier `2908233926163`, sender start `2908233926837`.
+The latest candidate Smoke at `4b1cec7` records **22/22 PASS**. Its [readable summary](../../docs/HISTORY.md#issue-646-qualification-evidence-phase-a2--c0) and raw bundle `a2-smoke-4b1cec7.redacted.zip` preserve all case evidence in the Actions artifact. The owner-process test independently verified `TerminateProcess` on the identity-bound ReceiveOnly sink (exit code `0x646`), zero sink events and sender attempts, no release obligations, and fail-closed terminal `focus_lost_during_preroll`. The release-floor case completed 20 cycles; each resumed authored target was observed due before its Q+T barrier, no Down sender attempt occurred before the barrier, and all 20 Down/Up pairs completed. First-cycle QPCs: target `2908233817555`, due checkpoint `2908233863456`, barrier `2908233926163`, sender start `2908233926837`.
 
 The earlier `5e0b5b3` candidate Smoke records 21 PASS and one `pause-resume-release-floor` FAIL. Its failure was `CASE-NOT-EXERCISED`: the prior checkpoint sampled before the resumed target could be observed; the native output did not report a floor violation. That recorded failure remains preserved in `a2-smoke-5e0b5b3.redacted.zip` in the Actions artifact. The corrected runner captures the prepared target/window before its floor wait, and the later `4b1cec7` full Smoke passes. The previous `27bea42` full Smoke, focused run and `d417b0c` suspend-fixture run are also retained in the artifact with their original results.
 

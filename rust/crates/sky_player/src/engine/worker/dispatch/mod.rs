@@ -14,8 +14,6 @@
 //! - `observer_wake.rs` owns bounded handoff of raw wait results with their
 //!   original target and deadline attribution.
 
-#[cfg(test)]
-mod adaptive_training_tests;
 mod authored;
 pub(crate) mod hold_forensics;
 pub(crate) mod observation;

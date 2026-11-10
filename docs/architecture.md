@@ -231,6 +231,8 @@ song file -> pure Rust parser/planner -> native playback adapter
           -> sky_player -> dispatch_core/dispatch_win32 -> SendInput
 ```
 
+The normative playback architecture is defined in [playback engine](playback-engine.md),
+and the qualification protocol is defined in [playback verification](playback-verification.md).
 The qualified realtime worker remains authoritative for QPC scheduling,
 MMCSS/priority, focus admission, supervisor lease, bounded queues, no-allocation
 hot-path behavior, and emergency release-all cleanup. Supervisor controls and

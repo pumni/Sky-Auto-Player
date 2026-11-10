@@ -31,8 +31,8 @@ evidence:
     label: README — tóm tắt workflow và kỹ thuật
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
-    label: Kiến trúc dispatch thời gian thực
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/rt-dispatch-architecture.md
+    label: Kiến trúc playback engine
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
 ---
 
 ## Phần mềm làm gì

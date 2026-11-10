@@ -817,12 +817,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         Err(error) => return admission_failure(&mut backend, metrics, error),
     };
     worker.epoch_qpc = epoch_qpc;
-    core.runtime.adaptive_wait_controller =
-        Some(sky_dispatch_win32::wait::AdaptiveWaitController::new(
-            effective_policy.wait_guard_mode,
-            effective_spin_threshold_us,
-            epoch_qpc,
-        ));
     if let Some(timing) = core.timing.as_mut() {
         timing.start_wall_time_us = epoch_wall_us;
         timing.last_cpu_metrics_sample_us = epoch_wall_us;

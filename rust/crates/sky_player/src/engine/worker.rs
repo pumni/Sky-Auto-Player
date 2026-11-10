@@ -382,8 +382,6 @@ pub(crate) struct WorkerRuntime {
     pub(crate) preparation_probe: DispatchPreparationProbe,
     pub(crate) production_forensics: ProductionHoldForensics,
     pub(crate) physical_timing_guard: Option<physical_timing_guard::PhysicalTimingGuard>,
-    pub(crate) adaptive_wait_controller: Option<sky_dispatch_win32::wait::AdaptiveWaitController>,
-    pub(crate) pending_adaptive_timer_wake: Option<sky_dispatch_win32::wait::KernelTimerWake>,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,

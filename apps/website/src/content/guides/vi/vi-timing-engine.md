@@ -21,14 +21,11 @@ related:
   - troubleshooting
 evidence:
   - category: architecture
-    label: Nguyên tắc timing
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/timing-principles.md
+    label: Kiến trúc playback engine
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
   - category: architecture
-    label: Mô hình timing hold-frame
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/hold-frame-model.md
-  - category: architecture
-    label: Kiến trúc dispatch thời gian thực
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/rt-dispatch-architecture.md
+    label: Giao thức playback verification và qualification
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-verification.md
   - category: implementation
     label: README — tóm tắt timing
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
@@ -45,25 +42,23 @@ Timing engine được thiết kế để tối thiểu hóa lỗi phía sender.
 
 ## Lên lịch nốt nhạc
 
-Thay vì phát lại một chuỗi delay cố định, Sky Auto Player đặt từng nốt trên một timeline
-được điều khiển bởi tempo của sheet và cài đặt FPS bạn cấu hình trong Sky. Khi scheduler
-đến vị trí của một nốt trên timeline đó, nó dispatch phím.
-
-Scheduler là **thuần túy**: không phụ thuộc wall-clock và không có lệnh gọi `SendInput`.
-Nó tạo ra một lịch các sự kiện; các lớp infrastructure và platform thực thi các sự kiện đó.
-Sự tách biệt này giúp logic timing có thể unit-test với đồng hồ được kiểm soát.
+Thay vì phát lại một danh sách delay cố định, Sky Auto Player biên dịch các nốt thành một
+luồng có thứ tự được điều khiển bởi tempo của sheet, FPS mục tiêu và các tham số hold.
+Executor 15 slot quản lý nghĩa vụ hold phím ($H$) và release gap ($G$) một cách tất định,
+không dùng hai con trỏ độc lập.
 
 ## Căn hợp âm
 
 Các nốt thuộc cùng một hợp âm được gửi trong một lệnh `SendInput` duy nhất chứa tất cả
-các phím trong hợp âm đó. Điều này loại bỏ độ lệch phía sender giữa các nốt phải vang lên
-đồng thời. Game xử lý chúng đồng thời hay không tùy vào vòng lặp sampling của chính game.
+các phím trong hợp âm đó. Khi các sự kiện nhả phím và nhấn hợp âm trùng thời điểm, chúng
+được gộp chung trong một syscall (Up trước Down) nhằm loại bỏ độ lệch phía sender.
 
-## Ngữ nghĩa hold
+## Ngữ nghĩa hold và timing floor
 
-Nốt hold (phím được giữ) được nhấn vào thời điểm bắt đầu nốt và nhả sau thời gian ký âm
-đầy đủ. Nốt tiếp theo đến sát không khiến hold bị cắt ngắn — hold và nốt tiếp theo được
-gửi như các sự kiện `SendInput` riêng biệt trên vị trí timeline của chúng.
+Nốt hold (phím được giữ) được giữ tối thiểu theo sàn hold $H$:
+$$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$$
+với $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$. Việc nhấn lại cùng một phím phải tuân
+thủ khoảng cách nhả phím $G = T$ trước khi phát Down tiếp theo.
 
 ## Chọn hold-frame
 
@@ -78,24 +73,23 @@ Thời gian hold được biểu diễn theo bội số của một frame game �
 Chọn 1,25 hoặc 1,5 nếu nốt hold ngắn không đăng ký ổn định trên máy của bạn. Cài đặt
 FPS phải khớp với FPS cấu hình trong Sky để timing hold chính xác.
 
-## Bù độ trễ
+## Hiệu chuẩn và robust wake guard
 
-Sky Auto Player đo khoảng thời gian giữa khi lệnh gọi `SendInput` được lên lịch và khi
-nó thực sự hoàn thành, xây dựng profile đang chạy về lỗi completion phía sender. Nó dùng
-số đo này để điều chỉnh lead time của các dispatch tương lai — gửi sớm hơn một chút để
-bù cho độ trễ quan sát được.
+Sky Auto Player đo lường sai số thức giấc của Windows kernel timer trong quá trình khởi động
+hiệu chuẩn host, xác định robust wake guard ($\text{median} + 6 \times \text{MAD}$). Trong quá
+trình phát nhạc, production waiter sử dụng wake guard đóng băng (Frozen) này để kết hợp giấc ngủ
+timer hiệu quả với vòng lặp spin QPC chính xác tới microsecond mà không gây jitter bất định.
 
-Đây là **bù phía sender mà thôi**. Sự thích ứng giảm drift có hệ thống do OS scheduling
-jitter trên máy của bạn. Nó không điều chỉnh cho network latency, frame pacing của game,
-hay bất kỳ yếu tố nào ở phía game. Telemetry hiển thị trong HUD báo cáo kết quả phía
-sender đo được, không phải đảm bảo timing tuyệt đối.
+Đây là **timing phía sender mà thôi**. Nó giảm trễ hệ thống do OS scheduling jitter trên máy.
+Nó không điều chỉnh cho network latency hay frame pacing của game. Telemetry hiển thị trong
+bảng Diagnostics báo cáo kết quả thực tế phía sender, không phải đảm bảo âm thanh trong game.
 
 ## Rust dispatch worker
 
-Một Rust worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân
-giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp, và telemetry native. Tauri/React
-render desktop GUI chính thức; native Rust services sở hữu application policy. Production path
-đi qua native Rust services và Tauri shell.
+Một Rust worker thread chuyên trách sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc,
+timing wait độ phân giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp, và telemetry
+native. Tauri/React shell render desktop UI, trong khi các Rust service native sở hữu
+trạng thái playback và các chính sách an toàn.
 
 ## Giới hạn đã biết
 

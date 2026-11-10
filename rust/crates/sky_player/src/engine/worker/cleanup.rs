@@ -575,11 +575,6 @@ pub(crate) fn suspend_live_input(
         .establish_resume_down_barrier(cleanup_completed_qpc)
         .map_err(|error| format!("resume Down barrier establishment failed: {error:?}"))?;
 
-    if let Some(controller) = runtime.adaptive_wait_controller.as_mut() {
-        controller.on_resume(cleanup_completed_qpc);
-    }
-    runtime.pending_adaptive_timer_wake = None;
-
     debug_assert!(release_state_verified(backend, &release));
     if let Some(pending) = runtime.pending_up_recovery.as_ref() {
         let frame = pending.authored_commit.frame;

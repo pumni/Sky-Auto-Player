@@ -513,7 +513,7 @@ pub(super) fn dispatch(
     #[cfg(any(test, feature = "test-support"))]
     let command_timing = &shared.commands.command_timing;
 
-    let mut timing = *core.timing.as_ref().expect("worker timing initialized");
+    let timing = *core.timing.as_ref().expect("worker timing initialized");
     let qpc_clock = core
         .resources
         .as_ref()
@@ -782,10 +782,6 @@ pub(super) fn dispatch(
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
-                    if let Some(controller) = core.runtime.adaptive_wait_controller.as_mut() {
-                        controller.on_resume(resumed_ticks);
-                    }
-                    core.runtime.pending_adaptive_timer_wake = None;
                     if let Err(error) = resources
                         .playback
                         .exit_pause(PauseReason::Focus, resumed_ticks)
@@ -941,10 +937,6 @@ pub(super) fn dispatch(
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
-                    if let Some(controller) = core.runtime.adaptive_wait_controller.as_mut() {
-                        controller.on_resume(resumed_ticks);
-                    }
-                    core.runtime.pending_adaptive_timer_wake = None;
                     if let Err(error) = resources
                         .playback
                         .exit_pause(PauseReason::Manual, resumed_ticks)
@@ -992,7 +984,6 @@ pub(super) fn dispatch(
             let paused = resources.playback.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
-                core.runtime.pending_adaptive_timer_wake = None;
                 let pause_target = match now_ticks.checked_add_duration(timing.paused_poll_ticks) {
                     Ok(target) => target,
                     Err(error) => {
@@ -1139,14 +1130,6 @@ pub(super) fn dispatch(
                         break;
                     }
                     sky_dispatch_core::executor::DispatchAction::Wait { deadline_ticks } => {
-                        let is_physical_work = resources
-                            .coordinator
-                            .executor
-                            .as_ref()
-                            .is_some_and(|exec| exec.has_physical_work());
-                        if !is_physical_work {
-                            core.runtime.pending_adaptive_timer_wake = None;
-                        }
                         let wait_target_qpc =
                             match resources.playback.epoch.checked_add_duration(
                                 DurationTicks::from_raw(deadline_ticks.as_u64()),
@@ -1186,25 +1169,10 @@ pub(super) fn dispatch(
                                         wait_result.wake_qpc;
                                     core.runtime.last_dispatch_deadline_target_qpc =
                                         Some(target_qpc);
-                                    if is_physical_work
-                                        && let (Some(return_qpc), Some(arm_target_qpc)) = (
-                                            wait_result.timer_return_qpc,
-                                            wait_result.timer_arm_target_qpc,
-                                        )
-                                    {
-                                        core.runtime.pending_adaptive_timer_wake =
-                                            Some(sky_dispatch_win32::wait::KernelTimerWake::new(
-                                                return_qpc,
-                                                arm_target_qpc,
-                                            ));
-                                    } else {
-                                        core.runtime.pending_adaptive_timer_wake = None;
-                                    }
                                 }
                                 continue;
                             }
                             WaitBoundary::Replan { .. } => {
-                                core.runtime.pending_adaptive_timer_wake = None;
                                 let _ = interrupt.try_take();
                                 continue;
                             }
@@ -1286,8 +1254,6 @@ pub(super) fn dispatch(
                         }
 
                         if timing_window.packet_not_before_qpc > now_ticks {
-                            // Floor displacement occurred: discard timer wake from adaptive learning.
-                            core.runtime.pending_adaptive_timer_wake = None;
                             if has_down {
                                 let expected =
                                     preflight_target.expect("target stamp checked above");
@@ -1315,7 +1281,6 @@ pub(super) fn dispatch(
                                 ) {
                                     FinalDownAdmissionResult::Allowed => {}
                                     FinalDownAdmissionResult::Replan => {
-                                        core.runtime.pending_adaptive_timer_wake = None;
                                         continue;
                                     }
                                     FinalDownAdmissionResult::Terminal(err) => {
@@ -1342,7 +1307,6 @@ pub(super) fn dispatch(
                             }) {
                                 WaitBoundary::Due { .. } => {}
                                 WaitBoundary::Replan { .. } => {
-                                    core.runtime.pending_adaptive_timer_wake = None;
                                     let _ = interrupt.try_take();
                                     continue;
                                 }
@@ -1407,7 +1371,6 @@ pub(super) fn dispatch(
                             ) {
                                 FinalDownAdmissionResult::Allowed => {}
                                 FinalDownAdmissionResult::Replan => {
-                                    core.runtime.pending_adaptive_timer_wake = None;
                                     continue;
                                 }
                                 FinalDownAdmissionResult::Terminal(err) => {
@@ -1639,25 +1602,6 @@ pub(super) fn dispatch(
                                 qpc_clock,
                                 completion_qpc,
                             );
-                        }
-
-                        if let Some(wake) = core.runtime.pending_adaptive_timer_wake.take()
-                            && let Some(controller) = core.runtime.adaptive_wait_controller.as_mut()
-                            && controller.record_timer_wake(wake, qpc_clock)
-                        {
-                            let new_guard_us = controller.current_guard_us();
-                            core.metrics.effective_spin_threshold_us = new_guard_us;
-                            match qpc_clock.duration_from_us(new_guard_us) {
-                                Ok(ticks) => {
-                                    timing.effective_spin_threshold_ticks = ticks;
-                                }
-                                Err(error) => {
-                                    core.runtime.terminal_error = Some(format!(
-                                        "spin threshold conversion failure: {error:?}"
-                                    ));
-                                    break;
-                                }
-                            }
                         }
 
                         continue;
