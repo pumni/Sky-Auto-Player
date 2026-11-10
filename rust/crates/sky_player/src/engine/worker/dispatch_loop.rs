@@ -1329,10 +1329,6 @@ pub(super) fn dispatch(
                             hook.visit_startup_checkpoint(
                                 super::super::config::StartupCheckpoint::FirstDownAdmission,
                             );
-                        }
-
-                        #[cfg(any(test, feature = "test-support"))]
-                        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
                             hook.mark_first_physical_send_started();
                             let source_idx =
                                 down_chord.as_ref().map_or(0, |c| c.source_action_index);
