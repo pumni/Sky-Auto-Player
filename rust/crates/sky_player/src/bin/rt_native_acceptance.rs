@@ -413,7 +413,8 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
     if args.hol_stall_us > 0 {
         let hook = acceptance_hook.unwrap_or_else(|| Arc::new(sky_player::engine::StartupOrderingHook::default()));
-        hook.enable_hol_stall(args.hol_stall_us, 0x0001);
+        let cycles = args.hol_cycles.unwrap_or(if args.scenario == Scenario::HolInterleaved { u32::from(args.sample_seconds.unwrap_or(15)) * 10 } else { 1 });
+        hook.enable_hol_stall_cycles(args.hol_stall_us, 0x0001, cycles);
         acceptance_hook = Some(hook);
     }
     options.startup_ordering_hook = acceptance_hook.clone();
@@ -714,10 +715,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
         if let Some(hook) = acceptance_hook.as_ref() {
             let (count, pre_qpc, post_qpc, clock_error) = hook.hol_stall_evidence();
-            object.insert("hol_stall_count".to_string(), json!(count));
-            object.insert("hol_last_stall_pre_qpc".to_string(), json!(pre_qpc));
-            object.insert("hol_last_stall_post_qpc".to_string(), json!(post_qpc));
-            object.insert("hol_clock_error".to_string(), json!(clock_error));
+            object.extend([("hol_stall_count".into(), json!(count)), ("hol_last_stall_pre_qpc".into(), json!(pre_qpc)), ("hol_last_stall_post_qpc".into(), json!(post_qpc)), ("hol_clock_error".into(), json!(clock_error)), ("hol_stall_cycles".into(), json!(hook.hol_stall_cycle_records()))]);
             if clock_error {
                 return write_report(&args, Verdict::Inconclusive, "HOL stall encountered QPC clock error", details);
             }

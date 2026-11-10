@@ -62,6 +62,7 @@ pub(super) enum Scenario {
     NoncanonicalProfile,
     TimingMarginSweep,
     LongIdle,
+    HolInterleaved,
 }
 
 impl Scenario {
@@ -98,6 +99,7 @@ impl Scenario {
             "noncanonical-profile" => Ok(Self::NoncanonicalProfile),
             "timing-margin-sweep" => Ok(Self::TimingMarginSweep),
             "long-idle" => Ok(Self::LongIdle),
+            "hol-interleaved" => Ok(Self::HolInterleaved),
             _ => Err(format!("unsupported scenario: {value}")),
         }
     }
@@ -135,6 +137,7 @@ impl Scenario {
             Self::NoncanonicalProfile => "noncanonical-profile",
             Self::TimingMarginSweep => "timing-margin-sweep",
             Self::LongIdle => "long-idle",
+            Self::HolInterleaved => "hol-interleaved",
         }
     }
 
@@ -150,6 +153,7 @@ impl Scenario {
                 | Self::MixedUpDown
                 | Self::NearMinimumRetrigger
                 | Self::LongIdle
+                | Self::HolInterleaved
         )
     }
 }
@@ -172,6 +176,7 @@ pub(super) struct RunArgs {
     pub(super) focus_probe_hwnd: Option<isize>,
     pub(super) focus_restore_request: Option<PathBuf>,
     pub(super) hol_stall_us: u64,
+    pub(super) hol_cycles: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,6 +268,7 @@ where
     let mut focus_probe_hwnd = None;
     let mut focus_restore_request = None;
     let mut hol_stall_us = 0u64;
+    let mut hol_cycles = None;
     let mut arguments = arguments.peekable();
     while let Some(flag) = arguments.next() {
         macro_rules! next_value {
@@ -382,6 +388,14 @@ where
                     .parse::<u64>()
                     .map_err(|_| "--hol-stall-us must be an integer".to_string())?;
             }
+            "--hol-cycles" => {
+                let value = next_value!("--hol-cycles");
+                hol_cycles = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| "--hol-cycles must be an integer".to_string())?,
+                );
+            }
             "--help" | "-h" => return Ok(ParsedCommand::Help),
             _ => return Err(format!("unknown argument {flag:?}")),
         }
@@ -407,6 +421,7 @@ where
         focus_probe_hwnd,
         focus_restore_request,
         hol_stall_us,
+        hol_cycles,
     };
     let probe_count = [
         run.focus_probe_ready.is_some(),

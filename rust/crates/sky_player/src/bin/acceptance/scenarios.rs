@@ -442,6 +442,18 @@ pub(super) fn scenario_plan_for_settings(
                 }
                 (actions, None, down_slots, up_slots, false)
             }
+            Scenario::HolInterleaved => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 84_000, &[0]),
+                    action(2, ActionKind::Down, 85_000, &[1]),
+                    action(3, ActionKind::Up, 119_000, &[1]),
+                ],
+                None,
+                vec![0, 1],
+                vec![0, 1],
+                false,
+            ),
         };
     let mut actions = actions;
     let mut expected_down_slots = expected_down_slots;
@@ -462,6 +474,8 @@ pub(super) fn scenario_plan_for_settings(
             .ok_or_else(|| "timed sample scenario has no authored actions".to_string())?;
         let cycle_gap_us = if scenario == Scenario::LongIdle {
             2_000_000
+        } else if scenario == Scenario::HolInterleaved {
+            31_000
         } else {
             acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps)
         };

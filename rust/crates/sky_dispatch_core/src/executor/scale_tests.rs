@@ -224,3 +224,126 @@ fn next_stale_packet_target_ticks_is_bounded_by_32() {
         crate::coordinator::RuntimeDispatchCoordinator::new(sched, 0, 0, TimelineTicks::from_raw);
     assert_eq!(coord.next_stale_packet_target_ticks(), None);
 }
+
+#[test]
+fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
+    // Parameters from Leader L9:
+    // GameFps = 60, TimingMarginUs = 500, T = 16_667 us, H = 2*T + 500 = 33_834 us.
+    // Repeating cycle every 100_000 us, starting at 50_000 us:
+    // Key A Down @ 50_000 us (slot 0)
+    // Key A Up   @ 84_000 us (slot 0, hold = 34_000 us >= H)
+    // Key B Down @ 85_000 us (slot 1)
+    // Key B Up   @ 119_000 us (slot 1, hold = 34_000 us >= H)
+    //
+    // A 5,000 us worker stall delays Key A Down completion to 55_000 us.
+    // Key A release due is pushed to: max(84_000, 55_000 + 33_834) = 88_834 us.
+    // In Phase A (ordered pipeline), Key B Down (85_000 us) is HOL-blocked behind Key A Up until 88_834 us (lateness: 3,834 us).
+    // In Phase B (independent 15-slot executor), Key B Down is dispatched on time at 85_000 us (lateness: 0 us)!
+    let allowed = vec![0x15, 0x16];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 50_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "A Down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 84_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "A Up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 85_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "B Down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 119_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "B Up".into(),
+        },
+    ];
+
+    let sched = compile_runtime_intents(&actions, &allowed).expect("valid schedule");
+    let min_hold = DurationTicks::from_raw(33_834);
+    let frame_time = DurationTicks::from_raw(16_667);
+    let mut exec = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+
+    // 1. At 50_000 us: Key A Down is evaluated and returned for dispatch.
+    let step_a_down = exec.evaluate(TimelineTicks::from_raw(50_000));
+    assert!(matches!(
+        step_a_down,
+        DispatchAction::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+        } if chord.down_mask == 0x01
+    ));
+
+    // A 5,000 us stall occurs; Key A Down completes at 55_000 us.
+    exec.on_send_completed(0, 0x01, TimelineTicks::from_raw(55_000))
+        .unwrap();
+
+    // Key A's release floor is now 55_000 + 33_834 = 88_834 us.
+    // 2. At 84_000 us: authored Key A Up is not yet physically eligible (84_000 < 88_834).
+    let step_84 = exec.evaluate(TimelineTicks::from_raw(84_000));
+    assert_eq!(
+        step_84,
+        DispatchAction::Wait {
+            deadline_ticks: TimelineTicks::from_raw(85_000),
+        },
+        "next event due is Key B Down at 85_000 us, not waiting for Key A release floor"
+    );
+
+    // 3. At 85_000 us: Key B Down is evaluated.
+    // In Phase B, slot 1 is free and Key B Down is dispatched IMMEDIATELY at 85_000 us!
+    let step_b_down = exec.evaluate(TimelineTicks::from_raw(85_000));
+    assert!(
+        matches!(
+            step_b_down,
+            DispatchAction::Send {
+                up_mask: 0,
+                down_chord: Some(chord),
+            } if chord.down_mask == 0x02
+        ),
+        "Key B Down MUST be dispatched on time at 85_000 us without HOL blocking"
+    );
+
+    // Key B Down completes on time at 85_000 us.
+    exec.on_send_completed(0, 0x02, TimelineTicks::from_raw(85_000))
+        .unwrap();
+
+    // 4. At 88_834 us: Key A Up physical release floor expires and is dispatched.
+    let step_a_up = exec.evaluate(TimelineTicks::from_raw(88_834));
+    assert_eq!(
+        step_a_up,
+        DispatchAction::Send {
+            up_mask: 0x01,
+            down_chord: None,
+        }
+    );
+    exec.on_send_completed(0x01, 0, TimelineTicks::from_raw(88_834))
+        .unwrap();
+
+    // 5. At 119_000 us: Key B Up is dispatched.
+    let step_b_up = exec.evaluate(TimelineTicks::from_raw(119_000));
+    assert_eq!(
+        step_b_up,
+        DispatchAction::Send {
+            up_mask: 0x02,
+            down_chord: None,
+        }
+    );
+    exec.on_send_completed(0x02, 0, TimelineTicks::from_raw(119_000))
+        .unwrap();
+
+    // 6. Schedule cleanly finished.
+    let step_fin = exec.evaluate(TimelineTicks::from_raw(119_001));
+    assert_eq!(step_fin, DispatchAction::Finished);
+}

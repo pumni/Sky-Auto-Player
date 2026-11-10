@@ -1042,3 +1042,67 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
     assert_eq!(two_down["requested_count"].as_u64(), Some(2));
     assert_eq!(two_down["applied_lead_ticks"].as_u64(), Some(0));
 }
+
+#[test]
+fn trailing_stale_packet_after_many_physical_packets_is_committed_without_early_finish() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let allowed: Vec<u16> = (0x15..0x15 + 15).collect();
+    let mut actions = Vec::with_capacity(69);
+    let mut action_idx = 0u32;
+    for i in 0..34 {
+        let t_down = i as u64 * 10_000;
+        let t_up = t_down + 5_000;
+        let sc = allowed[i % allowed.len()];
+        actions.push(KeyActionInput {
+            source_action_index: action_idx,
+            kind: ActionKind::Down,
+            scheduled_us: t_down,
+            scan_codes: smallvec::smallvec![sc],
+            reason: format!("phys-down-{i}").into(),
+        });
+        action_idx += 1;
+        actions.push(KeyActionInput {
+            source_action_index: action_idx,
+            kind: ActionKind::Up,
+            scheduled_us: t_up,
+            scan_codes: smallvec::smallvec![sc],
+            reason: format!("phys-up-{i}").into(),
+        });
+        action_idx += 1;
+    }
+    let stale_action_index = action_idx;
+    actions.push(KeyActionInput {
+        source_action_index: stale_action_index,
+        kind: ActionKind::Up,
+        scheduled_us: 340_000 + 10_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "trailing-unmatched-up".into(),
+    });
+
+    let schedule = compile_runtime_intents(&actions, &allowed)
+        .expect("valid 34-pair schedule with trailing stale metadata");
+
+    assert!(
+        schedule.packets.len() >= 66,
+        "must have >= 65 physical packets + 1 stale"
+    );
+
+    let (snapshot, telemetry) = run_mock_schedule(schedule, 15, 1024);
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".into()),
+        "session must finish cleanly: {snapshot:?}"
+    );
+    assert_eq!(snapshot.terminal_error, None);
+
+    let stale = telemetry["records"]
+        .as_array()
+        .expect("telemetry records")
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(stale_action_index as u64));
+    assert!(
+        stale.is_some(),
+        "trailing stale metadata packet at index {stale_action_index} must be committed: {telemetry}"
+    );
+}

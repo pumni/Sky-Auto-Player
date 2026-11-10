@@ -1087,44 +1087,49 @@ pub(super) fn dispatch(
 
                 match action {
                     sky_dispatch_core::executor::DispatchAction::Finished => {
-                        if let Some(stale_ticks) =
-                            resources.coordinator.next_stale_packet_target_ticks()
+                        if resources.coordinator.cursor
+                            < resources.coordinator.schedule.batches.len()
                         {
-                            let wait_target_qpc =
-                                match resources.playback.epoch.checked_add_duration(
-                                    DurationTicks::from_raw(stale_ticks.as_u64()),
-                                ) {
-                                    Ok(target) => target,
-                                    Err(error) => {
-                                        core.runtime.terminal_error =
-                                            Some(format!("deadline arithmetic failure: {error}"));
-                                        break;
+                            if let Some(stale_ticks) =
+                                resources.coordinator.next_stale_packet_target_ticks()
+                            {
+                                let wait_target_qpc =
+                                    match resources.playback.epoch.checked_add_duration(
+                                        DurationTicks::from_raw(stale_ticks.as_u64()),
+                                    ) {
+                                        Ok(target) => target,
+                                        Err(error) => {
+                                            core.runtime.terminal_error = Some(format!(
+                                                "deadline arithmetic failure: {error}"
+                                            ));
+                                            break;
+                                        }
+                                    };
+                                if wait_target_qpc > now_ticks {
+                                    match wait_for_next_boundary(WaitBoundaryInput {
+                                        deadline: WaitDeadline {
+                                            physical_target_qpc: Some(wait_target_qpc),
+                                            spin_threshold_ticks: timing
+                                                .effective_spin_threshold_ticks,
+                                            qpc_clock,
+                                        },
+                                        signals: WaitSignals {
+                                            waiter: &resources.waiter,
+                                            interrupt,
+                                        },
+                                        mutable: WaitMutable {
+                                            local_metrics: &mut core.metrics,
+                                            terminal_error: &mut core.runtime.terminal_error,
+                                        },
+                                    }) {
+                                        WaitBoundary::Due { .. } | WaitBoundary::Replan { .. } => {
+                                            continue;
+                                        }
+                                        WaitBoundary::Exit => break,
                                     }
-                                };
-                            if wait_target_qpc > now_ticks {
-                                match wait_for_next_boundary(WaitBoundaryInput {
-                                    deadline: WaitDeadline {
-                                        physical_target_qpc: Some(wait_target_qpc),
-                                        spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                                        qpc_clock,
-                                    },
-                                    signals: WaitSignals {
-                                        waiter: &resources.waiter,
-                                        interrupt,
-                                    },
-                                    mutable: WaitMutable {
-                                        local_metrics: &mut core.metrics,
-                                        terminal_error: &mut core.runtime.terminal_error,
-                                    },
-                                }) {
-                                    WaitBoundary::Due { .. } | WaitBoundary::Replan { .. } => {
-                                        continue;
-                                    }
-                                    WaitBoundary::Exit => break,
                                 }
-                            } else {
-                                continue;
                             }
+                            continue;
                         }
                         break;
                     }
@@ -1329,7 +1334,9 @@ pub(super) fn dispatch(
                         #[cfg(any(test, feature = "test-support"))]
                         if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
                             hook.mark_first_physical_send_started();
-                            hook.maybe_inject_hol_stall(down_mask, qpc_clock);
+                            let source_idx =
+                                down_chord.as_ref().map_or(0, |c| c.source_action_index);
+                            hook.maybe_inject_hol_stall(down_mask, source_idx, qpc_clock);
                         }
 
                         // Re-validate final Down authority immediately before physical send.

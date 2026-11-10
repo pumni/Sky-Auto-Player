@@ -1,6 +1,6 @@
-param(
+﻿param(
     [Parameter(Mandatory)]
-[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle')]
+[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
     [string]$Scenario,
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
@@ -17,7 +17,9 @@ param(
     [ValidateRange(15, 15)]
     [int]$SampleSeconds,
     [ValidateSet(60, 120)]
-    [int]$GameFps = 60
+    [int]$GameFps = 60,
+    [int]$HolStallUs = 0,
+    [int]$HolCycles = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -240,6 +242,8 @@ try {
         timing_margin_us = $TimingMarginUs
         game_fps = $GameFps
         sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+        hol_stall_us = $HolStallUs
+        hol_cycles = $HolCycles
         expected_hold_us = [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs
         expected_release_gap_us = [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs
         profile = 'production'
@@ -304,6 +308,12 @@ try {
     )
     if ($SampleSeconds) { $harnessArgs += @('--sample-seconds', [string]$SampleSeconds) }
     if ($TimingObserverForQualification) { $harnessArgs += '--timing-observer-for-qualification' }
+    if ($HolStallUs -gt 0) {
+        $harnessArgs += @('--hol-stall-us', [string]$HolStallUs)
+        if ($HolCycles -gt 0) {
+            $harnessArgs += @('--hol-cycles', [string]$HolCycles)
+        }
+    }
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
     }
@@ -407,6 +417,8 @@ try {
         timing_margin_us = $TimingMarginUs
         game_fps = $GameFps
         sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+        hol_stall_us = $HolStallUs
+        hol_cycles = $HolCycles
         started_utc = $startedUtc
         ended_utc = $endedUtc
         exit_code = $nativeExit
@@ -441,6 +453,8 @@ try {
         timing_margin_us = $TimingMarginUs
         game_fps = $GameFps
         sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+        hol_stall_us = $HolStallUs
+        hol_cycles = $HolCycles
         source_revision = if ($head) { $head } else { $null }
         error = $_.Exception.Message
     }

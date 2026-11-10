@@ -4,6 +4,8 @@ use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrument
 use sky_dispatch_win32::mmcss::PriorityMode;
 
 mod effective_policy;
+#[cfg(any(test, feature = "test-support"))]
+pub mod hol;
 pub(crate) use effective_policy::EffectiveRuntimePolicy;
 
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
@@ -131,13 +133,10 @@ use super::{FaultInjectionScript, SystemPowerState};
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{
-    AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
-};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
-pub type RestoreRaceHook =
-    Arc<dyn Fn(&AtomicBool, &super::dispatch_primitives::SessionTarget) + Send + Sync>;
+pub type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &super::shared::SessionTarget) + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
@@ -274,14 +273,7 @@ pub struct StartupOrderingHook {
     fail_watchdog_spawn: AtomicBool,
     fail_observer_spawn: AtomicBool,
     fail_startup_epoch_conversion: AtomicBool,
-    pub(crate) hol_stall_enabled: AtomicBool,
-    pub(crate) hol_stall_remaining_cycles: AtomicU32,
-    pub(crate) hol_stall_duration_us: AtomicU64,
-    pub(crate) hol_stall_target_mask: AtomicU16,
-    pub(crate) hol_stall_count: AtomicU64,
-    pub(crate) hol_last_stall_pre_qpc: AtomicU64,
-    pub(crate) hol_last_stall_post_qpc: AtomicU64,
-    pub(crate) hol_clock_error: AtomicBool,
+    pub(crate) hol: hol::HolStallController,
     scheduling_threads:
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
 }
@@ -598,98 +590,33 @@ impl StartupOrderingHook {
     }
 
     pub fn enable_hol_stall(&self, duration_us: u64, target_mask: u16) {
-        self.enable_hol_stall_cycles(duration_us, target_mask, 1);
+        self.hol.enable_cycles(duration_us, target_mask, 1);
     }
 
     pub fn enable_hol_stall_cycles(&self, duration_us: u64, target_mask: u16, cycles: u32) {
-        self.hol_stall_duration_us
-            .store(duration_us, Ordering::Release);
-        self.hol_stall_target_mask
-            .store(target_mask, Ordering::Release);
-        self.hol_stall_remaining_cycles
-            .store(cycles, Ordering::Release);
-        self.hol_clock_error.store(false, Ordering::Release);
-        self.hol_stall_enabled
-            .store(cycles > 0 && duration_us > 0, Ordering::Release);
+        self.hol.enable_cycles(duration_us, target_mask, cycles);
     }
 
     pub fn hol_stall_evidence(&self) -> (u64, u64, u64, bool) {
-        (
-            self.hol_stall_count.load(Ordering::Acquire),
-            self.hol_last_stall_pre_qpc.load(Ordering::Acquire),
-            self.hol_last_stall_post_qpc.load(Ordering::Acquire),
-            self.hol_clock_error.load(Ordering::Acquire),
-        )
+        self.hol.evidence()
+    }
+
+    pub fn hol_stall_cycle_records(&self) -> Vec<hol::HolStallCycleRecord> {
+        self.hol.cycle_records()
     }
 
     pub fn hol_clock_error(&self) -> bool {
-        self.hol_clock_error.load(Ordering::Acquire)
+        self.hol.clock_error()
     }
 
     pub(crate) fn maybe_inject_hol_stall(
         &self,
         down_mask: u16,
+        source_action_index: u32,
         qpc_clock: sky_dispatch_win32::clock::QpcClock,
     ) {
-        if !self.hol_stall_enabled.load(Ordering::Acquire) {
-            return;
-        }
-        let target_mask = self.hol_stall_target_mask.load(Ordering::Acquire);
-        if target_mask != 0 && (down_mask & target_mask) == 0 {
-            return;
-        }
-        let duration_us = self.hol_stall_duration_us.load(Ordering::Acquire);
-        if duration_us == 0 {
-            return;
-        }
-
-        let prev = self.hol_stall_remaining_cycles.load(Ordering::Acquire);
-        if prev == 0 {
-            self.hol_stall_enabled.store(false, Ordering::Release);
-            return;
-        }
-        let prev = self
-            .hol_stall_remaining_cycles
-            .fetch_sub(1, Ordering::AcqRel);
-        if prev <= 1 {
-            self.hol_stall_enabled.store(false, Ordering::Release);
-        }
-        if prev == 0 {
-            return;
-        }
-
-        let Ok(pre_qpc) = qpc_clock.now() else {
-            self.hol_clock_error.store(true, Ordering::Release);
-            return;
-        };
-        let Ok(duration_ticks) = qpc_clock.duration_from_us(duration_us) else {
-            self.hol_clock_error.store(true, Ordering::Release);
-            return;
-        };
-        let Ok(target_qpc) = pre_qpc.checked_add_duration(duration_ticks) else {
-            self.hol_clock_error.store(true, Ordering::Release);
-            return;
-        };
-
-        loop {
-            match qpc_clock.now() {
-                Ok(now) => {
-                    if now >= target_qpc {
-                        self.hol_last_stall_pre_qpc
-                            .store(pre_qpc.as_u64(), Ordering::Release);
-                        self.hol_last_stall_post_qpc
-                            .store(now.as_u64(), Ordering::Release);
-                        self.hol_stall_count.fetch_add(1, Ordering::AcqRel);
-                        break;
-                    }
-                    std::hint::spin_loop();
-                }
-                Err(_) => {
-                    self.hol_clock_error.store(true, Ordering::Release);
-                    break;
-                }
-            }
-        }
+        self.hol
+            .maybe_inject_hol_stall(down_mask, source_action_index, qpc_clock);
     }
 }
 
