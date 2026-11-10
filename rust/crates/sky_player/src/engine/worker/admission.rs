@@ -679,6 +679,27 @@ pub(crate) fn verify_final_down_admission(
     });
     if fresh_target_verdict != FinalDownVerdict::Allowed {
         apply_final_down_rejection(fresh_target_verdict, runtime, metrics);
+        match fresh_target_verdict {
+            FinalDownVerdict::FocusLost => {
+                if let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+                {
+                    return match step {
+                        DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
+                        DispatchStep::TerminateStatic(err) => {
+                            FinalDownAdmissionResult::Terminal(err.to_string())
+                        }
+                        _ => FinalDownAdmissionResult::Replan,
+                    };
+                }
+            }
+            FinalDownVerdict::OwnerRejected(failure) => {
+                return FinalDownAdmissionResult::Terminal(
+                    owner_rejection_reason(failure, true).to_string(),
+                );
+            }
+            _ => {}
+        }
         return FinalDownAdmissionResult::Replan;
     }
 

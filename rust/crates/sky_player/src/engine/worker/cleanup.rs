@@ -496,13 +496,12 @@ pub(crate) fn clean_completion_proven(
 
 fn clean_generation_accounting_proven(accounting: GenerationAccounting) -> bool {
     accounting.total == accounting.activated
-        && accounting.total == accounting.released
+        && accounting.total == accounting.released + accounting.cancelled
         && accounting.scheduled == 0
         && accounting.active == 0
         && accounting.dropped_conflict == 0
         && accounting.dropped_backend == 0
         && accounting.dropped_expired == 0
-        && accounting.cancelled == 0
 }
 
 pub(crate) fn describe_release_outcome(

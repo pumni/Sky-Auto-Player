@@ -1089,44 +1089,40 @@ pub(super) fn dispatch(
                     sky_dispatch_core::executor::DispatchAction::Finished => {
                         if resources.coordinator.cursor
                             < resources.coordinator.schedule.batches.len()
-                        {
-                            if let Some(stale_ticks) =
+                            && let Some(stale_ticks) =
                                 resources.coordinator.next_stale_packet_target_ticks()
-                            {
-                                let wait_target_qpc =
-                                    match resources.playback.epoch.checked_add_duration(
-                                        DurationTicks::from_raw(stale_ticks.as_u64()),
-                                    ) {
-                                        Ok(target) => target,
-                                        Err(error) => {
-                                            core.runtime.terminal_error = Some(format!(
-                                                "deadline arithmetic failure: {error}"
-                                            ));
-                                            break;
-                                        }
-                                    };
-                                if wait_target_qpc > now_ticks {
-                                    match wait_for_next_boundary(WaitBoundaryInput {
-                                        deadline: WaitDeadline {
-                                            physical_target_qpc: Some(wait_target_qpc),
-                                            spin_threshold_ticks: timing
-                                                .effective_spin_threshold_ticks,
-                                            qpc_clock,
-                                        },
-                                        signals: WaitSignals {
-                                            waiter: &resources.waiter,
-                                            interrupt,
-                                        },
-                                        mutable: WaitMutable {
-                                            local_metrics: &mut core.metrics,
-                                            terminal_error: &mut core.runtime.terminal_error,
-                                        },
-                                    }) {
-                                        WaitBoundary::Due { .. } | WaitBoundary::Replan { .. } => {
-                                            continue;
-                                        }
-                                        WaitBoundary::Exit => break,
+                        {
+                            let wait_target_qpc =
+                                match resources.playback.epoch.checked_add_duration(
+                                    DurationTicks::from_raw(stale_ticks.as_u64()),
+                                ) {
+                                    Ok(target) => target,
+                                    Err(error) => {
+                                        core.runtime.terminal_error =
+                                            Some(format!("deadline arithmetic failure: {error}"));
+                                        break;
                                     }
+                                };
+                            if wait_target_qpc > now_ticks {
+                                match wait_for_next_boundary(WaitBoundaryInput {
+                                    deadline: WaitDeadline {
+                                        physical_target_qpc: Some(wait_target_qpc),
+                                        spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                                        qpc_clock,
+                                    },
+                                    signals: WaitSignals {
+                                        waiter: &resources.waiter,
+                                        interrupt,
+                                    },
+                                    mutable: WaitMutable {
+                                        local_metrics: &mut core.metrics,
+                                        terminal_error: &mut core.runtime.terminal_error,
+                                    },
+                                }) {
+                                    WaitBoundary::Due { .. } | WaitBoundary::Replan { .. } => {
+                                        continue;
+                                    }
+                                    WaitBoundary::Exit => break,
                                 }
                             }
                             continue;
@@ -1562,7 +1558,7 @@ pub(super) fn dispatch(
                                 skipped_mask: send_result.evidence.skipped_mask,
                                 trace: crate::engine::worker::dispatch::observation::DownTraceObservation {
                                     event_index: source_action_index,
-                                    compiled_packet_index: None,
+                                    compiled_packet_index: down_chord.as_ref().map(|c| c.chord_index as u64),
                                     trace_kind,
                                     result_status: send_result.status,
                                     send_attempts: send_result.evidence.attempts,

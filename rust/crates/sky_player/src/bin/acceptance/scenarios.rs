@@ -596,11 +596,7 @@ pub(super) fn production_options_for_fps(
     NativeSessionOptions {
         schedule,
         backend: BackendConfig::Production,
-        profile: if scenario == Scenario::HolInterleaved {
-            DispatchProfile::StrictTimingDiagnostic
-        } else {
-            DispatchProfile::Production
-        },
+        profile: DispatchProfile::Production,
         timing: TimingOptions {
             game_fps,
             min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),

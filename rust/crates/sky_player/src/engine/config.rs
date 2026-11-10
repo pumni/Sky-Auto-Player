@@ -390,6 +390,14 @@ impl StartupOrderingHook {
             .store(checkpoint as u8, Ordering::Release);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn is_armed_for_prepared_stream_test(&self) -> bool {
+        let cp = self.startup_checkpoint.load(Ordering::Acquire);
+        cp == StartupCheckpoint::StreamBuild as u8
+            || cp == StartupCheckpoint::CoordinatorReset as u8
+            || cp == StartupCheckpoint::StreamMaterialization as u8
+    }
+
     pub fn panic_at_startup_checkpoint(&self, checkpoint: StartupCheckpoint) {
         self.panic_startup_checkpoint
             .store(checkpoint as u8, Ordering::Release);

@@ -283,7 +283,14 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             format!("executor construction failed: {error}"),
         );
     }
-    let prepared_stream = if effective_policy.prepared_normal {
+    #[cfg(any(test, feature = "test-support"))]
+    let needs_prepared_stream_for_checkpoint =
+        startup_hook.is_some_and(|h| h.is_armed_for_prepared_stream_test());
+    #[cfg(not(any(test, feature = "test-support")))]
+    let needs_prepared_stream_for_checkpoint = false;
+
+    let prepared_stream = if needs_prepared_stream_for_checkpoint {
+        coordinator.executor = None;
         match PreparedDispatchStream::build_with_checkpoints(
             coordinator,
             qpc_clock,
