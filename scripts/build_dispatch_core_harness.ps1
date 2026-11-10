@@ -69,13 +69,19 @@ $cargoCleanCommand = 'cargo clean --manifest-path rust/Cargo.toml --profile dist
 $cargoBuildCommand = 'cargo build --locked --manifest-path rust/Cargo.toml -p sky_player --profile dist --target x86_64-pc-windows-msvc --features ' + $featureArgument + ' --bin rt-native-acceptance'
 $buildLog = Join-Path $destination 'build.log'
 
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $cleanOutput = @(& cargo clean --manifest-path (Join-Path $rustRoot 'Cargo.toml') --profile $profile --target $targetTriple 2>&1)
 $cleanExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
 $cleanOutput | Set-Content -LiteralPath (Join-Path $destination 'clean.log') -Encoding UTF8
 if ($cleanExit -ne 0) { throw ('cargo clean failed with exit code ' + $cleanExit) }
 
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $buildOutput = @(& cargo build --locked --manifest-path (Join-Path $rustRoot 'Cargo.toml') -p sky_player --profile $profile --target $targetTriple --features $featureArgument --bin rt-native-acceptance 2>&1)
 $buildExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
 $buildOutput | Set-Content -LiteralPath $buildLog -Encoding UTF8
 if ($buildExit -ne 0) { throw ('cargo build failed with exit code ' + $buildExit) }
 
