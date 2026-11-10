@@ -695,35 +695,35 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
     assert_eq!(cancelled, 2);
     assert_eq!(executor.active_mask(), 0);
     assert_eq!(executor.accounting().cancelled, 2);
+    assert_eq!(
+        executor.resume_barrier_ticks(),
+        TimelineTicks::from_raw(41_000)
+    );
 
     // At 30 ms (the original authored Up time):
     // No physical Up should be replayed!
-    // Resume barrier is Q + T = 25 ms + 16 ms = 41 ms.
-    // Second Down (scheduled at 35 ms) MUST NOT DISPATCH before 41 ms!
+    // Next event is second Down scheduled at 35 ms.
     let step30 = executor.evaluate(TimelineTicks::from_raw(30_000));
     assert_eq!(
         step30,
         DispatchAction::Wait {
-            deadline_ticks: TimelineTicks::from_raw(41_000)
+            deadline_ticks: TimelineTicks::from_raw(35_000)
         },
-        "No stale Up replay; Down must wait until resume barrier Q + T = 41 ms"
+        "No stale Up replay; next authored event is Down at 35 ms"
     );
 
-    // At 40 ms: still waiting for barrier
-    let step40 = executor.evaluate(TimelineTicks::from_raw(40_000));
-    assert!(matches!(step40, DispatchAction::Wait { .. }));
-
-    // At 41 ms: barrier passed, second Down is dispatched!
-    let step41 = executor.evaluate(TimelineTicks::from_raw(41_000));
+    // At 35 ms: second Down is dispatched at its authored time (physical timing guard
+    // holds SendInput physical transmission until barrier Q + T = 41 ms).
+    let step35 = executor.evaluate(TimelineTicks::from_raw(35_000));
     assert!(
         matches!(
-            step41,
+            step35,
             DispatchAction::Send {
                 up_mask: 0,
                 down_chord: Some(chord)
             } if chord.down_mask == 0x01
         ),
-        "Second Down dispatched after resume barrier"
+        "Second Down dispatched at authored schedule time"
     );
 }
 

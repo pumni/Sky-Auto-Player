@@ -224,6 +224,11 @@ impl DispatchExecutor {
         self.down_chords.get(self.chord_cursor)
     }
 
+    #[inline]
+    pub fn resume_barrier_ticks(&self) -> TimelineTicks {
+        self.resume_barrier_ticks
+    }
+
     /// Evaluate the current state at `now_ticks` and decide the next dispatch action.
     pub fn evaluate(&self, now_ticks: TimelineTicks) -> DispatchAction<'_> {
         let mut up_ready_mask = 0u16;
@@ -251,7 +256,7 @@ impl DispatchExecutor {
 
         if let Some(chord) = chord_opt {
             chord_eligible = true;
-            chord_earliest_due = chord.scheduled_ticks.max(self.resume_barrier_ticks);
+            chord_earliest_due = chord.scheduled_ticks;
             if now_ticks < chord_earliest_due {
                 chord_eligible = false;
             }
