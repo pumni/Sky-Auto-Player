@@ -1244,6 +1244,15 @@ pub(super) fn dispatch(
                             }
                         };
 
+                        #[cfg(any(test, feature = "test-support"))]
+                        if has_down && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                        {
+                            hook.record_down_window(
+                                timing_window.authored_target_qpc.as_u64(),
+                                timing_window.packet_not_before_qpc.as_u64(),
+                            );
+                        }
+
                         if timing_window.packet_not_before_qpc > now_ticks {
                             if has_down {
                                 let expected =
