@@ -1,5 +1,6 @@
 use super::wait_failure_message;
 use crate::engine::telemetry::WorkerMetricsLocal;
+use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
@@ -7,6 +8,21 @@ use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResul
 #[path = "wait/observation.rs"]
 mod observation;
 pub use observation::WaitObservation;
+
+pub(crate) fn next_stale_metadata_deadline_qpc(
+    coordinator: &RuntimeDispatchCoordinator,
+    epoch_qpc: QpcTicks,
+) -> Result<Option<QpcTicks>, String> {
+    coordinator
+        .next_stale_packet_target_ticks()
+        .map_err(|error| format!("coordinator stale lookahead failure: {error}"))?
+        .map(|ticks| {
+            epoch_qpc
+                .checked_add_duration(DurationTicks::from_raw(ticks.as_u64()))
+                .map_err(|error| format!("stale metadata deadline arithmetic failure: {error}"))
+        })
+        .transpose()
+}
 
 pub(crate) enum WaitBoundary {
     Due {

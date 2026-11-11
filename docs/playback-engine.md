@@ -99,6 +99,12 @@ Worker Loop -> Wait Deadline Reached
     -> Reject: Defer, Replan, or Terminate
 ```
 
+Unmatched-Up metadata has no physical dispatch boundary. When its bounded
+coordinator lookahead finds an authored metadata deadline before the next
+physical packet eligibility deadline, the worker waits to that metadata deadline
+with zero spin, commits only metadata that is due, then re-evaluates the physical
+candidate. This metadata-only wait is not recorded as a physical packet wait.
+
 ### Focus and Process Identity
 - The target window must be the exact foreground window (`GetForegroundWindow() == target_hwnd`).
 - The process owning the foreground window must match the retained target PID and

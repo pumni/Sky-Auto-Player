@@ -260,9 +260,15 @@ pub struct StartupOrderingHook {
     down_authored_target_qpc_ticks: AtomicU64,
     down_not_before_qpc_ticks: AtomicU64,
     down_sender_start_qpc_ticks: AtomicU64,
-    down_sender_target_qpc_ticks: AtomicU64,
+    down_sender_authored_target_qpc_ticks: AtomicU64,
+    down_sender_packet_not_before_qpc_ticks: AtomicU64,
+    pub(crate) up_only_sender_attempt_qpc_ticks: std::sync::Mutex<Option<(Option<u64>, u64, u64)>>,
     down_sender_wake_qpc_ticks: AtomicU64,
+    down_sender_stale_commit_count: AtomicU64,
     down_sender_attempt_count: AtomicU64,
+    pub(crate) metadata_only_wait_count: AtomicU64,
+    pub(crate) metadata_only_wait_target_qpc_ticks: AtomicU64,
+    pub(crate) metadata_only_wait_wake_qpc_ticks: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
     startup_checkpoint: AtomicU8,
@@ -307,6 +313,8 @@ pub enum StartupCheckpoint {
     WorkerCompletionPublished = 13,
     #[cfg(any(test, feature = "test-support"))]
     StaleMetadataChunk = 14,
+    #[cfg(any(test, feature = "test-support"))]
+    MetadataOnlyWait = 15,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -530,14 +538,24 @@ impl StartupOrderingHook {
     }
 
     #[cfg(test)]
-    pub(crate) fn last_down_sender_qpc_evidence(&self) -> (Option<u64>, Option<u64>, Option<u64>) {
+    pub(crate) fn last_down_sender_qpc_evidence(
+        &self,
+    ) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>, u64) {
         let pre_call = self.down_sender_start_qpc_ticks.load(Ordering::Acquire);
-        let deadline = self.down_sender_target_qpc_ticks.load(Ordering::Acquire);
+        let authored_target = self
+            .down_sender_authored_target_qpc_ticks
+            .load(Ordering::Acquire);
+        let packet_not_before = self
+            .down_sender_packet_not_before_qpc_ticks
+            .load(Ordering::Acquire);
         let wake = self.down_sender_wake_qpc_ticks.load(Ordering::Acquire);
+        let stale_commit_count = self.down_sender_stale_commit_count.load(Ordering::Acquire);
         (
             (pre_call != 0).then_some(pre_call),
-            (deadline != 0).then_some(deadline),
+            (authored_target != 0).then_some(authored_target),
+            (packet_not_before != 0).then_some(packet_not_before),
             (wake != 0).then_some(wake),
+            stale_commit_count,
         )
     }
 
@@ -588,17 +606,23 @@ impl StartupOrderingHook {
     pub(crate) fn record_down_sender_attempt(
         &self,
         started_qpc_ticks: Option<u64>,
-        deadline_qpc_ticks: u64,
+        authored_target_qpc_ticks: u64,
+        packet_not_before_qpc_ticks: u64,
         wake_qpc_ticks: Option<u64>,
+        stale_commit_count: u64,
     ) {
         self.down_sender_attempt_count
             .fetch_add(1, Ordering::AcqRel);
         self.down_sender_start_qpc_ticks
             .store(started_qpc_ticks.unwrap_or(0), Ordering::Release);
-        self.down_sender_target_qpc_ticks
-            .store(deadline_qpc_ticks, Ordering::Release);
+        self.down_sender_authored_target_qpc_ticks
+            .store(authored_target_qpc_ticks, Ordering::Release);
+        self.down_sender_packet_not_before_qpc_ticks
+            .store(packet_not_before_qpc_ticks, Ordering::Release);
         self.down_sender_wake_qpc_ticks
             .store(wake_qpc_ticks.unwrap_or(0), Ordering::Release);
+        self.down_sender_stale_commit_count
+            .store(stale_commit_count, Ordering::Release);
     }
 
     pub(crate) fn wait_after_successful_up(&self) {

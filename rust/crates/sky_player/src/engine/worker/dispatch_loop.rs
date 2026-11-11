@@ -10,10 +10,13 @@ use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
-    focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
-    publish_backend_counters, publish_backend_metrics, record_wait_failure, suspend_live_input,
-    target_stamp_still_current, verify_final_down_admission, wait_for_next_boundary,
+    focus_matches, focus_matches_hwnd, load_target_stamp, next_stale_metadata_deadline_qpc,
+    process_command_control, publish_backend_counters, publish_backend_metrics,
+    record_wait_failure, suspend_live_input, target_stamp_still_current,
+    verify_final_down_admission, wait_for_next_boundary,
 };
+#[cfg(any(test, feature = "test-support"))]
+use crate::engine::test_support::PacketSenderAttemptEvidence;
 use sky_dispatch_core::clock::PauseReason;
 use smallvec::SmallVec;
 use std::any::Any;
@@ -58,6 +61,39 @@ fn account_unobserved_up_slots(
     local_metrics.up_slot_records_not_captured_by_mode = local_metrics
         .up_slot_records_not_captured_by_mode
         .saturating_add(count);
+}
+
+fn wait_for_metadata_only_deadline(
+    metadata_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    terminal_error: &mut Option<String>,
+) -> WaitBoundary {
+    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+        qpc_clock,
+        metadata_target_qpc,
+        DurationTicks::ZERO,
+        interrupt,
+    );
+    match wait_result.outcome {
+        WaitOutcome::Deadline => WaitBoundary::Due {
+            dispatch_qpc: wait_result.wake_qpc.unwrap_or(metadata_target_qpc),
+            planned_wait_ticks: DurationTicks::ZERO,
+            wait_result: Some(wait_result),
+            target_qpc: metadata_target_qpc,
+        },
+        WaitOutcome::Failed(failure) => {
+            record_wait_failure(failure, local_metrics, terminal_error);
+            WaitBoundary::Exit
+        }
+        WaitOutcome::Interrupted => {
+            local_metrics.wait_interrupted_count =
+                local_metrics.wait_interrupted_count.saturating_add(1);
+            WaitBoundary::Replan
+        }
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -792,20 +828,23 @@ pub(crate) fn dispatch_staged_candidate(
         .send_prepared_physical_packet_at_final_boundary(&candidate.prepared_packet, None);
 
     #[cfg(any(test, feature = "test-support"))]
-    if has_down
-        && send_result.evidence.attempts != 0
+    if send_result.evidence.attempts != 0
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
-        hook.record_down_sender_attempt(
-            send_result
+        hook.record_packet_sender_attempt(PacketSenderAttemptEvidence {
+            has_down,
+            has_up: candidate.packet_masks.up_mask != 0,
+            sender_start_qpc_ticks: send_result
                 .evidence
                 .started_ticks
                 .map(|ticks| ticks.as_u64()),
-            candidate.timing_window.authored_target_qpc.as_u64(),
-            runtime
+            authored_target_qpc_ticks: candidate.timing_window.authored_target_qpc.as_u64(),
+            packet_not_before_qpc_ticks: candidate.timing_window.packet_not_before_qpc.as_u64(),
+            wake_qpc_ticks: runtime
                 .last_dispatch_deadline_wake_qpc
                 .map(|ticks| ticks.as_u64()),
-        );
+            stale_commit_count: hook.stale_packet_commit_count.load(Ordering::Acquire),
+        });
     }
 
     if system_power.system_suspend_terminal() {
@@ -1580,6 +1619,13 @@ pub(super) fn dispatch(
                                 hook.mark_stale_packet_committed(
                                     core.runtime.last_dispatch_deadline_wake_qpc.is_some(),
                                 );
+                                if hook.stale_packet_commit_count.load(Ordering::Acquire)
+                                    == sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP as u64
+                                {
+                                    hook.visit_startup_checkpoint(
+                                        super::super::config::StartupCheckpoint::StaleMetadataChunk,
+                                    );
+                                }
                             }
                             continue;
                         }
@@ -1618,45 +1664,65 @@ pub(super) fn dispatch(
 
             match action {
                 sky_dispatch_core::executor::DispatchAction::Finished => {
-                    if resources.coordinator.cursor < resources.coordinator.schedule.batches.len()
-                        && let Some(stale_ticks) =
-                            resources.coordinator.next_stale_packet_target_ticks()
-                    {
-                        let wait_target_qpc = match resources
-                            .playback
-                            .epoch
-                            .checked_add_duration(DurationTicks::from_raw(stale_ticks.as_u64()))
-                        {
-                            Ok(target) => target,
+                    if resources.coordinator.cursor < resources.coordinator.schedule.batches.len() {
+                        let stale_deadline_qpc = match next_stale_metadata_deadline_qpc(
+                            &resources.coordinator,
+                            resources.playback.epoch,
+                        ) {
+                            Ok(deadline) => deadline,
                             Err(error) => {
-                                core.runtime.terminal_error =
-                                    Some(format!("deadline arithmetic failure: {error}"));
+                                core.runtime.terminal_error = Some(error);
                                 break;
                             }
                         };
-                        if wait_target_qpc > now_ticks {
-                            match wait_for_next_boundary(WaitBoundaryInput {
-                                deadline: WaitDeadline {
-                                    physical_target_qpc: Some(wait_target_qpc),
-                                    spin_threshold_ticks: timing.effective_spin_threshold_ticks,
-                                    qpc_clock,
-                                },
-                                signals: WaitSignals {
-                                    waiter: &resources.waiter,
-                                    interrupt,
-                                },
-                                mutable: WaitMutable {
-                                    local_metrics: &mut core.metrics,
-                                    terminal_error: &mut core.runtime.terminal_error,
-                                },
-                            }) {
-                                WaitBoundary::Due { .. } | WaitBoundary::Replan => {
-                                    continue;
+                        if let Some(wait_target_qpc) = stale_deadline_qpc {
+                            if wait_target_qpc > now_ticks {
+                                core.runtime.last_dispatch_deadline_wake_qpc = None;
+                                core.runtime.last_dispatch_deadline_target_qpc = None;
+                                super::dispatch::publish_pending_wait_observation(
+                                    &mut core.runtime,
+                                    core.observer.pending.as_ref(),
+                                    &mut core.metrics,
+                                );
+                                #[cfg(any(test, feature = "test-support"))]
+                                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                                    hook.visit_startup_checkpoint(
+                                        super::super::config::StartupCheckpoint::MetadataOnlyWait,
+                                    );
                                 }
-                                WaitBoundary::Exit => break,
+                                let wait_boundary = wait_for_metadata_only_deadline(
+                                    wait_target_qpc,
+                                    qpc_clock,
+                                    &resources.waiter,
+                                    interrupt,
+                                    &mut core.metrics,
+                                    &mut core.runtime.terminal_error,
+                                );
+                                #[cfg(any(test, feature = "test-support"))]
+                                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                                    let wake_qpc = match &wait_boundary {
+                                        WaitBoundary::Due { wait_result, .. } => wait_result
+                                            .as_ref()
+                                            .and_then(|result| result.wake_qpc)
+                                            .map(|ticks| ticks.as_u64()),
+                                        WaitBoundary::Replan | WaitBoundary::Exit => None,
+                                    };
+                                    hook.record_metadata_only_wait(
+                                        wait_target_qpc.as_u64(),
+                                        wake_qpc,
+                                    );
+                                }
+                                match wait_boundary {
+                                    WaitBoundary::Due { .. } => continue,
+                                    WaitBoundary::Replan => {
+                                        let _ = interrupt.try_take();
+                                        continue;
+                                    }
+                                    WaitBoundary::Exit => break,
+                                }
                             }
+                            continue;
                         }
-                        continue;
                     }
                     break;
                 }
@@ -1708,6 +1774,62 @@ pub(super) fn dispatch(
                     let target_wait_qpc = candidate
                         .as_ref()
                         .map_or(wait_target_qpc, |c| c.timing_window.packet_not_before_qpc);
+
+                    let stale_deadline_qpc = match next_stale_metadata_deadline_qpc(
+                        &resources.coordinator,
+                        resources.playback.epoch,
+                    ) {
+                        Ok(deadline) => deadline,
+                        Err(error) => {
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                    };
+                    if let Some(stale_deadline_qpc) = stale_deadline_qpc
+                        && stale_deadline_qpc > now_ticks
+                        && stale_deadline_qpc < target_wait_qpc
+                    {
+                        core.runtime.last_dispatch_deadline_wake_qpc = None;
+                        core.runtime.last_dispatch_deadline_target_qpc = None;
+                        super::dispatch::publish_pending_wait_observation(
+                            &mut core.runtime,
+                            core.observer.pending.as_ref(),
+                            &mut core.metrics,
+                        );
+                        #[cfg(any(test, feature = "test-support"))]
+                        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                            hook.visit_startup_checkpoint(
+                                super::super::config::StartupCheckpoint::MetadataOnlyWait,
+                            );
+                        }
+                        let wait_boundary = wait_for_metadata_only_deadline(
+                            stale_deadline_qpc,
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        );
+                        #[cfg(any(test, feature = "test-support"))]
+                        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                            let wake_qpc = match &wait_boundary {
+                                WaitBoundary::Due { wait_result, .. } => wait_result
+                                    .as_ref()
+                                    .and_then(|result| result.wake_qpc)
+                                    .map(|ticks| ticks.as_u64()),
+                                WaitBoundary::Replan | WaitBoundary::Exit => None,
+                            };
+                            hook.record_metadata_only_wait(stale_deadline_qpc.as_u64(), wake_qpc);
+                        }
+                        match wait_boundary {
+                            WaitBoundary::Due { .. } => continue,
+                            WaitBoundary::Replan => {
+                                let _ = interrupt.try_take();
+                                continue;
+                            }
+                            WaitBoundary::Exit => break,
+                        }
+                    }
 
                     // R1: Pre-wait final control check
                     if let Some(ref cand) = candidate {
@@ -2005,6 +2127,65 @@ pub(super) fn dispatch(
                     };
 
                     if candidate.timing_window.packet_not_before_qpc > now_ticks {
+                        let stale_deadline_qpc = match next_stale_metadata_deadline_qpc(
+                            &resources.coordinator,
+                            resources.playback.epoch,
+                        ) {
+                            Ok(deadline) => deadline,
+                            Err(error) => {
+                                core.runtime.terminal_error = Some(error);
+                                break;
+                            }
+                        };
+                        if let Some(stale_deadline_qpc) = stale_deadline_qpc
+                            && stale_deadline_qpc > now_ticks
+                            && stale_deadline_qpc < candidate.timing_window.packet_not_before_qpc
+                        {
+                            core.runtime.last_dispatch_deadline_wake_qpc = None;
+                            core.runtime.last_dispatch_deadline_target_qpc = None;
+                            super::dispatch::publish_pending_wait_observation(
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
+                                &mut core.metrics,
+                            );
+                            #[cfg(any(test, feature = "test-support"))]
+                            if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                                hook.visit_startup_checkpoint(
+                                    super::super::config::StartupCheckpoint::MetadataOnlyWait,
+                                );
+                            }
+                            let wait_boundary = wait_for_metadata_only_deadline(
+                                stale_deadline_qpc,
+                                qpc_clock,
+                                &resources.waiter,
+                                interrupt,
+                                &mut core.metrics,
+                                &mut core.runtime.terminal_error,
+                            );
+                            #[cfg(any(test, feature = "test-support"))]
+                            if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                                let wake_qpc = match &wait_boundary {
+                                    WaitBoundary::Due { wait_result, .. } => wait_result
+                                        .as_ref()
+                                        .and_then(|result| result.wake_qpc)
+                                        .map(|ticks| ticks.as_u64()),
+                                    WaitBoundary::Replan | WaitBoundary::Exit => None,
+                                };
+                                hook.record_metadata_only_wait(
+                                    stale_deadline_qpc.as_u64(),
+                                    wake_qpc,
+                                );
+                            }
+                            match wait_boundary {
+                                WaitBoundary::Due { .. } => continue,
+                                WaitBoundary::Replan => {
+                                    let _ = interrupt.try_take();
+                                    continue;
+                                }
+                                WaitBoundary::Exit => break,
+                            }
+                        }
+
                         let has_down = candidate.packet_masks.down_mask != 0;
                         if has_down {
                             let expected = candidate

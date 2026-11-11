@@ -1,0 +1,5 @@
+   Compiling sky_dispatch_win32 v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_dispatch_win32)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.82s
+     Running unittests src\lib.rs (rust\target\debug\deps\sky_dispatch_win32-9d1eefa4a812db58.exe)
+     Running unittests src\bin\native_calibration.rs (rust\target\debug\deps\native_calibration-ab9e8b37c8068472.exe)
+   Doc-tests sky_dispatch_win32

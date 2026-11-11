@@ -17,7 +17,7 @@ use crate::engine::telemetry::metrics::PrecisionPacketTimingObservation;
 use sky_dispatch_core::coordinator::PreparedAuthoredCommitProof;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 enum PreparedNormalPrecisionResult {
     Rejected(FinalDownVerdict),
@@ -432,9 +432,11 @@ pub(super) fn record_down_send_result(
         hook.record_down_sender_attempt(
             result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
             physical_timing_window.authored_target_qpc.as_u64(),
+            physical_timing_window.packet_not_before_qpc.as_u64(),
             runtime
                 .last_dispatch_deadline_wake_qpc
                 .map(|ticks| ticks.as_u64()),
+            hook.stale_packet_commit_count.load(Ordering::Acquire),
         );
     }
     if result.evidence.attempts != 0 {

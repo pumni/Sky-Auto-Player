@@ -179,25 +179,87 @@ impl RuntimeDispatchCoordinator {
     ///
     /// The scan is bounded to at most [`Self::MAX_STALE_PACKETS_SCANNED_PER_STEP`]
     /// packets to prevent unbounded scanning during high-frequency dispatch ticks.
-    pub fn next_stale_packet_target_ticks(&self) -> Option<TimelineTicks> {
+    pub fn next_stale_packet_target_ticks(
+        &self,
+    ) -> Result<Option<TimelineTicks>, CoordinatorError> {
         let mut cursor = self.cursor;
         let mut scanned = 0usize;
         while cursor < self.schedule.batches.len()
             && scanned < Self::MAX_STALE_PACKETS_SCANNED_PER_STEP
         {
             scanned += 1;
-            let batch = self.schedule.batches.get(cursor)?;
-            let packet_index = usize::try_from(batch.packet_id).ok()?;
-            let packet = self.schedule.packets.get(packet_index)?;
-            if packet.first_batch_index as usize != cursor {
-                return None;
+            let batch = self
+                .schedule
+                .batches
+                .get(cursor)
+                .ok_or(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "stale lookahead cursor is outside the batch schedule".to_string(),
+                    ),
+                ))?;
+            let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
+                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                    "packet id does not fit in usize".to_string(),
+                ))
+            })?;
+            let packet =
+                self.schedule
+                    .packets
+                    .get(packet_index)
+                    .ok_or(CoordinatorError::Schedule(
+                        RuntimeScheduleError::InvalidPacketIndex {
+                            index: packet_index,
+                        },
+                    ))?;
+            let packet_first_batch_index =
+                usize::try_from(packet.first_batch_index).map_err(|_| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                        "packet first batch index does not fit in usize".to_string(),
+                    ))
+                })?;
+            if packet_first_batch_index != cursor {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "stale packet first batch does not match coordinator lookahead cursor"
+                            .to_string(),
+                    ),
+                ));
             }
-            if packet.up_mask == 0 && packet.down_mask == 0 && packet.up_intent_len > 0 {
-                return self.effective_batch_scheduled_ticks(cursor).ok();
+            let packet_batch_count = usize::from(packet.batch_count);
+            if packet_batch_count == 0 {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "stale lookahead packet must contain at least one authored batch"
+                            .to_string(),
+                    ),
+                ));
             }
-            cursor += usize::from(packet.batch_count);
+            if packet.up_mask == 0 && packet.down_mask == 0 {
+                if packet.up_intent_len == 0 || packet.down_intent_len != 0 {
+                    return Err(CoordinatorError::Invariant(
+                        CoordinatorInvariantError::Accounting(
+                            "empty compiled packet is not a stale unmatched-Up packet".to_string(),
+                        ),
+                    ));
+                }
+                return self.effective_batch_scheduled_ticks(cursor).map(Some);
+            }
+            let next_cursor =
+                cursor
+                    .checked_add(packet_batch_count)
+                    .ok_or(CoordinatorError::Time(
+                        crate::time::TimeArithmeticError::Overflow,
+                    ))?;
+            if next_cursor > self.schedule.batches.len() {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "stale lookahead packet extends beyond the batch schedule".to_string(),
+                    ),
+                ));
+            }
+            cursor = next_cursor;
         }
-        None
+        Ok(None)
     }
 
     /// Atomically consume one prepared stale compiler packet.

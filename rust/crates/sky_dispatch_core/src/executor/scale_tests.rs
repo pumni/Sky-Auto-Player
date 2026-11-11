@@ -218,11 +218,72 @@ fn divergent_coordinator_executor_active_mask_fails_closed() {
 
 #[test]
 fn next_stale_packet_target_ticks_is_bounded_by_32() {
-    let canonical = vec![0x15];
-    let sched = generate_scale_schedule(40, 1, &canonical);
+    let mut actions = Vec::with_capacity(41);
+    for chord in 0..20u32 {
+        let down_us = u64::from(chord) * 100_000;
+        actions.push(KeyActionInput {
+            source_action_index: chord * 2,
+            kind: ActionKind::Down,
+            scheduled_us: down_us,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "bounded-lookahead-down".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: chord * 2 + 1,
+            kind: ActionKind::Up,
+            scheduled_us: down_us + 50_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "bounded-lookahead-up".into(),
+        });
+    }
+    actions.push(KeyActionInput {
+        source_action_index: 40,
+        kind: ActionKind::Up,
+        scheduled_us: 2_000_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "bounded-lookahead-stale-up".into(),
+    });
+    let sched = compile_runtime_intents(&actions, &[0x15]).expect("bounded lookahead schedule");
     let coord =
         crate::coordinator::RuntimeDispatchCoordinator::new(sched, 0, 0, TimelineTicks::from_raw);
-    assert_eq!(coord.next_stale_packet_target_ticks(), None);
+    assert_eq!(coord.next_stale_packet_target_ticks(), Ok(None));
+}
+
+#[test]
+fn next_stale_packet_target_ticks_reports_target_and_corruption() {
+    let actions = [KeyActionInput {
+        source_action_index: 0,
+        kind: ActionKind::Up,
+        scheduled_us: 1_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "lookahead-stale-up".into(),
+    }];
+    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("stale lookahead schedule");
+    let coordinator = crate::coordinator::RuntimeDispatchCoordinator::new(
+        schedule.clone(),
+        0,
+        0,
+        TimelineTicks::from_raw,
+    );
+    assert_eq!(
+        coordinator.next_stale_packet_target_ticks(),
+        Ok(Some(TimelineTicks::from_raw(1_000)))
+    );
+
+    let mut corrupt_schedule = schedule;
+    corrupt_schedule.batches[0].packet_id = u32::MAX;
+    let corrupt = crate::coordinator::RuntimeDispatchCoordinator::new(
+        corrupt_schedule,
+        0,
+        0,
+        TimelineTicks::from_raw,
+    );
+    assert!(matches!(
+        corrupt.next_stale_packet_target_ticks(),
+        Err(crate::coordinator::CoordinatorError::Schedule(
+            crate::model::RuntimeScheduleError::InvalidPacketIndex { .. }
+        ))
+    ));
 }
 
 #[test]

@@ -3,6 +3,10 @@ pub(crate) mod command_timing;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod dispatch_harness;
 #[cfg(any(test, feature = "test-support"))]
+mod dispatch_timing_evidence;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_timing_evidence::PacketSenderAttemptEvidence;
+#[cfg(any(test, feature = "test-support"))]
 mod fault_injection;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod mock_sender;

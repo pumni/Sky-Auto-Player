@@ -1,0 +1,14 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running `rust\target\debug\xtask.exe check all`
+[xtask] cargo vet --version
+[xtask] cargo vet --manifest-path rust/Cargo.toml --locked
+[xtask] cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+[xtask] cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+[xtask] cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked
+[xtask] bun install --frozen-lockfile
+[xtask] bun run check
+[xtask] bun run test:e2e
+[xtask] cargo check --manifest-path rust/Cargo.toml -p sky_desktop_shell --bin sky_desktop_shell --no-default-features --features desktop-runtime --locked
+[xtask] cargo check --manifest-path rust/Cargo.toml -p sky_desktop_shell --locked
+[xtask] cargo check --manifest-path rust/Cargo.toml -p sky_desktop_shell --all-features --locked
+[xtask] cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked

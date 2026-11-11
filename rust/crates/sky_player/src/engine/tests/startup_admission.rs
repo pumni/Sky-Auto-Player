@@ -246,6 +246,200 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
+fn actual_b_worker_waits_for_stale_metadata_before_the_next_physical_down() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::MetadataOnlyWait, 1);
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        post_wake_stale_metadata_schedule(1),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.wait.test_spin_threshold_us = None;
+    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("actual B worker session");
+
+    session.arm(0).expect("worker arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    assert_eq!(hook.stale_packet_commit_count.load(Ordering::Acquire), 0);
+    assert_eq!(hook.down_sender_attempt_count(), 2);
+    assert_eq!(send_calls.load(Ordering::Acquire), 4);
+
+    hook.release_startup_checkpoint();
+    let stale_wait = Instant::now();
+    while hook.stale_packet_commit_count.load(Ordering::Acquire) == 0
+        && stale_wait.elapsed() < Duration::from_secs(5)
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(hook.stale_packet_commit_count.load(Ordering::Acquire), 1);
+    assert_eq!(send_calls.load(Ordering::Acquire), 4);
+    let (metadata_waits, metadata_target, _metadata_wake) = hook.metadata_only_wait_evidence();
+    assert_eq!(metadata_waits, 1);
+    assert!(metadata_target.is_some());
+    assert_eq!(hook.down_sender_attempt_count(), 2);
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+    assert_eq!(send_calls.load(Ordering::Acquire), 6);
+    assert_eq!(hook.down_sender_attempt_count(), 3);
+    let (_, authored_target, packet_not_before, _, stale_at_final_down) =
+        hook.last_down_sender_qpc_evidence();
+    assert!(authored_target.is_some());
+    assert!(packet_not_before.is_some());
+    assert_eq!(stale_at_final_down, 1);
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "timestamp-floor-initial-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Down,
+            scheduled_us: 6_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "timestamp-floor-secondary-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Up,
+            scheduled_us: 25_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "timestamp-floor-initial-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 45_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "timestamp-floor-mixed-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 4,
+            kind: ActionKind::Down,
+            scheduled_us: 45_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "timestamp-floor-mixed-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 5,
+            kind: ActionKind::Up,
+            scheduled_us: 80_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "timestamp-floor-final-up".into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("mixed floor-held timestamp schedule");
+    assert!(schedule.packets.iter().any(|packet| {
+        packet.scheduled_us == 45_000 && packet.up_mask != 0 && packet.down_mask != 0
+    }));
+    let hook = Arc::new(StartupOrderingHook::default());
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 30_000,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.test_spin_threshold_us = None;
+    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("actual B worker session");
+
+    session.arm(0).expect("worker arm");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+    assert_eq!(hook.down_sender_attempt_count(), 3);
+    let (sender_start, authored_target, packet_not_before, _, _) =
+        hook.last_down_sender_qpc_evidence();
+    let sender_start = sender_start.expect("mixed Down sender pre-call QPC");
+    let authored_target = authored_target.expect("mixed Down authored QPC");
+    let packet_not_before = packet_not_before.expect("mixed Down eligibility QPC");
+    assert!(
+        packet_not_before > authored_target,
+        "floor-held mixed Down must preserve separate authored and packet eligibility QPCs"
+    );
+    let authored_to_pre_call = i128::from(sender_start) - i128::from(authored_target);
+    let eligibility_to_pre_call = i128::from(sender_start) - i128::from(packet_not_before);
+    assert_ne!(
+        authored_to_pre_call, eligibility_to_pre_call,
+        "floor-held mixed Down must preserve separate pre-call residuals"
+    );
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "timestamp-up-only-initial-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 35_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "timestamp-up-only-release".into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("Up-only timestamp schedule");
+    assert!(schedule.packets.iter().any(|packet| {
+        packet.up_mask != 0 && packet.down_mask == 0 && packet.scheduled_us == 35_000
+    }));
+
+    let hook = Arc::new(StartupOrderingHook::default());
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.test_spin_threshold_us = None;
+    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("actual B worker session");
+
+    session.arm(0).expect("worker arm");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+    assert_eq!(hook.down_sender_attempt_count(), 1);
+
+    let (sender_start, authored_target, packet_not_before) = hook
+        .up_only_sender_attempt_evidence()
+        .expect("Up-only sender timing evidence");
+    let sender_start = sender_start.expect("sender measured pre-call QPC");
+    assert_eq!(authored_target, packet_not_before);
+    assert!(sender_start >= packet_not_before);
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
 fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
     use serde_json::{Value, json};
 
@@ -272,8 +466,17 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
     for stale_count in [0usize, 1, 32, 33, 10_000] {
         let repetitions = if stale_count == 10_000 { 20 } else { 100 };
         let mut samples = Vec::with_capacity(repetitions);
+        let mut authored_to_pre_call_us = Vec::with_capacity(repetitions);
+        let mut eligibility_to_pre_call_us = Vec::with_capacity(repetitions);
         let mut wake_to_pre_call_us = Vec::with_capacity(repetitions);
-        let mut deadline_to_pre_call_us = Vec::with_capacity(repetitions);
+        let mut metadata_only_wait_count = 0u64;
+        let mut physical_wait_sample_count = 0u64;
+        let mut idle_wake_count = 0u64;
+        let mut worker_cpu_time_us = 0u64;
+        let mut playback_wall_time_us = 0u64;
+        let mut spin_time_us = 0u64;
+        let mut spin_time_missing_count = 0u64;
+        let mut observer_dropped_samples = 0u64;
 
         for repetition in 0..repetitions {
             let hook = Arc::new(StartupOrderingHook::default());
@@ -292,7 +495,8 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
             let session = NativeDispatchSession::new(options).expect("actual B worker session");
             session.arm(0).expect("worker arm");
             assert!(session.join(Duration::from_secs(10)).expect("worker join"));
-            assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+            let snapshot = session.snapshot();
+            assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
 
             let stale_committed = hook.stale_packet_commit_count.load(Ordering::Acquire);
             let stale_after_wake = hook
@@ -313,33 +517,69 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
                 qpc_frequency_hz = Some(frequency);
             }
             assert_eq!(hook.down_sender_attempt_count(), 3);
-            let (pre_call, deadline, wake) = hook.last_down_sender_qpc_evidence();
+            let (pre_call, authored_target, packet_not_before, wake, stale_at_final_send) =
+                hook.last_down_sender_qpc_evidence();
             let pre_call = pre_call.expect("final Down sender-boundary pre-call QPC");
-            let deadline = deadline.or_else(|| {
-                let (deadline, _) = hook.last_down_window();
-                (deadline != 0).then_some(deadline)
-            });
+            let authored_target = authored_target.expect("authored target QPC");
+            let packet_not_before = packet_not_before.expect("packet eligibility QPC");
+            assert_eq!(stale_at_final_send, stale_count as u64);
+            let authored_delta = delta_us(pre_call, authored_target, frequency);
+            let eligibility_delta = delta_us(pre_call, packet_not_before, frequency);
             let wake_delta = wake.map(|wake| delta_us(pre_call, wake, frequency));
-            let deadline_delta = deadline.map(|deadline| delta_us(pre_call, deadline, frequency));
+            authored_to_pre_call_us.push(authored_delta.1);
+            eligibility_to_pre_call_us.push(eligibility_delta.1);
             if let Some((_, micros)) = wake_delta {
                 wake_to_pre_call_us.push(micros);
             }
-            if let Some((_, micros)) = deadline_delta {
-                deadline_to_pre_call_us.push(micros);
+            let (metadata_waits, metadata_wait_target, metadata_wait_wake) =
+                hook.metadata_only_wait_evidence();
+            metadata_only_wait_count += metadata_waits;
+            physical_wait_sample_count += snapshot.wait_window_sample_count;
+            idle_wake_count += snapshot.idle_wake_count;
+            worker_cpu_time_us += snapshot.worker_cpu_time_us;
+            playback_wall_time_us += snapshot.playback_wall_time_us;
+            if let Some(value) = snapshot.spin_time_us {
+                spin_time_us += value;
+            } else {
+                spin_time_missing_count += 1;
             }
+            observer_dropped_samples += snapshot.observer_dropped_samples;
             samples.push(json!({
                 "repetition": repetition,
                 "stale_committed_before_final_send": stale_committed,
+                "stale_committed_at_final_down_sender_attempt": stale_at_final_send,
                 "stale_committed_after_attributed_wake": stale_after_wake,
                 "stale_committed_without_attributed_wake": stale_committed - stale_after_wake,
                 "wake_available": wake.is_some(),
                 "wake_qpc_ticks": wake,
-                "physical_deadline_qpc_ticks": deadline,
+                "authored_target_qpc_ticks": authored_target,
+                "packet_not_before_qpc_ticks": packet_not_before,
                 "pre_call_qpc_ticks": pre_call,
+                "authored_to_pre_call_ticks": authored_delta.0,
+                "authored_to_pre_call_us": authored_delta.1,
+                "eligibility_to_pre_call_ticks": eligibility_delta.0,
+                "eligibility_to_pre_call_us": eligibility_delta.1,
                 "wake_to_pre_call_ticks": wake_delta.map(|delta| delta.0),
                 "wake_to_pre_call_us": wake_delta.map(|delta| delta.1),
-                "deadline_to_pre_call_ticks": deadline_delta.map(|delta| delta.0),
-                "deadline_to_pre_call_us": deadline_delta.map(|delta| delta.1),
+                "metadata_only_wait_count": metadata_waits,
+                "metadata_only_wait_target_qpc_ticks": metadata_wait_target,
+                "metadata_only_wait_wake_available": metadata_wait_wake.is_some(),
+                "metadata_only_wait_wake_qpc_ticks": metadata_wait_wake,
+                "worker_cpu_time_us": snapshot.worker_cpu_time_us,
+                "process_cpu_time_us": snapshot.process_cpu_time_us,
+                "playback_wall_time_us": snapshot.playback_wall_time_us,
+                "physical_wait_sample_count": snapshot.wait_window_sample_count,
+                "idle_wake_count": snapshot.idle_wake_count,
+                "wait_interrupted_count": snapshot.wait_interrupted_count,
+                "spin_time_us": snapshot.spin_time_us,
+                "spin_observation_expected_samples": snapshot.spin_observation_expected_samples,
+                "spin_observation_dropped_samples": snapshot.spin_observation_dropped_samples,
+                "spin_observation_missing_samples": snapshot.spin_observation_missing_samples,
+                "spin_observation_pending_samples": snapshot.spin_observation_pending_samples,
+                "observer_dropped_samples": snapshot.observer_dropped_samples,
+                "observer_queue_high_watermark": snapshot.observer_queue_high_watermark,
+                "wait_backend_failures": snapshot.wait_backend_failures,
+                "wait_clock_failures": snapshot.wait_clock_failures,
             }));
         }
 
@@ -348,6 +588,24 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
             "repetitions": repetitions,
             "total_stale_scanned_per_final_send": stale_count,
             "qpc_frequency_hz": qpc_frequency_hz.expect("QPC frequency"),
+            "authored_to_pre_call": {
+                "measured_count": authored_to_pre_call_us.len(),
+                "missing_count": repetitions - authored_to_pre_call_us.len(),
+                "p50_us": nearest_rank(&authored_to_pre_call_us, 50),
+                "p95_us": nearest_rank(&authored_to_pre_call_us, 95),
+                "p99_us": nearest_rank(&authored_to_pre_call_us, 99),
+                "max_us": authored_to_pre_call_us.iter().max(),
+                "estimator": "nearest_rank"
+            },
+            "eligibility_to_pre_call": {
+                "measured_count": eligibility_to_pre_call_us.len(),
+                "missing_count": repetitions - eligibility_to_pre_call_us.len(),
+                "p50_us": nearest_rank(&eligibility_to_pre_call_us, 50),
+                "p95_us": nearest_rank(&eligibility_to_pre_call_us, 95),
+                "p99_us": nearest_rank(&eligibility_to_pre_call_us, 99),
+                "max_us": eligibility_to_pre_call_us.iter().max(),
+                "estimator": "nearest_rank"
+            },
             "wake_to_pre_call": {
                 "measured_count": wake_to_pre_call_us.len(),
                 "missing_wake_count": repetitions - wake_to_pre_call_us.len(),
@@ -357,14 +615,15 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
                 "max_us": wake_to_pre_call_us.iter().max(),
                 "estimator": "nearest_rank"
             },
-            "deadline_to_pre_call": {
-                "measured_count": deadline_to_pre_call_us.len(),
-                "missing_deadline_count": repetitions - deadline_to_pre_call_us.len(),
-                "p50_us": nearest_rank(&deadline_to_pre_call_us, 50),
-                "p95_us": nearest_rank(&deadline_to_pre_call_us, 95),
-                "p99_us": nearest_rank(&deadline_to_pre_call_us, 99),
-                "max_us": deadline_to_pre_call_us.iter().max(),
-                "estimator": "nearest_rank"
+            "worker_metrics_totals": {
+                "worker_cpu_time_us": worker_cpu_time_us,
+                "playback_wall_time_us": playback_wall_time_us,
+                "physical_wait_sample_count": physical_wait_sample_count,
+                "metadata_only_wait_count": metadata_only_wait_count,
+                "idle_wake_count": idle_wake_count,
+                "spin_time_us_measured_sum": spin_time_us,
+                "spin_time_missing_count": spin_time_missing_count,
+                "observer_dropped_samples": observer_dropped_samples
             },
             "samples": samples,
         }));
@@ -373,8 +632,11 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
         "stale_dispatch_timing_matrix_json={}",
         serde_json::to_string(&json!({
             "evidence_scope": "actual_b_worker_test_support_mock_sender_production_calibrated_frozen_wait",
+            "sender_kind": "mock",
+            "wait_policy": "production_calibrated",
+            "wait_guard": "Frozen",
             "qualification": false,
-            "scan_attribution": "test-support hook counts stale commits while a deadline wake attribution is present; missing wake samples remain missing",
+            "scan_attribution": "actual B-worker test-support hook captures stale commits at the final Down sender attempt; physical wake and metadata-only wake are kept separate, and unavailable timestamps remain missing",
             "scenarios": matrix,
         }))
         .expect("stale matrix JSON")

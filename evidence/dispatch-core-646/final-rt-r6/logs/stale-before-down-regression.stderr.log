@@ -1,0 +1,4 @@
+   Compiling sky_player v0.1.0 (D:\Dev\Sky-Auto-Player\rust\crates\sky_player)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.03s
+     Running unittests src\lib.rs (rust\target\debug\deps\sky_player-0d359fb8975926e7.exe)
+     Running tests\rt_dispatch_no_alloc.rs (rust\target\debug\deps\rt_dispatch_no_alloc-2dc3272ea1e66b2b.exe)

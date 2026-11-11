@@ -139,8 +139,8 @@ pub(crate) use timing::{
 };
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
-    wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals,
+    next_stale_metadata_deadline_qpc, record_wait_failure, wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;
