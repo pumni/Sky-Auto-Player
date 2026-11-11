@@ -1,3 +1,4 @@
+import { MousePointer2 } from 'lucide-react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { selectSelectedDetail, selectSongById } from '../../state/store';
 import type { SheetConversionMode, SheetPitch, SongRow } from '../../bridge/DesktopBridge';
@@ -40,6 +41,8 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
         aria-label="Song details"
         tabIndex={0}
       >
+        <MousePointer2 className="utility-empty-icon" size={24} aria-hidden="true" />
+        <strong>No song selected</strong>
         <p className="muted">Select a song to view details.</p>
       </section>
     );

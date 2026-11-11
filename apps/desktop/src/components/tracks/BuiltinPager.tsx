@@ -50,7 +50,7 @@ function BuiltinPagerNavigation({
   // Reserve both tabular digit groups plus two ch for the spaced slash.
   const indicatorCharacters = pageDigits * 2 + 2;
   const indicatorWidth = `max(36px, ${indicatorCharacters}ch)`;
-  const pagerWidth = `calc(${indicatorWidth} + 80px)`;
+  const pagerWidth = `calc(${indicatorWidth} + 72px)`;
 
   const focusTrigger = () => {
     window.setTimeout(() => triggerRef.current?.focus(), 0);

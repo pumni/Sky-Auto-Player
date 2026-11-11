@@ -308,6 +308,10 @@
   }
 }
 
+.track-browser:has(> .builtin-pager-wrap) {
+  padding-bottom: 0;
+}
+
 .builtin-pager-wrap {
   position: relative;
   display: grid;
@@ -316,7 +320,7 @@
   align-items: center;
   gap: 4px 12px;
   min-width: 0;
-  padding: 4px 12px;
+  padding: 2px 12px;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -334,13 +338,13 @@
 .builtin-pager {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
   align-items: center;
   justify-self: end;
   gap: 4px;
   font-size: 11px;
   min-width: 0;
-  height: 36px;
+  height: 32px;
   box-sizing: border-box;
   white-space: nowrap;
 }
@@ -355,8 +359,8 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-control);
@@ -369,10 +373,10 @@
 }
 
 .builtin-pager-control {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
 }
 
@@ -380,7 +384,7 @@
   position: relative;
   display: grid;
   place-items: center;
-  height: 36px;
+  height: 32px;
   min-width: 36px;
   box-sizing: border-box;
 }
@@ -390,7 +394,7 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 36px;
+  height: 32px;
   min-width: 0;
   padding: 4px 6px;
   border: 1px solid transparent;
@@ -428,7 +432,7 @@
   grid-template-columns: minmax(0, 1fr) auto 32px;
   align-items: center;
   width: 100%;
-  height: 36px;
+  height: 32px;
   gap: 3px;
 }
 

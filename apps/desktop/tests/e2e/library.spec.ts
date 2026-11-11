@@ -299,7 +299,7 @@ async function expectBuiltinPagerEditingControls(page: Page, pageCount: number) 
 
   const geometry = await readBuiltinPagerEditorGeometry(page);
   expect(geometry.slotFillsToolbar).toBe(true);
-  expect(geometry.slot.height).toBe(36);
+  expect(geometry.slot.height).toBe(32);
   expect(geometry.input.width).toBeGreaterThanOrEqual(20);
   expect(geometry.pageCountFits).toBe(true);
   expect(geometry.confirm.width).toBeGreaterThanOrEqual(32);
@@ -465,9 +465,9 @@ function expectBuiltinPagerGeometryStable(
         `${control} height: ${before[control].height} -> ${after[control].height}`,
       ).toBeLessThanOrEqual(1);
     }
-    expect(after.previous.height).toBeGreaterThanOrEqual(36);
-    expect(after.trigger.height).toBeGreaterThanOrEqual(36);
-    expect(after.next.height).toBeGreaterThanOrEqual(36);
+    expect(after.previous.height).toBeGreaterThanOrEqual(32);
+    expect(after.trigger.height).toBeGreaterThanOrEqual(32);
+    expect(after.next.height).toBeGreaterThanOrEqual(32);
   }
 }
 
@@ -750,8 +750,8 @@ test('F3.5 two-page Built-in pager spacing stays compact through inline editing 
   expectBuiltinPagerIndicatorFitsCompactly(beforeVisual);
   expect(beforeVisual.leftGlyphGap).toBeLessThanOrEqual(35);
   expect(beforeVisual.rightGlyphGap).toBeLessThanOrEqual(35);
-  expect(beforeVisual.previous.width).toBe(36);
-  expect(beforeVisual.next.width).toBe(36);
+  expect(beforeVisual.previous.width).toBe(32);
+  expect(beforeVisual.next.width).toBe(32);
   expect(beforeVisual.outerControlGap).toBe(4);
   await indicator.focus();
   await page.keyboard.press('Enter');
@@ -852,8 +852,8 @@ test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation'
   const previousRest = await readControlSurface(previous);
   const nextRest = await readControlSurface(next);
   for (const surface of [previousRest, nextRest]) {
-    expect(surface.width).toBe(36);
-    expect(surface.height).toBe(36);
+    expect(surface.width).toBe(32);
+    expect(surface.height).toBe(32);
     expect(surface.background).toBe('rgba(0, 0, 0, 0)');
     expect(surface.borderWidth).toBe('0px');
   }
@@ -933,9 +933,9 @@ test('page indicator switches between compact view and full-width editing withou
     await expect(pager).toHaveAttribute('data-editing', 'false');
     await expect(pager.locator('button')).toHaveCount(3);
     expectBuiltinPagerIndicatorFitsCompactly(viewGlyphs);
-    expect(Math.abs(before.toolbar.width - before.indicator.width - 80)).toBeLessThanOrEqual(1);
-    expect(before.previous?.width).toBe(36);
-    expect(before.next?.width).toBe(36);
+    expect(Math.abs(before.toolbar.width - before.indicator.width - 72)).toBeLessThanOrEqual(1);
+    expect(before.previous?.width).toBe(32);
+    expect(before.next?.width).toBe(32);
     if (total === 106) {
       const viewScreenshot = testInfo.outputPath('f3.7-view-mode-995x706.png');
       await page.screenshot({ path: viewScreenshot, animations: 'disabled' });

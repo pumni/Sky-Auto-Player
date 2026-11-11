@@ -1014,12 +1014,28 @@ body.is-resizing * {
 }
 
 .utility-empty {
-  align-content: start;
-  padding-top: 4px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+}
+
+.utility-empty-icon {
+  color: var(--text-tertiary);
+}
+
+.utility-empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .utility-empty p {
+  max-width: 250px;
   margin-block: 0;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .song-details-heading {

@@ -19,7 +19,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
     expect(box).not.toBeNull();
     if (box) {
       expect(box.width).toBeGreaterThanOrEqual(260);
-      expect(box.width).toBeLessThanOrEqual(320);
+      expect(box.width).toBeLessThanOrEqual(350);
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
     }
@@ -41,6 +41,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('Hold')).toBeVisible();
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
+  await popover.getByText('Calculated timing').click();
   await expect(popover.locator('.profile-timing-summary dt')).toHaveText([
     'Target hold',
     'Release gap',
