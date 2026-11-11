@@ -405,8 +405,19 @@
   color: var(--danger-fg);
 }
 
+.player-tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .player-tool-tooltip {
+  position: absolute;
   z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
   max-width: min(280px, calc(100vw - 24px));
   padding: 7px 10px;
   border: 1px solid var(--border-strong);
@@ -418,6 +429,23 @@
   line-height: 1.35;
   overflow-wrap: anywhere;
   pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 120ms ease,
+    visibility 120ms ease;
+}
+
+.player-tooltip-anchor:hover .player-tool-tooltip,
+.player-tooltip-anchor:focus-within .player-tool-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-tool-tooltip {
+    transition: none;
+  }
 }
 
 @media (forced-colors: active) {

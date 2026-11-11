@@ -332,10 +332,11 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   await expect(
     runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
   ).toBeVisible();
-  await expect(runtime.getByText('Sender availability', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender samples', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender backend', { exact: true })).toBeVisible();
-  await expect(runtime.locator('.diagnostics-sender-summary')).toContainText('Not measured');
+  await expect(
+    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+  ).toBeVisible();
+  await expect(runtime.getByText('Sender availability', { exact: true })).toHaveCount(0);
+  await expect(runtime.locator('.diagnostics-sender-summary')).toHaveCount(0);
   appearances.push(await computedAppearance(page, 'runtime-dry-run'));
   {
     const populated = appearances[0] as {

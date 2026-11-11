@@ -95,7 +95,7 @@
   transition: background-color 120ms ease;
 }
 
-.resizable-separator:hover:not(.is-disabled) span {
+.resizable-separator:hover:not(.is-disabled):not(:focus-visible):not(.is-dragging) span {
   background: color-mix(in srgb, var(--accent-ink) 85%, transparent);
 }
 

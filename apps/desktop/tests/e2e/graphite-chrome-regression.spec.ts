@@ -227,10 +227,11 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   await expect(
     runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
   ).toBeVisible();
-  await expect(runtime.getByText('Sender availability', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender samples', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender backend', { exact: true })).toBeVisible();
-  await expect(runtime.locator('.diagnostics-sender-summary')).toContainText('Not measured');
+  await expect(
+    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+  ).toBeVisible();
+  await expect(runtime.getByText('Sender availability', { exact: true })).toHaveCount(0);
+  await expect(runtime.locator('.diagnostics-sender-summary')).toHaveCount(0);
   await page.mouse.move(0, 0);
   appearances.push(await readAppearance(page, 'runtime-dry-run'));
   const expected = {

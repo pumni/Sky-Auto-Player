@@ -4,8 +4,6 @@ import {
   Dialog,
   DialogTrigger,
   Popover,
-  Tooltip,
-  TooltipTrigger,
 } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
@@ -74,10 +72,11 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 
   return (
     <div className="player-tools">
-      <TooltipTrigger delay={350} closeDelay={100}>
+      <div className="player-tooltip-anchor">
         <AriaButton
           className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
           aria-label="Auto Play"
+          aria-describedby="player-auto-play-tooltip"
           aria-pressed={autoPlayEnabled}
           isDisabled={!settings}
           aria-busy={autoPlayPending}
@@ -85,10 +84,10 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         >
           <ListVideo size={18} aria-hidden="true" />
         </AriaButton>
-        <Tooltip className="player-tool-tooltip" placement="top" offset={8}>
+        <span id="player-auto-play-tooltip" className="player-tool-tooltip" role="tooltip">
           Auto Play {autoPlayEnabled ? 'on' : 'off'} · Continue to the next song
-        </Tooltip>
-      </TooltipTrigger>
+        </span>
+      </div>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
           <AriaButton
@@ -135,10 +134,11 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
           </Popover>
         </DialogTrigger>
       </div>
-      <TooltipTrigger delay={350} closeDelay={100}>
+      <div className="player-tooltip-anchor">
         <AriaButton
           className="icon-button player-tool-button player-utility-button"
           aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
+          aria-describedby="player-utility-tooltip"
           aria-expanded={utility.open}
           {...(utility.open ? { 'aria-controls': 'utility-inspector' } : {})}
           ref={utilityTriggerRef}
@@ -146,10 +146,10 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         >
           <PanelRight size={16} aria-hidden="true" />
         </AriaButton>
-        <Tooltip className="player-tool-tooltip" placement="top" offset={8}>
+        <span id="player-utility-tooltip" className="player-tool-tooltip" role="tooltip">
           {utility.open ? 'Close Inspector' : 'Open Inspector'}
-        </Tooltip>
-      </TooltipTrigger>
+        </span>
+      </div>
     </div>
   );
 }
