@@ -16,6 +16,51 @@ fn checked_capacity_bytes(count: usize, element_size: usize) -> Result<usize, Co
         .ok_or_else(|| CompileError::MemoryBudgetExceeded("capacity size overflow".into()))
 }
 
+fn checked_arc_str_capacity_bytes(length: usize) -> Result<usize, CompileError> {
+    let alignment = std::mem::align_of::<usize>();
+    let bytes = length
+        .checked_add(2 * std::mem::size_of::<usize>())
+        .and_then(|bytes| bytes.checked_add(alignment - 1))
+        .ok_or_else(|| {
+            CompileError::MemoryBudgetExceeded("compiler reason allocation size overflow".into())
+        })?;
+    Ok(bytes / alignment * alignment)
+}
+
+/// Conservative payload bound for the standard HashMap table allocation.
+/// HashMap capacity is the maximum entry count before growth; bucket storage
+/// also includes one control byte per bucket and a control-group tail.
+fn hash_map_table_capacity_bytes(
+    capacity: usize,
+    entry_size: usize,
+) -> Result<usize, CompileError> {
+    if capacity == 0 {
+        return Ok(0);
+    }
+    let bucket_count = capacity
+        .checked_mul(8)
+        .and_then(|value| value.checked_add(6))
+        .map(|value| value / 7)
+        .and_then(usize::checked_next_power_of_two)
+        .ok_or_else(|| {
+            CompileError::MemoryBudgetExceeded("reason map table capacity overflow".into())
+        })?;
+    bucket_count
+        .checked_mul(entry_size.saturating_add(1))
+        .and_then(|bytes| bytes.checked_add(16 + std::mem::align_of::<usize>() - 1))
+        .ok_or_else(|| CompileError::MemoryBudgetExceeded("reason map table bytes overflow".into()))
+}
+
+fn hash_map_table_growth_peak_extra_bytes(
+    capacity: usize,
+    entry_size: usize,
+) -> Result<usize, CompileError> {
+    // HashMap growth may keep the old bucket array alive while it allocates
+    // and populates the new one. A previous table is never larger than the
+    // final table, so one additional final-table bound covers that overlap.
+    hash_map_table_capacity_bytes(capacity, entry_size)
+}
+
 fn check_memory_budget(required: usize, budget: usize) -> Result<(), CompileError> {
     if required > budget {
         return Err(CompileError::MemoryBudgetExceeded(format!(
@@ -114,6 +159,25 @@ pub fn compile_runtime_intents(
 pub fn compile_runtime_intents_with_cancellation(
     actions: &[KeyActionInput],
     allowed_scan_codes: &[u16],
+    cancelled: impl FnMut() -> bool,
+) -> Result<RuntimeSchedule, CompileError> {
+    compile_runtime_intents_with_memory_metrics(
+        actions,
+        allowed_scan_codes,
+        actions.len(),
+        0,
+        cancelled,
+    )
+}
+
+/// Compile while accounting for the caller's actual input-vector capacity and
+/// other caller-owned schedule capacity that remains live during compilation.
+/// The returned peak is a calculated capacity bound for this phase, not RSS.
+pub fn compile_runtime_intents_with_memory_metrics(
+    actions: &[KeyActionInput],
+    allowed_scan_codes: &[u16],
+    action_vector_capacity: usize,
+    caller_retained_bytes: usize,
     mut cancelled: impl FnMut() -> bool,
 ) -> Result<RuntimeSchedule, CompileError> {
     if cancelled() {
@@ -129,6 +193,11 @@ pub fn compile_runtime_intents_with_cancellation(
     }
     if actions.len() > MAX_ACTIONS {
         return Err(CompileError::TooManyActions);
+    }
+    if action_vector_capacity < actions.len() {
+        return Err(CompileError::MemoryBudgetExceeded(
+            "compiler input capacity is smaller than the action slice".into(),
+        ));
     }
 
     let key_registry = KeyRegistry::new(allowed_scan_codes);
@@ -150,6 +219,9 @@ pub fn compile_runtime_intents_with_cancellation(
     let mut down_action_count = 0usize;
     let mut reason_input_bytes = 0usize;
     let mut scan_code_input_bytes = 0usize;
+    let mut current_group_len = 0usize;
+    let mut max_group_len = 0usize;
+    let mut previous_group_time = None;
     for (index, action) in actions.iter().enumerate() {
         if index.is_multiple_of(256) && cancelled() {
             return Err(CompileError::Cancelled);
@@ -161,8 +233,17 @@ pub fn compile_runtime_intents_with_cancellation(
             .checked_add(usize::from(action.kind == ActionKind::Down))
             .ok_or(CompileError::TooManyActions)?;
         reason_input_bytes = reason_input_bytes
-            .checked_add(action.reason.len())
+            .checked_add(checked_arc_str_capacity_bytes(action.reason.len())?)
             .ok_or(CompileError::TooManyActions)?;
+        if previous_group_time == Some(action.scheduled_us) {
+            current_group_len = current_group_len
+                .checked_add(1)
+                .ok_or(CompileError::TooManyActions)?;
+        } else {
+            current_group_len = 1;
+            previous_group_time = Some(action.scheduled_us);
+        }
+        max_group_len = max_group_len.max(current_group_len);
         if action.scan_codes.spilled() {
             scan_code_input_bytes = scan_code_input_bytes
                 .checked_add(checked_capacity_bytes(
@@ -177,48 +258,55 @@ pub fn compile_runtime_intents_with_cancellation(
         }
     }
     let max_reason_entries = actions.len().min(MAX_REASON_TABLE_ENTRIES);
-    // Reserve a conservative bound for the temporary reason map and its
-    // duplicated string keys. The map is dropped before worker startup.
-    let reason_map_entry_bytes = std::mem::size_of::<(String, ReasonId)>()
-        .checked_mul(2)
-        .and_then(|bytes| bytes.checked_add(MAX_REASON_BYTES.saturating_mul(2)))
-        .ok_or_else(|| {
-            CompileError::MemoryBudgetExceeded("reason map capacity size overflow".into())
-        })?;
-    let reason_map_bound = checked_capacity_bytes(max_reason_entries, reason_map_entry_bytes)?;
+    // Include both HashMap tables during a bucket-array growth and both text
+    // copies (schedule reason + map key) at the per-reason maximum.
+    let reason_map_growth_bound = checked_sum([
+        checked_capacity_bytes(
+            hash_map_table_capacity_bytes(
+                max_reason_entries,
+                std::mem::size_of::<(String, ReasonId)>(),
+            )?,
+            2,
+        )?,
+        checked_capacity_bytes(max_reason_entries, MAX_REASON_BYTES.saturating_mul(2))?,
+    ])?;
+    // Vec growth for the reason table can likewise overlap its previous
+    // header buffer while the final schedule buffer is allocated.
+    let reason_table_growth_buffer_bound =
+        checked_capacity_bytes(max_reason_entries, std::mem::size_of::<String>())?;
     let compiler_input_bytes = checked_sum([
-        checked_capacity_bytes(actions.len(), std::mem::size_of::<KeyActionInput>())?,
+        checked_capacity_bytes(
+            action_vector_capacity,
+            std::mem::size_of::<KeyActionInput>(),
+        )?,
         reason_input_bytes,
         scan_code_input_bytes,
     ])?;
+    let max_group_batch_scratch_bytes =
+        checked_capacity_bytes(max_group_len, std::mem::size_of::<CompiledBatch>())?;
     let compile_preflight_bytes = checked_sum([
+        caller_retained_bytes,
         compiler_input_bytes,
         checked_capacity_bytes(actions.len(), std::mem::size_of::<CompiledBatch>())?,
         checked_capacity_bytes(actions.len(), std::mem::size_of::<CompiledPacket>())?,
         checked_capacity_bytes(intent_capacity, std::mem::size_of::<CompactIntent>())?,
         checked_capacity_bytes(down_action_count, std::mem::size_of::<CompiledDownChord>())?,
         checked_capacity_bytes(max_reason_entries, std::mem::size_of::<String>())?,
-        reason_map_bound,
+        reason_table_growth_buffer_bound,
+        reason_map_growth_bound,
+        max_group_batch_scratch_bytes,
         std::mem::size_of::<RuntimeSchedule>(),
     ])?;
     check_memory_budget(compile_preflight_bytes, MAX_RETAINED_DISPATCH_BYTES)?;
 
     let mut batches = Vec::new();
-    batches
-        .try_reserve_exact(actions.len())
-        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("batches reservation: {e}")))?;
+    reserve_exact(&mut batches, actions.len(), "batches")?;
     let mut intents = Vec::new();
-    intents
-        .try_reserve_exact(intent_capacity)
-        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("intents reservation: {e}")))?;
+    reserve_exact(&mut intents, intent_capacity, "intents")?;
     let mut packets = Vec::new();
-    packets
-        .try_reserve_exact(actions.len())
-        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("packets reservation: {e}")))?;
+    reserve_exact(&mut packets, actions.len(), "packets")?;
     let mut down_chords: Vec<CompiledDownChord> = Vec::new();
-    down_chords
-        .try_reserve_exact(down_action_count)
-        .map_err(|e| CompileError::MemoryBudgetExceeded(format!("down_chords reservation: {e}")))?;
+    reserve_exact(&mut down_chords, down_action_count, "down_chords")?;
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
         if let Some(&id) = reason_map.get(reason) {
@@ -251,6 +339,7 @@ pub fn compile_runtime_intents_with_cancellation(
     let mut previous_source_index: Option<u32> = None;
     let mut previous_scheduled_us: Option<u64> = None;
     let mut group_start = 0usize;
+    let mut max_group_batch_capacity = 0usize;
 
     while group_start < actions.len() {
         if cancelled() {
@@ -336,11 +425,8 @@ pub fn compile_runtime_intents_with_cancellation(
         let mut seen_up_mask = 0u16;
         let mut physical_up_source_action_index_by_slot: [Option<u32>; MAX_KEYS] = [None; MAX_KEYS];
         let mut group_batches: Vec<CompiledBatch> = Vec::new();
-        group_batches
-            .try_reserve(group_end - group_start)
-            .map_err(|e| {
-                CompileError::MemoryBudgetExceeded(format!("group batches reservation: {e}"))
-            })?;
+        reserve_exact(&mut group_batches, group_end - group_start, "group batches")?;
+        max_group_batch_capacity = max_group_batch_capacity.max(group_batches.capacity());
         for (offset, action) in actions[group_start..group_end].iter().enumerate() {
             if offset.is_multiple_of(256) && cancelled() {
                 return Err(CompileError::Cancelled);
@@ -532,7 +618,7 @@ pub fn compile_runtime_intents_with_cancellation(
         .max()
         .unwrap_or(0);
 
-    let schedule = RuntimeSchedule {
+    let mut schedule = RuntimeSchedule {
         packets,
         batches,
         intents,
@@ -541,12 +627,13 @@ pub fn compile_runtime_intents_with_cancellation(
         reason_table,
         down_chords,
         schedule_end_offset_us,
+        compile_memory: CompileMemoryMetrics::default(),
     };
     let schedule_metrics = schedule.memory_metrics().map_err(|error| {
         CompileError::MemoryBudgetExceeded(format!("schedule memory accounting: {error}"))
     })?;
     let reason_map_bytes = checked_sum([
-        checked_capacity_bytes(
+        hash_map_table_capacity_bytes(
             reason_map.capacity(),
             std::mem::size_of::<(String, ReasonId)>(),
         )?,
@@ -557,14 +644,54 @@ pub fn compile_runtime_intents_with_cancellation(
             })
         })?,
     ])?;
-    let compile_peak_bytes = checked_sum([
-        compiler_input_bytes,
+    let reason_map_growth_extra_bytes = hash_map_table_growth_peak_extra_bytes(
+        reason_map.capacity(),
+        std::mem::size_of::<(String, ReasonId)>(),
+    )?;
+    let reason_table_growth_extra_bytes = checked_capacity_bytes(
+        schedule.reason_table.capacity(),
+        std::mem::size_of::<String>(),
+    )?;
+    let group_scratch_bytes = checked_capacity_bytes(
+        max_group_batch_capacity,
+        std::mem::size_of::<CompiledBatch>(),
+    )?;
+    let temporary_capacity_bytes = checked_sum([
+        reason_map_bytes,
+        reason_map_growth_extra_bytes,
+        reason_table_growth_extra_bytes,
+        group_scratch_bytes,
+    ])?;
+    let schedule_capacity_bytes = checked_sum([
         schedule_metrics.heap_payload_bytes,
         schedule_metrics.struct_bytes,
-        reason_map_bytes,
     ])?;
-    check_memory_budget(compile_peak_bytes, MAX_RETAINED_DISPATCH_BYTES)?;
+    let phase_peak_capacity_bytes = checked_sum([
+        caller_retained_bytes,
+        compiler_input_bytes,
+        schedule_capacity_bytes,
+        temporary_capacity_bytes,
+    ])?;
+    check_memory_budget(phase_peak_capacity_bytes, MAX_RETAINED_DISPATCH_BYTES)?;
+    let metrics = CompileMemoryMetrics {
+        caller_retained_capacity_bytes: caller_retained_bytes,
+        input_capacity_bytes: compiler_input_bytes,
+        temporary_capacity_bytes,
+        schedule_capacity_bytes,
+        phase_peak_capacity_bytes,
+    };
+    schedule.compile_memory = metrics;
     Ok(schedule)
+}
+
+fn reserve_exact<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    label: &str,
+) -> Result<(), CompileError> {
+    values.try_reserve_exact(additional).map_err(|error| {
+        CompileError::MemoryBudgetExceeded(format!("{label} reservation failed: {error}"))
+    })
 }
 
 #[cfg(test)]

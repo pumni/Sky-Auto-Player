@@ -1,8 +1,8 @@
 #[cfg(any(test, feature = "test-support"))]
-use super::super::super::{QpcClock, TRACE_FLAG_DEFERRED};
+use super::super::super::{QpcClock, TRACE_FLAG_DEFERRED, TraceTiming};
 use super::super::super::{
     RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL,
-    TelemetryCollector, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+    TelemetryCollector, TraceContext, TraceDelivery, UpSlotLossReason, trace_outcome_code,
     trace_send_status_code,
 };
 use super::super::physical_timing_guard::PhysicalTimingWindow;
@@ -489,104 +489,20 @@ pub(crate) fn record_down_send_telemetry(
                 up_mask: observation.requested_packet.up_mask,
                 down_mask: observation.requested_packet.down_mask,
             },
-            TraceTiming {
-                authored_ticks: trace.authored_ticks,
-                effective_deadline_ticks: trace.effective_deadline_ticks,
-                wake_ticks,
-                wake_qpc_ticks: observation.wake_qpc.map(|ticks| ticks.as_u64()),
-                physical_eligibility_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .packet_not_before_qpc
-                        .as_u64(),
-                ),
-                #[cfg(any(test, feature = "test-support"))]
-                waiter_deadline_crossing_qpc_ticks: observation.precision_handoff.and_then(
-                    |handoff| {
-                        handoff
-                            .waiter_deadline_crossing_qpc
-                            .map(|ticks| ticks.as_u64())
-                    },
-                ),
-                #[cfg(not(any(test, feature = "test-support")))]
-                waiter_deadline_crossing_qpc_ticks: None,
-                #[cfg(any(test, feature = "test-support"))]
-                timer_arm_qpc_ticks: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.timer_arm_qpc.map(|ticks| ticks.as_u64())),
-                #[cfg(not(any(test, feature = "test-support")))]
-                timer_arm_qpc_ticks: None,
-                #[cfg(any(test, feature = "test-support"))]
-                timer_arm_target_qpc_ticks: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.timer_arm_target_qpc.map(|ticks| ticks.as_u64())),
-                #[cfg(not(any(test, feature = "test-support")))]
-                timer_arm_target_qpc_ticks: None,
-                #[cfg(any(test, feature = "test-support"))]
-                timer_arm_generation: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.timer_arm_generation),
-                #[cfg(not(any(test, feature = "test-support")))]
-                timer_arm_generation: None,
-                #[cfg(any(test, feature = "test-support"))]
-                timer_return_generation: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.timer_return_generation),
-                #[cfg(not(any(test, feature = "test-support")))]
-                timer_return_generation: None,
-                #[cfg(any(test, feature = "test-support"))]
-                timer_return_qpc_ticks: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.timer_return_qpc.map(|ticks| ticks.as_u64())),
-                #[cfg(not(any(test, feature = "test-support")))]
-                timer_return_qpc_ticks: None,
-                #[cfg(any(test, feature = "test-support"))]
-                waiter_return_qpc_ticks: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.waiter_return_qpc.map(|ticks| ticks.as_u64())),
-                #[cfg(not(any(test, feature = "test-support")))]
-                waiter_return_qpc_ticks: None,
-                target_crossing_qpc_ticks: observation
-                    .precision_handoff
-                    .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64())),
-                physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
-                physical_not_before_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .packet_not_before_qpc
-                        .as_u64(),
-                ),
-                hold_floor_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .musical_up_not_before_qpc
-                        .as_u64(),
-                ),
-                release_floor_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .down_not_before_qpc
-                        .as_u64(),
-                ),
-                previous_sendinput_completion_qpc_ticks: observation
-                    .previous_sendinput_completion_qpc
-                    .map(|ticks| ticks.as_u64()),
-                previous_sender_completion_known: observation.previous_sender_completion_known,
-                hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
-                release_floor_mask: observation.physical_timing_window.release_floor_mask,
-                final_policy_qpc_ticks: observation.final_policy_qpc.map(|ticks| ticks.as_u64()),
-                pre_call_qpc_ticks: observation.pre_call_qpc.map(|ticks| ticks.as_u64()),
-                sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
-                post_send_qpc_ticks: observation.dispatch_ready_qpc.map(|ticks| ticks.as_u64()),
-                observation_qpc_ticks: Some(observer_qpc_ticks.as_u64()),
-                pre_call_ticks,
-                sendinput_completion_ticks,
-                completion_residual_us,
-                core_post_send_duration_us: core_post_send_us,
-                post_send_metrics_available,
-                completion_error_ticks,
-                authored_completion_error_ticks,
-            },
+            super::observer_trace::trace_timing::down_send_trace_timing(
+                observation,
+                super::observer_trace::trace_timing::DownSendTraceTiming {
+                    core_post_send_us,
+                    completion_residual_us,
+                    post_send_metrics_available,
+                    completion_error_ticks,
+                    authored_completion_error_ticks,
+                    pre_call_ticks,
+                    sendinput_completion_ticks,
+                    wake_ticks,
+                    observer_qpc_ticks,
+                },
+            ),
             TraceDelivery {
                 requested: observation.requested_count(),
                 sent: observation.confirmed_count(),
@@ -607,6 +523,17 @@ pub(crate) fn record_down_send_telemetry(
     }
     if telemetry.output.accepted != accepted_before {
         super::observer_trace::attach_up_slot_traces(telemetry, observation)?;
+    } else if observation.up_slot_count != 0 {
+        let loss_reason = if observation.up_slots.is_none() {
+            UpSlotLossReason::PoolStorage
+        } else if telemetry.mode == super::super::super::TelemetryMode::Off {
+            UpSlotLossReason::CaptureModeOff
+        } else {
+            UpSlotLossReason::TelemetryRing
+        };
+        telemetry
+            .output
+            .account_up_slot_loss(loss_reason, u64::from(observation.up_slot_count));
     }
     Ok((down_outcome, force_publish))
 }

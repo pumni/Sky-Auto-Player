@@ -425,10 +425,19 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let mut telemetry = telemetry;
     telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
     telemetry.output.observer_queue_dropped = local_metrics.observer_dropped_samples;
-    telemetry.output.up_slot_records_dropped = telemetry
-        .output
-        .up_slot_records_dropped
-        .saturating_add(local_metrics.observer_dropped_up_slot_records);
+    telemetry.output.up_slot_records_expected = local_metrics.up_slot_records_expected;
+    telemetry.output.account_up_slot_loss(
+        crate::engine::telemetry::UpSlotLossReason::ObserverQueue,
+        local_metrics.observer_dropped_up_slot_records,
+    );
+    telemetry.output.account_up_slot_loss(
+        crate::engine::telemetry::UpSlotLossReason::PoolStorage,
+        local_metrics.observer_dropped_up_slot_pool_records,
+    );
+    telemetry.output.account_up_slot_loss(
+        crate::engine::telemetry::UpSlotLossReason::CaptureModeOff,
+        local_metrics.up_slot_records_not_captured_by_mode,
+    );
     if telemetry.output.observer_queue_dropped > 0 {
         telemetry.output.truncated = true;
     }

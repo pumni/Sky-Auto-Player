@@ -1,14 +1,16 @@
 pub(crate) mod metrics;
+mod output;
 
 pub use metrics::WorkerMetricsLocal;
 pub(crate) use metrics::{
     SharedMetrics, cpu_metrics_sample_due, publish_lifecycle_metrics, publish_terminal_metrics,
     try_publish_metrics, try_publish_observer_metrics,
 };
+pub use output::NativeTelemetryOutput;
+pub(crate) use output::UpSlotLossReason;
 
 use sky_dispatch_core::time::{TimeArithmeticError, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionStatus;
-use std::collections::VecDeque;
 
 /// Provenance assigned to every exported QPC observation.
 #[repr(u8)]
@@ -166,7 +168,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 23;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 24;
 pub const NATIVE_UP_SLOT_TRACE_CAPACITY: usize = 4_096;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
@@ -736,76 +738,6 @@ impl NativeTelemetrySummary {
         }
     }
 }
-
-#[derive(Debug, Default, serde::Serialize)]
-pub struct NativeTelemetryOutput {
-    pub schema_version: u32,
-    pub qpc_frequency_hz: u64,
-    pub records: VecDeque<RtTraceRecord>,
-    pub up_slot_records: Vec<UpSlotTrace>,
-    pub up_slot_records_dropped: u64,
-    pub summary: NativeTelemetrySummary,
-    pub attempted: u64,
-    pub accepted: u64,
-    pub dropped: u64,
-    /// Observations dropped by the bounded producer queue before telemetry
-    /// could inspect them. Kept separate from ring-capacity drops.
-    pub observer_queue_dropped: u64,
-    pub truncated: bool,
-    pub timing_semantics: TimingSemantics,
-}
-
-impl NativeTelemetryOutput {
-    pub(crate) fn try_new(mode: TelemetryMode, capacity: usize) -> Result<Self, String> {
-        let mut records = VecDeque::new();
-        if matches!(mode, TelemetryMode::Ring) {
-            records
-                .try_reserve_exact(capacity)
-                .map_err(|error| format!("telemetry ring allocation failed: {error}"))?;
-        }
-        Ok(Self {
-            schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
-            qpc_frequency_hz: 0,
-            records,
-            up_slot_records: Vec::new(),
-            up_slot_records_dropped: 0,
-            summary: NativeTelemetrySummary::default(),
-            attempted: 0,
-            accepted: 0,
-            dropped: 0,
-            observer_queue_dropped: 0,
-            truncated: false,
-            timing_semantics: TimingSemantics::default(),
-        })
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn new(mode: TelemetryMode, capacity: usize) -> Self {
-        Self {
-            schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
-            qpc_frequency_hz: 0,
-            records: if matches!(mode, TelemetryMode::Ring) {
-                // Reserve the complete bounded buffer at construction time so no
-                // heap allocation occurs on the first push_back during dispatch.
-                let mut records = VecDeque::with_capacity(capacity);
-                records.reserve_exact(capacity);
-                records
-            } else {
-                VecDeque::new()
-            },
-            up_slot_records: Vec::new(),
-            up_slot_records_dropped: 0,
-            summary: NativeTelemetrySummary::default(),
-            attempted: 0,
-            accepted: 0,
-            dropped: 0,
-            observer_queue_dropped: 0,
-            truncated: false,
-            timing_semantics: TimingSemantics::default(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryMode {
     Off,

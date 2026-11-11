@@ -26,15 +26,42 @@ fn publish_down_observation(
     up_slot_count: usize,
     local_metrics: &mut super::WorkerMetricsLocal,
 ) {
+    local_metrics.up_slot_records_expected = local_metrics
+        .up_slot_records_expected
+        .saturating_add(up_slot_count as u64);
+    let up_slot_storage_present = match &observation {
+        crate::engine::worker::dispatch::observation::DispatchObservation::Down(observation) => {
+            observation.up_slots.is_some()
+        }
+        _ => up_slot_count == 0,
+    };
     if !observer.push(
         observation,
         &mut local_metrics.observer_dropped_samples,
         &mut local_metrics.observer_queue_high_watermark,
     ) {
-        local_metrics.observer_dropped_up_slot_records = local_metrics
-            .observer_dropped_up_slot_records
-            .saturating_add(up_slot_count as u64);
+        if up_slot_storage_present {
+            local_metrics.observer_dropped_up_slot_records = local_metrics
+                .observer_dropped_up_slot_records
+                .saturating_add(up_slot_count as u64);
+        } else {
+            local_metrics.observer_dropped_up_slot_pool_records = local_metrics
+                .observer_dropped_up_slot_pool_records
+                .saturating_add(up_slot_count as u64);
+        }
     }
+}
+
+fn account_unobserved_up_slots(
+    local_metrics: &mut super::WorkerMetricsLocal,
+    up_slot_count: usize,
+) {
+    let count = up_slot_count as u64;
+    local_metrics.up_slot_records_expected =
+        local_metrics.up_slot_records_expected.saturating_add(count);
+    local_metrics.up_slot_records_not_captured_by_mode = local_metrics
+        .up_slot_records_not_captured_by_mode
+        .saturating_add(count);
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -977,6 +1004,8 @@ pub(crate) fn dispatch_staged_candidate(
             candidate.up_slot_timings.len(),
             local_metrics,
         );
+    } else if !candidate.up_slot_timings.is_empty() {
+        account_unobserved_up_slots(local_metrics, candidate.up_slot_timings.len());
     }
     super::dispatch::publish_pending_wait_observation(runtime, observer, local_metrics);
 

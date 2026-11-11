@@ -634,6 +634,7 @@ fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
                 reason_table: Vec::new(),
                 down_chords: Vec::new(),
                 schedule_end_offset_us: 0,
+                compile_memory: Default::default(),
             },
             0,
             DurationTicks::ZERO,

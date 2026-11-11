@@ -308,6 +308,12 @@ pub struct WorkerMetricsLocal {
     /// Per-key Up evidence lost when its parent packet observation could not
     /// enter the fixed diagnostic observer queue.
     pub observer_dropped_up_slot_records: u64,
+    /// Per-key Up evidence with no bounded pool storage available at publish.
+    pub observer_dropped_up_slot_pool_records: u64,
+    /// Per-key Up evidence offered to the diagnostic observer publication path.
+    pub up_slot_records_expected: u64,
+    /// Per-key Up evidence omitted because diagnostics were disabled.
+    pub up_slot_records_not_captured_by_mode: u64,
     /// Largest queue occupancy observed immediately after a successful enqueue.
     pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,

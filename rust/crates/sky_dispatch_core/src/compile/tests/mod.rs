@@ -33,6 +33,19 @@ fn compiler_memory_budget_denies_before_allocation() {
 }
 
 #[test]
+fn compiler_reservation_reports_real_try_reserve_failure() {
+    let mut actions = Vec::<KeyActionInput>::new();
+    let error = reserve_exact(&mut actions, usize::MAX, "test actions")
+        .expect_err("unrepresentable Vec capacity must be denied by try_reserve_exact");
+    assert!(
+        error
+            .to_string()
+            .contains("test actions reservation failed")
+    );
+    assert!(actions.is_empty());
+}
+
+#[test]
 fn test_compile_basic_pairing() {
     let allowed = vec![1, 2, 3];
     let actions = vec![

@@ -695,4 +695,163 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     ));
     assert_eq!(harness.local_metrics.observer_dropped_samples, 1);
     assert_eq!(harness.local_metrics.observer_dropped_up_slot_records, 2);
+    assert_eq!(harness.local_metrics.up_slot_records_expected, 2);
+    assert_eq!(
+        harness.local_metrics.up_slot_records_expected,
+        harness.local_metrics.observer_dropped_up_slot_records
+            + harness.local_metrics.observer_dropped_up_slot_pool_records
+    );
+}
+
+#[test]
+fn telemetry_ring_drop_accounts_each_coalesced_up_slot() {
+    use crate::engine::worker::dispatch::observation::DownObservation;
+    use crate::engine::{TelemetryCollector, TelemetryMode};
+
+    let queue = crate::engine::worker::dispatch::observer::PendingObservationQueue::default();
+    let mut observation = DownObservation::test_fixture(1);
+    let mut storage = queue.acquire_up_slots().expect("bounded Up-slot pool");
+    storage.slots.as_mut().expect("owned Up-slot storage")[..2].copy_from_slice(&[
+        sky_dispatch_core::executor::UpSlotTiming {
+            slot: 0,
+            scan_code: 21,
+            source_action_index: 5,
+            authored_up_offset_ticks: TimelineTicks::from_raw(100),
+            release_not_before_ticks: TimelineTicks::from_raw(120),
+        },
+        sky_dispatch_core::executor::UpSlotTiming {
+            slot: 1,
+            scan_code: 22,
+            source_action_index: 6,
+            authored_up_offset_ticks: TimelineTicks::from_raw(110),
+            release_not_before_ticks: TimelineTicks::from_raw(145),
+        },
+    ]);
+    observation.epoch_qpc = sky_dispatch_win32::clock::QpcTicks::from_raw(1_000);
+    observation.pre_call_qpc = Some(sky_dispatch_win32::clock::QpcTicks::from_raw(1_150));
+    observation.sendinput_completion_qpc =
+        sky_dispatch_win32::clock::QpcTicks::from_raw(1_155);
+    observation.up_slots = Some(storage);
+    observation.up_slot_count = 2;
+
+    let mut telemetry = TelemetryCollector::new(TelemetryMode::Ring, 0);
+    telemetry.output.up_slot_records_expected = 2;
+    crate::engine::worker::dispatch::observation::record_down_send_telemetry(
+        &observation,
+        &mut telemetry,
+        0,
+        0,
+        false,
+        0,
+        0,
+        None,
+        None,
+        None,
+        sky_dispatch_win32::clock::QpcTicks::from_raw(1_155),
+        false,
+        false,
+    )
+    .expect("record dropped packet trace");
+
+    assert_eq!(telemetry.output.records.len(), 0);
+    assert_eq!(telemetry.output.up_slot_records.len(), 0);
+    assert_eq!(telemetry.output.up_slot_records_dropped_by_telemetry_ring, 2);
+    assert_eq!(telemetry.output.up_slot_records_dropped, 2);
+    assert_eq!(
+        telemetry.output.up_slot_records_expected,
+        telemetry.output.up_slot_records.len() as u64
+            + telemetry.output.up_slot_records_dropped
+            + telemetry.output.up_slot_records_not_captured_by_mode
+    );
+
+    let mut disabled = TelemetryCollector::new(TelemetryMode::Off, 0);
+    disabled.output.up_slot_records_expected = 2;
+    crate::engine::worker::dispatch::observation::record_down_send_telemetry(
+        &observation,
+        &mut disabled,
+        0,
+        0,
+        false,
+        0,
+        0,
+        None,
+        None,
+        None,
+        sky_dispatch_win32::clock::QpcTicks::from_raw(1_155),
+        false,
+        false,
+    )
+    .expect("account disabled Up-slot capture");
+    assert_eq!(disabled.output.up_slot_capture_mode, "off");
+    assert_eq!(disabled.output.up_slot_records_dropped, 0);
+    assert_eq!(disabled.output.up_slot_records_not_captured_by_mode, 2);
+    assert_eq!(
+        disabled.output.up_slot_records_expected,
+        disabled.output.up_slot_records.len() as u64
+            + disabled.output.up_slot_records_dropped
+            + disabled.output.up_slot_records_not_captured_by_mode
+    );
+}
+
+#[test]
+fn missing_pool_storage_is_counted_once_when_observer_queue_is_also_full() {
+    use crate::engine::worker::dispatch::observation::{
+        DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY,
+    };
+    use crate::engine::worker::dispatch::observer::PendingObservationQueue;
+    use crate::engine::WorkerMetricsLocal;
+
+    let observer = PendingObservationQueue::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    let mut high_watermark = 0;
+    for index in 0..OBSERVATION_QUEUE_CAPACITY {
+        observer.push(
+            DispatchObservation::StaleMetadata(
+                crate::engine::worker::dispatch::observation::StaleMetadataObservation {
+                    source_action_index: u32::try_from(index).expect("queue source index"),
+                    effective_scheduled_ticks: TimelineTicks::from_raw(index as u64),
+                    suppressed_intent_count: 1,
+                },
+            ),
+            &mut metrics.observer_dropped_samples,
+            &mut high_watermark,
+        );
+    }
+    let mut observation = DownObservation::test_fixture(0);
+    observation.up_slot_count = 2;
+    super::publish_down_observation(
+        &observer,
+        DispatchObservation::Down(observation),
+        2,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.observer_dropped_samples, 1);
+    assert_eq!(metrics.up_slot_records_expected, 2);
+    assert_eq!(metrics.observer_dropped_up_slot_records, 0);
+    assert_eq!(metrics.observer_dropped_up_slot_pool_records, 2);
+    assert_eq!(
+        metrics.up_slot_records_expected,
+        metrics.observer_dropped_up_slot_records
+            + metrics.observer_dropped_up_slot_pool_records
+    );
+}
+
+#[test]
+fn absent_observer_counts_up_slots_as_not_captured_by_mode() {
+    use crate::engine::WorkerMetricsLocal;
+
+    let mut metrics = WorkerMetricsLocal::default();
+    super::account_unobserved_up_slots(&mut metrics, 2);
+
+    assert_eq!(metrics.up_slot_records_expected, 2);
+    assert_eq!(metrics.up_slot_records_not_captured_by_mode, 2);
+    assert_eq!(metrics.observer_dropped_up_slot_records, 0);
+    assert_eq!(metrics.observer_dropped_up_slot_pool_records, 0);
+    assert_eq!(
+        metrics.up_slot_records_expected,
+        metrics.up_slot_records_not_captured_by_mode
+            + metrics.observer_dropped_up_slot_records
+            + metrics.observer_dropped_up_slot_pool_records
+    );
 }

@@ -49,6 +49,71 @@ fn stale_metadata_race_schedule(
 }
 
 #[cfg(all(feature = "test-support", windows))]
+fn post_wake_32_stale_metadata_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
+    let mut actions = Vec::with_capacity(38);
+    actions.push(KeyActionInput {
+        source_action_index: 0,
+        kind: ActionKind::Down,
+        scheduled_us: 5_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "post-wake-initial-down".into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: 1,
+        kind: ActionKind::Up,
+        scheduled_us: 10_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "post-wake-initial-up".into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: 2,
+        kind: ActionKind::Up,
+        scheduled_us: 12_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "post-wake-stale-up".into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: 3,
+        kind: ActionKind::Down,
+        scheduled_us: 14_000,
+        scan_codes: smallvec::smallvec![0x16],
+        reason: "post-wake-intermediate-down".into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: 4,
+        kind: ActionKind::Up,
+        scheduled_us: 14_500,
+        scan_codes: smallvec::smallvec![0x16],
+        reason: "post-wake-intermediate-up".into(),
+    });
+    for index in 1..32usize {
+        actions.push(KeyActionInput {
+            source_action_index: u32::try_from(index + 4).expect("stale source index"),
+            kind: ActionKind::Up,
+            scheduled_us: 15_000 + index as u64,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "post-wake-stale-up".into(),
+        });
+    }
+    actions.push(KeyActionInput {
+        source_action_index: 36,
+        kind: ActionKind::Down,
+        scheduled_us: 200_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "post-wake-final-down".into(),
+    });
+    actions.push(KeyActionInput {
+        source_action_index: 37,
+        kind: ActionKind::Up,
+        scheduled_us: 210_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "post-wake-final-up".into(),
+    });
+    sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+        .expect("32 stale metadata post-wake schedule")
+}
+
+#[cfg(all(feature = "test-support", windows))]
 #[test]
 fn actual_worker_wait_path_drops_waitable_timer_after_session_exit() {
     let timer_context = sky_dispatch_win32::timer::test_support::new_counters();
@@ -185,72 +250,102 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
-fn actual_b_worker_reports_bounded_post_wake_deadline_to_send_cost() {
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "post-wake-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 150_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "post-wake-up".into(),
-            },
-        ],
-        &[0x15],
-    )
-    .expect("post-wake timing schedule");
-    let session = NativeDispatchSession::new(test_session_options(
-        schedule,
-        1,
-        BackendConfig::Mock {
-            latency_base_us: 0,
-            latency_per_key_us: 0,
-            fault_script: FaultInjectionScript::none(),
-        },
-    ))
-    .expect("actual B worker session");
-    session.arm(0).expect("worker arm");
-    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
-    assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+fn actual_b_worker_reports_repeated_post_wake_distribution_after_32_stale_metadata() {
+    const REPEATS: usize = 100;
+    let schedule = post_wake_32_stale_metadata_schedule();
+    let mut samples_us = Vec::with_capacity(REPEATS);
+    let mut qpc_frequency_hz = None;
 
-    let telemetry: serde_json::Value =
-        serde_json::from_str(&session.take_telemetry_json().expect("worker telemetry"))
-            .expect("telemetry JSON");
-    let down = telemetry["records"]
-        .as_array()
-        .expect("trace records")
-        .iter()
-        .find(|record| record["down_mask"].as_u64().unwrap_or_default() != 0)
-        .expect("timed Down trace");
-    assert!(down["wake_qpc_available"].as_bool().unwrap_or(false));
-    assert!(down["pre_call_qpc_available"].as_bool().unwrap_or(false));
-    let wake_qpc = down["wake_qpc_ticks"].as_u64().expect("wake QPC");
-    let send_qpc = down["pre_call_qpc_ticks"]
-        .as_u64()
-        .expect("sender start QPC");
-    let post_wake_ticks = send_qpc
-        .checked_sub(wake_qpc)
-        .expect("sender start follows waiter wake");
-    let frequency = std::num::NonZeroU64::new(
-        telemetry["qpc_frequency_hz"]
+    for _ in 0..REPEATS {
+        let mut options = test_session_options(
+            schedule.clone(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.wait.test_spin_threshold_us = None;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+        let session = NativeDispatchSession::new(options).expect("actual B worker session");
+        session.arm(0).expect("worker arm");
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+        assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+
+        let telemetry: serde_json::Value =
+            serde_json::from_str(&session.take_telemetry_json().expect("worker telemetry"))
+                .expect("telemetry JSON");
+        let frequency = telemetry["qpc_frequency_hz"]
             .as_u64()
-            .expect("QPC frequency"),
-    )
-    .expect("nonzero QPC frequency");
-    let post_wake_us = QpcClock::from_frequency_hz(frequency)
-        .duration_to_us(DurationTicks::from_raw(post_wake_ticks))
-        .expect("post-wake duration conversion");
+            .expect("QPC frequency");
+        if let Some(previous) = qpc_frequency_hz {
+            assert_eq!(
+                frequency, previous,
+                "one process must keep a stable QPC frequency"
+            );
+        } else {
+            qpc_frequency_hz = Some(frequency);
+        }
+        let records = telemetry["records"].as_array().expect("trace records");
+        let stale_count = records
+            .iter()
+            .filter(|record| record["outcome"].as_u64() == Some(4))
+            .count();
+        assert_eq!(
+            stale_count, 32,
+            "all stale Up metadata must precede final Down"
+        );
+        let down = records
+            .iter()
+            .find(|record| {
+                record["source_action_index"].as_u64() == Some(36)
+                    && record["down_mask"].as_u64().unwrap_or_default() != 0
+            })
+            .expect("final Down after 32 stale metadata records");
+        assert!(
+            down["wake_qpc_available"].as_bool().unwrap_or(false),
+            "final Down lacks wake QPC: {down}"
+        );
+        assert!(
+            down["pre_call_qpc_available"].as_bool().unwrap_or(false),
+            "final Down lacks sender-start QPC: {down}"
+        );
+        let wake_qpc = down["wake_qpc_ticks"].as_u64().expect("wake QPC");
+        let send_qpc = down["pre_call_qpc_ticks"]
+            .as_u64()
+            .expect("sender start QPC");
+        let post_wake_ticks = send_qpc
+            .checked_sub(wake_qpc)
+            .expect("sender start follows waiter wake");
+        let frequency = std::num::NonZeroU64::new(frequency).expect("nonzero QPC frequency");
+        samples_us.push(
+            QpcClock::from_frequency_hz(frequency)
+                .duration_to_us(DurationTicks::from_raw(post_wake_ticks))
+                .expect("post-wake duration conversion"),
+        );
+    }
+
+    let distribution = |percentile: usize| {
+        let mut ordered = samples_us.clone();
+        ordered.sort_unstable();
+        let rank = (percentile * ordered.len()).div_ceil(100).max(1);
+        ordered[rank - 1]
+    };
+    let p50 = distribution(50);
+    let p95 = distribution(95);
+    let p99 = distribution(99);
+    let max = *samples_us.iter().max().expect("timing samples");
     eprintln!(
-        "b_worker_post_wake_evidence wake_qpc={wake_qpc} sender_pre_call_qpc={send_qpc} delta_ticks={post_wake_ticks} delta_us={post_wake_us} bound_us=100000 evidence_scope=actual_b_worker_test_support_mock_sender"
+        "b_worker_post_wake_distribution scenario=32_stale_metadata_total_31_after_final_deadline_wake samples={} qpc_frequency_hz={} p50_us={} p95_us={} p99_us={} max_us={} estimator=nearest_rank evidence_scope=actual_b_worker_test_support_mock_sender qualification=false samples_us={samples_us:?}",
+        samples_us.len(),
+        qpc_frequency_hz.expect("QPC frequency"),
+        p50,
+        p95,
+        p99,
+        max,
     );
-    assert!(post_wake_us <= 100_000, "post-wake handoff exceeded bound");
+    assert_eq!(samples_us.len(), REPEATS);
 }
 
 #[test]

@@ -636,6 +636,7 @@ impl RuntimeDispatchCoordinator {
             .map_err(CoordinatorError::Allocation)?
             .heap_payload_bytes;
         let projected_coordinator = checked_storage_sum([
+            schedule.compile_memory.caller_retained_capacity_bytes,
             schedule_heap_bytes,
             std::mem::size_of::<Self>(),
             checked_storage_bytes(
@@ -750,6 +751,7 @@ impl RuntimeDispatchCoordinator {
             )?,
         ])?;
         let startup_peak_preflight = checked_storage_sum([
+            schedule.compile_memory.caller_retained_capacity_bytes,
             schedule_heap_bytes,
             std::mem::size_of::<Self>(),
             coordinator_vector_peak_bytes,

@@ -146,18 +146,10 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
                 reason: "up".into(),
             });
         }
-        let compiler_input_capacity_bytes = actions
-            .capacity()
-            .checked_mul(std::mem::size_of::<KeyActionInput>())
-            .and_then(|bytes| {
-                actions.iter().try_fold(bytes, |total, action| {
-                    total.checked_add(action.reason.len())
-                })
-            })
-            .expect("compiler input capacity accounting");
         let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
         assert_eq!(sched.down_chords.len(), chord_count);
         let schedule_memory = sched.memory_metrics().expect("schedule memory metrics");
+        let compile_memory = schedule_memory.compile_memory;
         let schedule = sched;
         let mut coordinator = crate::coordinator::RuntimeDispatchCoordinator::new(
             schedule,
@@ -187,24 +179,21 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
         assert!(mem.retained_capacity_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
         assert!(mem.startup_peak_capacity_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
 
-        let reason_map_entry_bound = std::mem::size_of::<(String, crate::model::ReasonId)>() * 2
-            + crate::compile::MAX_REASON_BYTES * 2;
-        let compile_reason_map_bound = (u16::MAX as usize + 1) * reason_map_entry_bound;
-        let compiler_phase_peak_upper_bound = compiler_input_capacity_bytes
-            .checked_add(schedule_memory.heap_payload_bytes)
-            .and_then(|bytes| bytes.checked_add(schedule_memory.struct_bytes))
-            .and_then(|bytes| bytes.checked_add(compile_reason_map_bound))
-            .expect("compiler phase upper bound");
-        let overall_startup_peak_capacity_bound =
-            compiler_phase_peak_upper_bound.max(mem.startup_peak_capacity_bytes);
+        let overall_startup_peak_capacity_bound = compile_memory
+            .phase_peak_capacity_bytes
+            .max(mem.startup_peak_capacity_bytes);
         eprintln!(
-            "dispatch_memory workload=one_key chords={chord_count} memory_basis=calculated_size_and_capacity windows_process_memory=not_measured compiler_input_capacity_bytes={compiler_input_capacity_bytes} schedule_heap_capacity_bytes={} coordinator_heap_capacity_bytes={} executor_heap_capacity_bytes={} coordinator_struct_bytes={} retained_capacity_bytes={} compiler_phase_peak_upper_bound_bytes={compiler_phase_peak_upper_bound} worker_startup_peak_capacity_bytes={} overall_startup_peak_capacity_bound_bytes={overall_startup_peak_capacity_bound}",
+            "dispatch_memory workload=one_key chords={chord_count} memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} caller_retained_capacity_bytes={} schedule_heap_capacity_bytes={} coordinator_heap_capacity_bytes={} executor_heap_capacity_bytes={} coordinator_struct_bytes={} dispatch_owned_retained_capacity_bytes={} compiler_phase_peak_capacity_bytes={} coordinator_materialization_peak_capacity_bytes={} overall_startup_peak_capacity_bound_bytes={overall_startup_peak_capacity_bound} lifetime_model=compiler_input_and_temp_overlap_compiled_schedule;compiler_input_and_temp_drop_before_coordinator_materialization;caller_retained_overlaps_both_phases",
+            compile_memory.input_capacity_bytes,
+            compile_memory.temporary_capacity_bytes,
+            compile_memory.caller_retained_capacity_bytes,
             mem.schedule_heap_bytes,
             mem.coordinator_heap_bytes,
             mem.executor_heap_bytes,
             mem.coordinator_struct_bytes,
             mem.retained_capacity_bytes,
-            mem.startup_peak_capacity_bytes,
+            compile_memory.phase_peak_capacity_bytes,
+            mem.coordinator_materialization_peak_capacity_bytes,
         );
         assert!(
             mem.retained_capacity_bytes <= MAX_EXECUTOR_BYTES,
@@ -321,9 +310,18 @@ fn executor_storage_admission_rejects_overflow_and_budget_excess() {
 }
 
 #[test]
+fn executor_reservation_reports_real_try_reserve_failure() {
+    let mut chords = Vec::new();
+    let error = reserve_executor_chords(&mut chords, usize::MAX)
+        .expect_err("unrepresentable Vec capacity must be denied by try_reserve_exact");
+    assert!(error.contains("executor chord capacity allocation failed"));
+    assert!(chords.is_empty());
+}
+
+#[test]
 fn executor_cancellation_interrupts_large_materialization() {
     let mut actions = Vec::new();
-    for index in 0..1_000u32 {
+    for index in 0..9_000u32 {
         actions.push(KeyActionInput {
             source_action_index: index * 2,
             kind: ActionKind::Down,
@@ -341,14 +339,18 @@ fn executor_cancellation_interrupts_large_materialization() {
     }
     let schedule = compile_runtime_intents(&actions, &[0x15]).expect("schedule");
     let mut checks = 0;
+    let mut converted_timestamps = 0;
     let result = DispatchExecutor::new_with_cancellation(
         &schedule,
         DurationTicks::from_raw(8_000),
         DurationTicks::from_raw(16_667),
-        |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
+        |us| {
+            converted_timestamps += 1;
+            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
+        },
         || {
             checks += 1;
-            if checks == 2 {
+            if checks == 3 {
                 Err("cancelled during materialization".into())
             } else {
                 Ok(())
@@ -360,5 +362,6 @@ fn executor_cancellation_interrupts_large_materialization() {
             .unwrap_err()
             .contains("cancelled during materialization")
     );
-    assert_eq!(checks, 2);
+    assert_eq!(checks, 3);
+    assert_eq!(converted_timestamps, 2 * 8_192);
 }

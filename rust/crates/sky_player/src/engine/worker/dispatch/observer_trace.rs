@@ -6,8 +6,10 @@ use super::observation::{
 use super::observation::{DownObservation, StaleMetadataObservation, UpSlotObservation};
 use crate::engine::{
     RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_UP, TRACE_SEND_STATUS_NOT_ATTEMPTED,
-    TelemetryCollector, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+    TelemetryCollector, TraceContext, TraceDelivery, TraceTiming, UpSlotLossReason,
+    trace_outcome_code,
 };
+pub(in crate::engine::worker::dispatch) mod trace_timing;
 
 pub(in crate::engine::worker) fn attach_up_slot_traces(
     telemetry: &mut TelemetryCollector,
@@ -16,10 +18,13 @@ pub(in crate::engine::worker) fn attach_up_slot_traces(
     let trace_record_index = u32::try_from(telemetry.output.accepted - 1)
         .map_err(|error| DispatchStep::Terminate(format!("Up trace index overflow: {error}")))?;
     if observation.up_slot_count != 0 && observation.up_slots.is_none() {
-        telemetry.output.up_slot_records_dropped = telemetry
-            .output
-            .up_slot_records_dropped
-            .saturating_add(u64::from(observation.up_slot_count));
+        telemetry.output.account_up_slot_loss(
+            UpSlotLossReason::PoolStorage,
+            u64::from(observation.up_slot_count),
+        );
+        if let Some(record) = telemetry.output.records.back_mut() {
+            record.up_slot_attribution_missing = true;
+        }
         return Ok(());
     }
     for timing in observation
@@ -29,8 +34,9 @@ pub(in crate::engine::worker) fn attach_up_slot_traces(
         .take(usize::from(observation.up_slot_count))
     {
         if telemetry.output.up_slot_records.len() == TelemetryCollector::MAX_UP_SLOT_RECORDS {
-            telemetry.output.up_slot_records_dropped =
-                telemetry.output.up_slot_records_dropped.saturating_add(1);
+            telemetry
+                .output
+                .account_up_slot_loss(UpSlotLossReason::SidecarCapacity, 1);
             if let Some(record) = telemetry.output.records.back_mut() {
                 record.up_slot_attribution_missing = true;
             }
@@ -637,6 +643,8 @@ mod tests {
         observation.up_slot_count = 1;
         let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 1);
         collector.output.accepted = 1;
+        collector.output.up_slot_records_expected =
+            (TelemetryCollector::MAX_UP_SLOT_RECORDS + 1) as u64;
         for _ in 0..=TelemetryCollector::MAX_UP_SLOT_RECORDS {
             attach_up_slot_traces(&mut collector, &observation).expect("bounded trace");
         }
@@ -645,6 +653,15 @@ mod tests {
             TelemetryCollector::MAX_UP_SLOT_RECORDS
         );
         assert_eq!(collector.output.up_slot_records_dropped, 1);
+        assert_eq!(
+            collector.output.up_slot_records_dropped_by_sidecar_capacity,
+            1
+        );
+        assert_eq!(
+            collector.output.up_slot_records_expected,
+            collector.output.up_slot_records.len() as u64
+                + collector.output.up_slot_records_dropped
+        );
     }
 
     #[test]
@@ -654,9 +671,88 @@ mod tests {
         observation.up_slots = None;
         let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 1);
         collector.output.accepted = 1;
+        collector.output.up_slot_records_expected = 3;
+        collector.output.records.push_back(RtTraceRecord::default());
         attach_up_slot_traces(&mut collector, &observation).expect("count missing sidecar");
         assert_eq!(collector.output.up_slot_records_dropped, 3);
+        assert_eq!(collector.output.up_slot_records_dropped_by_pool_storage, 3);
+        assert!(
+            collector
+                .output
+                .records
+                .back()
+                .expect("parent packet")
+                .up_slot_attribution_missing
+        );
         assert!(collector.output.up_slot_records.is_empty());
+        assert_eq!(
+            collector.output.up_slot_records_expected,
+            collector.output.up_slot_records.len() as u64
+                + collector.output.up_slot_records_dropped
+        );
+    }
+
+    #[test]
+    fn coalesced_up_sidecar_retains_numeric_per_slot_evidence() {
+        let queue = super::super::observer::PendingObservationQueue::default();
+        let mut observation = super::super::observation::DownObservation::test_fixture(0);
+        let mut storage = queue.acquire_up_slots().expect("Up-slot pool storage");
+        storage.slots.as_mut().expect("owned storage")[..2].copy_from_slice(&[
+            sky_dispatch_core::executor::UpSlotTiming {
+                slot: 0,
+                scan_code: 21,
+                source_action_index: 7,
+                authored_up_offset_ticks: TimelineTicks::from_raw(100),
+                release_not_before_ticks: TimelineTicks::from_raw(120),
+            },
+            sky_dispatch_core::executor::UpSlotTiming {
+                slot: 1,
+                scan_code: 22,
+                source_action_index: 8,
+                authored_up_offset_ticks: TimelineTicks::from_raw(110),
+                release_not_before_ticks: TimelineTicks::from_raw(145),
+            },
+        ]);
+        observation.epoch_qpc = QpcTicks::from_raw(1_000);
+        observation.pre_call_qpc = Some(QpcTicks::from_raw(1_150));
+        observation.up_pre_call_available = true;
+        observation.sendinput_completion_qpc = QpcTicks::from_raw(1_155);
+        observation.up_slots = Some(storage);
+        observation.up_slot_count = 2;
+
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 1);
+        collector.output.accepted = 1;
+        collector.output.up_slot_records_expected = 2;
+        attach_up_slot_traces(&mut collector, &observation).expect("coalesced Up sidecar");
+
+        assert_eq!(collector.output.up_slot_records.len(), 2);
+        assert_eq!(
+            (
+                collector.output.up_slot_records[0].slot,
+                collector.output.up_slot_records[0].scan_code,
+                collector.output.up_slot_records[0].source_action_index,
+                collector.output.up_slot_records[0].authored_offset_ticks,
+                collector.output.up_slot_records[0].floor_displacement_ticks,
+                collector.output.up_slot_records[0].residual_ticks,
+            ),
+            (0, 21, 7, 100, 20, Some(30))
+        );
+        assert_eq!(
+            (
+                collector.output.up_slot_records[1].slot,
+                collector.output.up_slot_records[1].scan_code,
+                collector.output.up_slot_records[1].source_action_index,
+                collector.output.up_slot_records[1].authored_offset_ticks,
+                collector.output.up_slot_records[1].floor_displacement_ticks,
+                collector.output.up_slot_records[1].residual_ticks,
+            ),
+            (1, 22, 8, 110, 35, Some(5))
+        );
+        assert_eq!(
+            collector.output.up_slot_records_expected,
+            collector.output.up_slot_records.len() as u64
+                + collector.output.up_slot_records_dropped
+        );
     }
 
     #[test]

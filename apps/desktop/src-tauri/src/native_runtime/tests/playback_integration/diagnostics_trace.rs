@@ -203,11 +203,18 @@ fn terminal_outcome_health_projection_preserves_trigger_and_release_identity() {
 fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     let active = active_for_control_with_physical(PlaybackSessionState::Finished, None, true);
     let telemetry = serde_json::json!({
-        "schema_version": 19,
+        "schema_version": sky_player::engine::NATIVE_TELEMETRY_SCHEMA_VERSION,
         "qpc_frequency_hz": 10_000_000,
         "records": [{"up_slot_attribution_missing": true}],
         "up_slot_records": [{"slot": 0}],
+        "up_slot_records_expected": 3,
         "up_slot_records_dropped": 2,
+        "up_slot_records_dropped_by_observer_queue": 0,
+        "up_slot_records_dropped_by_pool_storage": 2,
+        "up_slot_records_dropped_by_telemetry_ring": 0,
+        "up_slot_records_dropped_by_sidecar_capacity": 0,
+        "up_slot_records_not_captured_by_mode": 0,
+        "up_slot_capture_mode": "ring",
         "attempted": 0,
         "accepted": 0,
         "dropped": 0,
@@ -217,7 +224,7 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     let export = sender_trace_export_json(&active, &telemetry).expect("sender trace JSON");
     let document: Value = serde_json::from_str(&export).expect("valid sender trace JSON");
 
-    assert_eq!(document["export_schema_version"], 3);
+    assert_eq!(document["export_schema_version"], 4);
     assert_eq!(document["raw_packet_trace_status"], "not_captured");
     assert_eq!(document["session_id"], "a".repeat(32));
     assert_eq!(document["song_id"], "c".repeat(32));
@@ -233,12 +240,22 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
         "packet_trace_records"
     );
     assert_eq!(document["analytics"]["per_key_p95_p99_supported"], false);
+    assert!(document["analytics"]["per_key_p95_p99_refusal_reason"].is_string());
+    assert_eq!(
+        document["analytics"]["per_key_measurement_semantics"],
+        "only retained sidecar records contain per-slot evidence; packet aggregates are not expanded or imputed into per-key samples"
+    );
     assert_eq!(
         document["analytics"]["up_slot_sidecar_consumed_by_summary"],
         false
     );
     assert_eq!(document["analytics"]["up_slot_sidecar_record_count"], 1);
+    assert_eq!(document["analytics"]["up_slot_records_expected"], 3);
     assert_eq!(document["analytics"]["up_slot_sidecar_dropped_count"], 2);
+    assert_eq!(
+        document["analytics"]["up_slot_sidecar_loss_counts"]["pool_storage"],
+        2
+    );
     assert_eq!(
         document["analytics"]["up_slot_attribution_missing_packet_count"],
         1

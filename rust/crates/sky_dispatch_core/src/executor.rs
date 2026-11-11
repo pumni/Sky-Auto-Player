@@ -106,6 +106,15 @@ fn checked_executor_storage_bytes(chord_count: usize) -> Result<usize, String> {
     }
     Ok(estimated_bytes)
 }
+
+fn reserve_executor_chords(
+    down_chords: &mut Vec<DownChordTicks>,
+    chord_count: usize,
+) -> Result<(), String> {
+    down_chords
+        .try_reserve_exact(chord_count)
+        .map_err(|error| format!("executor chord capacity allocation failed: {error}"))
+}
 pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
 
 /// Measured memory footprint of the `DispatchExecutor`.
@@ -178,9 +187,7 @@ impl DispatchExecutor {
         checkpoint()?;
 
         let mut down_chords = Vec::new();
-        down_chords
-            .try_reserve(chord_count)
-            .map_err(|e| format!("executor chord capacity allocation failed: {e}"))?;
+        reserve_executor_chords(&mut down_chords, chord_count)?;
 
         for (idx, chord) in schedule.down_chords.iter().enumerate() {
             if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {

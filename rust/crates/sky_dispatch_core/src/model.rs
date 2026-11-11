@@ -218,6 +218,20 @@ pub struct RuntimeSchedule {
     pub reason_table: Vec<String>,
     pub down_chords: Vec<CompiledDownChord>,
     pub schedule_end_offset_us: u64,
+    /// Compile-phase capacity accounting carried into startup admission.
+    pub compile_memory: CompileMemoryMetrics,
+}
+
+/// Calculated capacity for overlapping compilation allocations. This is not
+/// a complete application/process peak and excludes allocator metadata and
+/// unrelated caller allocations not supplied to the compiler.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompileMemoryMetrics {
+    pub caller_retained_capacity_bytes: usize,
+    pub input_capacity_bytes: usize,
+    pub temporary_capacity_bytes: usize,
+    pub schedule_capacity_bytes: usize,
+    pub phase_peak_capacity_bytes: usize,
 }
 
 /// Capacity-based storage report for the compiler-owned runtime schedule.
@@ -233,6 +247,7 @@ pub struct RuntimeScheduleMemoryMetrics {
     pub reason_text_capacity_bytes: usize,
     pub heap_payload_bytes: usize,
     pub struct_bytes: usize,
+    pub compile_memory: CompileMemoryMetrics,
 }
 
 impl RuntimeSchedule {
@@ -291,6 +306,7 @@ impl RuntimeSchedule {
             reason_text_capacity_bytes,
             heap_payload_bytes,
             struct_bytes: std::mem::size_of::<Self>(),
+            compile_memory: self.compile_memory,
         })
     }
 

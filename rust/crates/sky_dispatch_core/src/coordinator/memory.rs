@@ -2,17 +2,32 @@ use super::{CoordinatorError, GenerationStatus, RuntimeDispatchCoordinator};
 use crate::model::MAX_RETAINED_DISPATCH_BYTES;
 use crate::time::TimelineTicks;
 
-/// Capacity-based accounting for one retained compiler schedule and its
-/// runtime coordinator/executor. Allocator metadata and process RSS are not
-/// included. `startup_peak_capacity_bytes` also includes a conservative copy
-/// bound for coordinator buffers while they become boxed slices.
+/// Capacity-based accounting for schedule storage, compiler overlap, and its
+/// runtime coordinator/executor. Allocator metadata, unrelated application
+/// allocations, process baseline, and OS process memory are not included.
+/// Startup phases use the maximum of the compile-phase bound and the
+/// coordinator materialization bound; the latter includes a conservative
+/// second copy of coordinator vectors while they are converted to boxed
+/// slices. Compiler inputs and scratch are gone before coordinator build;
+/// caller-retained source capacities overlap both phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DispatchMemoryMetrics {
     pub schedule_heap_bytes: usize,
     pub coordinator_heap_bytes: usize,
     pub executor_heap_bytes: usize,
     pub coordinator_struct_bytes: usize,
+    /// Schedule, coordinator, and executor storage retained by dispatch.
     pub retained_capacity_bytes: usize,
+    /// Caller-owned prepared schedule and active-session source capacity
+    /// overlapping native dispatch startup.
+    pub caller_retained_capacity_bytes: usize,
+    /// Compiler map/key/group scratch plus capacity overlap during map growth.
+    pub compiler_temporary_capacity_bytes: usize,
+    /// Peak while compiler input, output, and scratch storage overlap.
+    pub compiler_phase_peak_capacity_bytes: usize,
+    /// Peak while coordinator-owned vectors are materialized and boxed.
+    pub coordinator_materialization_peak_capacity_bytes: usize,
+    /// Maximum of the compiler and coordinator startup phase bounds.
     pub startup_peak_capacity_bytes: usize,
 }
 
@@ -91,13 +106,27 @@ impl RuntimeDispatchCoordinator {
         let startup_peak_capacity_bytes = retained_capacity_bytes
             .checked_add(self.startup_peak_extra_bytes)
             .ok_or_else(|| "dispatch startup peak capacity size overflow".to_string())?;
+        let coordinator_materialization_peak_capacity_bytes = startup_peak_capacity_bytes
+            .checked_add(self.schedule.compile_memory.caller_retained_capacity_bytes)
+            .ok_or_else(|| "dispatch startup peak capacity size overflow".to_string())?;
+        let compiler_phase_peak_capacity_bytes =
+            self.schedule.compile_memory.phase_peak_capacity_bytes;
+        let caller_retained_capacity_bytes =
+            self.schedule.compile_memory.caller_retained_capacity_bytes;
+        let compiler_temporary_capacity_bytes =
+            self.schedule.compile_memory.temporary_capacity_bytes;
         Ok(DispatchMemoryMetrics {
             schedule_heap_bytes: schedule.heap_payload_bytes,
             coordinator_heap_bytes,
             executor_heap_bytes,
             coordinator_struct_bytes,
             retained_capacity_bytes,
-            startup_peak_capacity_bytes,
+            caller_retained_capacity_bytes,
+            compiler_temporary_capacity_bytes,
+            compiler_phase_peak_capacity_bytes,
+            coordinator_materialization_peak_capacity_bytes,
+            startup_peak_capacity_bytes: compiler_phase_peak_capacity_bytes
+                .max(coordinator_materialization_peak_capacity_bytes),
         })
     }
 
@@ -129,13 +158,14 @@ impl RuntimeDispatchCoordinator {
             executor_heap_bytes,
             std::mem::size_of::<Self>(),
             self.startup_peak_extra_bytes,
+            self.schedule.compile_memory.caller_retained_capacity_bytes,
         ]
         .into_iter()
         .try_fold(0usize, |total, value| total.checked_add(value))
         .ok_or_else(|| "combined retained dispatch size overflow".to_string())?;
         if required > MAX_RETAINED_DISPATCH_BYTES {
             return Err(format!(
-                "combined schedule, coordinator and executor capacity ({required} bytes) exceeds dispatch budget of {MAX_RETAINED_DISPATCH_BYTES} bytes"
+                "overlapping dispatch startup capacity ({required} bytes) exceeds dispatch budget of {MAX_RETAINED_DISPATCH_BYTES} bytes"
             ));
         }
         Ok(())
