@@ -1,4 +1,4 @@
-import { BookMusic, ChevronLeft, ChevronRight, Heart, ListMusic, RefreshCw } from 'lucide-react';
+import { BookOpen, ChevronLeft, ChevronRight, Heart, ListMusic, RefreshCw } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Button } from 'react-aria-components';
 import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
@@ -152,7 +152,7 @@ export function LibraryNavigator({
             ? { count: navigation.builtinSongCount }
             : {})}
           disabled={!navigationReady || !navigation.builtinAvailable}
-          icon={<BookMusic size={18} />}
+          icon={<BookOpen size={18} />}
           onPress={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
         >
           {builtinChecking ? 'Checking Built-in Songs…' : 'Built-in Songs'}

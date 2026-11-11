@@ -95,7 +95,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             className="player-tool-button profile-summary-button"
             type="button"
             aria-label="Configure playback profile"
-            title="Configure playback profile"
           >
             <SlidersHorizontal size={18} aria-hidden="true" />
           </AriaButton>
@@ -140,7 +139,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
           className="icon-button player-tool-button player-utility-button"
           aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
           aria-expanded={utility.open}
-          aria-controls={utility.open ? 'utility-inspector' : undefined}
+          {...(utility.open ? { 'aria-controls': 'utility-inspector' } : {})}
           ref={utilityTriggerRef}
           onPress={() => toggleUtility()}
         >
