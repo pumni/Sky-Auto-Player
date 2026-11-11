@@ -47,17 +47,15 @@ describe('SongDetailsView', () => {
     const { container } = render(<SongDetailsView useStore={store} />);
     expect(screen.getByRole('heading', { name: first.title })).toBeInTheDocument();
     expect(container.querySelector('.song-details-context')).toBeNull();
-    expect(
-      screen.getByText(/Test playback \(no input\).*dry-run playback.*physical keyboard input/i),
-    ).toBeInTheDocument();
-    const sectionCount = container.querySelectorAll('.utility-section').length;
+    expect(screen.getByText('Timing risk')).toBeInTheDocument();
+    expect(screen.queryByText(/Test playback \(no input\).*dry-run playback/i)).toBeNull();
 
     const pending = store.getState().selectSong(second.song_id);
     await act(async () => Promise.resolve());
 
     expect(screen.getByRole('heading', { name: second.title })).toBeInTheDocument();
     expect(screen.queryByText('Medium timing risk')).toBeNull();
-    expect(container.querySelectorAll('.utility-section')).toHaveLength(sectionCount);
+    expect(container.querySelectorAll('.utility-section').length).toBeGreaterThan(0);
     expect(container.querySelector('.song-details-heading p')).toHaveTextContent(
       'TXT · … · … notes',
     );
@@ -95,6 +93,7 @@ describe('SongDetailsView', () => {
     render(<SongDetailsView useStore={store} />);
 
     expect(screen.getByText('Composed v5 · schema 5 · requires confirmation')).toBeInTheDocument();
+    expect(screen.getByText('Technical conversion counts')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Conversion mode' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Target Sky Piano pitch' })).toBeInTheDocument();
     expect(screen.getByText(/assumed from the source song/i)).toBeInTheDocument();

@@ -949,6 +949,17 @@ body.is-resizing * {
   overflow: hidden;
 }
 
+.song-details-view.scroll-surface,
+.diagnostics-view.scroll-surface {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.song-details-view.scroll-surface::-webkit-scrollbar-thumb,
+.diagnostics-view.scroll-surface::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
 .song-details-view,
 .diagnostics-view {
   display: flex;
@@ -1019,7 +1030,7 @@ body.is-resizing * {
 
 .song-details-heading h3 {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--type-page-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-top: 4px;
@@ -1078,7 +1089,8 @@ body.is-resizing * {
 
 .utility-section h4 {
   margin-bottom: 8px;
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1135,6 +1147,30 @@ body.is-resizing * {
   padding: 8px 9px;
   border-left: 2px solid var(--warning-fg, var(--risk-medium));
   background: var(--surface-raised);
+}
+
+.sheet-technical-details {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sheet-technical-details summary,
+.utility-risk-more summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sheet-technical-details[open] summary,
+.utility-risk-more[open] summary {
+  margin-bottom: 10px;
+  color: var(--text-primary);
+}
+
+.utility-risk-more > p {
+  margin-top: 6px;
 }
 
 .sheet-diagnostics-grid {
@@ -1342,10 +1378,19 @@ body.is-resizing * {
 
 .diagnostics-metric strong {
   color: var(--text-primary);
-  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-family: inherit;
   font-size: var(--type-metadata);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.diagnostics-metric strong.is-number {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+}
+
+.diagnostics-metric strong.is-status {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .diagnostics-status {
