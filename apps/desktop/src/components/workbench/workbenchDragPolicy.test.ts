@@ -46,7 +46,7 @@ describe('workbench drag policy', () => {
   });
 
   it('uses expanded width limits only while the drag explicitly keeps the navigator expanded', () => {
-    expect(getUtilityWidthMaxForDrag(1024, false)).toBe(394);
+    expect(getUtilityWidthMaxForDrag(1024, false)).toBe(388);
     expect(getUtilityWidthMaxForDrag(1024, true)).toBe(440);
     expect(getUtilityWidthMaxForDrag(1024, null)).toBe(440);
   });

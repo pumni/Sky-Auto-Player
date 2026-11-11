@@ -13,7 +13,6 @@
 }
 
 .workbench {
-  --workbench-separator-width: 1px;
   position: relative;
   display: flex;
   min-width: 0;
@@ -36,27 +35,15 @@
 .navigator-workbench-pane {
   --navigator-pane-width: inherit;
   flex-shrink: 0;
-  border-right: 0;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
   background: var(--workbench-navigation);
   box-shadow: none;
 }
 
 .track-browser-workbench-pane {
   flex: 1 1 0;
-  border-left: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
   /* Set by the workbench from the geometry policy's shared minimum. */
   min-width: var(--min-track-browser-width);
   container: track-browser / inline-size;
-}
-
-.workbench[data-utility-presentation='docked'] .track-browser-workbench-pane {
-  border-right: 0;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
 }
 
 .utility-workbench-pane {
@@ -65,12 +52,6 @@
   container: utility / inline-size;
   background: var(--workbench-inspector);
   box-shadow: none;
-}
-
-.workbench[data-utility-presentation='docked'] .utility-workbench-pane {
-  border-left: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
 }
 
 .utility-workbench-pane.is-overlay {
@@ -89,7 +70,8 @@
 .resizable-separator {
   position: relative;
   z-index: 1;
-  flex: 0 0 var(--workbench-separator-width);
+  /* Occupies the complete 4px gutter; the panes keep their rounded edges. */
+  flex: 0 0 var(--workbench-gap);
   min-height: 0;
   cursor: col-resize;
   touch-action: none;
@@ -98,29 +80,29 @@
 
 .resizable-separator::before {
   position: absolute;
-  /* 13px pointer target on a 1px seam. */
-  inset: 0 -6px;
+  inset: 0 -2px;
   content: '';
 }
 
 .resizable-separator span {
   position: absolute;
-  inset: 0 auto 0 50%;
-  transform: translateX(-50%);
-  border-left: 1px solid var(--workbench-pane-edge);
-  transition: border-color 120ms ease;
+  /* Highlight the whole gutter, not a 1px line inside a visually empty gap. */
+  inset: 0;
+  background: transparent;
+  pointer-events: none;
+  transition: background-color 120ms ease;
 }
 
-.resizable-separator:hover span {
-  border-color: var(--control-border);
+.resizable-separator:hover:not(.is-disabled) span {
+  background: color-mix(in srgb, var(--accent-ink) 28%, transparent);
 }
 
 .resizable-separator:focus-visible span {
-  border-color: var(--focus-ring);
+  background: color-mix(in srgb, var(--focus-ring) 40%, transparent);
 }
 
 .resizable-separator.is-dragging span {
-  border-color: var(--accent-ink);
+  background: var(--accent-ink);
 }
 
 .resizable-separator.is-disabled {
@@ -128,12 +110,8 @@
 }
 
 .resizable-separator:focus-visible {
-  outline: none;
-}
-
-.resizable-separator:focus-visible::before {
   outline: 2px solid var(--focus-ring);
-  outline-offset: -4px;
+  outline-offset: -1px;
 }
 
 body.is-resizing,

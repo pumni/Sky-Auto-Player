@@ -29,9 +29,7 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   if (navigatorPane && trackPane && playerBar) {
     const geometry = await page.evaluate(() => ({
       cssGutter: Number.parseFloat(
-        getComputedStyle(document.querySelector<HTMLElement>('.workbench')!).getPropertyValue(
-          '--workbench-separator-width',
-        ),
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
       ),
       solverGutter: Number.parseFloat(
         document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
@@ -41,13 +39,8 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
     expect(Math.round(trackPane.x - (navigatorPane.x + navigatorPane.width))).toBe(
       geometry.cssGutter,
     );
-    const verticalOuterPadding = await page.evaluate(() =>
-      Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
-      ),
-    );
     expect(Math.round(playerBar.y - (navigatorPane.y + navigatorPane.height))).toBe(
-      verticalOuterPadding,
+      geometry.cssGutter,
     );
   }
   const titlebar = await page.locator('.app-titlebar').boundingBox();
@@ -106,7 +99,7 @@ test('configured Tauri minimum keeps Inspector docked in the Chromium UI contrac
 test('Chromium fallback emulation uses overlay below the docked threshold', async ({ page }) => {
   // These widths are Chromium responsive simulations below Tauri's 800×560 minimum.
   for (const viewport of [
-    { width: 757, height: 540 },
+    { width: 763, height: 540 },
     { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
@@ -317,6 +310,69 @@ test('Player Bar geometry covers native desktop and Chromium fallback emulation'
     await expectFiveTransportControls(player, 'Play');
     await expect(player.getByRole('button', { name: 'Stop' })).toBeDisabled();
   }
+});
+
+test('separator fills the existing 4px gutter while pane borders and corner shapes remain', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+
+  const geometry = await page.evaluate(() => {
+    const required = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`Missing ${selector}`);
+      return element;
+    };
+    const rect = (element: Element) => element.getBoundingClientRect();
+    const navigator = required('.navigator-workbench-pane');
+    const browser = required('.track-browser-workbench-pane');
+    const inspector = required('.utility-workbench-pane');
+    const separators = Array.from(document.querySelectorAll<HTMLElement>('.resizable-separator'));
+    return {
+      gap: Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+      ),
+      separators: separators.map((separator) => {
+        const area = rect(separator);
+        const fill = rect(separator.querySelector('span')!);
+        return { x: area.x, right: area.right, width: area.width, fillWidth: fill.width };
+      }),
+      navigatorRight: rect(navigator).right,
+      browserLeft: rect(browser).left,
+      browserRight: rect(browser).right,
+      inspectorLeft: rect(inspector).left,
+      cornerRadius: getComputedStyle(browser).borderTopLeftRadius,
+    };
+  });
+
+  expect(geometry.gap).toBe(4);
+  expect(geometry.separators).toHaveLength(2);
+  for (const separator of geometry.separators) {
+    expect(separator.width).toBe(geometry.gap);
+    expect(separator.fillWidth).toBe(geometry.gap);
+  }
+  expect(geometry.separators[0]!.x).toBe(geometry.navigatorRight);
+  expect(geometry.separators[0]!.right).toBe(geometry.browserLeft);
+  expect(geometry.separators[1]!.x).toBe(geometry.browserRight);
+  expect(geometry.separators[1]!.right).toBe(geometry.inspectorLeft);
+  expect(geometry.cornerRadius).not.toBe('0px');
+
+  const separator = page.getByRole('separator', { name: 'Resize utility pane' });
+  const highlight = separator.locator('span');
+  await expect(highlight).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await separator.hover();
+  await expect
+    .poll(() => highlight.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .not.toBe('rgba(0, 0, 0, 0)');
+  const box = await separator.boundingBox();
+  if (!box) throw new Error('Missing utility separator bounds');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(separator).toHaveClass(/is-dragging/);
+  await page.mouse.up();
+  await expect(separator).not.toHaveClass(/is-dragging/);
 });
 
 test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
