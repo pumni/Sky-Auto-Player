@@ -81,9 +81,7 @@ export function AppTitleBar({
               </Button>
             </span>
           )}
-          <Button className="icon-button"
-            aria-label="Reload library"
-            onPress={() => void reload()}>
+          <Button className="icon-button" aria-label="Reload library" onPress={() => void reload()}>
             <RefreshCw size={17} aria-hidden="true" />
           </Button>
           <Button

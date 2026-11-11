@@ -123,10 +123,7 @@ describe('Track Browser primitives', () => {
     );
 
     expect(screen.getByText('Loading')).toHaveAttribute('aria-label', 'Metadata loading');
-    expect(screen.getByText('Unavailable')).toHaveAttribute(
-      'aria-label',
-      'Metadata unavailable',
-    );
+    expect(screen.getByText('Unavailable')).toHaveAttribute('aria-label', 'Metadata unavailable');
     expect(document.querySelectorAll('.track-metadata-status')).toHaveLength(2);
     expect(screen.getAllByRole('gridcell', { name: '—' })).toHaveLength(4);
     expect(screen.queryByText('Unknown')).toBeNull();

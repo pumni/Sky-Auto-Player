@@ -864,9 +864,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   expectStablePlayerBar(idleGeometry, confirmationGeometry);
   await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
   await expect(player.getByRole('button', { name: 'Next' })).toBeDisabled();
-  await expect(
-    confirmation.getByRole('button', { name: 'Not now' }),
-  ).toBeEnabled();
+  await expect(confirmation.getByRole('button', { name: 'Not now' })).toBeEnabled();
   const transportStatus = player.locator('.player-transport-status');
   await expect(transportStatus).toHaveText('Awaiting confirmation');
   const playerBox = await player.boundingBox();

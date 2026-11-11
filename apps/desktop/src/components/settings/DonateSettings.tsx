@@ -25,7 +25,6 @@ export function DonateSettings() {
     })();
   }
 
-
   return (
     <section className="settings-section donate-settings" aria-labelledby="donate-settings-title">
       <div className="donate-heading">

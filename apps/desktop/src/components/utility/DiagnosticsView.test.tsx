@@ -602,7 +602,9 @@ describe('DiagnosticsView', () => {
       });
     });
     expect(
-      screen.getByText('Exports the last available session, when present; no raw packet trace is recorded.'),
+      screen.getByText(
+        'Exports the last available session, when present; no raw packet trace is recorded.',
+      ),
     ).toBeInTheDocument();
   });
 

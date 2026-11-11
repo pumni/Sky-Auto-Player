@@ -255,19 +255,19 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
     const accountBounds = rect('.donate-bank-reference-row');
     const guidanceBounds = rect('.donate-bank-guidance');
     const detailListBounds = rect('.donate-bank-details');
-    const referenceRows = Array.from(
-      element.querySelectorAll('.donate-bank-reference-row'),
-    ).map((row) => {
-      const rowBounds = row.getBoundingClientRect();
-      const valueBounds = row.querySelector('dd')?.getBoundingClientRect();
-      return {
-        valueVisible: Boolean(
-          valueBounds &&
-            valueBounds.left >= rowBounds.left &&
-            valueBounds.right <= rowBounds.right + 1,
-        ),
-      };
-    });
+    const referenceRows = Array.from(element.querySelectorAll('.donate-bank-reference-row')).map(
+      (row) => {
+        const rowBounds = row.getBoundingClientRect();
+        const valueBounds = row.querySelector('dd')?.getBoundingClientRect();
+        return {
+          valueVisible: Boolean(
+            valueBounds &&
+              valueBounds.left >= rowBounds.left &&
+              valueBounds.right <= rowBounds.right + 1,
+          ),
+        };
+      },
+    );
     return {
       qrTop: qrBounds?.top ?? 0,
       qrRight: qrBounds?.right ?? 0,
@@ -308,9 +308,9 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
     { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
-    const overflow = await dialog.locator('.settings-content').evaluate((element) =>
-      element.scrollWidth > element.clientWidth,
-    );
+    const overflow = await dialog
+      .locator('.settings-content')
+      .evaluate((element) => element.scrollWidth > element.clientWidth);
     expect(overflow).toBe(false);
     const stacked = await bank.evaluate((element) => {
       const qrBounds = element.querySelector('.donate-qr-frame')?.getBoundingClientRect();

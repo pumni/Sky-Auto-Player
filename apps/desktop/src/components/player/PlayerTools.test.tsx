@@ -65,9 +65,7 @@ describe('PlayerTools playback modes and profile', () => {
     );
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(
-      within(dialog).getByText(
-        'Try these settings without sending any physical keyboard input.',
-      ),
+      within(dialog).getByText('Try these settings without sending any physical keyboard input.'),
     ).toBeInTheDocument();
     await act(async () =>
       within(dialog).getByRole('button', { name: 'Test playback (no input)' }).click(),

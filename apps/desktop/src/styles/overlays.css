@@ -697,7 +697,6 @@
   .donate-bank-details {
     grid-template-columns: minmax(0, 1fr);
   }
-
 }
 
 .calibration-copy {
