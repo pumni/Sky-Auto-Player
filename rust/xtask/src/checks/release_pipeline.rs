@@ -551,16 +551,15 @@ fn rust_release_state_machine_contract(
         );
     }
     let workflow_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
-    for relative in ["ci.yml", "hosted-v4-signing-proof.yml"] {
-        let source =
-            fs::read_to_string(workflow_root.join(relative)).map_err(|error| error.to_string())?;
-        if source.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
-            || source.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD")
-        {
-            return Err(format!(
-                "production updater secrets must never enter PR/general CI: {relative}"
-            ));
-        }
+    let relative = "ci.yml";
+    let ci_workflow =
+        fs::read_to_string(workflow_root.join(relative)).map_err(|error| error.to_string())?;
+    if ci_workflow.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || ci_workflow.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD")
+    {
+        return Err(format!(
+            "production updater secrets must never enter PR/general CI: {relative}"
+        ));
     }
     for old in [
         "scripts/v4_release_pipeline.ps1",
@@ -1111,12 +1110,8 @@ mod tests {
     fn production_signing_secrets_cannot_enter_pr_ci() {
         let root = crate::repo::root();
         let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
-        let proof = fs::read_to_string(root.join(".github/workflows/hosted-v4-signing-proof.yml"))
-            .expect("test-key proof workflow");
-        for source in [&ci, &proof] {
-            assert!(!source.contains("V4_TAURI_UPDATER_PRIVATE_KEY"));
-            assert!(!source.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"));
-        }
+        assert!(!ci.contains("V4_TAURI_UPDATER_PRIVATE_KEY"));
+        assert!(!ci.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"));
     }
 
     #[test]

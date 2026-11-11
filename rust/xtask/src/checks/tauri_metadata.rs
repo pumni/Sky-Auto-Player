@@ -293,8 +293,8 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "rust/xtask/src/release_v4.rs",
     "rust/xtask/src/nsis_harness.rs",
     "rust/xtask/src/updater_fixture.rs",
+    ".github/workflows/ci.yml",
     ".github/workflows/release-v4.yml",
-    ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/v4-metadata-recovery.yml",
     "apps/desktop/src-tauri/src/native_update.rs",
     "apps/desktop/src-tauri/tauri.conf.json",
@@ -784,6 +784,7 @@ releases/latest
         for surface in [
             "apps/desktop/src-tauri/src/native_update.rs",
             "apps/desktop/src-tauri/tauri.conf.json",
+            ".github/workflows/ci.yml",
             ".github/workflows/release-v4.yml",
         ] {
             assert!(ACTIVE_RELEASE_SURFACES.contains(&surface));

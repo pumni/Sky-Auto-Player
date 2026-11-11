@@ -5,13 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_COLOR: "1"
@@ -37,6 +39,8 @@ jobs:
       package_required: ${{ steps.classify.outputs.package_required }}
       updater_required: ${{ steps.classify.outputs.updater_required }}
       release_required: ${{ steps.classify.outputs.release_required }}
+      signing_proof_required: ${{ steps.classify.outputs.signing_proof_required }}
+      malware_proof_required: ${{ steps.classify.outputs.malware_proof_required }}
       supply_chain_required: ${{ steps.classify.outputs.supply_chain_required }}
       site_required: ${{ steps.classify.outputs.site_required }}
       classification_reason: ${{ steps.classify.outputs.classification_reason }}
@@ -70,12 +74,12 @@ jobs:
         run: |
           set -euo pipefail
           classifier_args=()
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            classifier_args+=(--full)
-          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            classifier_args+=(--base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}")
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            classifier_args+=(--diff-mode pr --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}")
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            classifier_args+=(--diff-mode push --base-sha "${{ github.event.before }}" --head-sha "${{ github.sha }}")
           else
-            classifier_args+=(--base-sha "${{ github.event.before }}" --head-sha "${{ github.sha }}")
+            classifier_args+=(--full)
           fi
           classification="$(cargo xtask ci classify "${classifier_args[@]}" --github-output "$GITHUB_OUTPUT")"
           printf '%s\n' "$classification"
@@ -299,6 +303,10 @@ jobs:
 
       - name: Test canonical toolchain pin resolver
         run: node --test scripts/toolchain-pin.test.mjs
+
+      - name: Test fail-closed ClamAV bootstrap
+        shell: bash
+        run: bash scripts/test_ci_bootstrap_clamav.sh
 
       - name: Run Rust-native CI, candidate, bridge, and calibration self-tests
         run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
@@ -755,6 +763,173 @@ jobs:
               echo "- Elapsed seconds: \`$elapsed\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  signing_proof:
+    needs: changes
+    if: needs.changes.outputs.signing_proof_required == 'true'
+    name: Build unsigned NSIS then sign exact bytes with a disposable key
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      SKY_AUTHENTICODE_MODE: unsigned-zero-budget
+      SKY_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Initialize isolated proof directory
+        run: |
+          $proofRoot = Join-Path $env:RUNNER_TEMP "sky-v4-hosted-signing-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $proofRoot) { throw "Hosted proof directory already exists" }
+          New-Item -ItemType Directory -Path $proofRoot | Out-Null
+          Set-Content -LiteralPath (Join-Path $proofRoot "owner") -Value $env:GITHUB_RUN_ID -Encoding ascii
+          $targetRoot = Join-Path $proofRoot "cargo-target"
+          "SKY_HOSTED_PROOF_ROOT=$proofRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "CARGO_TARGET_DIR=$targetRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Check out exact proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Set up canonical Rust toolchain
+        uses: ./.github/actions/setup-rust-pinned
+        with:
+          targets: |
+            x86_64-pc-windows-msvc
+          components: |
+            rustfmt
+            clippy
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Verify installed Bun pin
+        run: bun scripts/verify-bun-pin.mjs
+
+      - name: Install locked desktop dependencies
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Run ignored draft readback publication proof
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests::test_key_signature_is_verified_after_draft_readback_before_patch -- --ignored --exact --test-threads=1
+
+      - name: Verify source identity and pinned Tauri CLI
+        run: |
+          $manifest = Get-Content -LiteralPath apps/desktop/src-tauri/Cargo.toml -Raw
+          $package = [regex]::Match($manifest, '(?s)\[package\]\s*(.*?)(?=\r?\n\[|$)').Groups[1].Value
+          $versionMatch = [regex]::Match($package, '(?m)^version\s*=\s*"([^"]+)"\s*$')
+          if (-not $versionMatch.Success) { throw "Could not read the canonical desktop package version" }
+          $version = $versionMatch.Groups[1].Value
+          cargo xtask ci source-identity `
+            --candidate-version $version `
+            --source-sha $env:SKY_PROOF_SOURCE_SHA `
+            --require-worktree-version
+          if ($LASTEXITCODE -ne 0) { throw "Hosted proof source identity check failed with exit code $LASTEXITCODE" }
+          Push-Location apps/desktop
+          try { $tauriVersion = (& bun run tauri --version 2>&1 | Select-Object -Last 1).ToString().Trim() } finally { Pop-Location }
+          if ($LASTEXITCODE -ne 0) { throw "Tauri CLI version check failed with exit code $LASTEXITCODE" }
+          if ($tauriVersion -cne "tauri-cli 2.12.3") { throw "Expected pinned Tauri CLI 2.12.3, got $tauriVersion" }
+          $dirty = git status --porcelain
+          if (-not [string]::IsNullOrWhiteSpace($dirty)) { throw "Hosted proof checkout is not clean: $dirty" }
+          "SKY_PROOF_VERSION=$version" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Prove production Rust key adapter with a disposable Tauri private key
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_signing::hosted_proof::hosted_disposable_tauri_private_key_roundtrip_through_adapter -- --ignored --exact --test-threads=1
+
+      - name: Run Tauri signature proof positive and negative tests
+        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_trust::tests::hosted_signature_proof -- --test-threads=1
+
+      - name: Build one unsigned NSIS installer without signing credentials
+        working-directory: apps/desktop
+        run: |
+          foreach ($name in @("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PATH", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $configPath = Join-Path $env:SKY_HOSTED_PROOF_ROOT "unsigned-build-config.json"
+          [System.IO.File]::WriteAllText($configPath, '{"bundle":{"createUpdaterArtifacts":false}}', [System.Text.UTF8Encoding]::new($false))
+          bun run tauri build --ci --bundles nsis --config $configPath -- --profile dist
+          if ($LASTEXITCODE -ne 0) { throw "Unsigned hosted NSIS build failed with exit code $LASTEXITCODE" }
+          $bundleDir = Join-Path $env:CARGO_TARGET_DIR "dist\bundle\nsis"
+          $files = @(Get-ChildItem -LiteralPath $bundleDir -File)
+          $installers = @($files | Where-Object { $_.Name -like "*-setup.exe" })
+          if ($files.Count -ne 1 -or $installers.Count -ne 1) { throw "Unsigned NSIS output must contain exactly one installer and no signature or extra files" }
+          $installer = $installers[0].FullName
+          $installerSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SKY_PROOF_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_PROOF_INSTALLER_SHA256=$installerSha" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          @"
+          ## Hosted unsigned NSIS build
+          - Tauri CLI: tauri-cli 2.12.3
+          - version: $env:SKY_PROOF_VERSION
+          - installer: $([IO.Path]::GetFileName($installer))
+          - installer SHA-256 before signing: $installerSha
+          - updater artifacts during build: disabled
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+
+      - name: Sign the unchanged installer in an isolated test-key step
+        working-directory: apps/desktop
+        run: |
+          $signerRoot = Join-Path $env:SKY_HOSTED_PROOF_ROOT "signer"
+          New-Item -ItemType Directory -Path $signerRoot | Out-Null
+          $testKeyPath = Join-Path $signerRoot "synthetic-updater.key"
+          bun run tauri signer generate --ci --password "" --force -w $testKeyPath *> $null
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic updater test-key generation failed with exit code $LASTEXITCODE" }
+          $publicKeyPath = "$testKeyPath.pub"
+          if (-not (Test-Path -LiteralPath $publicKeyPath -PathType Leaf)) { throw "Synthetic updater public key was not produced" }
+          bun run tauri signer sign --private-key-path $testKeyPath --app-version $env:SKY_PROOF_VERSION $env:SKY_PROOF_INSTALLER *> $null
+          if ($LASTEXITCODE -ne 0) { throw "Standalone Tauri updater signing failed with exit code $LASTEXITCODE" }
+          $signaturePath = "$env:SKY_PROOF_INSTALLER.sig"
+          if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) { throw "Standalone updater signature was not produced" }
+          if ((Get-FileHash -LiteralPath $env:SKY_PROOF_INSTALLER -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:SKY_PROOF_INSTALLER_SHA256) {
+            throw "Standalone signing changed the exact installer bytes"
+          }
+          "SKY_PROOF_SIGNATURE=$signaturePath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_PROOF_PUBLIC_KEY=$publicKeyPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Verify exact test-key signature, version, digest, and source binding
+        run: |
+          $evidencePath = Join-Path $env:SKY_HOSTED_PROOF_ROOT "hosted-signing-proof.json"
+          cargo xtask updater-trust verify-test-signature `
+            --installer $env:SKY_PROOF_INSTALLER `
+            --signature $env:SKY_PROOF_SIGNATURE `
+            --public-key $env:SKY_PROOF_PUBLIC_KEY `
+            --expected-version $env:SKY_PROOF_VERSION `
+            --expected-sha256 $env:SKY_PROOF_INSTALLER_SHA256 `
+            --source-sha $env:SKY_PROOF_SOURCE_SHA `
+            --evidence $evidencePath
+          if ($LASTEXITCODE -ne 0) { throw "Rust hosted updater signature verification failed with exit code $LASTEXITCODE" }
+          $evidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+          if ($evidence.status -cne "PASS" -or $evidence.version -cne $env:SKY_PROOF_VERSION -or $evidence.installer_sha256 -cne $env:SKY_PROOF_INSTALLER_SHA256) {
+            throw "Hosted updater signature evidence does not match the exact build inputs"
+          }
+          @"
+          ## Hosted test-key updater signature proof
+          - source SHA: $($evidence.source_sha)
+          - version: $($evidence.version)
+          - installer SHA-256: $($evidence.installer_sha256)
+          - signature SHA-256: $($evidence.updater_signature_sha256)
+          - synthetic test key ID: $($evidence.updater_key_id)
+          - signed version: $($evidence.signed_version)
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+
+      - name: Remove synthetic key and hosted proof workspace
+        if: always()
+        run: |
+          foreach ($name in @("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PATH", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
+          $proofRoot = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "sky-v4-hosted-signing-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          if (-not $proofRoot.StartsWith("$tempRoot\", [StringComparison]::OrdinalIgnoreCase)) { throw "Hosted proof cleanup path escaped RUNNER_TEMP" }
+          $ownerPath = Join-Path $proofRoot "owner"
+          if ((Test-Path -LiteralPath $ownerPath -PathType Leaf) -and (Get-Content -LiteralPath $ownerPath -Raw).Trim() -ceq $env:GITHUB_RUN_ID) {
+            Remove-Item -LiteralPath $proofRoot -Recurse -Force
+          }
 
   candidate:
     name: Build current Tauri candidate
@@ -1265,6 +1440,161 @@ jobs:
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job packaged -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
+  malware_proof:
+    needs: changes
+    if: needs.changes.outputs.malware_proof_required == 'true'
+    name: Prove real NSIS-format ClamAV scanner on GitHub-hosted Ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      SKY_MALWARE_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out exact disposable proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install ClamAV and NSIS builder; refresh official signatures
+        shell: bash
+        run: |
+          bash scripts/ci_bootstrap_clamav.sh --with-nsis
+      - name: Build a real NSIS PE without any release credentials or external artifact upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$root"
+          mkdir -p "$root/candidate-bundle"
+          echo "SKY_MALWARE_PROOF_ROOT=$root" >> "$GITHUB_ENV"
+          head -c 2097152 /dev/urandom > "$root/disposable-payload.dat"
+          cat > "$root/disposable.nsi" <<'NSI'
+          Name "Sky Auto Player Disposable NSIS Scanner Proof"
+          OutFile "candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
+          RequestExecutionLevel user
+          Section
+            SetOutPath "$TEMP"
+            File "disposable-payload.dat"
+          SectionEnd
+          NSI
+          (cd "$root" && makensis -V2 disposable.nsi)
+          installer="$root/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
+          test -f "$installer"
+          test "$(stat -c '%s' "$installer")" -gt 1048576
+          file -b "$installer" | grep -q 'PE32'
+          echo "GitHub-hosted real NSIS PE scanner fixture: PASS"
+
+      - name: Prove ClamAV detects harmless EICAR hidden inside an actual compressed NSIS
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$SKY_MALWARE_PROOF_ROOT"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
+          eicar = b"X5O!P%@AP[4" + bytes([92]) + b"PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+          (root / "nsis-eicar-positive-control.txt").write_bytes(eicar)
+          (root / "nsis-eicar-positive-control.nsi").write_text(
+              'Name "Sky Auto Player NSIS Scanner Positive Control"\n'
+              'OutFile "nsis-eicar-positive-control.exe"\n'
+              'RequestExecutionLevel user\n'
+              'SetCompress force\n'
+              'Section\n'
+              '  SetOutPath "$TEMP"\n'
+              '  File "nsis-eicar-positive-control.txt"\n'
+              'SectionEnd\n',
+              encoding="utf-8",
+          )
+          PY
+          (cd "$root" && makensis -V2 nsis-eicar-positive-control.nsi)
+          set +e
+          scan_output="$(clamscan --stdout --no-summary --scan-archive=yes \
+            --alert-exceeds-max=yes --max-filesize=300M --max-scansize=1024M \
+            --max-recursion=30 "$root/nsis-eicar-positive-control.exe" 2>&1)"
+          scanner_status=$?
+          set -e
+          if [ "$scanner_status" -ne 1 ] || ! grep -q ' FOUND' <<<"$scan_output" || \
+             ! grep -qi 'EICAR' <<<"$scan_output"; then
+            echo "Hosted scanner did not detect EICAR inside a compressed NSIS archive" >&2
+            exit 1
+          fi
+          rm -f "$root/nsis-eicar-positive-control.exe" "$root/nsis-eicar-positive-control.nsi" "$root/nsis-eicar-positive-control.txt"
+          echo "Nested EICAR detection inside actual NSIS archive: PASS"
+
+      - name: Bind the real disposable NSIS to an isolated exact-byte release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+          root = Path(os.environ["RUNNER_TEMP"]) / f"sky-v4-malware-proof-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          name = "Sky Auto Player_4.3.0_x64-setup.exe"
+          fixture = root / "candidate-bundle" / name
+          if not fixture.is_file() or fixture.stat().st_size < 1024 * 1024:
+              raise RuntimeError("real NSIS proof is missing or suspiciously small")
+          with fixture.open("rb") as handle:
+              actual_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+          record = {
+              "role": "installer", "source_name": name,
+              "state_path": "candidate-bundle/" + name, "size": fixture.stat().st_size,
+              "sha256": actual_hash
+          }
+          signature = {"role": "updater-signature", "source_name": name + ".sig"}
+          context = {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "source_sha": os.environ["SKY_MALWARE_PROOF_SOURCE_SHA"],
+              "workflow_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "version": "4.3.0",
+          }
+          (root / "release-context.json").write_text(json.dumps(context))
+          (root / "candidate-manifest.json").write_text(json.dumps({**context, "public_assets": [record, signature]}))
+          PY
+
+      - name: Prove real NSIS PE is clean and EICAR is positively detected
+        shell: bash
+        run: |
+          set -euo pipefail
+          GITHUB_SHA="$SKY_MALWARE_PROOF_SOURCE_SHA" python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
+          v = json.loads((root / "malware-evidence.json").read_text())
+          assert v["positive_control_detected"] is True
+          assert v["nsis_archive_control_detected"] is True
+          assert v["detection_result"] == "none"
+          assert v["artifact_sha256"] == json.loads((root / "candidate-manifest.json").read_text())["public_assets"][0]["sha256"]
+          print("Hosted real NSIS malware scan evidence exact-byte binding: PASS")
+          PY
+
+      - name: Prove an altered NSIS SHA is rejected without rescanning as clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "tamper" >> "$SKY_MALWARE_PROOF_ROOT/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
+          if GITHUB_SHA="$SKY_MALWARE_PROOF_SOURCE_SHA" python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"; then
+            echo "tampered exact candidate was accepted" >&2
+            exit 1
+          fi
+          echo "Tampered candidate rejected: PASS"
+
+      - name: Clean disposable proof workspace
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ -d "$root" ] && [ "$(dirname "$root")" = "$RUNNER_TEMP" ]; then
+            rm -rf -- "$root"
+          fi
+
   site:
     name: Website validation
     needs: changes
@@ -1293,7 +1623,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -1313,6 +1643,8 @@ jobs:
           PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           UPDATER_REQUIRED: ${{ needs.changes.outputs.updater_required }}
           RELEASE_REQUIRED: ${{ needs.changes.outputs.release_required }}
+          SIGNING_PROOF_REQUIRED: ${{ needs.changes.outputs.signing_proof_required }}
+          MALWARE_PROOF_REQUIRED: ${{ needs.changes.outputs.malware_proof_required }}
           SUPPLY_CHAIN_REQUIRED: ${{ needs.changes.outputs.supply_chain_required }}
           SITE_REQUIRED: ${{ needs.changes.outputs.site_required }}
           STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
@@ -1332,6 +1664,8 @@ jobs:
           PACKAGED_RESULT: ${{ needs.packaged.result }}
           DESKTOP_WEB_RESULT: ${{ needs.desktop_web.result }}
           SITE_RESULT: ${{ needs.site.result }}
+          SIGNING_PROOF_RESULT: ${{ needs.signing_proof.result }}
+          MALWARE_PROOF_RESULT: ${{ needs.malware_proof.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
@@ -1364,6 +1698,8 @@ jobs:
             [[ "$PACKAGED_RESULT" == "skipped" ]]
           fi
           if [[ "$SITE_REQUIRED" == "true" ]]; then [[ "$SITE_RESULT" == "success" ]]; else [[ "$SITE_RESULT" == "skipped" ]]; fi
+          if [[ "$SIGNING_PROOF_REQUIRED" == "true" ]]; then [[ "$SIGNING_PROOF_RESULT" == "success" ]]; else [[ "$SIGNING_PROOF_RESULT" == "skipped" ]]; fi
+          if [[ "$MALWARE_PROOF_REQUIRED" == "true" ]]; then [[ "$MALWARE_PROOF_RESULT" == "success" ]]; else [[ "$MALWARE_PROOF_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
 
       - name: Report CI timing

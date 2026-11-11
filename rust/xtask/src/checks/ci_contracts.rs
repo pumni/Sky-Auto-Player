@@ -407,7 +407,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "scripts/setup_v4_test_signing.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
         "linux_process_runtime:",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]",
         "LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
@@ -834,10 +834,16 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "git_paths_are_exact_and_malformed_names_fail_closed",
         "git_path_decoding_preserves_trailing_space_and_rejects_invalid_utf8",
         "--depth=1",
+        "DiffMode",
+        "merge-base",
+        "SHALLOW_DEEPEN_STEPS",
+        "source_head_matches",
         "preserves_exact_lane_output_shape_and_reason_golden",
         "matches_positive_and_union_classifier_matrix",
         "unknown_or_malformed_paths_fail_closed_and_workflow_dispatch_is_full",
-        "explicit_base_head_works_in_detached_shallow_checkout_and_fetches_missing_base",
+        "pr_uses_merge_base_when_base_advances_and_diff_keeps_both_rename_paths",
+        "shallow_history_without_a_merge_base_fails_closed_after_bounded_fetches",
+        "empty changed-path diff requires full validation",
     ] {
         if !classifier.contains(marker) {
             return Err(format!(
@@ -884,7 +890,6 @@ fn process_tree_boundary_contract(source: &str) -> Result<()> {
 
 const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/ci.yml",
-    ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/pages.yml",
     ".github/workflows/release-v4.yml",
     ".github/workflows/v4-metadata-recovery.yml",
@@ -893,7 +898,7 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
 fn validate_active_github_hosted_ubuntu_labels(relative: &str, source: &str) -> Result<()> {
     let dedicated_malware_scanner = match relative {
         ".github/workflows/release-v4.yml" => Some("  attest:"),
-        ".github/workflows/hosted-v4-signing-proof.yml" => Some("  malware-scan-proof:"),
+        ".github/workflows/ci.yml" => Some("  malware_proof:"),
         _ => None,
     };
     let mut job = "";
@@ -914,22 +919,6 @@ fn validate_active_github_hosted_ubuntu_labels(relative: &str, source: &str) -> 
             )
             .into());
         }
-    }
-    Ok(())
-}
-
-/// Keep the hosted malware archive positive control on the actual release
-/// scanner, not only in a disposable PR proof. A standalone EICAR detection
-/// does not prove that the engine can unpack the signed NSIS payload.
-fn hosted_nsis_scan_contract(workflow: &str, scanner: &str) -> Result<()> {
-    if !workflow.contains("clamav clamav-freshclam nsis")
-        || !scanner.contains("require_eicar_detection(sample)")
-        || !scanner.contains("require_eicar_detection(archive)")
-        || !scanner.contains("\"--scan-archive=yes\"")
-    {
-        return Err(
-            "hosted release must demonstrate ClamAV archive inspection on the actual scanner runner".into(),
-        );
     }
     Ok(())
 }
@@ -974,10 +963,7 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             .map_err(|error| format!("{relative}: {error}"))?;
     }
 
-    hosted_nsis_scan_contract(
-        &fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?,
-        &fs::read_to_string(root.join("scripts/scan_v4_malware_exact.py"))?,
-    )?;
+    super::hosted_malware::hosted_release_scanner_contract(root)?;
 
     let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?.replace("\r\n", "\n");
     for output in [
@@ -988,6 +974,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "package_required",
         "updater_required",
         "release_required",
+        "signing_proof_required",
+        "malware_proof_required",
         "supply_chain_required",
         "site_required",
         "classification_reason",
@@ -1004,14 +992,19 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "github.event.pull_request.head.sha",
         "github.event.before",
         "classifier_args+=(--full)",
-        "classifier_args+=(--base-sha",
+        "classifier_args+=(--diff-mode pr --base-sha",
+        "classifier_args+=(--diff-mode push --base-sha",
+        "17 3 * * 0",
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
         "static_required:",
         "contains(steps.classify.outputs.classification_reason, 'static-only')",
         "desktop_e2e_required == 'true'",
         "name: Website validation",
         "if: needs.changes.outputs.site_required == 'true'",
+        "if: needs.changes.outputs.signing_proof_required == 'true'",
+        "if: needs.changes.outputs.malware_proof_required == 'true'",
         "name: Sky Auto Player — required CI gate",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -1057,6 +1050,17 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     ] {
         if !bridge.contains(marker) {
             return Err(format!("updater_bridge producer is missing its marker: {marker}").into());
+        }
+    }
+    for marker in [
+        "bash scripts/test_ci_bootstrap_clamav.sh",
+        "cargo xtask check static --skip-supply-chain",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!(
+                "CI static gate is missing its failure-injection/security check: {marker}"
+            )
+            .into());
         }
     }
     if bridge.matches("bun run tauri build").count() != 0 {
@@ -1343,6 +1347,12 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "UPDATER_BRIDGE_RESULT",
         "LINUX_PROCESS_RESULT",
         "needs.linux_process_runtime.result",
+        "SIGNING_PROOF_REQUIRED",
+        "SIGNING_PROOF_RESULT",
+        "needs.signing_proof.result",
+        "MALWARE_PROOF_REQUIRED",
+        "MALWARE_PROOF_RESULT",
+        "needs.malware_proof.result",
         "UPDATER_CONTRACT_REQUIRED",
         "UPDATER_CONTRACT_RESULT",
         "DESKTOP_WEB_REQUIRED",
@@ -1350,8 +1360,14 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "if [[ \"$UPDATER_BRIDGE_REQUIRED\" == \"true\" ]]",
         "if [[ \"$UPDATER_CONTRACT_REQUIRED\" == \"true\" ]]",
         "if [[ \"$DESKTOP_WEB_REQUIRED\" == \"true\" ]]",
+        "if [[ \"$SIGNING_PROOF_REQUIRED\" == \"true\" ]]",
+        "if [[ \"$MALWARE_PROOF_REQUIRED\" == \"true\" ]]",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
+        "[[ \"$SIGNING_PROOF_RESULT\" == \"success\" ]]",
+        "[[ \"$SIGNING_PROOF_RESULT\" == \"skipped\" ]]",
+        "[[ \"$MALWARE_PROOF_RESULT\" == \"success\" ]]",
+        "[[ \"$MALWARE_PROOF_RESULT\" == \"skipped\" ]]",
         "Sky Auto Player — required CI gate",
     ] {
         if !status.contains(marker) {
@@ -1741,32 +1757,10 @@ mod tests {
     }
 
     #[test]
-    fn hosted_release_requires_archive_detection_on_the_actual_scanner() {
-        let workflow = "attest:\n    runs-on: ubuntu-24.04\n    run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam nsis\n";
-        let scanner = "require_eicar_detection(sample)\nrequire_eicar_detection(archive)\n\"--scan-archive=yes\"";
-        assert!(hosted_nsis_scan_contract(workflow, scanner).is_ok());
-        assert!(hosted_nsis_scan_contract(&workflow.replace(" nsis", ""), scanner).is_err());
-        assert!(
-            hosted_nsis_scan_contract(
-                workflow,
-                &scanner.replace("require_eicar_detection(archive)", "")
-            )
-            .is_err()
-        );
-        assert!(
-            hosted_nsis_scan_contract(workflow, &scanner.replace("\"--scan-archive=yes\"", ""))
-                .is_err()
-        );
-    }
-
-    #[test]
     fn pinned_ubuntu_2404_is_allowed_only_for_malware_scanner_jobs() {
         for (path, job) in [
             (".github/workflows/release-v4.yml", "attest"),
-            (
-                ".github/workflows/hosted-v4-signing-proof.yml",
-                "malware-scan-proof",
-            ),
+            (".github/workflows/ci.yml", "malware_proof"),
         ] {
             let valid = format!("jobs:\n  {job}:\n    runs-on: ubuntu-24.04\n");
             assert!(validate_active_github_hosted_ubuntu_labels(path, &valid).is_ok());
