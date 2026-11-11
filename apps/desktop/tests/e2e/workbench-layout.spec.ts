@@ -361,8 +361,8 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
   for (const separator of geometry.separators) {
     expect(separator.width).toBe(geometry.gap);
     expect(separator.fillWidth).toBe(geometry.gap);
-    expect(separator.fillTopInset).toBe(6);
-    expect(separator.fillBottomInset).toBe(6);
+    expect(separator.fillTopInset).toBe(0);
+    expect(separator.fillBottomInset).toBe(0);
     expect(separator.fillRadius).toBe('999px');
   }
   expect(geometry.separators[0]!.x).toBe(geometry.navigatorRight);

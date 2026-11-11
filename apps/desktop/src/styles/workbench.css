@@ -87,8 +87,8 @@
 
 .resizable-separator span {
   position: absolute;
-  /* Fill the 4px lane, leaving space to round off both ends of the highlight. */
-  inset: 6px 0;
+  /* Full-height 4px highlight, with rounded caps and no vertical inset. */
+  inset: 0;
   border-radius: 999px;
   background: transparent;
   pointer-events: none;
