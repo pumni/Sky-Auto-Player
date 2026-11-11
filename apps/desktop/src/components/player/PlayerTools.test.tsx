@@ -17,9 +17,9 @@ describe('PlayerTools playback modes and profile', () => {
     const profile = screen.getByRole('button', { name: 'Configure playback profile' });
     const utility = screen.getByRole('button', { name: 'Open utility panel' });
     expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-    expect(autoPlay).toHaveAttribute('title', 'Auto Play on');
-    expect(autoPlay.querySelector('svg')).toHaveClass('lucide-list-music');
-    expect(autoPlay.querySelector('svg')).not.toHaveClass('lucide-list-end');
+    expect(autoPlay).not.toHaveAttribute('title');
+    expect(autoPlay.querySelector('svg')).toHaveClass('lucide-list-video');
+    expect(autoPlay.querySelector('svg')).not.toHaveClass('lucide-repeat');
     expect(
       autoPlay.compareDocumentPosition(profile) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -33,10 +33,7 @@ describe('PlayerTools playback modes and profile', () => {
       'aria-pressed',
       'false',
     );
-    expect(screen.getByRole('button', { name: 'Auto Play' })).toHaveAttribute(
-      'title',
-      'Auto Play off',
-    );
+    expect(screen.getByRole('button', { name: 'Auto Play' })).not.toHaveAttribute('title');
 
     await act(async () => screen.getByRole('button', { name: 'Auto Play' }).click());
     await waitFor(() => expect(store.getState().settings?.auto_play).toBe(true));

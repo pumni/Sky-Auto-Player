@@ -1,5 +1,12 @@
-import { FlaskConical, ListMusic, PanelRight, SlidersHorizontal } from 'lucide-react';
-import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
+import { FlaskConical, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
+import {
+  Button as AriaButton,
+  Dialog,
+  DialogTrigger,
+  Popover,
+  Tooltip,
+  TooltipTrigger,
+} from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
 import {
@@ -61,17 +68,20 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 
   return (
     <div className="player-tools">
-      <button
-        className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
-        type="button"
-        aria-label="Auto Play"
-        aria-pressed={autoPlayEnabled}
-        title={`Auto Play ${autoPlayEnabled ? 'on' : 'off'}`}
-        disabled={!settings || autoPlayPending}
-        onClick={() => void toggleAutoPlay()}
-      >
-        <ListMusic size={18} aria-hidden="true" />
-      </button>
+      <TooltipTrigger delay={350} closeDelay={100}>
+        <AriaButton
+          className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
+          aria-label="Auto Play"
+          aria-pressed={autoPlayEnabled}
+          isDisabled={!settings || autoPlayPending}
+          onPress={() => void toggleAutoPlay()}
+        >
+          <ListVideo size={18} aria-hidden="true" />
+        </AriaButton>
+        <Tooltip className="player-tool-tooltip" placement="top" offset={8}>
+          Auto Play {autoPlayEnabled ? 'on' : 'off'} · Continue to the next song
+        </Tooltip>
+      </TooltipTrigger>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
           <AriaButton
@@ -119,18 +129,21 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
           </Popover>
         </DialogTrigger>
       </div>
-      <button
-        className="icon-button player-tool-button player-utility-button"
-        type="button"
-        aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
-        title={utility.open ? 'Close utility panel' : 'Open utility panel'}
-        aria-expanded={utility.open}
-        aria-controls={utility.open ? 'utility-inspector' : undefined}
-        ref={utilityTriggerRef}
-        onClick={() => toggleUtility()}
-      >
-        <PanelRight size={16} aria-hidden="true" />
-      </button>
+      <TooltipTrigger delay={350} closeDelay={100}>
+        <AriaButton
+          className="icon-button player-tool-button player-utility-button"
+          aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
+          aria-expanded={utility.open}
+          aria-controls={utility.open ? 'utility-inspector' : undefined}
+          ref={utilityTriggerRef}
+          onPress={() => toggleUtility()}
+        >
+          <PanelRight size={16} aria-hidden="true" />
+        </AriaButton>
+        <Tooltip className="player-tool-tooltip" placement="top" offset={8}>
+          {utility.open ? 'Close Inspector' : 'Open Inspector'}
+        </Tooltip>
+      </TooltipTrigger>
     </div>
   );
 }

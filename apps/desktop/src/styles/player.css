@@ -405,6 +405,29 @@
   color: var(--danger-fg);
 }
 
+.player-tool-tooltip {
+  z-index: 30;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 22px var(--shadow-dialog);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .player-tool-tooltip {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+}
+
 .player-profile {
   position: relative;
   width: 32px;
