@@ -312,6 +312,92 @@ test('Player Bar geometry covers native desktop and Chromium fallback emulation'
   }
 });
 
+test('separator fills the existing 4px gutter while pane borders and corner shapes remain', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+
+  const geometry = await page.evaluate(() => {
+    const required = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`Missing ${selector}`);
+      return element;
+    };
+    const rect = (element: Element) => element.getBoundingClientRect();
+    const navigator = required('.navigator-workbench-pane');
+    const browser = required('.track-browser-workbench-pane');
+    const inspector = required('.utility-workbench-pane');
+    const separators = Array.from(document.querySelectorAll<HTMLElement>('.resizable-separator'));
+    return {
+      gap: Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+      ),
+      separators: separators.map((separator) => {
+        const area = rect(separator);
+        const fillElement = separator.querySelector('span')!;
+        const fill = rect(fillElement);
+        return {
+          x: area.x,
+          right: area.right,
+          width: area.width,
+          fillWidth: fill.width,
+          fillTopInset: fill.top - area.top,
+          fillBottomInset: area.bottom - fill.bottom,
+          fillRadius: getComputedStyle(fillElement).borderTopLeftRadius,
+        };
+      }),
+      navigatorRight: rect(navigator).right,
+      browserLeft: rect(browser).left,
+      browserRight: rect(browser).right,
+      inspectorLeft: rect(inspector).left,
+      cornerRadius: getComputedStyle(browser).borderTopLeftRadius,
+    };
+  });
+
+  expect(geometry.gap).toBe(4);
+  expect(geometry.separators).toHaveLength(2);
+  for (const separator of geometry.separators) {
+    expect(separator.width).toBe(geometry.gap);
+    expect(separator.fillWidth).toBe(geometry.gap);
+    expect(separator.fillTopInset).toBe(0);
+    expect(separator.fillBottomInset).toBe(0);
+    expect(separator.fillRadius).toBe('999px');
+  }
+  expect(geometry.separators[0]!.x).toBe(geometry.navigatorRight);
+  expect(geometry.separators[0]!.right).toBe(geometry.browserLeft);
+  expect(geometry.separators[1]!.x).toBe(geometry.browserRight);
+  expect(geometry.separators[1]!.right).toBe(geometry.inspectorLeft);
+  expect(geometry.cornerRadius).not.toBe('0px');
+
+  const separator = page.getByRole('separator', { name: 'Resize utility pane' });
+  const highlight = separator.locator('span');
+  await expect(highlight).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await separator.hover();
+  await expect
+    .poll(() =>
+      highlight.evaluate((element) => {
+        const fill = getComputedStyle(element).backgroundColor;
+        if (fill === 'transparent' || fill === 'rgba(0, 0, 0, 0)') return 0;
+        // Chromium may serialize color-mix as color(srgb ... / alpha) or rgba(...).
+        const colorAlpha = fill.match(/\/\s*([\d.]+)\s*\)$/);
+        if (colorAlpha) return Number(colorAlpha[1]);
+        const rgba = fill.match(/^rgba\(([^)]+)\)$/);
+        if (rgba) return Number(rgba[1]!.split(/[\s,]+/).at(-1));
+        return 1;
+      }),
+    )
+    .toBeGreaterThanOrEqual(0.8);
+  const box = await separator.boundingBox();
+  if (!box) throw new Error('Missing utility separator bounds');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(separator).toHaveClass(/is-dragging/);
+  await page.mouse.up();
+  await expect(separator).not.toHaveClass(/is-dragging/);
+});
+
 test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');

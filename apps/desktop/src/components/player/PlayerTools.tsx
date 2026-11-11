@@ -1,8 +1,12 @@
-import { ListMusic, PanelRight, SlidersHorizontal } from 'lucide-react';
+import { FlaskConical, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import {
+  playbackSessionStatusConcern,
+  type DesktopStore,
+  type DesktopStoreHook,
+} from '../../state/store';
 
 interface PlayerToolsProps {
   useStore: DesktopStoreHook;
@@ -22,18 +26,25 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const selectedSongId = useStore((store) => store.library.selectedSongId);
   const playback = useStore((store) => store.playback);
   const hasPreparedPlayback = playback.prepared !== null;
+  const sessionStatusConcern = useStore((store) => playbackSessionStatusConcern(store.playback));
   const [profileOpen, setProfileOpen] = useState(false);
   const [autoPlayPending, setAutoPlayPending] = useState(false);
   const autoPlayMutationPending = useRef(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
+  const hasTestSong = Boolean(playback.currentSong || selectedSongId);
   const canPreparePlayback =
-    Boolean(playback.currentSong || selectedSongId) &&
+    hasTestSong &&
     playback.sessionId === null &&
     playback.transportOperation === null &&
+    playback.startRequestId === null &&
+    !playback.statusRetryPending &&
+    sessionStatusConcern === null &&
     !hasPreparedPlayback;
-  const profileSummary = defaults
-    ? `${defaults.hold_frames}f + ${(defaults.timing_margin_us / 1_000).toFixed(1)}ms · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
-    : 'Unavailable';
+  const previewDescription = !hasTestSong
+    ? 'Select a song to enable a dry-run preview. No keyboard input will be sent.'
+    : !canPreparePlayback
+      ? 'Finish the current playback or pending preparation before starting another test.'
+      : 'Try these settings without sending any physical keyboard input.';
 
   const prepareAndMaybeStart = async () => {
     await prepare({ dry_run: true });
@@ -56,17 +67,22 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 
   return (
     <div className="player-tools">
-      <button
-        className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
-        type="button"
-        aria-label="Auto Play"
-        aria-pressed={autoPlayEnabled}
-        title={`Auto Play ${autoPlayEnabled ? 'on' : 'off'}`}
-        disabled={!settings || autoPlayPending}
-        onClick={() => void toggleAutoPlay()}
-      >
-        <ListMusic size={16} aria-hidden="true" />
-      </button>
+      <div className="player-tooltip-anchor">
+        <AriaButton
+          className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
+          aria-label="Auto Play"
+          aria-describedby="player-auto-play-tooltip"
+          aria-pressed={autoPlayEnabled}
+          isDisabled={!settings}
+          aria-busy={autoPlayPending}
+          onPress={() => void toggleAutoPlay()}
+        >
+          <ListVideo size={18} aria-hidden="true" />
+        </AriaButton>
+        <span id="player-auto-play-tooltip" className="player-tool-tooltip" role="tooltip">
+          Auto Play {autoPlayEnabled ? 'on' : 'off'} · Continue to the next song
+        </span>
+      </div>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
           <AriaButton
@@ -75,14 +91,14 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             type="button"
             aria-label="Configure playback profile"
           >
-            <SlidersHorizontal size={15} aria-hidden="true" />
-            <span>
-              <strong>Playback profile</strong>
-              <small>{profileSummary}</small>
-            </span>
+            <SlidersHorizontal size={18} aria-hidden="true" />
           </AriaButton>
           <Popover className="profile-popover" placement="top end" offset={8}>
             <Dialog aria-label="Playback profile">
+              <header className="profile-popover-header">
+                <h3>Playback profile</h3>
+                <p>Fine-tune how each song is played.</p>
+              </header>
               <div className="profile-fields">
                 <ProfileFields
                   defaults={defaults}
@@ -91,36 +107,44 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                   patchSettings={patchSettings}
                 />
               </div>
-              <p className="profile-test-explanation">
-                Tests the current profile with dry-run playback; no physical keyboard input is sent.
-              </p>
-              <button
-                className="button profile-test-action"
-                type="button"
-                disabled={!canPreparePlayback}
-                onClick={() => {
-                  setProfileOpen(false);
-                  void prepareAndMaybeStart();
-                }}
-              >
-                Test playback (no input)
-              </button>
+              <div className="profile-preview">
+                <div className="profile-preview-copy">
+                  <strong>Safe preview</strong>
+                  <p className="profile-test-explanation">{previewDescription}</p>
+                </div>
+                <button
+                  className="button profile-test-action"
+                  type="button"
+                  disabled={!canPreparePlayback}
+                  onClick={() => {
+                    setProfileOpen(false);
+                    void prepareAndMaybeStart();
+                  }}
+                >
+                  <FlaskConical size={15} aria-hidden="true" />
+                  Test playback (no input)
+                </button>
+              </div>
             </Dialog>
           </Popover>
         </DialogTrigger>
       </div>
-      <button
-        className="icon-button player-tool-button player-utility-button"
-        type="button"
-        aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
-        title={utility.open ? 'Close utility panel' : 'Open utility panel'}
-        aria-expanded={utility.open}
-        aria-controls={utility.open ? 'utility-inspector' : undefined}
-        ref={utilityTriggerRef}
-        onClick={() => toggleUtility()}
-      >
-        <PanelRight size={16} aria-hidden="true" />
-      </button>
+      <div className="player-tooltip-anchor">
+        <AriaButton
+          className="icon-button player-tool-button player-utility-button"
+          aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
+          aria-describedby="player-utility-tooltip"
+          aria-expanded={utility.open}
+          {...(utility.open ? { 'aria-controls': 'utility-inspector' } : {})}
+          ref={utilityTriggerRef}
+          onPress={() => toggleUtility()}
+        >
+          <PanelRight size={16} aria-hidden="true" />
+        </AriaButton>
+        <span id="player-utility-tooltip" className="player-tool-tooltip" role="tooltip">
+          {utility.open ? 'Close Inspector' : 'Open Inspector'}
+        </span>
+      </div>
     </div>
   );
 }
@@ -198,16 +222,19 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
           )
         }
       />
-      <dl className="profile-timing-summary">
-        <div>
-          <dt>Target hold</dt>
-          <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-        </div>
-        <div>
-          <dt>Release gap</dt>
-          <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
-        </div>
-      </dl>
+      <details className="profile-advanced">
+        <summary>Calculated timing</summary>
+        <dl className="profile-timing-summary">
+          <div>
+            <dt>Target hold</dt>
+            <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+          </div>
+          <div>
+            <dt>Release gap</dt>
+            <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
+          </div>
+        </dl>
+      </details>
     </>
   );
 }

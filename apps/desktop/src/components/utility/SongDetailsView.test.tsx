@@ -7,6 +7,16 @@ import { SongDetailsView } from './SongDetailsView';
 describe('SongDetailsView', () => {
   afterEach(() => cleanup());
 
+  it('shows a centered song-selection cue when Inspector has no selected song', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const { container } = render(<SongDetailsView useStore={store} />);
+    expect(screen.getByText('No song selected')).toBeInTheDocument();
+    expect(screen.getByText('Select a song to view details.')).toBeInTheDocument();
+    expect(container.querySelector('.utility-empty-icon')).toHaveClass('lucide-mouse-pointer-2');
+    expect(screen.getByLabelText('Song details')).toHaveClass('utility-empty');
+  });
+
   async function selectFixture(index: number) {
     const songId = index.toString(16).padStart(32, '0');
     const bridge = createMockBridge({ builtinSongIds: [songId] });
@@ -47,17 +57,15 @@ describe('SongDetailsView', () => {
     const { container } = render(<SongDetailsView useStore={store} />);
     expect(screen.getByRole('heading', { name: first.title })).toBeInTheDocument();
     expect(container.querySelector('.song-details-context')).toBeNull();
-    expect(
-      screen.getByText(/Test playback \(no input\).*dry-run playback.*physical keyboard input/i),
-    ).toBeInTheDocument();
-    const sectionCount = container.querySelectorAll('.utility-section').length;
+    expect(screen.getByText('Timing risk')).toBeInTheDocument();
+    expect(screen.queryByText(/Test playback \(no input\).*dry-run playback/i)).toBeNull();
 
     const pending = store.getState().selectSong(second.song_id);
     await act(async () => Promise.resolve());
 
     expect(screen.getByRole('heading', { name: second.title })).toBeInTheDocument();
     expect(screen.queryByText('Medium timing risk')).toBeNull();
-    expect(container.querySelectorAll('.utility-section')).toHaveLength(sectionCount);
+    expect(container.querySelectorAll('.utility-section').length).toBeGreaterThan(0);
     expect(container.querySelector('.song-details-heading p')).toHaveTextContent(
       'TXT · … · … notes',
     );
@@ -95,6 +103,7 @@ describe('SongDetailsView', () => {
     render(<SongDetailsView useStore={store} />);
 
     expect(screen.getByText('Composed v5 · schema 5 · requires confirmation')).toBeInTheDocument();
+    expect(screen.getByText('Technical conversion counts')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Conversion mode' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Target Sky Piano pitch' })).toBeInTheDocument();
     expect(screen.getByText(/assumed from the source song/i)).toBeInTheDocument();

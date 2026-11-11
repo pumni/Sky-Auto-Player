@@ -177,13 +177,19 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
               <button
                 className="icon-button button-primary player-primary-action"
                 type="button"
-                aria-label="Play"
+                aria-label={
+                  primaryCanStartPrepared && playback.prepared?.config.dry_run
+                    ? 'Start test playback (no input)'
+                    : 'Play'
+                }
                 title={
                   confirmationPending
                     ? 'Playback confirmation required'
                     : playback.prepared?.admission === 'blocked'
                       ? 'Playback is blocked'
-                      : 'Play'
+                      : primaryCanStartPrepared && playback.prepared?.config.dry_run
+                        ? 'Start test playback: no keyboard input'
+                        : 'Play: may send physical keyboard input'
                 }
                 disabled={
                   transportOwnsControls ||
@@ -218,7 +224,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           disabled={!stopCanAct || playback.transportOperation === 'stopping'}
           onClick={() => void stop()}
         >
-          <Square size={12} aria-hidden="true" />
+          <Square size={14} aria-hidden="true" />
         </button>
       </div>
       <PlayerTransportTimeline useStore={useStore} transportStatus={transportStatus} />

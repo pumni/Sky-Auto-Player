@@ -1,9 +1,9 @@
 import { ArrowLeft } from 'lucide-react';
 import { Button } from 'react-aria-components';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { PlaylistAddSongsMenu, type PlaylistImportFeedback } from './PlaylistAddSongsMenu';
-import { TrackTable } from './TrackTable';
+import { TrackTable, type TrackTableHandle } from './TrackTable';
 import { BuiltinPager } from './BuiltinPager';
 import { formatSongCount } from './trackFormatting';
 
@@ -41,6 +41,14 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
   const exitPlaylistAdd = useStore((store: DesktopStore) => store.exitPlaylistAdd);
   const search = useStore((store: DesktopStore) => store.search);
   const [importFeedback, setImportFeedback] = useState<PlaylistImportFeedback | null>(null);
+  const trackTableRef = useRef<TrackTableHandle>(null);
+  const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
+  const selectedSongIndex = useStore((store: DesktopStore) => store.library.selectedSongIndex);
+  const visibleRange = useStore((store: DesktopStore) => store.library.visibleRange);
+  const membershipCurrent = useStore(
+    (store: DesktopStore) =>
+      store.library.membershipRevision === store.library.indexMembershipRevision,
+  );
   const sourceName = useStore((store: DesktopStore) => {
     if (store.library.source.kind === 'playlist') {
       return store.libraryNavigation.playlistsById.get(store.library.source.id)?.name ?? 'Playlist';
@@ -67,6 +75,15 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
     resultTotal === 0 &&
     !hasSearch;
   const heading = isPlaylistAddMode ? `Add songs to ${sourceName}` : sourceName;
+  const canLocateSelected =
+    isBuiltin &&
+    !loading &&
+    selectedSongId !== null &&
+    selectedSongIndex !== null &&
+    membershipCurrent &&
+    selectedSongIndex >= 0 &&
+    selectedSongIndex < resultTotal &&
+    (selectedSongIndex < visibleRange.first || selectedSongIndex > visibleRange.last);
 
   const noResultsHeading = isBuiltinSearch
     ? builtinStatusPending
@@ -167,6 +184,16 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
               </span>
             )}
         </div>
+        {canLocateSelected && (
+          <button
+            className="button track-browser-locate-button"
+            type="button"
+            title="Scroll to the selected song in Built-in Songs"
+            onClick={() => void trackTableRef.current?.locateSelected()}
+          >
+            Locate selected
+          </button>
+        )}
         {isPlaylist && !isPlaylistAddMode && (
           <div className="playlist-actions">
             <PlaylistAddSongsMenu
@@ -281,7 +308,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
         </div>
       ) : (
         <>
-          <TrackTable useStore={useStore} />
+          <TrackTable useStore={useStore} locateSelectedRef={trackTableRef} />
           {isBuiltinSearch && <BuiltinPager useStore={useStore} />}
         </>
       )}

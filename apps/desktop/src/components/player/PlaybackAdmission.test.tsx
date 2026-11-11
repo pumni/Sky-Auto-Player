@@ -35,9 +35,13 @@ describe('PlaybackAdmission recovery actions', () => {
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
     expect(
-      screen.getByText(/informational and does not change authored timing/),
+      screen.getByText(/informational; they do not change the authored song/),
     ).toBeInTheDocument();
     expect(screen.getAllByLabelText('Offline whole-stream timing advisory')).toHaveLength(3);
+    expect(screen.getAllByText('Modeled timing pressure').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('No modeled timing pressure').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Modeled timing pressure')[0]?.closest('summary')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
     expect(
       container.querySelector('[data-plan-fingerprint="mock-plan"]')?.getAttribute('data-status'),
     ).toBe('modeled_risk');
@@ -56,6 +60,44 @@ describe('PlaybackAdmission recovery actions', () => {
       container.querySelector('[data-plan-fingerprint="mock-dry-run-plan"]')?.textContent,
     ).toContain('hypothetical for this dry-run');
     expect(screen.getAllByText(/Sky does not acknowledge these estimates/)).toHaveLength(3);
+  });
+
+  it('keeps a single native confirmation decision compact and lets Not now dismiss it', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is empty');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const playback = store.getState().playback;
+    const prepared = playback.prepared;
+    if (!prepared || prepared.admission !== 'confirmation_required') {
+      throw new Error('expected a prepared playback requiring confirmation');
+    }
+    act(() =>
+      store.setState({
+        playback: {
+          ...playback,
+          prepared: {
+            ...prepared,
+            decisions: prepared.decisions.filter((decision) => decision.decision === 'proceed'),
+            variants: prepared.variants.filter((variant) => variant.decision === 'proceed'),
+          },
+        },
+      }),
+    );
+
+    const { container } = render(<PlaybackAdmission useStore={store} />);
+    expect(container.querySelectorAll('.admission-option')).toHaveLength(1);
+    expect(screen.getByText(prepared.risk.headline)).toBeVisible();
+    expect(screen.getByText(prepared.risk.reasons[0]!)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
+    const collapse = container.querySelector('details.admission-option-estimate');
+    expect(collapse).not.toBeNull();
+    expect(collapse).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(store.getState().playback.prepared).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Playback confirmation' })).toBeNull();
   });
 
   it('shows ready-plan modeled pressure without disabling playback', async () => {

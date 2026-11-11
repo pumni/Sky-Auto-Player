@@ -25,7 +25,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
 
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
   await selectedRow.click();
@@ -174,7 +174,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   const player = await startDryRunWithSelection(page);
   const details = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
-  await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'Inspector' })).toBeVisible();
   const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await page.mouse.move(0, 0);
   await search.evaluate((input: HTMLInputElement) => input.blur());
@@ -187,7 +187,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
     .poll(() => search.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')))
     .toBe(true);
   await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
   await page.mouse.move(0, 0);
   appearances.push(await readAppearance(page, 'populated-search-focused'));
 
@@ -205,7 +205,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
       compactSearch.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')),
     )
     .toBe(true);
-  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Playing');
   await expect(overlay).toBeVisible();
   const overlayBox = await overlay.boundingBox();
   expect(overlayBox).not.toBeNull();
@@ -227,10 +227,11 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   await expect(
     runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
   ).toBeVisible();
-  await expect(runtime.getByText('Sender availability', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender samples', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender backend', { exact: true })).toBeVisible();
-  await expect(runtime.locator('.diagnostics-sender-summary')).toContainText('Not measured');
+  await expect(
+    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+  ).toBeVisible();
+  await expect(runtime.getByText('Sender availability', { exact: true })).toHaveCount(0);
+  await expect(runtime.locator('.diagnostics-sender-summary')).toHaveCount(0);
   await page.mouse.move(0, 0);
   appearances.push(await readAppearance(page, 'runtime-dry-run'));
   const expected = {

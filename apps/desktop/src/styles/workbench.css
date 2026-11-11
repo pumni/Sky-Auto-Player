@@ -70,8 +70,10 @@
 .resizable-separator {
   position: relative;
   z-index: 1;
+  /* Occupies the complete 4px gutter; the panes keep their rounded edges. */
   flex: 0 0 var(--workbench-gap);
   min-height: 0;
+  border-radius: 999px;
   cursor: col-resize;
   touch-action: none;
   user-select: none;
@@ -85,22 +87,24 @@
 
 .resizable-separator span {
   position: absolute;
-  inset: 0 auto 0 50%;
-  transform: translateX(-50%);
-  border-left: 1px solid transparent;
-  transition: border-color 120ms ease;
+  /* Full-height 4px highlight, with rounded caps and no vertical inset. */
+  inset: 0;
+  border-radius: 999px;
+  background: transparent;
+  pointer-events: none;
+  transition: background-color 120ms ease;
 }
 
-.resizable-separator:hover span {
-  border-color: var(--control-border);
+.resizable-separator:hover:not(.is-disabled):not(:focus-visible):not(.is-dragging) span {
+  background: color-mix(in srgb, var(--accent-ink) 85%, transparent);
 }
 
 .resizable-separator:focus-visible span {
-  border-color: var(--focus-ring);
+  background: var(--focus-ring);
 }
 
 .resizable-separator.is-dragging span {
-  border-color: var(--accent-ink);
+  background: var(--accent-ink);
 }
 
 .resizable-separator.is-disabled {
@@ -422,6 +426,7 @@ body.is-resizing * {
   font-size: 14px;
   font-weight: 600;
   line-height: 1;
+  text-transform: uppercase;
 }
 
 .library-collapsed-playlist-tile:hover .library-playlist-monogram,
@@ -749,6 +754,23 @@ body.is-resizing * {
   background: var(--control-hover);
 }
 
+.track-browser-locate-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-height: 28px;
+  padding-inline: 9px;
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.track-browser-locate-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--workbench-control-hover);
+}
+
 .playlist-add-songs-button {
   display: inline-flex;
   align-items: center;
@@ -949,6 +971,17 @@ body.is-resizing * {
   overflow: hidden;
 }
 
+.song-details-view.scroll-surface,
+.diagnostics-view.scroll-surface {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.song-details-view.scroll-surface::-webkit-scrollbar-thumb,
+.diagnostics-view.scroll-surface::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
 .song-details-view,
 .diagnostics-view {
   display: flex;
@@ -1003,12 +1036,28 @@ body.is-resizing * {
 }
 
 .utility-empty {
-  align-content: start;
-  padding-top: 4px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+}
+
+.utility-empty-icon {
+  color: var(--text-tertiary);
+}
+
+.utility-empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .utility-empty p {
+  max-width: 250px;
   margin-block: 0;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .song-details-heading {
@@ -1019,7 +1068,7 @@ body.is-resizing * {
 
 .song-details-heading h3 {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--type-page-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-top: 4px;
@@ -1078,7 +1127,8 @@ body.is-resizing * {
 
 .utility-section h4 {
   margin-bottom: 8px;
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1135,6 +1185,30 @@ body.is-resizing * {
   padding: 8px 9px;
   border-left: 2px solid var(--warning-fg, var(--risk-medium));
   background: var(--surface-raised);
+}
+
+.sheet-technical-details {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sheet-technical-details summary,
+.utility-risk-more summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sheet-technical-details[open] summary,
+.utility-risk-more[open] summary {
+  margin-bottom: 10px;
+  color: var(--text-primary);
+}
+
+.utility-risk-more > p {
+  margin-top: 6px;
 }
 
 .sheet-diagnostics-grid {
@@ -1342,10 +1416,19 @@ body.is-resizing * {
 
 .diagnostics-metric strong {
   color: var(--text-primary);
-  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-family: inherit;
   font-size: var(--type-metadata);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.diagnostics-metric strong.is-number {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+}
+
+.diagnostics-metric strong.is-status {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .diagnostics-status {
@@ -1510,8 +1593,10 @@ body.is-resizing * {
     outline-color: Highlight;
   }
 
-  .resizable-separator:focus-visible span {
-    border-left-color: Highlight;
+  .resizable-separator:is(:focus-visible, .is-dragging) span,
+  .resizable-separator:hover:not(.is-disabled) span {
+    forced-color-adjust: none;
+    background: Highlight;
   }
 
   .library-nav-item.is-active,

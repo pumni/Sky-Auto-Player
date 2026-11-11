@@ -1,3 +1,4 @@
+import { MousePointer2 } from 'lucide-react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { selectSelectedDetail, selectSongById } from '../../state/store';
 import type { SheetConversionMode, SheetPitch, SongRow } from '../../bridge/DesktopBridge';
@@ -40,6 +41,8 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
         aria-label="Song details"
         tabIndex={0}
       >
+        <MousePointer2 className="utility-empty-icon" size={24} aria-hidden="true" />
+        <strong>No song selected</strong>
         <p className="muted">Select a song to view details.</p>
       </section>
     );
@@ -56,6 +59,11 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const summary = metadataSummary(selectedRow);
   const isPending = detail.state === 'loading' || !song;
   const detailError = detail.state === 'fatal' ? detail.error : null;
+  const showRiskGuidance =
+    isPending ||
+    detailError !== null ||
+    song?.risk.level !== 'low' ||
+    (song?.risk.reasons.length ?? 0) > 0;
   return (
     <section
       ref={scrollRef}
@@ -159,46 +167,49 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                       : 'this is the target pitch you selected.'}
                   </p>
                 )}
-                <dl className="sheet-diagnostics-grid">
-                  <div>
-                    <dt>Source notes</dt>
-                    <dd>{sheet.source_note_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Source tracks</dt>
-                    <dd>{sheet.source_track_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Output onsets</dt>
-                    <dd>{sheet.output_onset_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Same-onset merges</dt>
-                    <dd>{sheet.merged_duplicate_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Tempo collapses</dt>
-                    <dd>{sheet.tempo_quantization_collapse_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Omitted track events</dt>
-                    <dd>{sheet.omitted_source_event_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Unpitched / unresolved</dt>
-                    <dd>
-                      {(sheet.source_unpitched_count ?? 0) + (sheet.source_unresolved_count ?? 0)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Outside target range</dt>
-                    <dd>{sheet.target_unplayable_count ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Impossible same-key repeats</dt>
-                    <dd>{sheet.impossible_same_key_repeats ?? '—'}</dd>
-                  </div>
-                </dl>
+                <details className="sheet-technical-details">
+                  <summary>Technical conversion counts</summary>
+                  <dl className="sheet-diagnostics-grid">
+                    <div>
+                      <dt>Source notes</dt>
+                      <dd>{sheet.source_note_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Source tracks</dt>
+                      <dd>{sheet.source_track_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Output onsets</dt>
+                      <dd>{sheet.output_onset_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Same-onset merges</dt>
+                      <dd>{sheet.merged_duplicate_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Tempo collapses</dt>
+                      <dd>{sheet.tempo_quantization_collapse_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Omitted track events</dt>
+                      <dd>{sheet.omitted_source_event_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Unpitched / unresolved</dt>
+                      <dd>
+                        {(sheet.source_unpitched_count ?? 0) + (sheet.source_unresolved_count ?? 0)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Outside target range</dt>
+                      <dd>{sheet.target_unplayable_count ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Impossible same-key repeats</dt>
+                      <dd>{sheet.impossible_same_key_repeats ?? '—'}</dd>
+                    </div>
+                  </dl>
+                </details>
                 {(sheet.authored_sustain_lost_count ?? 0) > 0 && (
                   <p className="sheet-sustain-note">
                     {sheet.authored_sustain_lost_count} authored sustained note(s) become one-shot
@@ -250,49 +261,65 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
         className={`utility-risk-summary ${song ? `risk-${song.risk.level}` : 'risk-unknown'}`}
       >
         <div>
-          <span className="utility-section-label">TIMING RISK</span>
+          <span className="utility-section-label">Timing risk</span>
           <strong>{song?.risk.headline ?? (detailError ? 'Unavailable' : '…')}</strong>
         </div>
-        <span className="utility-risk-level">{song?.risk.level ?? '…'}</span>
       </section>
 
-      <section className="utility-section" aria-live={isPending ? 'polite' : undefined}>
-        <h4>Why this rating</h4>
-        <ul>
-          {song?.risk.reasons.length ? (
-            song.risk.reasons.map((reason) => <li key={reason}>{reason}</li>)
-          ) : (
-            <li className={detailError ? 'inline-error' : 'muted'}>
-              {detailError ?? (isPending ? '…' : 'No additional timing factors.')}
-            </li>
-          )}
-        </ul>
-      </section>
+      {showRiskGuidance ? (
+        <>
+          <section className="utility-section" aria-live={isPending ? 'polite' : undefined}>
+            <h4>Why this rating</h4>
+            <ul>
+              {song?.risk.reasons.length ? (
+                song.risk.reasons.map((reason) => <li key={reason}>{reason}</li>)
+              ) : (
+                <li className={detailError ? 'inline-error' : 'muted'}>
+                  {detailError ?? (isPending ? '…' : 'No additional timing factors.')}
+                </li>
+              )}
+            </ul>
+          </section>
 
-      <section className="utility-section">
-        <h4>Recommendation</h4>
-        <p>{song?.recommendation?.summary ?? detailError ?? '…'}</p>
-        <dl className="recommendation-grid">
-          <div>
-            <dt>Hold</dt>
-            <dd>{song?.recommendation?.recommended_hold_frames ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Tempo</dt>
-            <dd>
-              {song?.recommendation?.recommended_tempo_scale
-                ? `${song.recommendation.recommended_tempo_scale}×`
-                : '—'}
-            </dd>
-          </div>
-        </dl>
-      </section>
-
-      <p className="utility-note">
-        Test playback (no input) in Playback profile tests the current settings using dry-run
-        playback, which sends no physical keyboard input. Use Play to request normal playback with
-        the selected settings.
-      </p>
+          <section className="utility-section">
+            <h4>Recommendation</h4>
+            <p>{song?.recommendation?.summary ?? detailError ?? '…'}</p>
+            <dl className="recommendation-grid">
+              <div>
+                <dt>Hold</dt>
+                <dd>{song?.recommendation?.recommended_hold_frames ?? '—'}</dd>
+              </div>
+              <div>
+                <dt>Tempo</dt>
+                <dd>
+                  {song?.recommendation?.recommended_tempo_scale
+                    ? `${song.recommendation.recommended_tempo_scale}×`
+                    : '—'}
+                </dd>
+              </div>
+            </dl>
+          </section>
+        </>
+      ) : (
+        <details className="utility-section utility-risk-more">
+          <summary>Timing rationale and settings</summary>
+          <p>{song?.recommendation?.summary ?? 'Current playback settings look suitable.'}</p>
+          <dl className="recommendation-grid">
+            <div>
+              <dt>Hold</dt>
+              <dd>{song?.recommendation?.recommended_hold_frames ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Tempo</dt>
+              <dd>
+                {song?.recommendation?.recommended_tempo_scale
+                  ? `${song.recommendation.recommended_tempo_scale}×`
+                  : '—'}
+              </dd>
+            </div>
+          </dl>
+        </details>
+      )}
     </section>
   );
 }

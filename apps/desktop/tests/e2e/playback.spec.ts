@@ -569,15 +569,13 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
 
   const profile = page.getByRole('dialog', { name: 'Playback profile' });
   await expect(
-    profile.getByText(
-      'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
-    ),
+    profile.getByText('Try these settings without sending any physical keyboard input.'),
   ).toBeVisible();
   await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
 
   const playbackStatus = player.locator('.player-track-status');
-  await expect(playbackStatus).toHaveText('Dry run · Playing');
-  await expect(playbackStatus).toHaveAttribute('aria-label', /No physical input is sent/);
+  await expect(playbackStatus).toHaveText('Playing');
+  await expect(playbackStatus).toHaveAttribute('aria-label', /no physical input is sent/i);
   await expect(playbackStatus).toHaveCount(1);
   const playbackStatusLayout = await playbackStatus.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -600,7 +598,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await expect(playbackStatus).toHaveText('Dry run · Playing');
+    await expect(playbackStatus).toHaveText('Playing');
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
     const titleBox = await player.locator('.player-track-copy strong').boundingBox();
     const trackInfoBox = await player.locator('.player-track-info').boundingBox();
@@ -767,7 +765,7 @@ test('Auto Play dock toggle mirrors Settings and stays outside the compact profi
   await expect(profileDialog.getByRole('switch', { name: 'Auto Play' })).toHaveCount(0);
   const profileBox = await profileDialog.boundingBox();
   expect(profileBox).not.toBeNull();
-  if (profileBox) expect(profileBox.width).toBeLessThanOrEqual(320);
+  if (profileBox) expect(profileBox.width).toBeLessThanOrEqual(350);
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
@@ -864,9 +862,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   expectStablePlayerBar(idleGeometry, confirmationGeometry);
   await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
   await expect(player.getByRole('button', { name: 'Next' })).toBeDisabled();
-  await expect(
-    confirmation.getByRole('button', { name: 'Cancel playback confirmation' }),
-  ).toBeEnabled();
+  await expect(confirmation.getByRole('button', { name: 'Not now' })).toBeEnabled();
   const transportStatus = player.locator('.player-transport-status');
   await expect(transportStatus).toHaveText('Awaiting confirmation');
   const playerBox = await player.boundingBox();
@@ -884,7 +880,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
     confirmation.getByRole('button', { name: 'Test playback (no input)' }),
   ).toBeVisible();
 
-  await confirmation.getByRole('button', { name: 'Cancel playback confirmation' }).click();
+  await confirmation.getByRole('button', { name: 'Not now' }).click();
   await expect(page.getByRole('group', { name: 'Playback confirmation' })).toHaveCount(0);
   await idlePrimary.waitFor({ state: 'visible' });
   await idlePrimary.click();

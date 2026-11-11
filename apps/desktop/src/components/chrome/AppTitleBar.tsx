@@ -1,4 +1,4 @@
-import { Download, ListRestart, Settings } from 'lucide-react';
+import { Download, RefreshCw, Settings } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useMemo, type RefObject } from 'react';
 import brandMark32Url from '../../assets/brand/app-icon-32.png';
@@ -82,7 +82,7 @@ export function AppTitleBar({
             </span>
           )}
           <Button className="icon-button" aria-label="Reload library" onPress={() => void reload()}>
-            <ListRestart size={17} aria-hidden="true" />
+            <RefreshCw size={17} aria-hidden="true" />
           </Button>
           <Button
             ref={settingsTriggerRef}
