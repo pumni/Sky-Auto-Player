@@ -1,9 +1,28 @@
 use super::wait_failure_message;
 use crate::engine::telemetry::WorkerMetricsLocal;
-use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
+#[path = "wait/observation.rs"]
+mod observation;
+pub use observation::WaitObservation;
+
+pub(crate) fn next_stale_metadata_deadline_qpc(
+    coordinator: &RuntimeDispatchCoordinator,
+    epoch_qpc: QpcTicks,
+) -> Result<Option<QpcTicks>, String> {
+    coordinator
+        .next_stale_packet_target_ticks()
+        .map_err(|error| format!("coordinator stale lookahead failure: {error}"))?
+        .map(|ticks| {
+            epoch_qpc
+                .checked_add_duration(DurationTicks::from_raw(ticks.as_u64()))
+                .map_err(|error| format!("stale metadata deadline arithmetic failure: {error}"))
+        })
+        .transpose()
+}
 
 pub(crate) enum WaitBoundary {
     Due {
@@ -12,24 +31,8 @@ pub(crate) enum WaitBoundary {
         dispatch_qpc: QpcTicks,
         planned_wait_ticks: DurationTicks,
     },
-    Replan {
-        wait_result: WaitResult,
-        target_qpc: QpcTicks,
-        planned_wait_ticks: DurationTicks,
-    },
+    Interrupted(WaitResult, QpcTicks, DurationTicks),
     Exit,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct WaitObservation {
-    pub outcome: WaitOutcome,
-    pub wake_qpc: Option<QpcTicks>,
-    pub spin_ticks: DurationTicks,
-    pub physical_target_qpc: QpcTicks,
-    pub planned_wait_ticks: DurationTicks,
-    pub deadline_ticks: TimelineTicks,
-    pub epoch_qpc: QpcTicks,
-    pub allow_pre_epoch_startup_dispatch: bool,
 }
 
 pub(crate) struct WaitDeadline {
@@ -135,11 +138,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
                 local_metrics.wait_interrupted_count.saturating_add(1);
-            WaitBoundary::Replan {
-                wait_result,
-                target_qpc: physical_target_qpc,
-                planned_wait_ticks,
-            }
+            WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks)
         }
     }
 }
@@ -294,11 +293,7 @@ mod tests {
         });
         signaler.join().expect("signal thread");
 
-        assert!(matches!(
-            boundary,
-            WaitBoundary::Replan { wait_result, .. }
-                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
-        ));
+        assert!(matches!(boundary, WaitBoundary::Interrupted(..)));
         assert_eq!(system_power.take_pending(), SYSTEM_POWER_SUSPEND_PENDING);
         assert!(system_power.down_blocked());
         assert!(terminal_error.is_none());
@@ -339,11 +334,7 @@ mod tests {
             },
         });
 
-        assert!(matches!(
-            boundary,
-            WaitBoundary::Replan { wait_result, .. }
-                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
-        ));
+        assert!(matches!(boundary, WaitBoundary::Interrupted(..)));
         assert!(system_power.down_blocked());
         assert!(terminal_error.is_none());
     }

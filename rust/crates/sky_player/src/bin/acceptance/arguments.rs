@@ -61,6 +61,8 @@ pub(super) enum Scenario {
     LeaseAgeWatchdogDelayed,
     NoncanonicalProfile,
     TimingMarginSweep,
+    LongIdle,
+    HolInterleaved,
 }
 
 impl Scenario {
@@ -96,6 +98,8 @@ impl Scenario {
             "lease-age-watchdog-delayed" => Ok(Self::LeaseAgeWatchdogDelayed),
             "noncanonical-profile" => Ok(Self::NoncanonicalProfile),
             "timing-margin-sweep" => Ok(Self::TimingMarginSweep),
+            "long-idle" => Ok(Self::LongIdle),
+            "hol-interleaved" => Ok(Self::HolInterleaved),
             _ => Err(format!("unsupported scenario: {value}")),
         }
     }
@@ -132,11 +136,25 @@ impl Scenario {
             Self::LeaseAgeWatchdogDelayed => "lease-age-watchdog-delayed",
             Self::NoncanonicalProfile => "noncanonical-profile",
             Self::TimingMarginSweep => "timing-margin-sweep",
+            Self::LongIdle => "long-idle",
+            Self::HolInterleaved => "hol-interleaved",
         }
     }
 
     pub(super) const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
+    }
+
+    pub(super) const fn supports_timed_sample(self) -> bool {
+        matches!(
+            self,
+            Self::CanonicalMaxChord
+                | Self::DenseAlternating
+                | Self::MixedUpDown
+                | Self::NearMinimumRetrigger
+                | Self::LongIdle
+                | Self::HolInterleaved
+        )
     }
 }
 
@@ -151,10 +169,15 @@ pub(super) struct RunArgs {
     pub(super) timing_observer_for_qualification: bool,
     pub(super) evidence: PathBuf,
     pub(super) timing_margin_us: u64,
+    pub(super) sample_seconds: Option<u8>,
+    pub(super) game_fps: u16,
     pub(super) focus_probe_ready: Option<PathBuf>,
     pub(super) focus_probe_events: Option<PathBuf>,
     pub(super) focus_probe_hwnd: Option<isize>,
     pub(super) focus_restore_request: Option<PathBuf>,
+    pub(super) hol_stall_us: u64,
+    pub(super) hol_cycles: Option<u32>,
+    pub(super) guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,10 +262,15 @@ where
     let mut timing_observer_for_qualification = false;
     let mut evidence = None;
     let mut timing_margin_us = None;
+    let mut sample_seconds = None;
+    let mut game_fps = None;
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
     let mut focus_restore_request = None;
+    let mut hol_stall_us = 0u64;
+    let mut hol_cycles = None;
+    let mut guard_mode = None;
     let mut arguments = arguments.peekable();
     while let Some(flag) = arguments.next() {
         macro_rules! next_value {
@@ -313,6 +341,30 @@ where
                     "--timing-margin-us"
                 ))?);
             }
+            "--sample-seconds" => {
+                unique!(sample_seconds, "--sample-seconds");
+                let value = next_value!("--sample-seconds");
+                let parsed = value.parse::<u8>().map_err(|_| {
+                    "--sample-seconds must be 15 for timed benchmark workloads".to_string()
+                })?;
+                if parsed != 15 {
+                    return Err(
+                        "--sample-seconds must be 15 for timed benchmark workloads".to_string(),
+                    );
+                }
+                sample_seconds = Some(parsed);
+            }
+            "--game-fps" => {
+                unique!(game_fps, "--game-fps");
+                let value = next_value!("--game-fps");
+                let parsed = value
+                    .parse::<u16>()
+                    .map_err(|_| "--game-fps must be 60 or 120".to_string())?;
+                if !matches!(parsed, 60 | 120) {
+                    return Err("--game-fps must be 60 or 120".to_string());
+                }
+                game_fps = Some(parsed);
+            }
             "--focus-probe-ready" => {
                 unique!(focus_probe_ready, "--focus-probe-ready");
                 let value = next_value!("--focus-probe-ready");
@@ -332,6 +384,26 @@ where
                 let value = next_value!("--focus-restore-request");
                 focus_restore_request = Some(bounded_path(&value, "--focus-restore-request")?);
             }
+            "--hol-stall-us" => {
+                let value = next_value!("--hol-stall-us");
+                hol_stall_us = value
+                    .parse::<u64>()
+                    .map_err(|_| "--hol-stall-us must be an integer".to_string())?;
+            }
+            "--hol-cycles" => {
+                let value = next_value!("--hol-cycles");
+                hol_cycles = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| "--hol-cycles must be an integer".to_string())?,
+                );
+            }
+            "--guard-mode" => {
+                unique!(guard_mode, "--guard-mode");
+                guard_mode = Some(sky_dispatch_win32::wait::WaitGuardMode::parse(
+                    &next_value!("--guard-mode"),
+                )?);
+            }
             "--help" | "-h" => return Ok(ParsedCommand::Help),
             _ => return Err(format!("unknown argument {flag:?}")),
         }
@@ -339,6 +411,13 @@ where
     if !allow_real_input {
         return Err("--allow-real-input is required".to_string());
     }
+    let guard_mode = match guard_mode {
+        Some(mode) => mode,
+        None => match std::env::var("SHIPPING_WAIT") {
+            Ok(val) => sky_dispatch_win32::wait::WaitGuardMode::parse(&val).unwrap_or_default(),
+            Err(_) => sky_dispatch_win32::wait::WaitGuardMode::default(),
+        },
+    };
     let scenario = scenario.ok_or_else(|| "--scenario is required".to_string())?;
     let run = RunArgs {
         run_id: run_id.ok_or_else(|| "--run-id is required".to_string())?,
@@ -350,10 +429,15 @@ where
         timing_observer_for_qualification,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
         timing_margin_us: timing_margin_us.unwrap_or(ACCEPTANCE_TIMING_MARGIN_US),
+        sample_seconds,
+        game_fps: game_fps.unwrap_or(60),
         focus_probe_ready,
         focus_probe_events,
         focus_probe_hwnd,
         focus_restore_request,
+        hol_stall_us,
+        hol_cycles,
+        guard_mode,
     };
     let probe_count = [
         run.focus_probe_ready.is_some(),
@@ -377,6 +461,12 @@ where
     }
     if !run.scenario.needs_focus_probe() && probe_count != 0 {
         return Err("focus-probe arguments are valid only for focus-loss".to_string());
+    }
+    if run.sample_seconds.is_some() && !run.scenario.supports_timed_sample() {
+        return Err(
+            "--sample-seconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, and long-idle"
+                .to_string(),
+        );
     }
     Ok(ParsedCommand::Run(Box::new(run)))
 }

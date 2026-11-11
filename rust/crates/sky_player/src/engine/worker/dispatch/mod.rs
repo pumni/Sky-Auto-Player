@@ -14,25 +14,36 @@
 //! - `observer_wake.rs` owns bounded handoff of raw wait results with their
 //!   original target and deadline attribution.
 
+#[cfg(any(test, feature = "test-support"))]
 mod authored;
 pub(crate) mod hold_forensics;
 pub(crate) mod observation;
 pub(crate) mod observer;
 mod observer_trace;
+#[cfg(test)]
+pub(super) use observer_trace::attach_up_slot_traces;
 mod observer_wake;
+pub(crate) use observer_wake::{
+    publish_interrupted_physical_wait, wait_for_metadata_only_deadline,
+};
+#[cfg(any(test, feature = "test-support"))]
 mod prepared;
 #[cfg(test)]
 mod prepared_characterization_tests;
+#[cfg(any(test, feature = "test-support"))]
 mod recovery;
 pub(crate) mod timing;
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use recovery::{DownMissReason, classify_missed_down_boundary};
 
 /// Outcome of one authored packet dispatch step.
 #[derive(Debug)]
 pub enum DispatchStep {
+    #[cfg(any(test, feature = "test-support"))]
     NoWork,
     Dispatched,
+    #[cfg(any(test, feature = "test-support"))]
     Continue,
     Terminate(String),
     TerminateStatic(&'static str),
@@ -58,9 +69,11 @@ pub(crate) struct PhysicalBoundaryStamp {
 pub(crate) enum DownBoundaryState {
     #[default]
     AwaitingFuture,
+    #[cfg(any(test, feature = "test-support"))]
     FutureAuthorized(PhysicalBoundaryStamp),
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl DownBoundaryState {
     #[inline]
     pub(crate) const fn awaiting_future(self) -> bool {
@@ -77,12 +90,14 @@ impl DownBoundaryState {
 }
 
 /// Musical admission class for one prepared Down-bearing boundary.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DownBoundaryAdmission {
     Authorized,
     UnobservedBacklog,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl DownBoundaryAdmission {
     #[inline]
     pub(crate) const fn is_missed(self) -> bool {
@@ -95,12 +110,14 @@ impl DownBoundaryAdmission {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PendingUpRecovery {
     pub(crate) boundary: PhysicalBoundaryStamp,
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) admission: DownBoundaryAdmission,
     /// Frozen coordinator token for resolving the already-missed Down if a
     /// lifecycle safety release interrupts the delayed Up-prefix recovery.
     pub(crate) authored_commit: PreparedAuthoredCommit,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl PendingUpRecovery {
     #[inline]
     pub(crate) fn matches_authored_boundary(&self, boundary: PhysicalBoundaryStamp) -> bool {
@@ -108,6 +125,7 @@ impl PendingUpRecovery {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl PhysicalBoundaryStamp {
     #[inline]
     pub(crate) fn same_authored_boundary(self, other: Self) -> bool {
@@ -120,6 +138,7 @@ impl PhysicalBoundaryStamp {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) dispatch_plan: &'a NextDispatchPlan,
     pub(crate) effective_now_ticks: TimelineTicks,
@@ -143,6 +162,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) test_inject_sender_start: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RecoveryDescriptor {
     None,
@@ -155,23 +175,6 @@ pub(crate) enum RecoveryDescriptor {
 /// Built once per authored epoch by the typed frame-view helpers in
 /// `timing`; the send/admission/telemetry helpers consume it without
 /// re-querying the coordinator schedule.
-#[cfg(not(any(test, feature = "test-support")))]
-#[derive(Debug)]
-pub(crate) struct AuthoredBatchView {
-    pub(super) prepared_batch: PreparedBatch,
-    pub(super) batch_source_action_index: u32,
-    pub(super) batch_intent_count: usize,
-    pub(super) batch_kind: ActionKind,
-    pub(super) batch_scheduled_ticks: TimelineTicks,
-    pub(super) authored_batch_scheduled_ticks: TimelineTicks,
-    pub(super) conflict_mask: u16,
-    pub(super) dispatch_path: DispatchPath,
-    pub(super) packet_masks: PhysicalPacket,
-    pub(super) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
-    pub(super) recovery: RecoveryDescriptor,
-    pub(super) commit: PhysicalCommit,
-}
-
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct AuthoredBatchView {
@@ -192,23 +195,37 @@ pub(crate) struct AuthoredBatchView {
 /// `Err(None)` indicates an unrecoverable terminal step; `Ok(None)` means the
 /// coordinator offered no authored work for this epoch (worker should advance
 /// the wait deadline instead).
+#[cfg(any(test, feature = "test-support"))]
 pub(super) type BatchViewResult = Result<Option<AuthoredBatchView>, DispatchStep>;
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use authored::dispatch_authored_packet;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observation::DispatchObservation;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
-pub(crate) use observer_wake::{publish_pending_wait_observation, record_wait_attempt};
+pub(crate) use observer_wake::{
+    precision_handoff, publish_pending_wait_observation, record_wait_attempt,
+    take_deadline_wake_qpc,
+};
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use prepared::dispatch_prepared_normal_frame;
 
-use super::super::{ActionKind, QpcTicks, TimelineTicks};
+use super::super::QpcTicks;
+#[cfg(any(test, feature = "test-support"))]
+use super::super::{ActionKind, TimelineTicks};
+#[cfg(any(test, feature = "test-support"))]
 use super::DispatchPath;
+#[cfg(any(test, feature = "test-support"))]
 use super::planning::NextDispatchPlan;
-use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
+use sky_dispatch_core::coordinator::PreparedAuthoredCommit;
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_core::coordinator::PreparedBatch;
+#[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_win32::input::PhysicalPacket;
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug)]
 pub(crate) enum PhysicalCommit {
     Authored(PreparedAuthoredCommit),

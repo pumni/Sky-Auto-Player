@@ -3,8 +3,10 @@
 use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(test, feature = "qpc-read-counting"))]
+use std::sync::atomic::AtomicU64;
+#[cfg(any(test, feature = "qpc-read-counting", feature = "test-support"))]
+use std::sync::atomic::Ordering;
 
 pub use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 
@@ -22,10 +24,19 @@ pub enum TimeConversionError {
     Overflow,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "qpc-read-counting"))]
 static QPC_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(any(test, feature = "test-support"))]
+static QPC_NOW_FAULT_INJECTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_qpc_now_fault_for_test(fault: bool) {
+    QPC_NOW_FAULT_INJECTED.store(fault, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "qpc-read-counting"))]
 #[inline]
 fn record_qpc_read() {
     QPC_READ_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -33,14 +44,14 @@ fn record_qpc_read() {
 
 /// Reset the test-support QPC probe.  It is deliberately absent from normal
 /// builds so the production clock path remains a single platform query.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "qpc-read-counting"))]
 pub fn reset_qpc_read_count() {
     QPC_READ_COUNT.store(0, Ordering::Relaxed);
 }
 
 /// Return the number of `QueryPerformanceCounter`/clock-seam reads since the
 /// last reset.  Tests use this to catch a redundant post-wake sample.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "qpc-read-counting"))]
 pub fn qpc_read_count() -> u64 {
     QPC_READ_COUNT.load(Ordering::Relaxed)
 }
@@ -108,8 +119,12 @@ pub fn qpc_frequency_checked() -> Result<u64, QpcError> {
 }
 
 pub fn qpc_now_ticks_checked() -> Result<QpcTicks, QpcError> {
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "qpc-read-counting"))]
     record_qpc_read();
+    #[cfg(any(test, feature = "test-support"))]
+    if QPC_NOW_FAULT_INJECTED.load(Ordering::SeqCst) {
+        return Err(QpcError::CounterUnavailable);
+    }
     #[cfg(windows)]
     {
         let mut ticks: i64 = 0;

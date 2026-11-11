@@ -829,6 +829,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
         active_mask: u16,
         release_obligations: u16,
         lease_samples: u64,
+        foreground_queries: u64,
         accounting_changed: bool,
         focus_paused: bool,
     }
@@ -847,6 +848,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
                 | Fault::ForegroundOwnerSwitch
                 | Fault::ForegroundOwnerUnavailable
                 | Fault::OwnerFailureAfterModifier(_)
+                | Fault::ModifierHeld
         );
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         harness.set_strict_timing_for_test(path == DispatchPath::StrictDynamic);
@@ -990,6 +992,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             | Fault::Allowed => {}
         }
 
+        sky_dispatch_win32::focus::reset_foreground_query_count();
         let step = match path {
             DispatchPath::PreparedNormal => {
                 harness.prepare_prepared_stream_for_test();
@@ -1001,6 +1004,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
                 harness.dispatch_at_plan_target_for_test(&plan)
             }
         };
+        let foreground_queries = sky_dispatch_win32::focus::foreground_query_count();
         let step_class = match step {
             super::worker::DispatchStep::Dispatched => 0,
             super::worker::DispatchStep::Continue => 1,
@@ -1019,6 +1023,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             active_mask: harness.backend_active_mask(),
             release_obligations: harness.release_obligation_mask_for_test(),
             lease_samples: harness.final_lease_qpc_sample_count_for_test(),
+            foreground_queries,
             accounting_changed: harness.generation_accounting_for_test() != accounting_before,
             focus_paused: harness
                 .resources
@@ -1076,6 +1081,12 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             )),
             "transport attempts for {fault:?}"
         );
+        if fault == Fault::ModifierHeld {
+            assert_eq!(
+                prepared.foreground_queries, 0,
+                "held modifiers reject before the fresh foreground query"
+            );
+        }
         assert_eq!(
             prepared.step_class,
             match fault {
@@ -1572,5 +1583,31 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
         current_down[0]["compiled_packet_index"].as_u64(),
         Some(1),
         "the same frozen compiled packet must be readmitted"
+    );
+}
+
+#[test]
+fn ordinary_up_packet_respects_final_control_admission_without_down_checks() {
+    let panic_requested = AtomicBool::new(true);
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let supervisor_expired =
+        crate::engine::shared::SupervisorLeaseState::new(sky_dispatch_win32::clock::QpcTicks::ZERO);
+    let system_power = crate::engine::shared::SystemPowerState::default();
+
+    let signals = crate::engine::worker::FinalControlSignals {
+        quit_requested: &quit_requested,
+        skip_requested: &skip_requested,
+        panic_requested: &panic_requested,
+        desired_pause: &desired_pause,
+        supervisor_expired: &supervisor_expired,
+        system_power: Some(&system_power),
+    };
+
+    let admission = crate::engine::final_control_precheck(signals);
+    assert_eq!(
+        admission,
+        crate::engine::FinalControlAdmission::PanicRequested
     );
 }

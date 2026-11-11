@@ -23,8 +23,8 @@ evidence:
     label: README — phần FAQ
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
-    label: Nguyên tắc timing
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/timing-principles.md
+    label: Kiến trúc playback engine
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
   - category: distribution
     label: Tài liệu phân phối và cập nhật
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/distribution-and-update.md

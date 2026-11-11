@@ -69,7 +69,7 @@ Sky Auto Player is built around a Rust real-time playback engine (`sky_player`),
 
 The engine uses MMCSS scheduling when available and records diagnostics for analysis. These mechanisms improve control over *sender-side* timing; they are **not a guarantee of sub-millisecond in-game or audible accuracy**.
 
-For implementation details and measurement limitations, see [Timing Principles](docs/timing-principles.md) and [Real-Time Dispatch Architecture](docs/rt-dispatch-architecture.md).
+For implementation details and measurement limitations, see [Playback Engine](docs/playback-engine.md) and [Playback Verification](docs/playback-verification.md).
 
 ## Safety, Compatibility & Updates
 

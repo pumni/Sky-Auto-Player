@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn large_stream_materialization_cancels_at_bounded_checkpoints_before_any_input() {
     let hook = Arc::new(StartupOrderingHook::default());
-    hook.arm_startup_checkpoint(StartupCheckpoint::StreamMaterialization, 5);
+    hook.arm_startup_checkpoint(StartupCheckpoint::StreamBuild, 5);
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));

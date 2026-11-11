@@ -32,6 +32,7 @@ impl PreparedDispatchFrame {
 #[derive(Debug)]
 // Inline entries keep the pre-reserved stream contiguous and avoid one heap
 // allocation per authored boundary during startup preparation.
+#[allow(dead_code)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum PreparedDispatchEntry {
     Physical(PreparedDispatchFrame),
@@ -41,6 +42,31 @@ pub(crate) enum PreparedDispatchEntry {
     },
 }
 
+#[allow(dead_code)]
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn record_down_window_before_wait(
+    hook: Option<&crate::engine::config::StartupOrderingHook>,
+    entry: Option<&PreparedDispatchEntry>,
+    authored_target_qpc: QpcTicks,
+    timing_window: Option<super::physical_timing_guard::PhysicalTimingWindow>,
+) -> u16 {
+    let Some(PreparedDispatchEntry::Physical(frame)) = entry else {
+        return 0;
+    };
+    let down_mask = frame.view.packet_masks.down_mask;
+    if down_mask != 0 {
+        let window = timing_window.expect("prepared physical timing window");
+        if let Some(hook) = hook {
+            hook.record_down_window(
+                authored_target_qpc.as_u64(),
+                window.packet_not_before_qpc.as_u64(),
+            );
+        }
+    }
+    down_mask
+}
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct PreparedDispatchStream {
     entries: Vec<PreparedDispatchEntry>,
@@ -241,6 +267,7 @@ impl PreparedDispatchStream {
         Ok(())
     }
 
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn is_exhausted(&self) -> bool {
         self.cursor >= self.entries.len()
@@ -251,7 +278,7 @@ impl PreparedDispatchStream {
         self.entries.len()
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn prepared_storage_evidence_for_test(&self) -> (usize, usize, usize, usize) {
         let mut physical_count = 0usize;
         let mut metadata_count = 0usize;
@@ -307,7 +334,7 @@ impl PreparedDispatchStream {
             .count()
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn cancellation_ledger_bytes_for_test(&self) -> usize {
         // Resumable cancellation provenance is owned by the coordinator's
         // fixed fifteen-slot token table, never by a song-sized stream list.

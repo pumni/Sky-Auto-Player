@@ -3,8 +3,16 @@ use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
 
+#[cfg(any(test, feature = "test-support"))]
+mod startup_ordering;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use startup_ordering::InterruptedWaitEvidence;
+
 mod effective_policy;
+#[cfg(any(test, feature = "test-support"))]
+pub mod hol;
 pub(crate) use effective_policy::EffectiveRuntimePolicy;
+pub use sky_dispatch_win32::wait::WaitGuardMode;
 
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
@@ -127,18 +135,14 @@ pub(crate) fn validate_timing_constants() -> Result<(), String> {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+use super::{FaultInjectionScript, SystemPowerState};
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
-use super::FaultInjectionScript;
-#[cfg(any(test, feature = "test-support"))]
-use super::SystemPowerState;
-
-#[cfg(any(test, feature = "test-support"))]
-pub type RestoreRaceHook =
-    Arc<dyn Fn(&AtomicBool, &super::dispatch_primitives::SessionTarget) + Send + Sync>;
+pub type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &super::shared::SessionTarget) + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
@@ -248,6 +252,8 @@ pub(crate) struct AdmittedNativeSessionOptions {
 pub struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
+    pub(crate) stale_packet_commit_count: AtomicU64,
+    pub(crate) stale_packet_committed_after_wake_count: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
     release_floor_control_enabled: AtomicBool,
@@ -258,8 +264,19 @@ pub struct StartupOrderingHook {
     pause_ack_pending: AtomicBool,
     down_authored_target_qpc_ticks: AtomicU64,
     down_not_before_qpc_ticks: AtomicU64,
+    down_window_sequence: AtomicU64,
     down_sender_start_qpc_ticks: AtomicU64,
+    down_sender_authored_target_qpc_ticks: AtomicU64,
+    down_sender_packet_not_before_qpc_ticks: AtomicU64,
+    pub(crate) up_only_sender_attempt_qpc_ticks: std::sync::Mutex<Option<(Option<u64>, u64, u64)>>,
+    down_sender_wake_qpc_ticks: AtomicU64,
+    down_sender_stale_commit_count: AtomicU64,
     down_sender_attempt_count: AtomicU64,
+    interrupted_wait_count: AtomicU64,
+    interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
+    pub(crate) metadata_only_wait_count: AtomicU64,
+    pub(crate) metadata_only_wait_target_qpc_ticks: AtomicU64,
+    pub(crate) metadata_only_wait_wake_qpc_ticks: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
     startup_checkpoint: AtomicU8,
@@ -275,6 +292,7 @@ pub struct StartupOrderingHook {
     fail_watchdog_spawn: AtomicBool,
     fail_observer_spawn: AtomicBool,
     fail_startup_epoch_conversion: AtomicBool,
+    pub(crate) hol: hol::HolStallController,
     scheduling_threads:
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
 }
@@ -283,7 +301,6 @@ pub struct StartupOrderingHook {
 #[repr(u8)]
 pub enum StartupCheckpoint {
     StreamBuild = 1,
-    CoordinatorReset = 2,
     BeforeReady = 3,
     ReadyToArmed = 4,
     EpochPrepared = 5,
@@ -302,6 +319,12 @@ pub enum StartupCheckpoint {
     WakeCalibration = 12,
     #[cfg(any(test, feature = "test-support"))]
     WorkerCompletionPublished = 13,
+    #[cfg(any(test, feature = "test-support"))]
+    StaleMetadataChunk = 14,
+    #[cfg(any(test, feature = "test-support"))]
+    MetadataOnlyWait = 15,
+    #[cfg(any(test, feature = "test-support"))]
+    PhysicalWait = 16,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -459,9 +482,15 @@ impl StartupOrderingHook {
         self.sequence.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    pub(crate) fn mark_stale_packet_committed(&self) {
+    pub(crate) fn mark_stale_packet_committed(&self, attributed_wake_available: bool) {
         self.stale_packet_committed
             .store(self.next_sequence(), Ordering::SeqCst);
+        self.stale_packet_commit_count
+            .fetch_add(1, Ordering::SeqCst);
+        if attributed_wake_available {
+            self.stale_packet_committed_after_wake_count
+                .fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     pub(crate) fn mark_first_physical_send_started(&self) {
@@ -507,15 +536,30 @@ impl StartupOrderingHook {
         self.pause_ack_qpc_ticks.load(Ordering::Acquire)
     }
 
-    pub fn last_down_window(&self) -> (u64, u64) {
-        (
-            self.down_authored_target_qpc_ticks.load(Ordering::Acquire),
-            self.down_not_before_qpc_ticks.load(Ordering::Acquire),
-        )
-    }
-
     pub fn last_down_sender_start_qpc_ticks(&self) -> u64 {
         self.down_sender_start_qpc_ticks.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_down_sender_qpc_evidence(
+        &self,
+    ) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>, u64) {
+        let pre_call = self.down_sender_start_qpc_ticks.load(Ordering::Acquire);
+        let authored_target = self
+            .down_sender_authored_target_qpc_ticks
+            .load(Ordering::Acquire);
+        let packet_not_before = self
+            .down_sender_packet_not_before_qpc_ticks
+            .load(Ordering::Acquire);
+        let wake = self.down_sender_wake_qpc_ticks.load(Ordering::Acquire);
+        let stale_commit_count = self.down_sender_stale_commit_count.load(Ordering::Acquire);
+        (
+            (pre_call != 0).then_some(pre_call),
+            (authored_target != 0).then_some(authored_target),
+            (packet_not_before != 0).then_some(packet_not_before),
+            (wake != 0).then_some(wake),
+            stale_commit_count,
+        )
     }
 
     pub fn down_sender_attempt_count(&self) -> u64 {
@@ -555,18 +599,26 @@ impl StartupOrderingHook {
             && self.pause_ack_pending.load(Ordering::Acquire)
     }
 
-    pub(crate) fn record_down_window(&self, authored_target: u64, not_before: u64) {
-        self.down_authored_target_qpc_ticks
-            .store(authored_target, Ordering::Release);
-        self.down_not_before_qpc_ticks
-            .store(not_before, Ordering::Release);
-    }
-
-    pub(crate) fn record_down_sender_attempt(&self, started_qpc_ticks: Option<u64>) {
+    pub(crate) fn record_down_sender_attempt(
+        &self,
+        started_qpc_ticks: Option<u64>,
+        authored_target_qpc_ticks: u64,
+        packet_not_before_qpc_ticks: u64,
+        wake_qpc_ticks: Option<u64>,
+        stale_commit_count: u64,
+    ) {
         self.down_sender_attempt_count
             .fetch_add(1, Ordering::AcqRel);
         self.down_sender_start_qpc_ticks
             .store(started_qpc_ticks.unwrap_or(0), Ordering::Release);
+        self.down_sender_authored_target_qpc_ticks
+            .store(authored_target_qpc_ticks, Ordering::Release);
+        self.down_sender_packet_not_before_qpc_ticks
+            .store(packet_not_before_qpc_ticks, Ordering::Release);
+        self.down_sender_wake_qpc_ticks
+            .store(wake_qpc_ticks.unwrap_or(0), Ordering::Release);
+        self.down_sender_stale_commit_count
+            .store(stale_commit_count, Ordering::Release);
     }
 
     pub(crate) fn wait_after_successful_up(&self) {
@@ -588,6 +640,36 @@ impl StartupOrderingHook {
 
     pub fn watchdog_is_held(&self) -> bool {
         self.watchdog_hold.load(Ordering::Acquire)
+    }
+
+    pub fn enable_hol_stall(&self, duration_us: u64, target_mask: u16) {
+        self.hol.enable_cycles(duration_us, target_mask, 1);
+    }
+
+    pub fn enable_hol_stall_cycles(&self, duration_us: u64, target_mask: u16, cycles: u32) {
+        self.hol.enable_cycles(duration_us, target_mask, cycles);
+    }
+
+    pub fn hol_stall_evidence(&self) -> (u64, u64, u64, bool) {
+        self.hol.evidence()
+    }
+
+    pub fn hol_stall_cycle_records(&self) -> Vec<hol::HolStallCycleRecord> {
+        self.hol.cycle_records()
+    }
+
+    pub fn hol_clock_error(&self) -> bool {
+        self.hol.clock_error()
+    }
+
+    pub(crate) fn maybe_inject_hol_stall(
+        &self,
+        down_mask: u16,
+        source_action_index: u32,
+        qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    ) {
+        self.hol
+            .maybe_inject_hol_stall(down_mask, source_action_index, qpc_clock);
     }
 }
 
@@ -612,6 +694,7 @@ pub(crate) struct WorkerConfig {
 }
 
 impl WorkerConfig {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn observer_enabled(&self) -> bool {
         let qualification_observer = {
             #[cfg(any(test, feature = "test-support"))]
@@ -653,6 +736,7 @@ impl Default for WorkerConfig {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
                 supervisor_lease_timeout_us: 0,
+                guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
                 #[cfg(any(test, feature = "test-support"))]
                 test_spin_threshold_us: None,
                 #[cfg(any(test, feature = "test-support"))]
@@ -697,6 +781,7 @@ pub struct WaitOptions {
     pub enable_waitable_timer: bool,
     pub enable_event_wait: bool,
     pub supervisor_lease_timeout_us: u64,
+    pub guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
     /// Test-only early handoff margin. This seam keeps mock-session tests
     /// independent from host timer overshoot without changing authored
     /// targets or the production wait policy.
@@ -704,6 +789,21 @@ pub struct WaitOptions {
     pub test_spin_threshold_us: Option<u64>,
     #[cfg(any(test, feature = "test-support"))]
     pub test_wait_policy: TestWaitPolicy,
+}
+
+impl Default for WaitOptions {
+    fn default() -> Self {
+        Self {
+            enable_waitable_timer: true,
+            enable_event_wait: true,
+            supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            test_spin_threshold_us: None,
+            #[cfg(any(test, feature = "test-support"))]
+            test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+        }
+    }
 }
 
 impl WaitOptions {
@@ -781,6 +881,7 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
             test_spin_threshold_us: None,
             test_wait_policy: TestWaitPolicy::ProductionCalibrated,
         };

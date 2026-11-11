@@ -49,7 +49,7 @@ pub(crate) struct PhysicalTimingGuard {
 }
 
 impl PhysicalTimingGuard {
-    pub(super) const fn new(
+    pub(crate) const fn new(
         effective_min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
     ) -> Self {
@@ -61,6 +61,11 @@ impl PhysicalTimingGuard {
             frame_ticks,
             valid: true,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_valid(&self) -> bool {
+        self.valid
     }
 
     /// Clear sender evidence and make queries fail closed until a verified
@@ -101,7 +106,7 @@ impl PhysicalTimingGuard {
     ///
     /// Overflow invalidates all evidence so a caller cannot continue with
     /// floors that omit a successful physical transition.
-    pub(super) fn observe_successful_packet(
+    pub(crate) fn observe_successful_packet(
         &mut self,
         completed_qpc: QpcTicks,
         up_mask: u16,

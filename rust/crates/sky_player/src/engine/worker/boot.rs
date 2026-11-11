@@ -18,9 +18,9 @@ use super::super::{
 };
 use super::admission::focus_matches_hwnd;
 use super::{
-    DispatchHealthOptions, HealthWindow, PreparedDispatchStream, StartupResources, Worker,
-    WorkerHealthState, WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target,
-    initialize_startup, load_target_stamp,
+    DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
+    WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target, initialize_startup,
+    load_target_stamp,
 };
 use crate::engine::config::{CALIBRATION_SAMPLES, StartupCalibrationPlacement};
 use startup_calibration::{
@@ -75,11 +75,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let requested_wait_policy = config
         .wait
         .requested_wait_policy_label(matches!(&config.backend, &BackendConfig::Production));
-    let effective_wait_policy = if production_wait {
-        "production_calibrated"
-    } else {
-        "legacy_test_wide_spin"
-    };
     #[cfg(any(test, feature = "test-support"))]
     let calibration_placement = config.startup_calibration_placement;
     #[cfg(not(any(test, feature = "test-support")))]
@@ -182,11 +177,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         };
     let StartupResources { waiter } = initialize_startup(
         worker.config.priority.mode,
-        production_wait,
+        effective_policy,
         config.wait.enable_waitable_timer,
         config.wait.enable_event_wait,
         requested_wait_policy,
-        effective_wait_policy,
         priority_acquired,
         metrics,
     );
@@ -278,46 +272,32 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let prepared_stream = if effective_policy.prepared_normal {
-        match PreparedDispatchStream::build_with_checkpoints(
-            coordinator,
-            qpc_clock,
-            &core.runtime.preparation_probe,
-            backend.instrument_key_profile(),
-            || {
-                startup_checkpoint(
-                    shared,
-                    config.focus.require_focus && schedule_has_down,
-                    StartupCheckpoint::StreamMaterialization,
-                    #[cfg(any(test, feature = "test-support"))]
-                    startup_hook,
-                )
-            },
-            || {
-                startup_checkpoint(
-                    shared,
-                    config.focus.require_focus && schedule_has_down,
-                    StartupCheckpoint::CoordinatorReset,
-                    #[cfg(any(test, feature = "test-support"))]
-                    startup_hook,
-                )
-            },
-        ) {
-            Ok((stream, restored_coordinator)) => {
-                coordinator = restored_coordinator;
-                Some(stream)
-            }
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("normal prepared stream admission failed: {error}"),
-                );
-            }
-        }
-    } else {
-        None
-    };
+    if let Err(error) = coordinator.attach_executor_with_cancellation(
+        min_hold_ticks,
+        frame_ticks,
+        |us| {
+            qpc_clock
+                .timeline_from_us(us)
+                .map_err(|e| format!("QPC conversion failure: {e:?}"))
+        },
+        || {
+            startup_checkpoint(
+                shared,
+                config.focus.require_focus && schedule_has_down,
+                StartupCheckpoint::StreamMaterialization,
+                #[cfg(any(test, feature = "test-support"))]
+                startup_hook,
+            )
+            .map_err(|_| "executor construction cancelled during startup".to_string())?;
+            Ok(())
+        },
+    ) {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            format!("executor construction failed: {error}"),
+        );
+    }
     core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
         match coordinator.effective_total_ticks() {
             Ok(ticks) => ticks.as_u64(),
@@ -794,59 +774,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    #[cfg(any(test, feature = "test-support"))]
-    let inject_epoch_conversion_failure =
-        startup_hook.is_some_and(|hook| hook.take_startup_epoch_conversion_failure());
-    #[cfg(not(any(test, feature = "test-support")))]
-    let inject_epoch_conversion_failure = false;
-    let pre_roll_ticks = match if inject_epoch_conversion_failure {
-        Err("injected QPC pre-roll conversion failure".to_string())
-    } else {
-        qpc_clock
-            .duration_from_us(shared.publication.pre_roll_us.load(Ordering::Acquire))
-            .map_err(|error| format!("{error:?}"))
-    } {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("pre-roll conversion failed before epoch publication: {error}"),
-            );
-        }
-    };
-    let epoch_qpc = match epoch_base.checked_add_duration(pre_roll_ticks) {
-        Ok(epoch) => epoch,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("playback epoch arithmetic failed: {error}"),
-            );
-        }
-    };
-    let playback = match PlaybackClockState::new(epoch_qpc, DurationTicks::ZERO) {
-        Ok(playback) => playback,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("playback clock initialization failed: {error}"),
-            );
-        }
+    let (epoch_qpc, playback, epoch_wall_us) = match compute_playback_epoch(
+        qpc_clock,
+        epoch_base,
+        shared.publication.pre_roll_us.load(Ordering::Acquire),
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook.is_some_and(|hook| hook.take_startup_epoch_conversion_failure()),
+    ) {
+        Ok(state) => state,
+        Err(error) => return admission_failure(&mut backend, metrics, error),
     };
     worker.epoch_qpc = epoch_qpc;
-    let epoch_wall_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(epoch_qpc.as_u64()))
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("playback epoch wall-time conversion failed: {error:?}"),
-            );
-        }
-    };
     if let Some(timing) = core.timing.as_mut() {
         timing.start_wall_time_us = epoch_wall_us;
         timing.last_cpu_metrics_sample_us = epoch_wall_us;
@@ -885,12 +823,35 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         waiter,
         backend,
         coordinator,
-        prepared_stream,
         playback,
         telemetry,
         scheduling,
     });
     0
+}
+
+fn compute_playback_epoch(
+    qpc_clock: QpcClock,
+    epoch_base: QpcTicks,
+    pre_roll_us: u64,
+    #[cfg(any(test, feature = "test-support"))] inject_epoch_conversion_failure: bool,
+) -> Result<(QpcTicks, PlaybackClockState, u64), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    if inject_epoch_conversion_failure {
+        return Err("injected QPC pre-roll conversion failure".to_string());
+    }
+    let pre_roll_ticks = qpc_clock.duration_from_us(pre_roll_us).map_err(|error| {
+        format!("pre-roll conversion failed before epoch publication: {error:?}")
+    })?;
+    let epoch_qpc = epoch_base
+        .checked_add_duration(pre_roll_ticks)
+        .map_err(|error| format!("playback epoch arithmetic failed: {error}"))?;
+    let playback = PlaybackClockState::new(epoch_qpc, DurationTicks::ZERO)
+        .map_err(|error| format!("playback clock initialization failed: {error}"))?;
+    let epoch_wall_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(epoch_qpc.as_u64()))
+        .map_err(|error| format!("playback epoch wall-time conversion failed: {error:?}"))?;
+    Ok((epoch_qpc, playback, epoch_wall_us))
 }
 
 #[cfg(test)]

@@ -463,7 +463,14 @@ struct Samples {
     deadline_missed_count: usize,
     failure_reasons: BTreeMap<String, usize>,
     observation_count: usize,
+    packet_observation_count: usize,
+    wait_observation_count: usize,
     observation_gaps: usize,
+    pre_call_unavailable_count: usize,
+    observer_dropped_samples: u64,
+    spin_observation_expected_samples: u64,
+    spin_observation_dropped_samples: u64,
+    spin_observation_missing_samples: u64,
     planned_wait_gap_us: Vec<u64>,
     wait_wake_lateness_us: Vec<i64>,
     target_minus_wait_entry_us: Vec<i64>,
@@ -541,7 +548,28 @@ impl Samples {
         self.observation_count = self
             .observation_count
             .saturating_add(other.observation_count);
+        self.packet_observation_count = self
+            .packet_observation_count
+            .saturating_add(other.packet_observation_count);
+        self.wait_observation_count = self
+            .wait_observation_count
+            .saturating_add(other.wait_observation_count);
         self.observation_gaps = self.observation_gaps.saturating_add(other.observation_gaps);
+        self.pre_call_unavailable_count = self
+            .pre_call_unavailable_count
+            .saturating_add(other.pre_call_unavailable_count);
+        self.observer_dropped_samples = self
+            .observer_dropped_samples
+            .saturating_add(other.observer_dropped_samples);
+        self.spin_observation_expected_samples = self
+            .spin_observation_expected_samples
+            .saturating_add(other.spin_observation_expected_samples);
+        self.spin_observation_dropped_samples = self
+            .spin_observation_dropped_samples
+            .saturating_add(other.spin_observation_dropped_samples);
+        self.spin_observation_missing_samples = self
+            .spin_observation_missing_samples
+            .saturating_add(other.spin_observation_missing_samples);
         self.hot_wait_count = self.hot_wait_count.saturating_add(other.hot_wait_count);
         self.cold_wait_count = self.cold_wait_count.saturating_add(other.cold_wait_count);
         self.missed_down_unobserved_backlog = self
@@ -739,7 +767,7 @@ fn baseline_down_miss_name(kind: DownMissKind) -> &'static str {
 fn baseline_observed_disposition(
     step: &DispatchStep,
     outcome: Option<SendTransactionOutcome>,
-    observation: Option<DispatchObservation>,
+    observation: Option<&DispatchObservation>,
     final_gate_control_rejections: u64,
 ) -> (
     &'static str,
@@ -812,7 +840,7 @@ fn baseline_observed_disposition(
 
 #[allow(clippy::type_complexity)]
 fn baseline_observation_timing(
-    observation: DispatchObservation,
+    observation: &DispatchObservation,
 ) -> (
     Option<u64>,
     Option<u64>,
@@ -826,7 +854,7 @@ fn baseline_observation_timing(
         DispatchObservation::Down(value) => {
             let crossing_qpc = value
                 .precision_handoff
-                .map(|handoff| handoff.target_crossing_qpc.as_u64());
+                .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64()));
             let wake_qpc = value
                 .wake_qpc
                 .or_else(|| {
@@ -835,33 +863,30 @@ fn baseline_observation_timing(
                         .and_then(|handoff| handoff.admission_wake_qpc)
                 })
                 .map(|ticks| ticks.as_u64());
-            let pre_call_qpc = Some(value.pre_call_qpc.as_u64());
+            let pre_call_qpc = value.pre_call_qpc.map(|ticks| ticks.as_u64());
             let completion_qpc = Some(value.sendinput_completion_qpc.as_u64());
-            let completion_duration = qpc_clock
-                .duration_to_us(
-                    value
-                        .sendinput_completion_qpc
-                        .checked_duration_since(value.pre_call_qpc)
-                        .expect("baseline completion ordering"),
-                )
-                .ok();
+            let completion_duration = value.pre_call_qpc.and_then(|pre_call| {
+                value
+                    .sendinput_completion_qpc
+                    .checked_duration_since(pre_call)
+                    .ok()
+                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
+            });
             (
                 crossing_qpc,
                 wake_qpc,
                 pre_call_qpc,
                 completion_qpc,
-                Some(signed_qpc_us(
-                    qpc_clock,
-                    value.pre_call_qpc,
-                    value.physical_target_qpc,
-                )),
+                value
+                    .pre_call_qpc
+                    .map(|pre_call| signed_qpc_us(qpc_clock, pre_call, value.physical_target_qpc)),
                 completion_duration,
             )
         }
         DispatchObservation::Up(value) => {
             let crossing_qpc = value
                 .precision_handoff
-                .map(|handoff| handoff.target_crossing_qpc.as_u64());
+                .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64()));
             let wake_qpc = value
                 .wake_qpc
                 .or_else(|| {
@@ -954,12 +979,12 @@ fn baseline_record_boundary(
         ),
     };
     let observation = harness.pop_observation();
-    let observation_timing = observation.map(baseline_observation_timing);
+    let observation_timing = observation.as_ref().map(baseline_observation_timing);
     let control_rejections = harness
         .final_gate_control_rejections_for_test()
         .saturating_sub(prior_control_rejections);
     let (observed_disposition, observed_reason, observed_send_status, observed_success) =
-        baseline_observed_disposition(&step, outcome, observation, control_rejections);
+        baseline_observed_disposition(&step, outcome, observation.as_ref(), control_rejections);
     let delivery = if observed_success {
         evidence.successful_sendinput_transactions =
             evidence.successful_sendinput_transactions.saturating_add(1);
@@ -1292,23 +1317,16 @@ fn baseline_semantic_expectation(
 
 /// Paired producer-only A/B measurement. It deliberately avoids a production
 /// bypass flag: the baseline does no queue work, the available queue measures
-/// the healthy push+len path, and the saturated queue models a stalled
+/// the healthy push path, and the saturated queue models a stalled
 /// consumer. Observation construction/copying and queue draining are outside
 /// the timed regions.
 fn observation_enqueue_ab() -> serde_json::Value {
-    let template = representative_observation();
     let available = PendingObservationQueue::default();
     let saturated = PendingObservationQueue::default();
     let mut available_dropped = 0;
-    let mut available_high_watermark = 0;
     let mut saturated_dropped = 0;
-    let mut saturated_high_watermark = 0;
     for _ in 0..OBSERVATION_QUEUE_CAPACITY {
-        saturated.push(
-            template,
-            &mut saturated_dropped,
-            &mut saturated_high_watermark,
-        );
+        saturated.push(representative_observation(), &mut saturated_dropped);
     }
 
     let sample_count = observer_ab_iterations();
@@ -1316,42 +1334,35 @@ fn observation_enqueue_ab() -> serde_json::Value {
     let mut available_ns = Vec::with_capacity(sample_count);
     let mut saturated_ns = Vec::with_capacity(sample_count);
     for _ in 0..sample_count {
-        let bypass_observation = template;
+        let bypass_observation = representative_observation();
         let started = Instant::now();
         black_box(&bypass_observation);
         bypass_ns.push(elapsed_ns(started));
 
-        let available_observation = template;
+        let available_observation = representative_observation();
         let started = Instant::now();
-        available.push(
-            available_observation,
-            &mut available_dropped,
-            &mut available_high_watermark,
-        );
+        available.push(available_observation, &mut available_dropped);
         available_ns.push(elapsed_ns(started));
         black_box(available.pop_front()).expect("available queue sample must be present");
 
-        let saturated_observation = template;
+        let saturated_observation = representative_observation();
         let started = Instant::now();
-        saturated.push(
-            saturated_observation,
-            &mut saturated_dropped,
-            &mut saturated_high_watermark,
-        );
+        saturated.push(saturated_observation, &mut saturated_dropped);
         saturated_ns.push(elapsed_ns(started));
     }
 
     assert_eq!(available_dropped, 0);
     assert_eq!(saturated_dropped, sample_count as u64);
-    // The precision producer intentionally does not call ArrayQueue::len()
-    // to maintain a watermark.  Keep the variables in the report for schema
-    // compatibility, but assert the Round 2 no-len contract instead.
+    // Preserve the benchmark schema: occupancy is sampled by the observer
+    // consumer and is not part of this producer-only timed operation.
+    let available_high_watermark = 0;
+    let saturated_high_watermark = 0;
     assert_eq!(available_high_watermark, 0);
     assert_eq!(saturated_high_watermark, 0);
     json!({
         "scope": "producer primitive only; observation construction, copying, and consumer drain excluded",
         "clock": "std::time::Instant",
-        "high_watermark_tracking": "disabled_in_precision_path",
+        "high_watermark_tracking": "observer_consumer_only",
         "iterations": sample_count,
         "baseline_bypass_ns": nanos_summary(bypass_ns),
         "available_queue_push_ns": nanos_summary(available_ns),
@@ -1407,7 +1418,7 @@ fn record_precision_handoff(
     samples: &mut Samples,
     handoff: Option<PrecisionHandoffEvidence>,
     physical_target_qpc: QpcTicks,
-    pre_call_qpc: QpcTicks,
+    pre_call_qpc: Option<QpcTicks>,
     sendinput_completion_qpc: QpcTicks,
     dispatch_ready_qpc: Option<QpcTicks>,
     qpc_clock: QpcClock,
@@ -1415,33 +1426,37 @@ fn record_precision_handoff(
     let Some(handoff) = handoff else {
         return;
     };
-    if let Some(admission_wake_qpc) = handoff.admission_wake_qpc {
-        samples
-            .admission_wake_to_precision_wake_us
-            .push(signed_qpc_us(
-                qpc_clock,
-                handoff.target_crossing_qpc,
-                admission_wake_qpc,
-            ));
-    }
-    samples.target_crossing_error_us.push(signed_qpc_us(
-        qpc_clock,
-        handoff.target_crossing_qpc,
-        physical_target_qpc,
-    ));
-    if let Some(final_policy_qpc) = handoff.final_policy_qpc {
-        samples
-            .target_crossing_to_final_policy_us
-            .push(signed_qpc_us(
-                qpc_clock,
-                final_policy_qpc,
-                handoff.target_crossing_qpc,
-            ));
-        samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
+    if let Some(target_crossing_qpc) = handoff.target_crossing_qpc {
+        if let Some(admission_wake_qpc) = handoff.admission_wake_qpc {
+            samples
+                .admission_wake_to_precision_wake_us
+                .push(signed_qpc_us(
+                    qpc_clock,
+                    target_crossing_qpc,
+                    admission_wake_qpc,
+                ));
+        }
+        samples.target_crossing_error_us.push(signed_qpc_us(
             qpc_clock,
-            pre_call_qpc,
-            final_policy_qpc,
+            target_crossing_qpc,
+            physical_target_qpc,
         ));
+        if let (Some(final_policy_qpc), Some(pre_call_qpc)) =
+            (handoff.final_policy_qpc, pre_call_qpc)
+        {
+            samples
+                .target_crossing_to_final_policy_us
+                .push(signed_qpc_us(
+                    qpc_clock,
+                    final_policy_qpc,
+                    target_crossing_qpc,
+                ));
+            samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
+                qpc_clock,
+                pre_call_qpc,
+                final_policy_qpc,
+            ));
+        }
     }
     if let Some(dispatch_ready_qpc) = dispatch_ready_qpc {
         samples.completion_to_rt_ready_us.push(signed_qpc_us(
@@ -1474,10 +1489,12 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                     wake_qpc,
                 ));
             }
-            if let Some(final_policy_qpc) = value.final_policy_qpc {
+            if let (Some(final_policy_qpc), Some(pre_call_qpc)) =
+                (value.final_policy_qpc, value.pre_call_qpc)
+            {
                 samples.final_policy_to_pre_call_us.push(signed_qpc_us(
                     qpc_clock,
-                    value.pre_call_qpc,
+                    pre_call_qpc,
                     final_policy_qpc,
                 ));
             }
@@ -1486,24 +1503,26 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 value.sendinput_completion_qpc,
                 value.physical_target_qpc,
             ));
-            if value.pre_call_qpc < value.physical_target_qpc {
-                samples.early_dispatch_count += 1;
+            if let Some(pre_call_qpc) = value.pre_call_qpc {
+                if pre_call_qpc < value.physical_target_qpc {
+                    samples.early_dispatch_count += 1;
+                }
+                samples.dispatch_start_error_us.push(signed_qpc_us(
+                    qpc_clock,
+                    pre_call_qpc,
+                    value.physical_target_qpc,
+                ));
+                if let Ok(duration) = value
+                    .sendinput_completion_qpc
+                    .checked_duration_since(pre_call_qpc)
+                    && let Ok(duration_us) = qpc_clock.duration_to_us(duration)
+                {
+                    samples.pre_call_to_completion_us.push(duration_us);
+                }
+            } else {
+                samples.pre_call_unavailable_count =
+                    samples.pre_call_unavailable_count.saturating_add(1);
             }
-            samples.dispatch_start_error_us.push(signed_qpc_us(
-                qpc_clock,
-                value.pre_call_qpc,
-                value.physical_target_qpc,
-            ));
-            samples.pre_call_to_completion_us.push(
-                qpc_clock
-                    .duration_to_us(
-                        value
-                            .sendinput_completion_qpc
-                            .checked_duration_since(value.pre_call_qpc)
-                            .expect("QPC ordering"),
-                    )
-                    .expect("duration"),
-            );
             let completed_effective_ticks = value
                 .sendinput_completion_qpc
                 .checked_duration_since(value.epoch_qpc)
@@ -1534,7 +1553,7 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 samples,
                 value.precision_handoff,
                 value.physical_target_qpc,
-                value.pre_call_qpc,
+                Some(value.pre_call_qpc),
                 value.sendinput_completion_qpc,
                 value.dispatch_ready_qpc,
                 qpc_clock,
@@ -1577,7 +1596,7 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
         }
         DispatchObservation::Wait(wait) => {
             let _ = wait;
-            samples.record_observation_failure("unexpected_wait_observation");
+            samples.wait_observation_count = samples.wait_observation_count.saturating_add(1);
         }
         DispatchObservation::StaleMetadata(value) => {
             let _ = value;
@@ -1732,6 +1751,7 @@ fn drain_observations(harness: &mut ProductionDispatchTestHarness, samples: &mut
             DispatchObservation::Down(_) | DispatchObservation::Up(_) => {
                 physical_count += 1;
                 samples.observation_count += 1;
+                samples.packet_observation_count += 1;
                 add_observation(samples, observation);
             }
             other => {
@@ -1789,9 +1809,23 @@ fn record_harness_metrics(
     let anomalies = partial
         .saturating_add(zero_progress)
         .saturating_add(integrity_lost);
+    let (observer_dropped, spin_expected, spin_dropped, spin_missing) =
+        harness.observer_loss_counts_for_test();
     samples.transport_anomaly_count = samples
         .transport_anomaly_count
         .saturating_add(usize::try_from(anomalies).unwrap_or(usize::MAX));
+    samples.observer_dropped_samples = samples
+        .observer_dropped_samples
+        .saturating_add(observer_dropped);
+    samples.spin_observation_expected_samples = samples
+        .spin_observation_expected_samples
+        .saturating_add(spin_expected);
+    samples.spin_observation_dropped_samples = samples
+        .spin_observation_dropped_samples
+        .saturating_add(spin_dropped);
+    samples.spin_observation_missing_samples = samples
+        .spin_observation_missing_samples
+        .saturating_add(spin_missing);
     Ok(())
 }
 
@@ -3284,7 +3318,31 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
     if samples.observation_gaps != 0 {
         acceptance_failure_reasons.push("observation_gaps");
     }
-    if samples.dispatch_start_error_us.len() != samples.observation_count {
+    if samples.pre_call_unavailable_count != 0 {
+        acceptance_failure_reasons.push("pre_call_unavailable");
+    }
+    if samples.wait_observation_count != samples.wait_count {
+        acceptance_failure_reasons.push("wait_observation_count_mismatch");
+    }
+    if samples.observer_dropped_samples != 0 {
+        acceptance_failure_reasons.push("observer_sample_drops");
+    }
+    if samples.spin_observation_dropped_samples != 0
+        || samples.spin_observation_missing_samples != 0
+    {
+        acceptance_failure_reasons.push("spin_observation_loss");
+    }
+    if samples.spin_observation_expected_samples
+        != (samples.wait_observation_count as u64)
+            .saturating_add(samples.spin_observation_dropped_samples)
+            .saturating_add(samples.spin_observation_missing_samples)
+    {
+        acceptance_failure_reasons.push("spin_observation_accounting_mismatch");
+    }
+    let expected_pre_call_samples = samples
+        .packet_observation_count
+        .saturating_sub(samples.pre_call_unavailable_count);
+    if samples.dispatch_start_error_us.len() != expected_pre_call_samples {
         acceptance_failure_reasons.push("missing_start_error_samples");
     }
     let acceptance_clean = acceptance_failure_reasons.is_empty();
@@ -3296,10 +3354,14 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
     let target_minus_wait_entry = signed_summary(samples.target_minus_wait_entry_us);
     let alignment_to_wait_entry = signed_summary(samples.alignment_to_wait_entry_us);
     let prepared_stream_build = unsigned_summary(samples.prepared_stream_build_us);
-    json!({
+    let mut summary = serde_json::Map::new();
+    summary.extend(json!({
         "acceptance_clean": acceptance_clean,
         "acceptance_failure_reasons": acceptance_failure_reasons,
         "statistics_eligible": statistics_eligible,
+        "summary_scope": "dispatch_and_packet_samples",
+        "up_slot_sidecar_consumed_by_summary": false,
+        "per_key_up_p95_p99_supported": false,
         "qualification_dimensions": {
             "waiter_timing_clean": acceptance_clean,
             "dispatch_path_clean": acceptance_clean,
@@ -3342,7 +3404,14 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "final_policy_to_pre_call_us": signed_summary(samples.final_policy_to_pre_call_us),
         "final_policy_to_true_pre_call_us": signed_summary(samples.final_policy_to_true_pre_call_us),
         "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
+    })
+    .as_object()
+    .expect("summary prefix is an object")
+    .clone());
+    summary.extend(json!({
         "completion_error_us_diagnostic": {
+            "statistical_unit": "dispatch_packet",
+            "per_key_p95_p99_supported": false,
             "p01": quantile(&mut samples.completion_error_us, 1, 100),
             "p50": quantile(&mut samples.completion_error_us, 50, 100),
             "p95": quantile(&mut samples.completion_error_us, 95, 100),
@@ -3361,7 +3430,14 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "deadline_missed_before_send_count": samples.deadline_missed_count,
         "failure_reasons": samples.failure_reasons,
         "observation_count": samples.observation_count,
+        "packet_observation_count": samples.packet_observation_count,
+        "wait_observation_count": samples.wait_observation_count,
         "observation_gaps": samples.observation_gaps,
+        "pre_call_unavailable_count": samples.pre_call_unavailable_count,
+        "observer_dropped_samples": samples.observer_dropped_samples,
+        "spin_observation_expected_samples": samples.spin_observation_expected_samples,
+        "spin_observation_dropped_samples": samples.spin_observation_dropped_samples,
+        "spin_observation_missing_samples": samples.spin_observation_missing_samples,
         "observation_queue": "bounded_nonblocking_on",
         "wait_evidence": {
             "planned_gap_us": unsigned_summary(samples.planned_wait_gap_us),
@@ -3392,6 +3468,10 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "total_wall_time_us": total_wall_time_us,
         "spin_duty_cycle_ppm": spin_duty,
     })
+    .as_object()
+    .expect("summary continuation is an object")
+    .clone());
+    serde_json::Value::Object(summary)
 }
 
 fn all_scenarios_clean(mode_reports: &serde_json::Map<String, serde_json::Value>) -> bool {
@@ -3702,6 +3782,9 @@ fn main() {
     );
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
+        "summary_scope": "dispatch_and_packet_samples",
+        "up_slot_sidecar_consumed_by_summary": false,
+        "per_key_up_p95_p99_supported": false,
         "acceptance_clean": acceptance_clean,
         "statistics_eligible": statistics_eligible,
         "qualification_dimensions": {
@@ -3773,7 +3856,7 @@ fn main() {
 
 #[cfg(test)]
 mod argument_contract_tests {
-    use super::{BenchmarkMode, BenchmarkScope};
+    use super::{BenchmarkMode, BenchmarkScope, Samples, add_observation, summarize_for_attempts};
 
     #[test]
     fn semantic_scope_and_mode_arguments_round_trip() {
@@ -3821,5 +3904,58 @@ mod argument_contract_tests {
         ] {
             assert!(BenchmarkMode::parse(mode).is_err(), "{mode}");
         }
+    }
+
+    #[test]
+    fn captured_wait_observation_is_not_counted_as_a_packet_sample() {
+        use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+        use sky_dispatch_win32::clock::QpcTicks;
+        use sky_dispatch_win32::wait::WaitOutcome;
+
+        let mut samples = Samples {
+            physical_dispatches: 1,
+            wait_count: 1,
+            observation_count: 2,
+            packet_observation_count: 1,
+            spin_observation_expected_samples: 1,
+            ..Samples::default()
+        };
+        samples.dispatch_start_error_us.push(10);
+        add_observation(
+            &mut samples,
+            sky_player::engine::dispatch_primitives::DispatchObservation::Wait(
+                sky_player::engine::dispatch_primitives::WaitObservation {
+                    sequence: 1,
+                    outcome: WaitOutcome::Deadline,
+                    wake_qpc: Some(QpcTicks::from_raw(200)),
+                    spin_ticks: DurationTicks::from_raw(10),
+                    physical_target_qpc: QpcTicks::from_raw(100),
+                    planned_wait_ticks: DurationTicks::from_raw(100),
+                    deadline_ticks: TimelineTicks::from_raw(100),
+                    epoch_qpc: QpcTicks::ZERO,
+                    allow_pre_epoch_startup_dispatch: true,
+                    #[cfg(any(test, feature = "test-support"))]
+                    timer_arm_qpc: None,
+                    #[cfg(any(test, feature = "test-support"))]
+                    timer_arm_target_qpc: None,
+                    #[cfg(any(test, feature = "test-support"))]
+                    timer_arm_generation: None,
+                    #[cfg(any(test, feature = "test-support"))]
+                    timer_return_generation: None,
+                    #[cfg(any(test, feature = "test-support"))]
+                    timer_return_qpc: None,
+                    #[cfg(any(test, feature = "test-support"))]
+                    deadline_crossing_qpc: None,
+                    #[cfg(any(test, feature = "test-support"))]
+                    waiter_return_qpc: None,
+                },
+            ),
+        );
+
+        let report = summarize_for_attempts(samples, 1);
+        assert_eq!(report["acceptance_clean"], true);
+        assert_eq!(report["packet_observation_count"], 1);
+        assert_eq!(report["wait_observation_count"], 1);
+        assert_eq!(report["statistics_eligible"], false);
     }
 }

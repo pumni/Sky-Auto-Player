@@ -173,6 +173,129 @@ impl WindowIdentityAuthority {
     }
 }
 
+/// Terminates only the live, identity-retained project ReceiveOnly test sink.
+/// This is available to the native acceptance harness through `test-support`;
+/// production builds never request process-termination rights.
+#[cfg(all(windows, feature = "test-support"))]
+pub fn terminate_receive_only_sink_process_for_test(
+    identity: &WindowIdentity,
+    expected_image_identity: &str,
+) -> Result<u32, String> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
+        WaitForSingleObject,
+    };
+
+    const SINK_TITLE: &str = "Sky Auto Player — Native Acceptance Sink";
+    const TEST_EXIT_CODE: u32 = 0x646;
+
+    if identity.title != SINK_TITLE
+        || !identity
+            .process_image_basename
+            .eq_ignore_ascii_case("pwsh.exe")
+        || identity.owner_pid == std::process::id()
+    {
+        return Err(
+            "refusing to terminate a process that is not the retained ReceiveOnly sink".into(),
+        );
+    }
+    // SAFETY: The retained window identity was validated by the acceptance
+    // harness. The additional creation-time and image checks below bind this
+    // termination-capable handle to that same PID incarnation.
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            identity.owner_pid,
+        )
+    };
+    if process.is_null() {
+        return Err("could not open the retained ReceiveOnly process for termination".into());
+    }
+
+    let result = (|| {
+        let mut creation = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut exit = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut kernel = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut user = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        // SAFETY: Each output points to a live, writable FILETIME value.
+        if unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) }
+            == 0
+            || filetime_ticks(exit) != 0
+            || filetime_ticks(creation) != identity.process_start_time_filetime
+        {
+            return Err("ReceiveOnly process creation identity changed before termination".into());
+        }
+
+        let mut image = [0u16; 4096];
+        let mut image_length = image.len() as u32;
+        // SAFETY: `image` is writable and its capacity is supplied to Win32.
+        if unsafe { QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut image_length) }
+            == 0
+        {
+            return Err("ReceiveOnly process image could not be revalidated".into());
+        }
+        let image = String::from_utf16(&image[..image_length as usize])
+            .map_err(|_| "ReceiveOnly process image path was invalid UTF-16")?;
+        if !image.eq_ignore_ascii_case(expected_image_identity) {
+            return Err("ReceiveOnly process image identity changed before termination".into());
+        }
+
+        // SAFETY: `process` is the exact identity-revalidated sink handle.
+        match unsafe { WaitForSingleObject(process, 0) } {
+            WAIT_TIMEOUT => {}
+            WAIT_OBJECT_0 => {
+                return Err("ReceiveOnly process exited before the termination fixture".into());
+            }
+            _ => return Err("could not query ReceiveOnly process wait state".into()),
+        }
+        // SAFETY: This deliberately terminates only the project-owned sink
+        // process whose title, PID incarnation, image path, and window
+        // identity were verified above.
+        if unsafe { TerminateProcess(process, TEST_EXIT_CODE) } == 0 {
+            return Err(
+                "TerminateProcess failed for the identity-verified ReceiveOnly sink".into(),
+            );
+        }
+        // SAFETY: `process` is a valid synchronization handle.
+        if unsafe { WaitForSingleObject(process, 5_000) } != WAIT_OBJECT_0 {
+            return Err(
+                "ReceiveOnly process did not signal termination within five seconds".into(),
+            );
+        }
+        let mut exit_code = 0u32;
+        // SAFETY: `exit_code` is writable and `process` is signaled.
+        if unsafe { GetExitCodeProcess(process, &mut exit_code) } == 0
+            || exit_code != TEST_EXIT_CODE
+        {
+            return Err(
+                "ReceiveOnly process exit code did not match the termination fixture".into(),
+            );
+        }
+        Ok(exit_code)
+    })();
+
+    // SAFETY: This function opened `process` and closes it exactly once here.
+    unsafe { CloseHandle(process as HANDLE) };
+    result
+}
+
 impl Drop for WindowIdentityAuthority {
     fn drop(&mut self) {
         #[cfg(feature = "test-support")]

@@ -44,6 +44,9 @@ pub(super) use session::{
     target_integrity_startup_failure,
 };
 
+#[cfg(test)]
+pub(super) type StartupCompileTestHook = Arc<dyn Fn(usize) + Send + Sync>;
+
 /// Application-side playback control plane.  The realtime worker remains in
 /// `sky_player`; this service owns prepared-plan admission, the single active
 /// session rule, and the bounded supervisor loop around that worker.
@@ -55,8 +58,13 @@ pub(super) struct NativePlaybackService {
     pub(super) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     pub(super) prepare_publication: Mutex<PreparePublicationState>,
     pub(super) activity: ActivityCoordinator,
+    pub(super) startup_cancellation: Arc<AtomicBool>,
+    /// Serializes shutdown acceptance with the final pre-arm handoff.
+    pub(super) startup_arm_gate: Mutex<()>,
     #[cfg(test)]
     pub(super) startup_failure: Option<String>,
+    #[cfg(test)]
+    pub(super) startup_compile_test_hook: Mutex<Option<StartupCompileTestHook>>,
     #[cfg(test)]
     pub(super) settings_invalidation_count: AtomicU64,
     #[cfg(test)]
@@ -75,6 +83,8 @@ pub(super) struct NativePlaybackService {
     pub(super) test_player: Option<Arc<NativeDispatchSession>>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) before_arm_test_hook: Option<PlaybackBeforeArmTestHook>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) post_compile_prepublication_test_hook: Option<PlaybackPostCompileTestHook>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) monitor_retired_test_hook: Option<PlaybackRetiredTestHook>,
 }

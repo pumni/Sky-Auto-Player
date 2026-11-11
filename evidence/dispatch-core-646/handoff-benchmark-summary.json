@@ -1,0 +1,5566 @@
+{
+  "schema": "rt_handoff_bench_summary_v1",
+  "command": "cargo run -p sky_player --example rt_handoff_bench --features test-support --profile dist",
+  "cwd": "D:\\Dev\\Sky-Auto-Player\\rust",
+  "environment": {
+    "RT_HANDOFF_BENCH_ITERATIONS": "100"
+  },
+  "result": {
+    "statistics_eligible": false,
+    "acceptance_clean": true,
+    "outer_elapsed_ms": 119037,
+    "qualification_dimensions": {
+      "dispatch_path_clean": true,
+      "sender_cutoff_clean": false,
+      "sender_cutoff_exercised": true,
+      "sender_cutoff_note": "This benchmark does not independently qualify the production SendInput cutoff; deterministic cutoff truth-table coverage is reported by the Rust sender tests and native acceptance seam.",
+      "sender_cutoff_qualification": "separate_native_sender_acceptance",
+      "statistics_eligible": false,
+      "waiter_timing_clean": true
+    },
+    "exit_code": 0,
+    "benchmark_report_elapsed_ms": 91659,
+    "scale_estimate": {
+      "iterations_per_scenario": 10000,
+      "estimated_outer_elapsed_ms_if_linear": 11903700,
+      "basis": "100-iteration full matrix measured at 119037 ms outer wall time, multiplied by 100",
+      "measured": false
+    }
+  },
+  "provenance": {
+    "benchmark_scope": "full",
+    "effective_wait_policy": "production_calibrated",
+    "waiter_metrics_valid": true,
+    "waiter_constructor": "HybridWaiter::production",
+    "benchmark_mode": "real_wait",
+    "transport": "deterministic_mock",
+    "raw_stdout_path": "C:\\Users\\pe4cE_HOA\\AppData\\Local\\Temp\\sky-auto-player-final-rt-r5-evidence-final\\rt-handoff-iterations-100-final.stdout.log",
+    "raw_stdout_sha256": "f9e4bc18604d9c40c1c2e21ef192a13720913df51a88822be9b91c7717189788",
+    "raw_stderr_path": "C:\\Users\\pe4cE_HOA\\AppData\\Local\\Temp\\sky-auto-player-final-rt-r5-evidence-final\\rt-handoff-iterations-100-final.stderr.log",
+    "raw_stderr_sha256": "0a2aaf3034c75347715d5679c4f42056e794d457b9cda9ad4a128c4e5a1bdb34",
+    "evidence_scope": "Rust handoff timing with deterministic mock transport and real HybridWaiter; test-support sender cutoff seam is exercised but production SendInput cutoff qualification is separate; not Raw Input or game-observed latency"
+  },
+  "workloads": [
+    "down_only_1",
+    "down_only_5",
+    "down_only_15",
+    "up_only_1",
+    "up_only_5",
+    "up_only_15",
+    "mixed_2",
+    "mixed_10",
+    "mixed_14"
+  ],
+  "policy_count": 6,
+  "scenario_count": 54,
+  "policies": [
+    {
+      "name": "fixed_spin_1000us",
+      "iterations_per_scenario": 100,
+      "process_cpu_duty_percent": 4.858712124871035,
+      "process_cpu_time_us": 734375,
+      "scenario_count": 9,
+      "scenarios": [
+        {
+          "workload": "down_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 1,
+            "p50": 7,
+            "p95": 9,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 1,
+            "p50": 6,
+            "p95": 8,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9959,
+              "p50": 9994,
+              "p95": 9996,
+              "p99": 9997,
+              "p99_9": 9997,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 0,
+              "max_positive": null,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 919,
+            "min": 30,
+            "p50": 681,
+            "p95": 901,
+            "p99": 915,
+            "p99_9": 915,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 65370,
+          "total_spin_time_us": 65835,
+          "total_wall_time_us": 1007106,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 1,
+            "p50": 7,
+            "p95": 10,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 1,
+            "p50": 6,
+            "p95": 9,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9972,
+              "p50": 9994,
+              "p95": 9995,
+              "p99": 9996,
+              "p99_9": 9996,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 0,
+              "max_positive": null,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 963,
+            "min": 185,
+            "p50": 634,
+            "p95": 905,
+            "p99": 934,
+            "p99_9": 934,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 64880,
+          "total_spin_time_us": 65407,
+          "total_wall_time_us": 1008110,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 14,
+            "max_positive": 14,
+            "min": 1,
+            "p50": 7,
+            "p95": 11,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 13,
+            "max_positive": 13,
+            "min": 1,
+            "p50": 6,
+            "p95": 9,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9975,
+              "p50": 9994,
+              "p95": 9995,
+              "p99": 9996,
+              "p99_9": 9996,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 0,
+              "max_positive": null,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 933,
+            "min": 147,
+            "p50": 641,
+            "p95": 903,
+            "p99": 930,
+            "p99_9": 930,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 62687,
+          "total_spin_time_us": 63150,
+          "total_wall_time_us": 1007381,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_10",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 155,
+            "max_positive": 155,
+            "min": 5,
+            "p50": 7,
+            "p95": 10,
+            "p99": 17,
+            "p99_9": 17,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 15,
+            "max_positive": 15,
+            "min": 5,
+            "p50": 7,
+            "p95": 9,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19990,
+              "min": 19939,
+              "p50": 19987,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 145,
+              "max_positive": 145,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 971,
+            "min": 0,
+            "p50": 733,
+            "p95": 927,
+            "p99": 953,
+            "p99_9": 953,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 34828,
+          "total_spin_time_us": 69938,
+          "total_wall_time_us": 2008091,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_14",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 5,
+            "p50": 7,
+            "p95": 10,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 5,
+            "p50": 6,
+            "p95": 9,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19951,
+              "p50": 19986,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 4,
+              "max_positive": 4,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 3,
+              "p99_9": 3,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 974,
+            "min": 18,
+            "p50": 658,
+            "p95": 899,
+            "p99": 943,
+            "p99_9": 943,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 32751,
+          "total_spin_time_us": 65769,
+          "total_wall_time_us": 2008135,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_2",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 21,
+            "max_positive": 21,
+            "min": 5,
+            "p50": 7,
+            "p95": 11,
+            "p99": 16,
+            "p99_9": 16,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 20,
+            "max_positive": 20,
+            "min": 5,
+            "p50": 6,
+            "p95": 10,
+            "p99": 14,
+            "p99_9": 14,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19990,
+              "min": 19945,
+              "p50": 19986,
+              "p95": 19989,
+              "p99": 19990,
+              "p99_9": 19990,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 9,
+              "max_positive": 9,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 965,
+            "min": 224,
+            "p50": 689,
+            "p95": 914,
+            "p99": 936,
+            "p99_9": 936,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 34041,
+          "total_spin_time_us": 68358,
+          "total_wall_time_us": 2008090,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 977,
+            "max_positive": 977,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 34,
+            "p99_9": 34,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 10,
+            "max_positive": 10,
+            "min": 3,
+            "p50": 5,
+            "p95": 7,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 2,
+            "p99_9": 2,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19947,
+              "p50": 19985,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 967,
+              "max_positive": 967,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 29,
+              "p99_9": 29,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 968,
+            "min": 0,
+            "p50": 679,
+            "p95": 903,
+            "p99": 958,
+            "p99_9": 958,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 33500,
+          "total_spin_time_us": 67276,
+          "total_wall_time_us": 2008238,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 5162,
+            "max_positive": 5162,
+            "min": 4,
+            "p50": 7,
+            "p95": 14,
+            "p99": 269,
+            "p99_9": 269,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 20,
+            "max_positive": 20,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19988,
+              "min": 19961,
+              "p50": 19983,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 5147,
+              "max_positive": 5147,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 259,
+              "p99_9": 259,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 959,
+            "min": 0,
+            "p50": 664,
+            "p95": 918,
+            "p99": 948,
+            "p99_9": 948,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 32959,
+          "total_spin_time_us": 66377,
+          "total_wall_time_us": 2013884,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 25,
+            "max_positive": 25,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 3,
+            "p50": 5,
+            "p95": 8,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19940,
+              "p50": 19986,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 18,
+              "max_positive": 18,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 976,
+            "min": 329,
+            "p50": 687,
+            "p95": 934,
+            "p99": 969,
+            "p99_9": 969,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 34491,
+          "total_spin_time_us": 69232,
+          "total_wall_time_us": 2007215,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        }
+      ]
+    },
+    {
+      "name": "fixed_spin_1500us",
+      "iterations_per_scenario": 100,
+      "process_cpu_duty_percent": 7.4488038743844305,
+      "process_cpu_time_us": 1125000,
+      "scenario_count": 9,
+      "scenarios": [
+        {
+          "workload": "down_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 2676,
+            "max_positive": 2676,
+            "min": 1,
+            "p50": 7,
+            "p95": 10,
+            "p99": 15,
+            "p99_9": 15,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 13,
+            "max_positive": 13,
+            "min": 1,
+            "p50": 6,
+            "p95": 10,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9975,
+              "p50": 9995,
+              "p95": 9997,
+              "p99": 9997,
+              "p99_9": 9997,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 2672,
+              "max_positive": 2672,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1426,
+            "min": 0,
+            "p50": 1101,
+            "p95": 1358,
+            "p99": 1422,
+            "p99_9": 1422,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 105664,
+          "total_spin_time_us": 106618,
+          "total_wall_time_us": 1009028,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 67,
+            "max_positive": 67,
+            "min": 1,
+            "p50": 7,
+            "p95": 9,
+            "p99": 41,
+            "p99_9": 41,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 40,
+            "max_positive": 40,
+            "min": 1,
+            "p50": 6,
+            "p95": 8,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9962,
+              "p50": 9995,
+              "p95": 9996,
+              "p99": 9997,
+              "p99_9": 9997,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 59,
+              "max_positive": 59,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1451,
+            "min": 0,
+            "p50": 1063,
+            "p95": 1406,
+            "p99": 1438,
+            "p99_9": 1438,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 105468,
+          "total_spin_time_us": 106221,
+          "total_wall_time_us": 1007137,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 13,
+            "max_positive": 13,
+            "min": 1,
+            "p50": 7,
+            "p95": 10,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 1,
+            "p50": 6,
+            "p95": 9,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9959,
+              "p50": 9995,
+              "p95": 9996,
+              "p99": 9997,
+              "p99_9": 9997,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 0,
+              "max_positive": null,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1459,
+            "min": 454,
+            "p50": 1112,
+            "p95": 1360,
+            "p99": 1451,
+            "p99_9": 1451,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 108658,
+          "total_spin_time_us": 109367,
+          "total_wall_time_us": 1006519,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_10",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 30,
+            "max_positive": 30,
+            "min": 6,
+            "p50": 8,
+            "p95": 14,
+            "p99": 29,
+            "p99_9": 29,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 17,
+            "max_positive": 17,
+            "min": 5,
+            "p50": 7,
+            "p95": 12,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19953,
+              "p50": 19987,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 21,
+              "max_positive": 21,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 15,
+              "p99_9": 15,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1455,
+            "min": 168,
+            "p50": 1204,
+            "p95": 1394,
+            "p99": 1425,
+            "p99_9": 1425,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 58005,
+          "total_spin_time_us": 116484,
+          "total_wall_time_us": 2008163,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_14",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 195,
+            "max_positive": 195,
+            "min": 5,
+            "p50": 7,
+            "p95": 13,
+            "p99": 17,
+            "p99_9": 17,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 15,
+            "max_positive": 15,
+            "min": 5,
+            "p50": 7,
+            "p95": 11,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19966,
+              "p50": 19986,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 183,
+              "max_positive": 183,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 8,
+              "p99_9": 8,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1539,
+            "min": 409,
+            "p50": 1155,
+            "p95": 1428,
+            "p99": 1459,
+            "p99_9": 1459,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 57290,
+          "total_spin_time_us": 115054,
+          "total_wall_time_us": 2008254,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_2",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 21,
+            "max_positive": 21,
+            "min": 5,
+            "p50": 7,
+            "p95": 11,
+            "p99": 17,
+            "p99_9": 17,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 19,
+            "max_positive": 19,
+            "min": 5,
+            "p50": 6,
+            "p95": 10,
+            "p99": 15,
+            "p99_9": 15,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 10,
+            "max_positive": 10,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19990,
+              "min": 19955,
+              "p50": 19988,
+              "p95": 19990,
+              "p99": 19990,
+              "p99_9": 19990,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 0,
+              "max_positive": null,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1444,
+            "min": 909,
+            "p50": 1175,
+            "p95": 1427,
+            "p99": 1441,
+            "p99_9": 1441,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 58561,
+          "total_spin_time_us": 117558,
+          "total_wall_time_us": 2007416,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 228,
+            "max_positive": 228,
+            "min": 4,
+            "p50": 5,
+            "p95": 9,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 228,
+            "max_positive": 228,
+            "min": 3,
+            "p50": 4,
+            "p95": 7,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19943,
+              "p50": 19988,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 0,
+              "max_positive": null,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1433,
+            "min": 199,
+            "p50": 1145,
+            "p95": 1404,
+            "p99": 1430,
+            "p99_9": 1430,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 56422,
+          "total_spin_time_us": 113226,
+          "total_wall_time_us": 2006758,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 52,
+            "max_positive": 52,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 37,
+            "p99_9": 37,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 4,
+            "p50": 5,
+            "p95": 8,
+            "p99": 8,
+            "p99_9": 8,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19958,
+              "p50": 19987,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 45,
+              "max_positive": 45,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 29,
+              "p99_9": 29,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1440,
+            "min": 564,
+            "p50": 1130,
+            "p95": 1396,
+            "p99": 1438,
+            "p99_9": 1438,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 57027,
+          "total_spin_time_us": 114468,
+          "total_wall_time_us": 2007234,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 43,
+            "max_positive": 43,
+            "min": 4,
+            "p50": 5,
+            "p95": 9,
+            "p99": 38,
+            "p99_9": 38,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 3,
+            "p50": 4,
+            "p95": 8,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19955,
+              "p50": 19987,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 37,
+              "max_positive": 37,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 26,
+              "p99_9": 26,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 1453,
+            "min": 913,
+            "p50": 1206,
+            "p95": 1430,
+            "p99": 1450,
+            "p99_9": 1450,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 60101,
+          "total_spin_time_us": 120609,
+          "total_wall_time_us": 2006749,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        }
+      ]
+    },
+    {
+      "name": "fixed_spin_250us",
+      "iterations_per_scenario": 100,
+      "process_cpu_duty_percent": 2.048261095151789,
+      "process_cpu_time_us": 312500,
+      "scenario_count": 9,
+      "scenarios": [
+        {
+          "workload": "down_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 877,
+            "max_positive": 877,
+            "min": 5,
+            "p50": 139,
+            "p95": 539,
+            "p99": 649,
+            "p99_9": 649,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 13,
+            "max_positive": 13,
+            "min": 3,
+            "p50": 6,
+            "p95": 10,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9996,
+              "min": 9952,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 873,
+              "max_positive": 873,
+              "min": 0,
+              "p50": 131,
+              "p95": 530,
+              "p99": 638,
+              "p99_9": 638,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 185,
+            "min": 0,
+            "p50": 0,
+            "p95": 124,
+            "p99": 150,
+            "p99_9": 150,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 1354,
+          "total_spin_time_us": 1389,
+          "total_wall_time_us": 1025483,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 959,
+            "max_positive": 959,
+            "min": 3,
+            "p50": 58,
+            "p95": 452,
+            "p99": 682,
+            "p99_9": 682,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 72,
+            "max_positive": 72,
+            "min": 1,
+            "p50": 7,
+            "p95": 10,
+            "p99": 16,
+            "p99_9": 16,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9996,
+              "min": 9962,
+              "p50": 9991,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 949,
+              "max_positive": 949,
+              "min": 0,
+              "p50": 48,
+              "p95": 445,
+              "p99": 671,
+              "p99_9": 671,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 203,
+            "min": 0,
+            "p50": 0,
+            "p95": 172,
+            "p99": 198,
+            "p99_9": 198,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 3666,
+          "total_spin_time_us": 3749,
+          "total_wall_time_us": 1022517,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 3477,
+            "max_positive": 3477,
+            "min": 2,
+            "p50": 131,
+            "p95": 680,
+            "p99": 891,
+            "p99_9": 891,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 2,
+            "p50": 6,
+            "p95": 10,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9995,
+              "min": 9929,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 3465,
+              "max_positive": 3465,
+              "min": 0,
+              "p50": 124,
+              "p95": 667,
+              "p99": 883,
+              "p99_9": 883,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 203,
+            "min": 0,
+            "p50": 0,
+            "p95": 189,
+            "p99": 201,
+            "p99_9": 201,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 3449,
+          "total_spin_time_us": 3552,
+          "total_wall_time_us": 1029568,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_10",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 859,
+            "max_positive": 859,
+            "min": 6,
+            "p50": 123,
+            "p95": 393,
+            "p99": 545,
+            "p99_9": 545,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 21,
+            "max_positive": 21,
+            "min": 5,
+            "p50": 7,
+            "p95": 11,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19952,
+              "p50": 19981,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 851,
+              "max_positive": 851,
+              "min": 0,
+              "p50": 114,
+              "p95": 385,
+              "p99": 538,
+              "p99_9": 538,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 205,
+            "min": 0,
+            "p50": 0,
+            "p95": 132,
+            "p99": 184,
+            "p99_9": 184,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 991,
+          "total_spin_time_us": 2007,
+          "total_wall_time_us": 2023537,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_14",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 576,
+            "max_positive": 576,
+            "min": 6,
+            "p50": 48,
+            "p95": 395,
+            "p99": 551,
+            "p99_9": 551,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 23,
+            "max_positive": 23,
+            "min": 5,
+            "p50": 7,
+            "p95": 13,
+            "p99": 20,
+            "p99_9": 20,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19947,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 568,
+              "max_positive": 568,
+              "min": 0,
+              "p50": 38,
+              "p95": 386,
+              "p99": 540,
+              "p99_9": 540,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 218,
+            "min": 0,
+            "p50": 0,
+            "p95": 174,
+            "p99": 196,
+            "p99_9": 196,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 1709,
+          "total_spin_time_us": 3457,
+          "total_wall_time_us": 2021641,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_2",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 683,
+            "max_positive": 683,
+            "min": 5,
+            "p50": 58,
+            "p95": 325,
+            "p99": 658,
+            "p99_9": 658,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 14,
+            "max_positive": 14,
+            "min": 5,
+            "p50": 7,
+            "p95": 10,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 51,
+            "max_positive": 51,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 14,
+            "p99_9": 14,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19990,
+              "min": 19947,
+              "p50": 19982,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 674,
+              "max_positive": 674,
+              "min": 0,
+              "p50": 47,
+              "p95": 317,
+              "p99": 646,
+              "p99_9": 646,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 209,
+            "min": 0,
+            "p50": 0,
+            "p95": 169,
+            "p99": 188,
+            "p99_9": 188,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 1910,
+          "total_spin_time_us": 3859,
+          "total_wall_time_us": 2020089,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 696,
+            "max_positive": 696,
+            "min": 4,
+            "p50": 87,
+            "p95": 445,
+            "p99": 506,
+            "p99_9": 506,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 9,
+            "max_positive": 9,
+            "min": 3,
+            "p50": 5,
+            "p95": 7,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19938,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 689,
+              "max_positive": 689,
+              "min": 0,
+              "p50": 81,
+              "p95": 439,
+              "p99": 499,
+              "p99_9": 499,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 185,
+            "min": 0,
+            "p50": 0,
+            "p95": 161,
+            "p99": 182,
+            "p99_9": 182,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 1684,
+          "total_spin_time_us": 3406,
+          "total_wall_time_us": 2021921,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 699,
+            "max_positive": 699,
+            "min": 4,
+            "p50": 53,
+            "p95": 465,
+            "p99": 659,
+            "p99_9": 659,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 19,
+            "max_positive": 19,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19988,
+              "min": 19937,
+              "p50": 19980,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 691,
+              "max_positive": 691,
+              "min": 0,
+              "p50": 45,
+              "p95": 457,
+              "p99": 653,
+              "p99_9": 653,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 206,
+            "min": 0,
+            "p50": 0,
+            "p95": 147,
+            "p99": 190,
+            "p99_9": 190,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 1815,
+          "total_spin_time_us": 3673,
+          "total_wall_time_us": 2022872,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 627,
+            "max_positive": 627,
+            "min": 4,
+            "p50": 95,
+            "p95": 325,
+            "p99": 390,
+            "p99_9": 390,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 9,
+            "max_positive": 9,
+            "min": 4,
+            "p50": 5,
+            "p95": 9,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 17,
+            "max_positive": 17,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19958,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 621,
+              "max_positive": 621,
+              "min": 0,
+              "p50": 87,
+              "p95": 318,
+              "p99": 382,
+              "p99_9": 382,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 168,
+            "min": 0,
+            "p50": 0,
+            "p95": 132,
+            "p99": 151,
+            "p99_9": 151,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 1322,
+          "total_spin_time_us": 2671,
+          "total_wall_time_us": 2019947,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        }
+      ]
+    },
+    {
+      "name": "fixed_spin_400us",
+      "iterations_per_scenario": 100,
+      "process_cpu_duty_percent": 1.4380008639180504,
+      "process_cpu_time_us": 218750,
+      "scenario_count": 9,
+      "scenarios": [
+        {
+          "workload": "down_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 3878,
+            "max_positive": 3878,
+            "min": 6,
+            "p50": 8,
+            "p95": 181,
+            "p99": 554,
+            "p99_9": 554,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 3,
+            "p50": 6,
+            "p95": 9,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 10,
+            "max_positive": 10,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9995,
+              "min": 9966,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 3871,
+              "max_positive": 3871,
+              "min": 0,
+              "p50": 0,
+              "p95": 177,
+              "p99": 545,
+              "p99_9": 545,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 328,
+            "min": 0,
+            "p50": 19,
+            "p95": 273,
+            "p99": 319,
+            "p99_9": 319,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 7794,
+          "total_spin_time_us": 7927,
+          "total_wall_time_us": 1016966,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 711,
+            "max_positive": 711,
+            "min": 4,
+            "p50": 10,
+            "p95": 408,
+            "p99": 692,
+            "p99_9": 692,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 34,
+            "max_positive": 34,
+            "min": 3,
+            "p50": 7,
+            "p95": 10,
+            "p99": 18,
+            "p99_9": 18,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9995,
+              "min": 9963,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 702,
+              "max_positive": 702,
+              "min": 0,
+              "p50": 0,
+              "p95": 399,
+              "p99": 683,
+              "p99_9": 683,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 325,
+            "min": 0,
+            "p50": 12,
+            "p95": 289,
+            "p99": 325,
+            "p99_9": 325,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 7500,
+          "total_spin_time_us": 7636,
+          "total_wall_time_us": 1018036,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 5054,
+            "max_positive": 5054,
+            "min": 3,
+            "p50": 8,
+            "p95": 368,
+            "p99": 581,
+            "p99_9": 581,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 154,
+            "max_positive": 154,
+            "min": 3,
+            "p50": 6,
+            "p95": 9,
+            "p99": 22,
+            "p99_9": 22,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9995,
+              "min": 9954,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 5045,
+              "max_positive": 5045,
+              "min": 0,
+              "p50": 0,
+              "p95": 359,
+              "p99": 572,
+              "p99_9": 572,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 407,
+            "min": 0,
+            "p50": 66,
+            "p95": 256,
+            "p99": 283,
+            "p99_9": 283,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 9078,
+          "total_spin_time_us": 9275,
+          "total_wall_time_us": 1021607,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_10",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 3038,
+            "max_positive": 3038,
+            "min": 6,
+            "p50": 12,
+            "p95": 300,
+            "p99": 511,
+            "p99_9": 511,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 17,
+            "max_positive": 17,
+            "min": 5,
+            "p50": 8,
+            "p95": 12,
+            "p99": 16,
+            "p99_9": 16,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 9,
+            "max_positive": 9,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19956,
+              "p50": 19980,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 3022,
+              "max_positive": 3022,
+              "min": 0,
+              "p50": 0,
+              "p95": 289,
+              "p99": 501,
+              "p99_9": 501,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 368,
+            "min": 0,
+            "p50": 21,
+            "p95": 332,
+            "p99": 348,
+            "p99_9": 348,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 5164,
+          "total_spin_time_us": 10424,
+          "total_wall_time_us": 2018537,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_14",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 3239,
+            "max_positive": 3239,
+            "min": 5,
+            "p50": 9,
+            "p95": 253,
+            "p99": 2716,
+            "p99_9": 2716,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 40,
+            "max_positive": 40,
+            "min": 4,
+            "p50": 8,
+            "p95": 12,
+            "p99": 17,
+            "p99_9": 17,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19887,
+              "p50": 19980,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 3227,
+              "max_positive": 3227,
+              "min": 0,
+              "p50": 0,
+              "p95": 244,
+              "p99": 2674,
+              "p99_9": 2674,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 335,
+            "min": 0,
+            "p50": 54,
+            "p95": 302,
+            "p99": 322,
+            "p99_9": 322,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 5025,
+          "total_spin_time_us": 10148,
+          "total_wall_time_us": 2019433,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_2",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 4210,
+            "max_positive": 4210,
+            "min": 5,
+            "p50": 12,
+            "p95": 287,
+            "p99": 3745,
+            "p99_9": 3745,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 14,
+            "max_positive": 14,
+            "min": 5,
+            "p50": 7,
+            "p95": 11,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 25,
+            "max_positive": 25,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 24,
+            "p99_9": 24,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19951,
+              "p50": 19981,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 4200,
+              "max_positive": 4200,
+              "min": 0,
+              "p50": 0,
+              "p95": 279,
+              "p99": 3736,
+              "p99_9": 3736,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 372,
+            "min": 0,
+            "p50": 13,
+            "p95": 261,
+            "p99": 333,
+            "p99_9": 333,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 4166,
+          "total_spin_time_us": 8429,
+          "total_wall_time_us": 2023091,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 2656,
+            "max_positive": 2656,
+            "min": 5,
+            "p50": 19,
+            "p95": 365,
+            "p99": 708,
+            "p99_9": 708,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 18,
+            "max_positive": 18,
+            "min": 4,
+            "p50": 5,
+            "p95": 8,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19951,
+              "p50": 19982,
+              "p95": 19987,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 2649,
+              "max_positive": 2649,
+              "min": 0,
+              "p50": 9,
+              "p95": 358,
+              "p99": 703,
+              "p99_9": 703,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 339,
+            "min": 0,
+            "p50": 0,
+            "p95": 264,
+            "p99": 288,
+            "p99_9": 288,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 3330,
+          "total_spin_time_us": 6721,
+          "total_wall_time_us": 2018267,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 838,
+            "max_positive": 838,
+            "min": 5,
+            "p50": 10,
+            "p95": 304,
+            "p99": 393,
+            "p99_9": 393,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 24,
+            "max_positive": 24,
+            "min": 4,
+            "p50": 6,
+            "p95": 10,
+            "p99": 14,
+            "p99_9": 14,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 2,
+            "p99_9": 2,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19988,
+              "min": 19928,
+              "p50": 19979,
+              "p95": 19987,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 831,
+              "max_positive": 831,
+              "min": 0,
+              "p50": 0,
+              "p95": 295,
+              "p99": 381,
+              "p99_9": 381,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 335,
+            "min": 0,
+            "p50": 15,
+            "p95": 292,
+            "p99": 324,
+            "p99_9": 324,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 4102,
+          "total_spin_time_us": 8278,
+          "total_wall_time_us": 2017593,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 521,
+            "max_positive": 521,
+            "min": 4,
+            "p50": 8,
+            "p95": 234,
+            "p99": 460,
+            "p99_9": 460,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 68,
+            "max_positive": 68,
+            "min": 3,
+            "p50": 6,
+            "p95": 10,
+            "p99": 23,
+            "p99_9": 23,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19945,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 515,
+              "max_positive": 515,
+              "min": 0,
+              "p50": 0,
+              "p95": 227,
+              "p99": 452,
+              "p99_9": 452,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 362,
+            "min": 0,
+            "p50": 33,
+            "p95": 286,
+            "p99": 339,
+            "p99_9": 339,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 4186,
+          "total_spin_time_us": 8432,
+          "total_wall_time_us": 2014059,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        }
+      ]
+    },
+    {
+      "name": "fixed_spin_700us",
+      "iterations_per_scenario": 100,
+      "process_cpu_duty_percent": 2.786622310575076,
+      "process_cpu_time_us": 421875,
+      "scenario_count": 9,
+      "scenarios": [
+        {
+          "workload": "down_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 2810,
+            "max_positive": 2810,
+            "min": 1,
+            "p50": 7,
+            "p95": 15,
+            "p99": 115,
+            "p99_9": 115,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 14,
+            "max_positive": 14,
+            "min": 1,
+            "p50": 7,
+            "p95": 10,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9973,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9997,
+              "p99_9": 9997,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 2797,
+              "max_positive": 2797,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 109,
+              "p99_9": 109,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 677,
+            "min": 0,
+            "p50": 284,
+            "p95": 569,
+            "p99": 660,
+            "p99_9": 660,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 31152,
+          "total_spin_time_us": 31492,
+          "total_wall_time_us": 1010913,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 256,
+            "max_positive": 256,
+            "min": 1,
+            "p50": 8,
+            "p95": 11,
+            "p99": 212,
+            "p99_9": 212,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 10,
+            "max_positive": 10,
+            "min": 1,
+            "p50": 7,
+            "p95": 9,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9976,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9996,
+              "p99_9": 9996,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 245,
+              "max_positive": 245,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 205,
+              "p99_9": 205,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 634,
+            "min": 0,
+            "p50": 335,
+            "p95": 578,
+            "p99": 621,
+            "p99_9": 621,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 34502,
+          "total_spin_time_us": 34811,
+          "total_wall_time_us": 1008952,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 157,
+            "max_positive": 157,
+            "min": 4,
+            "p50": 7,
+            "p95": 10,
+            "p99": 40,
+            "p99_9": 40,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 12,
+            "max_positive": 12,
+            "min": 3,
+            "p50": 6,
+            "p95": 9,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9996,
+              "min": 9946,
+              "p50": 9993,
+              "p95": 9995,
+              "p99": 9996,
+              "p99_9": 9996,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 148,
+              "max_positive": 148,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 33,
+              "p99_9": 33,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 655,
+            "min": 0,
+            "p50": 391,
+            "p95": 626,
+            "p99": 649,
+            "p99_9": 649,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 37618,
+          "total_spin_time_us": 37909,
+          "total_wall_time_us": 1007719,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_10",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 215,
+            "max_positive": 215,
+            "min": 6,
+            "p50": 8,
+            "p95": 26,
+            "p99": 137,
+            "p99_9": 137,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 14,
+            "max_positive": 14,
+            "min": 5,
+            "p50": 7,
+            "p95": 10,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19957,
+              "p50": 19981,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 207,
+              "max_positive": 207,
+              "min": 0,
+              "p50": 0,
+              "p95": 17,
+              "p99": 127,
+              "p99_9": 127,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 638,
+            "min": 0,
+            "p50": 295,
+            "p95": 589,
+            "p99": 616,
+            "p99_9": 616,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 15949,
+          "total_spin_time_us": 32056,
+          "total_wall_time_us": 2009829,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_14",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 2650,
+            "max_positive": 2650,
+            "min": 5,
+            "p50": 8,
+            "p95": 71,
+            "p99": 340,
+            "p99_9": 340,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 15,
+            "max_positive": 15,
+            "min": 5,
+            "p50": 7,
+            "p95": 11,
+            "p99": 13,
+            "p99_9": 13,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19925,
+              "p50": 19982,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 2642,
+              "max_positive": 2642,
+              "min": 0,
+              "p50": 0,
+              "p95": 60,
+              "p99": 330,
+              "p99_9": 330,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 651,
+            "min": 0,
+            "p50": 329,
+            "p95": 573,
+            "p99": 616,
+            "p99_9": 616,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 15117,
+          "total_spin_time_us": 30421,
+          "total_wall_time_us": 2012347,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_2",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 351,
+            "max_positive": 351,
+            "min": 5,
+            "p50": 8,
+            "p95": 70,
+            "p99": 341,
+            "p99_9": 341,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 25,
+            "max_positive": 25,
+            "min": 4,
+            "p50": 7,
+            "p95": 10,
+            "p99": 15,
+            "p99_9": 15,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19953,
+              "p50": 19983,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 342,
+              "max_positive": 342,
+              "min": 0,
+              "p50": 0,
+              "p95": 54,
+              "p99": 334,
+              "p99_9": 334,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 646,
+            "min": 0,
+            "p50": 325,
+            "p95": 608,
+            "p99": 641,
+            "p99_9": 641,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 16077,
+          "total_spin_time_us": 32320,
+          "total_wall_time_us": 2010242,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 3874,
+            "max_positive": 3874,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 136,
+            "p99_9": 136,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 9,
+            "max_positive": 9,
+            "min": 3,
+            "p50": 5,
+            "p95": 7,
+            "p99": 8,
+            "p99_9": 8,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19950,
+              "p50": 19982,
+              "p95": 19988,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 3867,
+              "max_positive": 3867,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 128,
+              "p99_9": 128,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 648,
+            "min": 0,
+            "p50": 315,
+            "p95": 601,
+            "p99": 648,
+            "p99_9": 648,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 16429,
+          "total_spin_time_us": 33055,
+          "total_wall_time_us": 2011922,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 1973,
+            "max_positive": 1973,
+            "min": 4,
+            "p50": 7,
+            "p95": 31,
+            "p99": 1682,
+            "p99_9": 1682,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 13,
+            "max_positive": 13,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 12,
+            "p99_9": 12,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19952,
+              "p50": 19980,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 1960,
+              "max_positive": 1960,
+              "min": 0,
+              "p50": 0,
+              "p95": 20,
+              "p99": 1671,
+              "p99_9": 1671,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 658,
+            "min": 0,
+            "p50": 353,
+            "p95": 592,
+            "p99": 647,
+            "p99_9": 647,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 17335,
+          "total_spin_time_us": 34895,
+          "total_wall_time_us": 2012886,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 4264,
+            "max_positive": 4264,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 1704,
+            "p99_9": 1704,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 18,
+            "max_positive": 18,
+            "min": 3,
+            "p50": 5,
+            "p95": 8,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19950,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 4253,
+              "max_positive": 4253,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 1685,
+              "p99_9": 1685,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 629,
+            "min": 0,
+            "p50": 331,
+            "p95": 584,
+            "p99": 617,
+            "p99_9": 617,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 16861,
+          "total_spin_time_us": 33957,
+          "total_wall_time_us": 2013915,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        }
+      ]
+    },
+    {
+      "name": "production_adaptive_spin",
+      "iterations_per_scenario": 100,
+      "process_cpu_duty_percent": 5.569051085177869,
+      "process_cpu_time_us": 843750,
+      "scenario_count": 9,
+      "scenarios": [
+        {
+          "workload": "down_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 85,
+            "max_positive": 85,
+            "min": 1,
+            "p50": 6,
+            "p95": 9,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 79,
+            "max_positive": 79,
+            "min": 1,
+            "p50": 5,
+            "p95": 8,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 5,
+            "max_positive": 5,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9997,
+              "min": 9956,
+              "p50": 9992,
+              "p95": 9996,
+              "p99": 9997,
+              "p99_9": 9997,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 2,
+              "max_positive": 2,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 914,
+            "min": 135,
+            "p50": 688,
+            "p95": 890,
+            "p99": 908,
+            "p99_9": 908,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 65050,
+          "total_spin_time_us": 65671,
+          "total_wall_time_us": 1009533,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 1735,
+            "max_positive": 1735,
+            "min": 5,
+            "p50": 8,
+            "p95": 20,
+            "p99": 1295,
+            "p99_9": 1295,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 27,
+            "max_positive": 27,
+            "min": 5,
+            "p50": 7,
+            "p95": 14,
+            "p99": 20,
+            "p99_9": 20,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 13,
+            "max_positive": 13,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 2,
+            "p99_9": 2,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9996,
+              "min": 9970,
+              "p50": 9992,
+              "p95": 9995,
+              "p99": 9995,
+              "p99_9": 9995,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 1720,
+              "max_positive": 1720,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 1280,
+              "p99_9": 1280,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 954,
+            "min": 0,
+            "p50": 675,
+            "p95": 932,
+            "p99": 948,
+            "p99_9": 948,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 67201,
+          "total_spin_time_us": 68175,
+          "total_wall_time_us": 1014481,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "down_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 197,
+            "max_positive": 197,
+            "min": 2,
+            "p50": 7,
+            "p95": 12,
+            "p99": 106,
+            "p99_9": 106,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 105,
+            "max_positive": 105,
+            "min": 2,
+            "p50": 6,
+            "p95": 9,
+            "p99": 36,
+            "p99_9": 36,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 9996,
+              "min": 9980,
+              "p50": 9994,
+              "p95": 9995,
+              "p99": 9996,
+              "p99_9": 9996,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 188,
+              "max_positive": 188,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 42,
+              "p99_9": 42,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 948,
+            "min": 129,
+            "p50": 689,
+            "p95": 914,
+            "p99": 938,
+            "p99_9": 938,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 67948,
+          "total_spin_time_us": 68624,
+          "total_wall_time_us": 1009938,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_10",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 34,
+            "max_positive": 34,
+            "min": 5,
+            "p50": 8,
+            "p95": 11,
+            "p99": 21,
+            "p99_9": 21,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 11,
+            "max_positive": 11,
+            "min": 5,
+            "p50": 7,
+            "p95": 10,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19990,
+              "min": 19902,
+              "p50": 19982,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 24,
+              "max_positive": 24,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 11,
+              "p99_9": 11,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 946,
+            "min": 24,
+            "p50": 623,
+            "p95": 893,
+            "p99": 931,
+            "p99_9": 931,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 31517,
+          "total_spin_time_us": 63330,
+          "total_wall_time_us": 2009363,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_14",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 67,
+            "max_positive": 67,
+            "min": 5,
+            "p50": 8,
+            "p95": 11,
+            "p99": 61,
+            "p99_9": 61,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 10,
+            "max_positive": 10,
+            "min": 5,
+            "p50": 7,
+            "p95": 9,
+            "p99": 10,
+            "p99_9": 10,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19940,
+              "p50": 19981,
+              "p95": 19989,
+              "p99": 19989,
+              "p99_9": 19989,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 57,
+              "max_positive": 57,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 52,
+              "p99_9": 52,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 953,
+            "min": 0,
+            "p50": 621,
+            "p95": 896,
+            "p99": 936,
+            "p99_9": 936,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 30100,
+          "total_spin_time_us": 60490,
+          "total_wall_time_us": 2009576,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "mixed_2",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 96,
+            "max_positive": 96,
+            "min": 5,
+            "p50": 8,
+            "p95": 18,
+            "p99": 38,
+            "p99_9": 38,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 28,
+            "max_positive": 28,
+            "min": 5,
+            "p50": 7,
+            "p95": 12,
+            "p99": 28,
+            "p99_9": 28,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19990,
+              "min": 19932,
+              "p50": 19983,
+              "p95": 19989,
+              "p99": 19990,
+              "p99_9": 19990,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 78,
+              "max_positive": 78,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 25,
+              "p99_9": 25,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 954,
+            "min": 0,
+            "p50": 694,
+            "p95": 889,
+            "p99": 926,
+            "p99_9": 926,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 32862,
+          "total_spin_time_us": 66046,
+          "total_wall_time_us": 2009762,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_1",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 21,
+            "max_positive": 21,
+            "min": 4,
+            "p50": 6,
+            "p95": 8,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 9,
+            "max_positive": 9,
+            "min": 3,
+            "p50": 5,
+            "p95": 8,
+            "p99": 9,
+            "p99_9": 9,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 1,
+            "max_positive": 1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19988,
+              "min": 19927,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 14,
+              "max_positive": 14,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 960,
+            "min": 0,
+            "p50": 646,
+            "p95": 904,
+            "p99": 921,
+            "p99_9": 921,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 32400,
+          "total_spin_time_us": 65134,
+          "total_wall_time_us": 2010254,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_15",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 251,
+            "max_positive": 251,
+            "min": 4,
+            "p50": 7,
+            "p95": 12,
+            "p99": 36,
+            "p99_9": 36,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 36,
+            "max_positive": 36,
+            "min": 3,
+            "p50": 6,
+            "p95": 9,
+            "p99": 18,
+            "p99_9": 18,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19988,
+              "min": 19955,
+              "p50": 19978,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 239,
+              "max_positive": 239,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 12,
+              "p99_9": 12,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 925,
+            "min": 178,
+            "p50": 676,
+            "p95": 898,
+            "p99": 923,
+            "p99_9": 923,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 32690,
+          "total_spin_time_us": 65751,
+          "total_wall_time_us": 2011292,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        },
+        {
+          "workload": "up_only_5",
+          "physical_dispatches": 100,
+          "wait_count": 100,
+          "observation_count": 200,
+          "packet_observation_count": 100,
+          "wait_observation_count": 100,
+          "observer_dropped_samples": 0,
+          "spin_observation_expected_samples": 100,
+          "spin_observation_dropped_samples": 0,
+          "spin_observation_missing_samples": 0,
+          "dispatch_start_error_us": {
+            "max": 31,
+            "max_positive": 31,
+            "min": 4,
+            "p50": 6,
+            "p95": 9,
+            "p99": 24,
+            "p99_9": 24,
+            "samples": 100
+          },
+          "wake_to_final_policy_us": {
+            "max": 23,
+            "max_positive": 23,
+            "min": 3,
+            "p50": 6,
+            "p95": 8,
+            "p99": 11,
+            "p99_9": 11,
+            "samples": 100
+          },
+          "final_policy_to_pre_call_us": {
+            "max": 2,
+            "max_positive": 2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "p99_9": 1,
+            "samples": 100
+          },
+          "wait_evidence": {
+            "alignment_to_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "cold_count": 0,
+            "cold_threshold_us": 20000,
+            "hot_count": 100,
+            "planned_gap_us": {
+              "max": 19989,
+              "min": 19774,
+              "p50": 19981,
+              "p95": 19988,
+              "p99": 19988,
+              "p99_9": 19988,
+              "samples": 100
+            },
+            "target_minus_wait_entry_us": {
+              "max": null,
+              "max_positive": null,
+              "min": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "p99_9": null,
+              "samples": 0
+            },
+            "wake_lateness_us": {
+              "max": 26,
+              "max_positive": 26,
+              "min": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "p99_9": 0,
+              "samples": 100
+            }
+          },
+          "spin_time_us": {
+            "max": 958,
+            "min": 12,
+            "p50": 622,
+            "p95": 911,
+            "p99": 942,
+            "p99_9": 942,
+            "samples": 100
+          },
+          "spin_duty_cycle_ppm": 31195,
+          "total_spin_time_us": 62698,
+          "total_wall_time_us": 2009830,
+          "acceptance_clean": true,
+          "acceptance_failure_reasons": [],
+          "statistics_eligible": false
+        }
+      ]
+    }
+  ]
+}

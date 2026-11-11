@@ -57,9 +57,7 @@ use sky_native_adapters::{
     CatalogCacheStore, CatalogComposer, CatalogComposition, FileCatalogSource,
     ImportedSourceCatalogStatus, JsonLibraryManifestStore, JsonSettingsStore,
 };
-use sky_player::adapter_support::{
-    ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
-};
+use sky_player::adapter_support::{ActionKind as DispatchActionKind, KeyActionInput, PriorityMode};
 use sky_player::engine::{
     BackendConfig, DispatchProfile, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot,
     FocusOptions, NativeDispatchSession, NativeSessionOptions, PriorityOptions, TelemetryMode,
@@ -96,6 +94,8 @@ const DRY_RUN_TERMINAL_NONE: u8 = 0;
 type PlaybackJoinTestHook = Arc<dyn Fn(Duration) -> Result<bool, String> + Send + Sync>;
 #[cfg(all(test, feature = "tauri-test"))]
 type PlaybackBeforeArmTestHook = Arc<dyn Fn() + Send + Sync>;
+#[cfg(all(test, feature = "tauri-test"))]
+type PlaybackPostCompileTestHook = Arc<dyn Fn() + Send + Sync>;
 #[cfg(all(test, feature = "tauri-test"))]
 type PlaybackRetiredTestHook = Arc<dyn Fn() + Send + Sync>;
 type PlaybackPresentationCompletion = Box<dyn FnOnce(Result<(), String>) + Send + 'static>;

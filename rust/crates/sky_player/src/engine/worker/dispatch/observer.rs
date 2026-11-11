@@ -2,35 +2,46 @@ use super::super::super::{
     DurationTicks, QpcClock, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
     TimelineTicks, try_publish_observer_metrics,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::super::WorkerRuntime;
 use super::super::health::build_dispatch_budget;
+#[cfg(any(test, feature = "test-support"))]
 use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, WorkerHealthState,
-    WorkerMetricsLocal, WorkerRuntime, WorkerTimingState, observe_dispatch_health, record_lateness,
-    signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
+    WorkerMetricsLocal, WorkerTimingState, observe_dispatch_health, record_lateness, signed_delta,
+    signed_timeline_delta_ticks,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::AuthoredBatchView;
+use super::DispatchStep;
+#[cfg(any(test, feature = "test-support"))]
 use super::authored::resolve_slo_terminal_step;
+#[cfg(any(test, feature = "test-support"))]
+use super::observation::DownTraceObservation;
 use super::observation::{
-    DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-    PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation, down_effective_ticks,
-    down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
-    record_release_telemetry, up_dispatch_evidence, up_transport_counts,
+    DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation,
+    down_effective_ticks, down_observer_evidence, record_down_recovery_metrics,
+    record_down_send_telemetry,
 };
+#[cfg(any(test, feature = "test-support"))]
 use super::observer_wake::take_deadline_wake_qpc;
+#[cfg(any(test, feature = "test-support"))]
 use super::recovery::record_physical_floor_delays;
-use super::timing::{DownSendTiming, is_clean_dispatch_observation};
-use super::{AuthoredBatchView, DispatchStep};
+#[cfg(any(test, feature = "test-support"))]
+use super::timing::DownSendTiming;
+use super::timing::is_clean_dispatch_observation;
 use crossbeam_queue::ArrayQueue;
 use sky_dispatch_core::time::QpcTicks;
 use sky_dispatch_win32::input::PacketRetryReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
-fn qpc_span_us(
+pub(super) fn qpc_span_us(
     qpc_clock: QpcClock,
     start: QpcTicks,
     end: QpcTicks,
@@ -43,6 +54,61 @@ fn qpc_span_us(
         DispatchStep::Terminate(format!("{context} duration conversion failure: {error:?}"))
     })
 }
+
+struct DownPreCallEvidence {
+    duration_us: Option<u64>,
+    effective_ticks: Option<TimelineTicks>,
+    policy_to_pre_call_us: Option<u64>,
+    wake_to_pre_call_us: Option<u64>,
+}
+
+fn down_pre_call_evidence(
+    observation: &DownObservation,
+    qpc_clock: QpcClock,
+) -> Result<DownPreCallEvidence, DispatchStep> {
+    let duration_us = observation
+        .pre_call_qpc
+        .map(|pre_call| {
+            let duration = observation
+                .sendinput_completion_qpc
+                .checked_duration_since(pre_call)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!("note-on QPC ordering failure: {error}"))
+                })?;
+            qpc_clock.duration_to_us(duration).map_err(|error| {
+                DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
+            })
+        })
+        .transpose()?;
+    let effective_ticks = observation
+        .pre_call_qpc
+        .map(|pre_call| down_effective_ticks(observation, pre_call))
+        .transpose()?;
+    let policy_to_pre_call_us = observation
+        .final_policy_qpc
+        .zip(observation.pre_call_qpc)
+        .map(|(final_policy, pre_call)| {
+            qpc_span_us(
+                qpc_clock,
+                final_policy,
+                pre_call,
+                "note-on final-policy-to-pre-call",
+            )
+        })
+        .transpose()?;
+    let wake_to_pre_call_us = observation
+        .wake_qpc
+        .zip(observation.pre_call_qpc)
+        .map(|(wake, pre_call)| qpc_span_us(qpc_clock, wake, pre_call, "note-on wake-to-pre-call"))
+        .transpose()?;
+    Ok(DownPreCallEvidence {
+        duration_us,
+        effective_ticks,
+        policy_to_pre_call_us,
+        wake_to_pre_call_us,
+    })
+}
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -72,14 +138,12 @@ pub(crate) fn publisher_down_send_outcome(
     let strict_completion_late = timing_proof.strict_completion_late;
     let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
     let wake_qpc = take_deadline_wake_qpc(runtime);
-    let precision_handoff =
-        timing_proof
-            .target_crossing_qpc
-            .map(|target_crossing_qpc| PrecisionHandoffEvidence {
-                admission_wake_qpc: wake_qpc,
-                target_crossing_qpc,
-                final_policy_qpc,
-            });
+    let precision_handoff = super::observer_wake::precision_handoff(
+        runtime,
+        wake_qpc,
+        timing_proof.target_crossing_qpc,
+        final_policy_qpc,
+    );
     let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
         match qpc_clock.now() {
             Ok(ticks) => Some(ticks),
@@ -109,12 +173,17 @@ pub(crate) fn publisher_down_send_outcome(
     }
     if let Some(observer) = observer {
         let observation = DownObservation {
+            wait_sequence: 0,
+            wait_spin_ticks: 0,
+            up_slots: None,
+            up_slot_count: 0,
+            up_pre_call_available: false,
             epoch_qpc: timing_proof.epoch_qpc,
             allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
             physical_target_qpc,
             physical_timing_window,
             final_policy_qpc,
-            pre_call_qpc,
+            pre_call_qpc: Some(pre_call_qpc),
             sendinput_completion_qpc,
             previous_sendinput_completion_qpc: timing_proof.previous_sendinput_completion_qpc,
             previous_sender_completion_known: timing_proof.previous_sender_completion_known,
@@ -140,7 +209,6 @@ pub(crate) fn publisher_down_send_outcome(
         observer.push(
             DispatchObservation::Down(observation),
             &mut local_metrics.observer_dropped_samples,
-            &mut local_metrics.observer_queue_high_watermark,
         );
         super::observer_wake::publish_pending_wait_observation(
             runtime,
@@ -163,7 +231,6 @@ pub(crate) fn dispatch_stale_packet(
     coordinator: &mut RuntimeDispatchCoordinator,
     observer: Option<&PendingObservationQueue>,
     dropped_samples: &mut u64,
-    queue_high_watermark: &mut u64,
 ) -> DispatchStep {
     if let Err(error) = coordinator.commit_stale_packet(prepared) {
         return DispatchStep::Terminate(format!(
@@ -178,7 +245,6 @@ pub(crate) fn dispatch_stale_packet(
                 suppressed_intent_count: prepared.suppressed_intent_count,
             }),
             dropped_samples,
-            queue_high_watermark,
         );
     }
     DispatchStep::Dispatched
@@ -186,32 +252,60 @@ pub(crate) fn dispatch_stale_packet(
 #[derive(Clone, Debug)]
 pub struct PendingObservationQueue {
     queue: Arc<ArrayQueue<DispatchObservation>>,
+    up_slot_pool: Arc<ArrayQueue<Box<[sky_dispatch_core::executor::UpSlotTiming; 15]>>>,
+}
+#[derive(Debug)]
+pub struct PooledUpSlots {
+    pub slots: Option<Box<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
+    pool: Arc<ArrayQueue<Box<[sky_dispatch_core::executor::UpSlotTiming; 15]>>>,
+}
+impl Drop for PooledUpSlots {
+    fn drop(&mut self) {
+        if let Some(slots) = self.slots.take() {
+            self.pool
+                .push(slots)
+                .expect("checked-out Up slot has pool capacity");
+        }
+    }
 }
 impl Default for PendingObservationQueue {
     fn default() -> Self {
+        let up_slot_pool = Arc::new(ArrayQueue::new(OBSERVATION_QUEUE_CAPACITY + 2));
+        for _ in 0..OBSERVATION_QUEUE_CAPACITY + 2 {
+            assert!(
+                up_slot_pool
+                    .push(Box::new(
+                        [sky_dispatch_core::executor::UpSlotTiming::EMPTY; 15]
+                    ))
+                    .is_ok()
+            );
+        }
         Self {
             queue: Arc::new(ArrayQueue::new(OBSERVATION_QUEUE_CAPACITY)),
+            up_slot_pool,
         }
     }
 }
 impl PendingObservationQueue {
-    pub fn push(
-        &self,
-        observation: DispatchObservation,
-        dropped_samples: &mut u64,
-        high_watermark: &mut u64,
-    ) {
+    pub fn acquire_up_slots(&self) -> Option<PooledUpSlots> {
+        self.up_slot_pool.pop().map(|slots| PooledUpSlots {
+            slots: Some(slots),
+            pool: Arc::clone(&self.up_slot_pool),
+        })
+    }
+    pub fn push(&self, observation: DispatchObservation, dropped_samples: &mut u64) -> bool {
         if self.queue.push(observation).is_err() {
             *dropped_samples = dropped_samples.saturating_add(1);
+            false
         } else {
-            self.observe_occupancy(high_watermark);
+            true
         }
     }
     pub fn push_wait(
         &self,
         observation: WaitObservation,
         dropped_samples: &mut u64,
-        high_watermark: &mut u64,
+        spin_dropped_samples: &mut u64,
     ) {
         if self
             .queue
@@ -219,21 +313,22 @@ impl PendingObservationQueue {
             .is_err()
         {
             *dropped_samples = dropped_samples.saturating_add(1);
-        } else {
-            self.observe_occupancy(high_watermark);
+            *spin_dropped_samples = spin_dropped_samples.saturating_add(1);
         }
-    }
-
-    fn observe_occupancy(&self, high_watermark: &mut u64) {
-        let observed = u64::try_from(self.queue.len()).unwrap_or(u64::MAX);
-        *high_watermark = (*high_watermark).max(observed);
     }
 
     pub fn pop_front(&self) -> Option<DispatchObservation> {
         self.queue.pop()
     }
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
+    fn drain_up_slot_record_count(&self) -> u64 {
+        let mut count = 0u64;
+        while let Some(observation) = self.pop_front() {
+            if let DispatchObservation::Down(down) = observation {
+                count = count.saturating_add(u64::from(down.up_slot_count));
+            }
+        }
+        count
+    }
     pub fn len(&self) -> usize {
         self.queue.len()
     }
@@ -247,11 +342,14 @@ impl PendingObservationQueue {
 pub(crate) struct ObserverRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<ObserverOutput>>,
+    pending: PendingObservationQueue,
+    telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
 }
 
 pub(crate) struct ObserverOutput {
     pub(crate) metrics: WorkerMetricsLocal,
     pub(crate) terminal_error: Option<String>,
+    pub(crate) up_slot_accounting_complete: bool,
 }
 
 impl ObserverRuntime {
@@ -266,6 +364,8 @@ impl ObserverRuntime {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let consumer_queue = pending.clone();
+        let runtime_pending = pending.clone();
+        let runtime_telemetry = Arc::clone(&telemetry);
         let handle = std::thread::Builder::new()
             .name("sky-dispatch-observer".to_string())
             .spawn(move || {
@@ -274,6 +374,8 @@ impl ObserverRuntime {
                 let mut timing = timing;
                 let mut terminal_error = None;
                 let mut consumer_queue = consumer_queue;
+                #[cfg(any(test, feature = "test-support"))]
+                let mut completed_drains = 0usize;
                 loop {
                     if consumer_queue.is_empty() {
                         if stop_thread.load(Ordering::Acquire) {
@@ -281,6 +383,14 @@ impl ObserverRuntime {
                         }
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
+                    }
+                    local_metrics.observer_queue_high_watermark = local_metrics
+                        .observer_queue_high_watermark
+                        .max(u64::try_from(consumer_queue.len()).unwrap_or(u64::MAX));
+                    #[cfg(any(test, feature = "test-support"))]
+                    if OBSERVER_ABORT_AFTER_DRAINS.load(Ordering::Relaxed) == completed_drains {
+                        terminal_error = Some("injected observer consumer failure".to_string());
+                        break;
                     }
                     let now_qpc_ticks = match qpc_clock.now() {
                         Ok(ticks) => ticks,
@@ -303,6 +413,10 @@ impl ObserverRuntime {
                         Ok(Some(drain_us)) => {
                             local_metrics.observer_duration_max_us =
                                 local_metrics.observer_duration_max_us.max(drain_us);
+                            #[cfg(any(test, feature = "test-support"))]
+                            {
+                                completed_drains = completed_drains.saturating_add(1);
+                            }
                         }
                         Ok(None) => {}
                         Err(DispatchStep::Terminate(error)) => {
@@ -313,6 +427,7 @@ impl ObserverRuntime {
                             terminal_error = Some((*error).to_string());
                             break;
                         }
+                        #[cfg(any(test, feature = "test-support"))]
                         Err(DispatchStep::NoWork | DispatchStep::Continue) => {}
                         Err(DispatchStep::Dispatched) => {}
                     }
@@ -320,24 +435,35 @@ impl ObserverRuntime {
                 ObserverOutput {
                     metrics: local_metrics,
                     terminal_error,
+                    up_slot_accounting_complete: true,
                 }
             })?;
         Ok(Self {
             stop,
             handle: Some(handle),
+            pending: runtime_pending,
+            telemetry: runtime_telemetry,
         })
     }
 
     pub(crate) fn stop(mut self) -> ObserverOutput {
         self.stop.store(true, Ordering::Release);
-        self.handle
+        let output = self
+            .handle
             .take()
             .expect("observer handle available")
             .join()
             .unwrap_or_else(|_| ObserverOutput {
                 metrics: WorkerMetricsLocal::default(),
                 terminal_error: Some("observer consumer panicked".to_string()),
-            })
+                up_slot_accounting_complete: false,
+            });
+        let stranded_up_slots = self.pending.drain_up_slot_record_count();
+        self.telemetry.lock().output.account_up_slot_loss(
+            crate::engine::telemetry::UpSlotLossReason::ObserverAbort,
+            stranded_up_slots,
+        );
+        output
     }
 }
 
@@ -351,6 +477,8 @@ impl Drop for ObserverRuntime {
 }
 #[cfg(any(test, feature = "test-support"))]
 static OBSERVER_ARTIFICIAL_COST_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_ABORT_AFTER_DRAINS: AtomicUsize = AtomicUsize::new(usize::MAX);
 #[cfg(any(test, feature = "test-support"))]
 static OBSERVER_TEST_HOOK_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 #[cfg(any(test, feature = "test-support"))]
@@ -376,6 +504,11 @@ pub fn set_observer_artificial_cost_us(us: u64) {
 #[cfg(any(test, feature = "test-support"))]
 pub fn reset_observer_test_hooks() {
     OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
+    OBSERVER_ABORT_AFTER_DRAINS.store(usize::MAX, Ordering::SeqCst);
+}
+#[cfg(test)]
+fn set_observer_abort_after_drains(count: usize) {
+    OBSERVER_ABORT_AFTER_DRAINS.store(count, Ordering::SeqCst);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -396,17 +529,8 @@ pub(crate) fn drain_down_send_outcome(
     let core_post_send_warn_us = health_budget.core_post_send_warn_us;
     let (_requested_count, _confirmed_count, _skipped_count, _observation_evidence) =
         down_observer_evidence(observation);
-    let pre_call_to_completion_ticks = observation
-        .sendinput_completion_qpc
-        .checked_duration_since(observation.pre_call_qpc)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-on QPC ordering failure: {error}"))
-        })?;
-    let pre_call_to_completion_us = qpc_clock
-        .duration_to_us(pre_call_to_completion_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
-        })?;
+    let pre_call_evidence = down_pre_call_evidence(observation, qpc_clock)?;
+    let pre_call_to_completion_us = pre_call_evidence.duration_us;
     let completion_residual_us = qpc_clock
         .duration_to_us(
             observation
@@ -423,7 +547,7 @@ pub(crate) fn drain_down_send_outcome(
                 "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
-    let pre_call_effective_ticks = down_effective_ticks(observation, observation.pre_call_qpc)?;
+    let pre_call_effective_ticks = pre_call_evidence.effective_ticks;
     let completed_effective_ticks =
         down_effective_ticks(observation, observation.sendinput_completion_qpc)?;
     let wake_ticks = observation
@@ -474,28 +598,8 @@ pub(crate) fn drain_down_send_outcome(
         )?),
         _ => None,
     };
-    let final_policy_to_pre_call_us = observation
-        .final_policy_qpc
-        .map(|final_policy| {
-            qpc_span_us(
-                qpc_clock,
-                final_policy,
-                observation.pre_call_qpc,
-                "note-on final-policy-to-pre-call",
-            )
-        })
-        .transpose()?;
-    let wake_to_send_start_us = observation
-        .wake_qpc
-        .map(|wake| {
-            qpc_span_us(
-                qpc_clock,
-                wake,
-                observation.pre_call_qpc,
-                "note-on wake-to-pre-call",
-            )
-        })
-        .transpose()?;
+    let final_policy_to_pre_call_us = pre_call_evidence.policy_to_pre_call_us;
+    let wake_to_send_start_us = pre_call_evidence.wake_to_pre_call_us;
     local_metrics.sendinput_warn_threshold_us = send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
@@ -563,7 +667,7 @@ pub(crate) fn drain_down_send_outcome(
         observation.dispatch_ready_qpc.is_some(),
         completion_error_ticks,
         authored_completion_error_ticks,
-        Some(pre_call_effective_ticks),
+        pre_call_effective_ticks,
         Some(completed_effective_ticks),
         wake_ticks,
         now_qpc_ticks,
@@ -575,9 +679,11 @@ pub(crate) fn drain_down_send_outcome(
     if let Some(wake_to_send_us) = wake_to_send_start_us {
         local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
     }
-    local_metrics.sendinput_duration_max_us = local_metrics
-        .sendinput_duration_max_us
-        .max(pre_call_to_completion_us);
+    if let Some(send_duration_us) = pre_call_to_completion_us {
+        local_metrics.sendinput_duration_max_us = local_metrics
+            .sendinput_duration_max_us
+            .max(send_duration_us);
+    }
     if let Some(final_policy_to_pre_call_us) = final_policy_to_pre_call_us {
         local_metrics.final_policy_to_pre_call_max_us = local_metrics
             .final_policy_to_pre_call_max_us
@@ -594,197 +700,24 @@ pub(crate) fn drain_down_send_outcome(
         false,
         local_metrics,
     );
-    observe_dispatch_health(
-        DispatchHealthObservation {
-            send_duration_us: pre_call_to_completion_us,
-            post_send_duration_us: core_post_send_us,
-            post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
-            path,
-            send_warn_us,
-            core_post_send_warn_us,
-            elapsed_us: completed_effective_us,
-        },
-        health.options.window_policy(),
-        &mut health.sendinput_window,
-        &mut health.core_post_send_window,
-        local_metrics,
-    );
-    try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
-    Ok(())
-}
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn drain_up_send_outcome(
-    observation: &UpObservation,
-    health: &mut WorkerHealthState,
-    local_metrics: &mut WorkerMetricsLocal,
-    metrics: &SharedMetrics,
-    telemetry: &mut TelemetryCollector,
-    qpc_clock: QpcClock,
-    now_us: u64,
-) -> Result<(), DispatchStep> {
-    let health_budget = build_dispatch_budget(
-        DispatchPath::UpOnly {
-            up_count: observation.requested_mask.count_ones() as usize,
-        },
-        health.options,
-    );
-    let send_warn_us = health_budget.send_warn_us;
-    let core_post_send_warn_us = health_budget.core_post_send_warn_us;
-    let (scan_count, _sent_count, _skipped_count) = up_transport_counts(observation);
-    let pre_call_to_completion_us = qpc_clock
-        .duration_to_us(observation.pre_call_to_completion_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
-        })?;
-    let completion_residual_us = qpc_clock
-        .duration_to_us(
-            observation
-                .sendinput_completion_qpc
-                .checked_duration_since(observation.physical_target_qpc)
-                .map_err(|error| {
-                    DispatchStep::Terminate(format!(
-                        "note-off completion precedes physical target: {error:?}"
-                    ))
-                })?,
-        )
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "note-off completion-residual conversion failure: {error:?}"
-            ))
-        })?;
-    let completed_effective_us = qpc_clock
-        .timeline_to_us(observation.completed_effective_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-off completion conversion failure: {error:?}"))
-        })?;
-    let scheduled_us = qpc_clock
-        .timeline_to_us(observation.scheduled_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-off scheduled conversion failure: {error:?}"))
-        })?;
-    let deferred_by_us = qpc_clock
-        .duration_to_us(observation.deferred_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-off deferral conversion failure: {error:?}"))
-        })?;
-    let _up_completion_error_us =
-        signed_ticks_to_us(qpc_clock, observation.up_completion_error_ticks).map_err(|error| {
-            DispatchStep::Terminate(format!("note-off error conversion failure: {error:?}"))
-        })?;
-    let core_post_send_us = observation
-        .dispatch_ready_qpc
-        .map(|ready| {
-            ready
-                .checked_duration_since(observation.sendinput_completion_qpc)
-                .map_err(|error| {
-                    DispatchStep::Terminate(format!(
-                        "note-off observer QPC ordering failure: {error:?}"
-                    ))
-                })
-                .and_then(|ticks| {
-                    qpc_clock.duration_to_us(ticks).map_err(|error| {
-                        DispatchStep::Terminate(format!(
-                            "note-off observer post-send conversion failure: {error:?}"
-                        ))
-                    })
-                })
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let wake_to_final_policy_us = observation
-        .wake_qpc
-        .map(|wake| {
-            qpc_span_us(
-                qpc_clock,
-                wake,
-                observation.final_policy_qpc,
-                "note-off wake-to-final-policy",
-            )
-        })
-        .transpose()?;
-    let final_policy_to_pre_call_us = qpc_span_us(
-        qpc_clock,
-        observation.final_policy_qpc,
-        observation.pre_call_qpc,
-        "note-off final-policy-to-pre-call",
-    )?;
-    let wake_to_send_start_us = observation
-        .wake_qpc
-        .map(|wake| {
-            qpc_span_us(
-                qpc_clock,
-                wake,
-                observation.pre_call_qpc,
-                "note-off wake-to-pre-call",
-            )
-        })
-        .transpose()?;
-    local_metrics.sendinput_warn_threshold_us = send_warn_us;
-    local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
-    local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
-    local_metrics.send_up_warn_threshold_us = send_warn_us;
-    local_metrics.wait_warn_threshold_us = health.options.wait_warn_us;
-    record_release_telemetry(
-        telemetry,
-        observation,
-        qpc_clock,
-        core_post_send_us,
-        completion_residual_us,
-        observation.dispatch_ready_qpc.is_some(),
-    )?;
-    if let Some(wake_to_send_us) = wake_to_send_start_us {
-        local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
-    }
-    if let Some(pause_ticks) = observation.recovery_pause_ticks {
-        let recovery_pause_us = qpc_clock.duration_to_us(pause_ticks).map_err(|error| {
-            DispatchStep::Terminate(format!("recovery telemetry conversion failure: {error:?}"))
-        })?;
-        local_metrics.total_us = local_metrics.total_us.saturating_add(recovery_pause_us);
-    }
-    local_metrics.core_post_send_max_us =
-        local_metrics.core_post_send_max_us.max(core_post_send_us);
-    local_metrics.sendinput_duration_max_us = local_metrics
-        .sendinput_duration_max_us
-        .max(pre_call_to_completion_us);
-    local_metrics.final_policy_to_pre_call_max_us = local_metrics
-        .final_policy_to_pre_call_max_us
-        .max(final_policy_to_pre_call_us);
-    if let Some(wake_to_final_policy_us) = wake_to_final_policy_us {
-        local_metrics.wake_to_final_policy_max_us = local_metrics
-            .wake_to_final_policy_max_us
-            .max(wake_to_final_policy_us);
-    }
-    record_lateness(
-        signed_delta(completed_effective_us, scheduled_us),
-        true,
-        deferred_by_us > 0,
-        local_metrics,
-    );
-    observe_dispatch_health(
-        DispatchHealthObservation {
-            send_duration_us: pre_call_to_completion_us,
-            post_send_duration_us: core_post_send_us,
-            post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
-            path: DispatchPath::UpOnly {
-                up_count: scan_count,
+    if let Some(send_duration_us) = pre_call_to_completion_us {
+        observe_dispatch_health(
+            DispatchHealthObservation {
+                send_duration_us,
+                post_send_duration_us: core_post_send_us,
+                post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
+                path,
+                send_warn_us,
+                core_post_send_warn_us,
+                elapsed_us: completed_effective_us,
             },
-            send_warn_us,
-            core_post_send_warn_us,
-            elapsed_us: completed_effective_us,
-        },
-        health.options.window_policy(),
-        &mut health.sendinput_window,
-        &mut health.core_post_send_window,
-        local_metrics,
-    );
-    try_publish_observer_metrics(
-        local_metrics,
-        metrics,
-        qpc_clock,
-        now_us,
-        !is_clean_dispatch_observation(up_dispatch_evidence(observation))
-            || observation.trace.recovery_required,
-    );
+            health.options.window_policy(),
+            &mut health.sendinput_window,
+            &mut health.core_post_send_window,
+            local_metrics,
+        );
+    }
+    try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
@@ -801,94 +734,136 @@ pub(crate) fn drain_one_observer(
     let Some(observation) = pending.pop_front() else {
         return Ok(None);
     };
-    let now_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(now_qpc_ticks.as_u64()))
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("observer now conversion failure: {error:?}"))
-        })?;
-    let drain_start = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "observer start QPC failure: {error:?}"
-            )));
-        }
+    let up_slot_count = match &observation {
+        DispatchObservation::Down(down) => u64::from(down.up_slot_count),
+        _ => 0,
     };
-    match &observation {
-        DispatchObservation::Down(down) => drain_down_send_outcome(
-            down,
-            health,
-            local_metrics,
-            metrics,
-            telemetry,
-            qpc_clock,
+    let accounted_before = telemetry
+        .output
+        .accounted_up_slot_records()
+        .unwrap_or_default();
+    let result = (|| {
+        let now_us = qpc_clock
+            .duration_to_us(DurationTicks::from_raw(now_qpc_ticks.as_u64()))
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("observer now conversion failure: {error:?}"))
+            })?;
+        let drain_start = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "observer start QPC failure: {error:?}"
+                )));
+            }
+        };
+        match &observation {
+            DispatchObservation::Down(down) => drain_down_send_outcome(
+                down,
+                health,
+                local_metrics,
+                metrics,
+                telemetry,
+                qpc_clock,
+                now_us,
+                now_qpc_ticks,
+                timing,
+            )?,
+            #[cfg(any(test, feature = "test-support"))]
+            DispatchObservation::DownMiss(miss) => {
+                super::observer_trace::drain_down_miss(miss, telemetry)?;
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            DispatchObservation::Up(up) => super::observer_trace::drain_up_send_outcome(
+                up,
+                super::observer_trace::UpObservationDrainContext {
+                    health,
+                    local_metrics,
+                    metrics,
+                    telemetry,
+                    qpc_clock,
+                    now_us,
+                },
+            )?,
+            DispatchObservation::Wait(wait) => {
+                super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
+            }
+            DispatchObservation::StaleMetadata(stale) => {
+                super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            DispatchObservation::BlockedUnfocused(blocked) => {
+                super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
+            }
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            let cost_us = OBSERVER_ARTIFICIAL_COST_US.load(Ordering::Relaxed);
+            if cost_us > 0 {
+                std::thread::sleep(std::time::Duration::from_micros(cost_us));
+            }
+        }
+        let drain_end = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "observer end QPC failure: {error:?}"
+                )));
+            }
+        };
+        let drain_us = match drain_end.checked_duration_since(drain_start) {
+            Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
+            Err(_) => 0,
+        };
+        if let Ok(wall_now_us) =
+            qpc_clock.duration_to_us(DurationTicks::from_raw(drain_end.as_u64()))
+        {
+            super::super::update_deferred_worker_metrics(local_metrics, timing, wall_now_us);
+        }
+        super::super::health::observe_observer_health(
+            drain_us,
+            health.options.observer_warn_us,
             now_us,
-            now_qpc_ticks,
-            timing,
-        )?,
-        DispatchObservation::DownMiss(miss) => {
-            super::observer_trace::drain_down_miss(miss, telemetry)?;
-        }
-        DispatchObservation::Up(up) => drain_up_send_outcome(
-            up,
-            health,
+            health.options.window_policy(),
+            &mut health.observer_window,
             local_metrics,
-            metrics,
-            telemetry,
-            qpc_clock,
-            now_us,
-        )?,
-        DispatchObservation::Wait(wait) => {
-            super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
+        );
+        #[cfg(not(any(test, feature = "test-support")))]
+        let is_immediate_publish = matches!(
+            observation,
+            DispatchObservation::Wait(_) | DispatchObservation::StaleMetadata(_)
+        );
+        #[cfg(any(test, feature = "test-support"))]
+        let is_immediate_publish = matches!(
+            observation,
+            DispatchObservation::Wait(_)
+                | DispatchObservation::StaleMetadata(_)
+                | DispatchObservation::DownMiss(_)
+                | DispatchObservation::BlockedUnfocused(_)
+        );
+        if is_immediate_publish {
+            try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
         }
-        DispatchObservation::StaleMetadata(stale) => {
-            super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
-        }
-        DispatchObservation::BlockedUnfocused(blocked) => {
-            super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
-        }
+        Ok(Some(drain_us))
+    })();
+    if result.is_err() && up_slot_count > 0 {
+        let accounted_after = telemetry
+            .output
+            .accounted_up_slot_records()
+            .unwrap_or(accounted_before);
+        let accounted_during_drain = accounted_after
+            .saturating_sub(accounted_before)
+            .min(up_slot_count);
+        telemetry.output.account_up_slot_loss(
+            crate::engine::telemetry::UpSlotLossReason::ObserverAbort,
+            up_slot_count.saturating_sub(accounted_during_drain),
+        );
     }
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        let cost_us = OBSERVER_ARTIFICIAL_COST_US.load(Ordering::Relaxed);
-        if cost_us > 0 {
-            std::thread::sleep(std::time::Duration::from_micros(cost_us));
-        }
-    }
-    let drain_end = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "observer end QPC failure: {error:?}"
-            )));
-        }
-    };
-    let drain_us = match drain_end.checked_duration_since(drain_start) {
-        Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
-        Err(_) => 0,
-    };
-    if let Ok(wall_now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(drain_end.as_u64())) {
-        super::super::update_deferred_worker_metrics(local_metrics, timing, wall_now_us);
-    }
-    super::super::health::observe_observer_health(
-        drain_us,
-        health.options.observer_warn_us,
-        now_us,
-        health.options.window_policy(),
-        &mut health.observer_window,
-        local_metrics,
-    );
-    if matches!(
-        observation,
-        DispatchObservation::Wait(_)
-            | DispatchObservation::StaleMetadata(_)
-            | DispatchObservation::DownMiss(_)
-            | DispatchObservation::BlockedUnfocused(_)
-    ) {
-        try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
-    }
-    Ok(Some(drain_us))
+    result
 }
+
+#[cfg(test)]
+#[path = "observer_accounting_tests.rs"]
+mod observer_accounting_tests;
 
 #[cfg(test)]
 #[path = "hold_forensics_tests.rs"]

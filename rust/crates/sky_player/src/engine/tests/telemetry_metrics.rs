@@ -60,7 +60,7 @@ fn engine_snapshots_project_always_on_timing_with_trace_on_and_off() {
 }
 
 #[test]
-fn production_without_observer_keeps_scalar_timing_and_exports_empty_schema19_trace() {
+fn production_without_observer_keeps_scalar_timing_and_exports_empty_current_schema_trace() {
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -100,7 +100,7 @@ fn production_without_observer_keeps_scalar_timing_and_exports_empty_schema19_tr
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
             .expect("valid telemetry JSON");
-    assert_eq!(telemetry["schema_version"], 19);
+    assert_eq!(telemetry["schema_version"], NATIVE_TELEMETRY_SCHEMA_VERSION);
     assert_eq!(telemetry["records"].as_array().map(Vec::len), Some(0));
     assert_eq!(telemetry["attempted"], 0);
     assert_eq!(telemetry["accepted"], 0);

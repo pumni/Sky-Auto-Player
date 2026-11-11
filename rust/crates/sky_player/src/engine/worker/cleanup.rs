@@ -301,9 +301,11 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "observer_shutdown");
+    let mut observer_up_slot_accounting_complete = true;
     if let Some(observer_runtime) = observer.take() {
         let observer_output = observer_runtime.stop();
         local_metrics.merge_observer(&observer_output.metrics);
+        observer_up_slot_accounting_complete = observer_output.up_slot_accounting_complete;
         if let Some(error) = observer_output.terminal_error {
             record_termination_error(
                 &mut terminal_error,
@@ -411,7 +413,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     local_metrics.worker_cpu_time_us = final_worker_cpu_time_us;
     local_metrics.process_cpu_time_us =
         current_process_cpu_time_us().saturating_sub(start_process_cpu_us);
-    if local_metrics.playback_wall_time_us > 0 {
+    if local_metrics.idle_wake_count > 0 && local_metrics.playback_wall_time_us > 0 {
         local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
             / local_metrics.playback_wall_time_us as u128)
             as u64;
@@ -425,6 +427,22 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let mut telemetry = telemetry;
     telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
     telemetry.output.observer_queue_dropped = local_metrics.observer_dropped_samples;
+    telemetry.output.up_slot_records_expected = local_metrics.up_slot_records_expected;
+    telemetry.output.account_up_slot_loss(
+        crate::engine::telemetry::UpSlotLossReason::ObserverQueue,
+        local_metrics.observer_dropped_up_slot_records,
+    );
+    telemetry.output.account_up_slot_loss(
+        crate::engine::telemetry::UpSlotLossReason::PoolStorage,
+        local_metrics.observer_dropped_up_slot_pool_records,
+    );
+    telemetry.output.account_up_slot_loss(
+        crate::engine::telemetry::UpSlotLossReason::CaptureModeOff,
+        local_metrics.up_slot_records_not_captured_by_mode,
+    );
+    telemetry
+        .output
+        .finalize_up_slot_accounting(observer_up_slot_accounting_complete);
     if telemetry.output.observer_queue_dropped > 0 {
         telemetry.output.truncated = true;
     }
@@ -496,13 +514,12 @@ pub(crate) fn clean_completion_proven(
 
 fn clean_generation_accounting_proven(accounting: GenerationAccounting) -> bool {
     accounting.total == accounting.activated
-        && accounting.total == accounting.released
+        && accounting.total == accounting.released + accounting.cancelled
         && accounting.scheduled == 0
         && accounting.active == 0
         && accounting.dropped_conflict == 0
         && accounting.dropped_backend == 0
         && accounting.dropped_expired == 0
-        && accounting.cancelled == 0
 }
 
 pub(crate) fn describe_release_outcome(
@@ -543,6 +560,7 @@ pub(crate) fn suspend_live_input(
     effective_now_ticks: Result<TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
+    post_cleanup_timeline_ticks: impl FnOnce(QpcTicks) -> Result<TimelineTicks, String>,
 ) -> Result<usize, String> {
     runtime.invalidate_down_authorization();
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
@@ -578,17 +596,21 @@ pub(crate) fn suspend_live_input(
     debug_assert!(release_state_verified(backend, &release));
     if let Some(pending) = runtime.pending_up_recovery.as_ref() {
         let frame = pending.authored_commit.frame;
+        #[cfg(any(test, feature = "test-support"))]
+        let admission_mismatch = !pending.admission.is_missed();
+        #[cfg(not(any(test, feature = "test-support")))]
+        let admission_mismatch = false;
         if pending.boundary.first_batch_index != frame.first_batch_index
             || pending.boundary.packet_index != frame.packet_index
             || pending.boundary.packet_batch_count != frame.packet_batch_count
             || pending.boundary.down_mask != frame.down_mask
             || pending.boundary.up_mask & frame.immediate_up_mask != frame.immediate_up_mask
             || pending.boundary.down_mask == 0
-            || !pending.admission.is_missed()
+            || admission_mismatch
         {
             return Err("pending Up recovery no longer matches its frozen authored miss".into());
         }
-        let effective_now_ticks = effective_now_ticks.map_err(|error| {
+        let resolved_now_ticks = effective_now_ticks.as_ref().map_err(|error| {
             format!("playback clock failure while resolving missed Down: {error}")
         })?;
         coordinator
@@ -596,18 +618,21 @@ pub(crate) fn suspend_live_input(
                 &pending.authored_commit,
                 frame.immediate_up_mask,
                 frame.down_mask,
-                effective_now_ticks,
+                *resolved_now_ticks,
             )
             .map_err(|error| format!("coordinator missed Down commit failure: {error}"))?;
     }
+    let post_cleanup_timeline = post_cleanup_timeline_ticks(cleanup_completed_qpc)
+        .map_err(|error| format!("post-cleanup timeline ticks conversion failure: {error}"))?;
     let cancelled = coordinator
-        .cancel_live_generations_after_verified_resumable_cleanup()
+        .cancel_live_generations_after_verified_resumable_cleanup_with_time(post_cleanup_timeline)
         .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
     runtime.invalidate_down_authorization();
     runtime.pending_up_recovery = None;
     Ok(cancelled)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn release_runtime_outcome(
     deferred_by_us: u64,
     sent_count: usize,

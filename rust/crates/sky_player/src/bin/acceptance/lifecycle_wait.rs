@@ -52,3 +52,18 @@ pub(super) fn wait_for_resume(session: &NativeDispatchSession) -> bool {
         thread::sleep(Duration::from_millis(5));
     }
 }
+
+pub(super) fn wait_for_terminal_outcome(
+    session: &NativeDispatchSession,
+    expected: &'static str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match session.terminal_outcome() {
+            Some(outcome) => return outcome == expected,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(1)),
+            None => return false,
+        }
+    }
+}

@@ -8,6 +8,7 @@ mod acceptance {
 #[path = "acceptance_limits.rs"] mod acceptance_limits;
 #[path = "entrypoint.rs"] mod entrypoint;
 #[path = "modifier_guard.rs"] mod modifier_guard;
+#[path = "sink_event_log.rs"] mod sink_event_log;
 #[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
 #[cfg(windows)]
@@ -18,18 +19,24 @@ mod acceptance {
 #[path = "preterminal.rs"] mod preterminal;
 #[path = "evidence_report.rs"] mod evidence_report;
 #[cfg(windows)]
-use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_armed};
+use lifecycle_wait::{
+    wait_for_focus_pause, wait_for_resume, wait_for_startup_armed,
+    wait_for_terminal_outcome,
+};
 #[cfg(windows)]
 use lifecycle_wait::publish_foreground_focus_hint;
 #[cfg(windows)]
-use preterminal::{finish_preterminal, wait_for_sink_events};
+use preterminal::{PreTerminalResult, finish_preterminal, wait_for_sink_events};
 #[cfg(all(test, windows))]
-use preterminal::{PreTerminalResult, wait_for_sink_events_with};
+use preterminal::wait_for_sink_events_with;
 use evidence_report::{Verdict, write_report};
+use sink_event_log::read_log_window_status;
 use acceptance_limits::*;
 pub(super) use entrypoint::main;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
-use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
+use scenarios::{action, expected_physical_keys, scenario_plan_for_settings};
+#[cfg(test)]
+use scenarios::{acceptance_min_hold_us, acceptance_min_release_gap_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
 pub(super) use scenarios::noncanonical_profile_spec;
@@ -42,11 +49,13 @@ use snapshot_report::{
 };
 #[cfg(test)]
 use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sky_dispatch_win32::focus::{
     WindowIdentity, focus_window_and_verify, foreground_window_matches, inspect_window_identity,
 };
+#[cfg(feature = "qpc-read-counting")]
+use sky_dispatch_win32::clock::{qpc_read_count, reset_qpc_read_count};
 #[cfg(test)]
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
 use sky_dispatch_win32::input::InstrumentKeyProfileSpec;
@@ -81,7 +90,7 @@ const SCRIPT_MARKER: &str = "native_acceptance_sink.ps1";
 const INPUT_POLICY: &str = concat!("receives_only; benchmark must use ", "Send", "Input");
 const REQUIRED_IMAGE_BASENAME: &str = "pwsh.exe";
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct ReadyRecord { schema_version: u32, run_id: String, role: String, sink_kind: String, pid: u32, hwnd: i64, title: String, process: String, input_policy: String, event_log_id: String, event_schema_version: u32, process_start_time_filetime: u64 }
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] struct LogCursor { offset: u64, sequence: u64 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] struct PhysicalExpectation { scan_code: u16, extended: bool }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] enum DrainMode { ExpectedEvents { allow_unpaired_cleanup_ups: bool }, ZeroEventSafety }
@@ -98,7 +107,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--sample-seconds 15] [--game-fps <60|120>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
 fn protocol_expectation(role: &str) -> Result<(&'static str, &'static str, &'static str), String> {
     match role {
@@ -193,38 +202,24 @@ fn read_log_cursor(path: &Path, ready: &ReadyRecord, role: &str) -> Result<LogCu
     let sequence = validate_event_stream(&records, ready, role)?;
     Ok(LogCursor { offset: bytes.len() as u64, sequence })
 }
-fn read_log_window_status(
-    path: &Path,
-    cursor: LogCursor,
-    ready: &ReadyRecord,
-    role: &str,
-) -> Result<EventWindow, String> {
-    let all = fs::read(path).map_err(|error| format!("failed to read event log window: {error}"))?;
-    let all_complete_len = if all.ends_with(b"\n") { all.len() } else { all.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1) };
-    let prefix = parse_event_log(&all[..all_complete_len], "event log window prefix")?;
-    let prefix_sequence = validate_event_stream(&prefix, ready, role)?;
-    if all.len() < cursor.offset as usize || prefix_sequence < cursor.sequence { return Err("event log was truncated or rebound after authorization".into()); }
-    let bytes = all.get(cursor.offset as usize..).ok_or_else(|| "event log was truncated after authorization".to_string())?;
-    let complete = bytes.is_empty() || bytes.ends_with(b"\n");
-    let complete_len = if complete {
-        bytes.len()
-    } else {
-        bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1)
-    };
-    let text = String::from_utf8(bytes[..complete_len].to_vec()).map_err(|_| "event log window is not UTF-8".to_string())?;
-    let mut previous_sequence = cursor.sequence;
-    let mut events = Vec::new();
-    for line in text.lines().filter(|line| !line.is_empty()) {
-        let event: EventRecord = serde_json::from_str(line).map_err(|error| format!("event log window contains malformed JSON: {error}"))?;
-        if event.run_id != ready.run_id || event.role != role || event.event_log_id != ready.event_log_id || event.schema_version != EVENT_SCHEMA_VERSION { return Err("event log window is not bound to the authorized process stream".into()); }
-        if event.sequence != previous_sequence.saturating_add(1) { return Err("event log sequence has a duplicate or gap".to_string()); }
-        previous_sequence = event.sequence;
-        if event.kind != "stream_start" { events.push(event); }
-    }
-    Ok(EventWindow { events, complete })
-}
 fn physical_event(event: &EventRecord) -> PhysicalExpectation {
     PhysicalExpectation { scan_code: event.scan_code, extended: event.extended }
+}
+fn expected_sink_physical_keys(
+    scenario: Scenario,
+    profile: Option<&InstrumentKeyProfileSpec>,
+    expected_down: &[PhysicalExpectation],
+    expected_up: &[PhysicalExpectation],
+) -> (Vec<PhysicalExpectation>, Vec<PhysicalExpectation>) {
+    if scenario == Scenario::SuspendResume {
+        // System suspend is terminal for this physical session. Only the first
+        // committed Down and its safety Up can be observed; later authored
+        // events are not expected after terminal cleanup.
+        let first_key = expected_physical_keys(profile, &[0]);
+        (first_key.clone(), first_key)
+    } else {
+        (expected_down.to_vec(), expected_up.to_vec())
+    }
 }
 fn validate_event_prefix(
     events: &[EventRecord],
@@ -262,6 +257,11 @@ fn reconcile_event_sequence(events: &[EventRecord], expected: &[(&str, PhysicalE
     if events.len() != expected.len() { return Err(format!("event count {} does not match expected {}", events.len(), expected.len())); }
     for (index, (event, (kind, physical))) in events.iter().zip(expected).enumerate() { if event.kind != *kind || physical_event(event) != *physical { return Err(format!("event {index} does not match expected {kind} scan=0x{:02X}", physical.scan_code)); } }
     Ok(())
+}
+fn expected_mixed_up_down_event_sequence(down: &[PhysicalExpectation], up: &[PhysicalExpectation]) -> Result<Vec<(&'static str, PhysicalExpectation)>, &'static str> {
+    if down.len() < 2 || down.len() != up.len() || !down.len().is_multiple_of(2) { return Err("mixed-up-down expected Down/Up slots must have equal, nonzero, even counts"); }
+    let (down_pairs, _) = down.as_chunks::<2>(); let (up_pairs, _) = up.as_chunks::<2>();
+    Ok(down_pairs.iter().zip(up_pairs).flat_map(|(down, up)| [("key_press", down[0]), ("key_release", up[0]), ("key_press", down[1]), ("key_release", up[1])]).collect())
 }
 trait EventWindowReader {
     fn read(&mut self) -> Result<EventWindow, String>;
@@ -327,6 +327,9 @@ fn drain_event_window(
     let mut reader = FileEventWindowReader { path, cursor, ready, role }; let mut clock = RealDrainClock { started: Instant::now(), poll_ms: DRAIN_POLL_MS };
     drain_event_window_with(&mut reader, &mut clock, mode, expected_down, expected_up)
 }
+#[cfg(any(windows, test))]
+fn needs_supervisor_progress_heartbeat(scenario: Scenario, sample_seconds: Option<u8>) -> bool { !matches!(scenario, Scenario::SupervisorLeaseExpiry | Scenario::LeaseAgeWatchdogDelayed) && (sample_seconds.is_some() || matches!(scenario, Scenario::ReleaseGapStress | Scenario::FocusLoss | Scenario::SuspendResume)) }
+
 #[cfg(windows)]
 fn run_windows(args: RunArgs) -> i32 {
     macro_rules! inconclusive {
@@ -359,26 +362,38 @@ fn run_windows(args: RunArgs) -> i32 {
     {
         inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({}));
     }
-    let plan = match scenario_plan(args.scenario, args.timing_margin_us) {
+    let plan = match scenario_plan_for_settings(
+        args.scenario,
+        args.timing_margin_us,
+        args.game_fps,
+        args.sample_seconds,
+    ) {
         Ok(plan) => plan,
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),
     };
-    let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
-    let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let (mut options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
+    let (mut options, modifier_query_count, modifier_held_latch) = modifier_guard::native_session_options(
+        plan.schedule, plan.profile, args.timing_margin_us, args.scenario, args.game_fps,
+    );
+    options.wait.guard_mode = args.guard_mode;
     options.startup_calibration_placement = match args.calibration_placement {
         CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,
     };
     options.timing_observer_for_qualification = args.timing_observer_for_qualification;
-    let acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
+    let mut acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
+    if args.hol_stall_us > 0 {
+        let hook = acceptance_hook.unwrap_or_else(|| Arc::new(sky_player::engine::StartupOrderingHook::default()));
+        let cycles = args.hol_cycles.unwrap_or(if args.scenario == Scenario::HolInterleaved { u32::from(args.sample_seconds.unwrap_or(15)) * 10 } else { 1 });
+        hook.enable_hol_stall_cycles(args.hol_stall_us, 0x0001, cycles);
+        acceptance_hook = Some(hook);
+    }
     options.startup_ordering_hook = acceptance_hook.clone();
-    let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(
-        acceptance_hook.clone(),
-    );
+    let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(acceptance_hook.clone());
     let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
-    let owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let mut owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
         Ok(record) => record,
@@ -389,10 +404,12 @@ fn run_windows(args: RunArgs) -> i32 {
         Ok(cursor) => cursor,
         Err(error) => inconclusive!(&error, json!({})),
     };
+    #[cfg(feature = "qpc-read-counting")]
+    reset_qpc_read_count();
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
-    if matches!(args.scenario, Scenario::ReleaseGapStress | Scenario::FocusLoss | Scenario::SuspendResume)
+    if needs_supervisor_progress_heartbeat(args.scenario, args.sample_seconds)
         && let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session))
     {
         inconclusive!(&error, json!({}));
@@ -401,7 +418,20 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut independent_helper_probe: Option<release_gap_stress::IndependentHelperLivenessProbe> = None;
     let mut release_floor_cycles = Vec::<Value>::new();
     let mut watchdog_was_held = false;
+    let mut owner_process_terminated_at_first_down_checkpoint = false;
+    let mut system_suspend_terminal_observed = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
+    if args.scenario == Scenario::OwnerProcessTermination {
+        let hook = acceptance_hook
+            .as_deref()
+            .expect("owner-process-termination admission checkpoint");
+        if let Err(error) = owner_identity::terminate_at_first_down_admission(&mut owner_binding, hook) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!(&error, snapshot_json(&session.snapshot()));
+        }
+        owner_process_terminated_at_first_down_checkpoint = true;
+    }
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_armed(&session) {
             let _ = session.quit();
@@ -467,10 +497,37 @@ fn run_windows(args: RunArgs) -> i32 {
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; }
         first_physical_commit_observed = true;
         if !session.notify_system_power(true) { inconclusive!("system suspend transition was not accepted", snapshot_json(&session.snapshot())); }
-        pause_observed = wait_for_focus_pause(&session);
-        if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("system suspend did not commit before the bounded proof deadline", snapshot_json(&session.snapshot())); }
-        if !session.notify_system_power(false) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("system resume transition was not accepted", snapshot_json(&session.snapshot())); }
-        resume_requested = wait_for_resume(&session);
+        system_suspend_terminal_observed = wait_for_terminal_outcome(
+            &session,
+            "system_suspend",
+            Duration::from_secs(5),
+        );
+        if !system_suspend_terminal_observed {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!(
+                "system suspend did not terminate the physical session before the bounded proof deadline",
+                snapshot_json(&session.snapshot())
+            );
+        }
+        false
+    } else if args.scenario == Scenario::ModifierHeldAfterOwned {
+        let hook = acceptance_hook
+            .as_deref()
+            .expect("modifier-held-after-owned commit checkpoint");
+        if let Err(exit_code) = modifier_guard::arm_after_owned_down(
+            &args,
+            &session,
+            hook,
+            sink_cursor,
+            &fresh_sink,
+            expected_down[0],
+            &modifier_held_latch,
+            &modifier_query_count,
+        ) {
+            return exit_code;
+        }
+        first_physical_commit_observed = true;
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
@@ -524,18 +581,45 @@ fn run_windows(args: RunArgs) -> i32 {
     } else {
         false
     };
-    let joined = session.join(Duration::from_secs(if args.scenario == Scenario::ReleaseGapStress { 60 } else { 10 })).unwrap_or(false);
+    let join_timeout_seconds = args.sample_seconds.map_or_else(
+        || {
+            if args.scenario == Scenario::ReleaseGapStress {
+                60
+            } else {
+                10
+            }
+        },
+        |seconds| u64::from(seconds).saturating_add(15),
+    );
+    let joined = session
+        .join(Duration::from_secs(join_timeout_seconds))
+        .unwrap_or(false);
+    #[cfg(feature = "qpc-read-counting")]
+    let qpc_read_count = Some(qpc_read_count());
+    #[cfg(not(feature = "qpc-read-counting"))]
+    let qpc_read_count: Option<u64> = None;
     let independent_helper_liveness_ticks = independent_helper_probe
         .map(release_gap_stress::IndependentHelperLivenessProbe::stop_and_read)
         .unwrap_or(0);
     owner_identity::clear_test_override(args.scenario);
     let snapshot = session.snapshot();
     if !joined { inconclusive!("production session did not join within the bounded timeout", snapshot_json(&snapshot)); }
-    let timing_telemetry: Value = match session
+    let (timing_telemetry, timing_telemetry_available, timing_telemetry_unavailable_reason) = match session
         .take_telemetry_json()
         .and_then(|output| serde_json::from_str(&output).map_err(|error| error.to_string()))
     {
-        Ok(output) => output,
+        Ok(output) => (output, true, None),
+        Err(error)
+            if args.scenario == Scenario::PreflightUserHeld && !snapshot.startup_ready =>
+        {
+            (
+                Value::Null,
+                false,
+                Some(format!(
+                    "worker timing telemetry was not published after startup preflight rejection ({error})"
+                )),
+            )
+        }
         Err(error) => inconclusive!(&format!("native timing telemetry unavailable: {error}"), snapshot_json(&snapshot)),
     };
     let sink_drain_mode = DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: plan.allow_unpaired_cleanup_ups };
@@ -545,8 +629,8 @@ fn run_windows(args: RunArgs) -> i32 {
         &fresh_sink,
         RECEIVE_ONLY_ROLE,
         sink_drain_mode,
-        &expected_down,
-        &expected_up,
+        &sink_expected_down,
+        &sink_expected_up,
     ) {
         DrainResult::Pass(events) => (events, None),
         DrainResult::Fail(reason, events) => (events, Some(reason)),
@@ -569,11 +653,18 @@ fn run_windows(args: RunArgs) -> i32 {
         (None, None, None) => (Vec::new(), None),
         _ => inconclusive!("focus probe evidence paths are incomplete", snapshot_json(&snapshot)),
     };
-    let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, expected_down.len() + expected_up.len(), args.scenario);
+    let down_sender_attempt_count = acceptance_hook
+        .as_deref()
+        .map(|hook| hook.down_sender_attempt_count());
+    let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, sink_expected_down.len() + sink_expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
         object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
         object.insert("timing_observer_for_qualification".to_string(), json!(args.timing_observer_for_qualification));
+        object.insert("qpc_read_count_available".to_string(), json!(qpc_read_count.is_some()));
+        object.insert("qpc_read_count".to_string(), json!(qpc_read_count));
         object.insert("native_timing_telemetry".to_string(), timing_telemetry);
+        object.insert("native_timing_telemetry_available".to_string(), json!(timing_telemetry_available));
+        object.insert("native_timing_telemetry_unavailable_reason".to_string(), json!(timing_telemetry_unavailable_reason));
         if args.scenario == Scenario::SupervisorLeaseExpiry {
             object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));
         }
@@ -584,6 +675,7 @@ fn run_windows(args: RunArgs) -> i32 {
                 release_floor_cycles: &release_floor_cycles,
                 watchdog_was_held,
                 hook: acceptance_hook.as_deref(),
+                terminal_outcome: snapshot.outcome.as_deref(),
                 final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
                 terminal_error: snapshot.terminal_error.as_deref(),
                 terminal_trigger_reason: snapshot.terminal_trigger_reason.as_deref(),
@@ -603,12 +695,22 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("independent_helper_liveness_ticks".to_string(), json!(independent_helper_liveness_ticks));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
-        object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
+        if args.scenario == Scenario::SuspendResume {
+            object.insert("system_suspend_fixture".to_string(), json!({"injection_method": "NativeDispatchSession::notify_system_power(true)", "physical_os_suspend_performed": false, "resume_notified": false, "physical_session_terminal": system_suspend_terminal_observed}));
+        }
         modifier_guard::attach_query_evidence(object, args.scenario, modifier_query_count.load(Ordering::SeqCst));
-        owner_binding.insert_report_fields(args.scenario, object);
+        owner_binding.insert_report_fields(args.scenario, object, down_sender_attempt_count);
         let power = session.system_power_snapshot();
         object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
+        if let Some(hook) = acceptance_hook.as_ref() {
+            let (count, pre_qpc, post_qpc, clock_error) = hook.hol_stall_evidence();
+            object.extend([("hol_stall_count".into(), json!(count)), ("hol_last_stall_pre_qpc".into(), json!(pre_qpc)), ("hol_last_stall_post_qpc".into(), json!(post_qpc)), ("hol_clock_error".into(), json!(clock_error)), ("hol_stall_cycles".into(), json!(hook.hol_stall_cycle_records()))]);
+            if clock_error {
+                return write_report(&args, Verdict::Inconclusive, "HOL stall encountered QPC clock error", details);
+            }
+        }
     }
     if args.scenario == Scenario::PreflightUserHeld {
         let (verdict, reason) = preflight_user_held_result(&snapshot, &sink_events);
@@ -629,8 +731,11 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_delayed_watchdog_expiry = lifecycle_lease_qualification::expected_delayed_watchdog_expiry(
         args.scenario,
         snapshot.terminal_trigger_reason.as_deref(),
-    ) && snapshot.terminal_error.is_none() && snapshot.secondary_errors.is_empty();
-    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_delayed_watchdog_expiry && !expected_ambiguous_cleanup && !modifier_guard::requires_test_query_seam(args.scenario) && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref()))
+        snapshot.terminal_error.as_deref(),
+        snapshot.final_gate_lease_expirations,
+    ) && snapshot.outcome.as_deref() == Some("error")
+        && snapshot.secondary_errors.is_empty();
+    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_delayed_watchdog_expiry && !expected_ambiguous_cleanup && !modifier_guard::requires_test_query_seam(args.scenario) && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref(), owner_binding.process_termination_verified()))
     {
         return write_report(
             &args,
@@ -646,7 +751,7 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Fail, &error, details);
     }
     if args.scenario == Scenario::TargetHwndChange && (!target_changed || !target_change_cleanup_exception(&snapshot) || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "target HWND transition did not fail closed before gameplay delivery with zero transport events", details); }
-    if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask) { return write_report(&args, verdict, reason, details); }
+    if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask, owner_binding.process_termination_verified(), down_sender_attempt_count) { return write_report(&args, verdict, reason, details); }
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
@@ -663,11 +768,20 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     if args.scenario == Scenario::SuspendResume {
         let power = session.system_power_snapshot();
-        if !first_physical_commit_observed || !pause_observed || !resume_requested || power.suspend_notifications == 0 || power.resume_notifications == 0 || power.suspended || snapshot.timeline_rebase_count != 0 {
+        if !first_physical_commit_observed
+            || !system_suspend_terminal_observed
+            || resume_requested
+            || power.suspend_notifications == 0
+            || power.resume_notifications != 0
+            || !power.suspended
+            || !power.down_blocked
+            || snapshot.outcome.as_deref() != Some("system_suspend")
+            || snapshot.timeline_rebase_count != 0
+        {
             return write_report(&args, Verdict::Fail, "suspend/resume control evidence is incomplete", details);
         }
-        let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0];
-        let expected = [("key_press", first), ("key_release", first), ("key_release", first), ("key_press", second), ("key_release", second)];
+        let first = sink_expected_down[0];
+        let expected = [("key_press", first), ("key_release", first)];
         if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); }
     }
     if args.scenario == Scenario::LeaseAgeWatchdogDelayed {
@@ -679,6 +793,7 @@ fn run_windows(args: RunArgs) -> i32 {
                 watchdog_was_held,
                 down_sender_attempt_count: hook.down_sender_attempt_count(),
                 final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+                terminal_outcome: snapshot.outcome.as_deref(),
                 terminal_error: snapshot.terminal_error.as_deref(),
                 terminal_trigger_reason: snapshot.terminal_trigger_reason.as_deref(),
                 final_release_obligation_mask: snapshot.final_release_obligation_mask,
@@ -700,12 +815,12 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Pass, "session watchdog expired after session progress stopped while the unrelated helper remained alive", details);
     }
     if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
-    if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
+    if args.scenario == Scenario::MixedUpDown { let expected = match expected_mixed_up_down_event_sequence(&expected_down, &expected_up) { Ok(expected) => expected, Err(error) => return write_report(&args, Verdict::Fail, error, details) }; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario == Scenario::AmbiguousPacket && (!expected_ambiguous_cleanup || !ambiguous_packet_event_sequence_matches(&sink_events, expected_physical_keys(plan.profile.as_ref(), &[0])[0], expected_physical_keys(plan.profile.as_ref(), &[1])[0])) {
         return write_report(&args, Verdict::Fail, "ambiguous packet did not reconcile to its exact bounded cleanup mask and event sequence", details);
     }
     if args.scenario.needs_focus_probe() {
-        let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, plan.allow_unpaired_cleanup_ups).is_ok();
+        let sink_events_clean = reconcile_events(&sink_events, &sink_expected_down, &sink_expected_up, plan.allow_unpaired_cleanup_ups).is_ok();
         if !focus_evidence_clean(focus_gate_observed, snapshot.final_gate_focus_losses, snapshot.final_gate_target_changes, sink_events_clean, probe_events.is_empty()) {
             return write_report(
                 &args,
@@ -716,8 +831,8 @@ fn run_windows(args: RunArgs) -> i32 {
         }
     } else if let Err(error) = reconcile_events(
         &sink_events,
-        &expected_down,
-        &expected_up,
+        &sink_expected_down,
+        &sink_expected_up,
         plan.allow_unpaired_cleanup_ups,
     ) {
         return write_report(&args, Verdict::Fail, &error, details);
@@ -758,6 +873,9 @@ fn run_windows(args: RunArgs) -> i32 {
         json!({"physical_run": false}),
     )
 }
+#[cfg(test)]
+#[path = "suspend_terminal_tests.rs"]
+mod suspend_terminal_tests;
 #[cfg(test)]
 #[path = "rt_native_acceptance_tests.rs"]
 mod tests;

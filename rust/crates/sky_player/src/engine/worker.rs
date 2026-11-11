@@ -16,22 +16,33 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
+#[cfg(test)]
+pub(crate) use physical_timing_guard::PhysicalTimingGuard;
+#[cfg(any(test, feature = "test-support"))]
 mod planning;
+#[cfg(any(test, feature = "test-support"))]
 mod prepared;
 mod startup;
 mod timing;
 mod wait;
 
+#[cfg(test)]
+pub(crate) use admission::final_down_target_admission;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use admission::invoke_final_gate_race_hook;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use admission::{
-    FinalControlAdmission, FinalControlSignals, FinalDownVerdict, FinalGateRejection,
-    FinalTargetSignals, TargetStamp, apply_final_down_rejection, ensure_preflight_for_target,
-    enter_focus_pause, final_control_precheck, final_down_control_verdict,
-    final_down_modifier_verdict, final_down_post_modifier_verdict, final_down_target_admission,
-    focus_matches, focus_matches_hwnd, handle_final_focus_loss, load_target_stamp,
+    FinalControlAdmission, FinalDownVerdict, FinalGateRejection, FinalTargetSignals,
+    apply_final_down_rejection, final_control_precheck, final_down_control_verdict,
+    final_down_fresh_target_admission, final_down_modifier_verdict,
+    final_down_post_modifier_verdict, final_down_target_hint, handle_final_focus_loss,
     modifier_guard_rejection_step, owner_rejection_reason, record_final_gate_rejection,
-    target_stamp_still_current, trace_kind_for_packet_kind,
+    trace_kind_for_packet_kind,
+};
+pub(crate) use admission::{
+    FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
+    enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
+    target_stamp_still_current, verify_final_down_admission,
 };
 #[cfg(test)]
 pub(crate) use admission::{OwnerAdmissionFailure, final_down_lease_age_proof};
@@ -39,13 +50,13 @@ pub(crate) use admission::{OwnerAdmissionFailure, final_down_lease_age_proof};
 pub(crate) use cleanup::FinalizeTestObservation;
 #[cfg(test)]
 pub(crate) use cleanup::record_termination_error;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use cleanup::release_runtime_outcome;
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, finalize_worker,
 };
-pub(crate) use cleanup::{
-    describe_release_outcome, release_runtime_outcome, release_state_verified, suspend_live_input,
-};
+pub(crate) use cleanup::{describe_release_outcome, release_state_verified, suspend_live_input};
 pub(crate) use control::TerminalTrigger;
 use control::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
@@ -53,26 +64,37 @@ use control::{
 };
 pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
+pub(super) use dispatch::PhysicalBoundaryStamp;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch::dispatch_prepared_normal_frame;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
+#[cfg(any(test, feature = "test-support"))]
+pub(super) use dispatch::{AuthoredPacketContext, dispatch_authored_packet};
 pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchStep, DownBoundaryState, PendingUpRecovery,
-    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_prepared_normal_frame,
-    dispatch_stale_packet,
+    DispatchStep, DownBoundaryState, PendingUpRecovery, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::physical_wait_target_for_plan;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::preflight_prepared_plan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::publish_live_metrics_after_dispatch;
 #[cfg(any(test, feature = "test-support"))]
-#[allow(unused_imports)]
+pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::{
-    physical_wait_target_for_plan, preroll_manual_pause_cancels, startup_focus_loss_is_terminal,
+    StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate, stage_candidate,
 };
+#[cfg(test)]
+pub(crate) use dispatch_loop::{preroll_manual_pause_cancels, startup_focus_loss_is_terminal};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use health::record_sendinput_pre_call_lateness;
 
 #[cfg(any(test, feature = "test-support"))]
 #[cfg(test)]
@@ -83,38 +105,42 @@ pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
     HealthWindow, focus_gate_matches, observe_dispatch_health, observe_wait_health,
     publish_backend_counters, publish_backend_metrics, record_lateness,
-    record_sendinput_pre_call_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::TargetProof;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::plan_next_dispatch;
 #[cfg(test)]
 pub(crate) use planning::plan_structure_is_valid;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use prepared::{PreparedDispatchEntry, PreparedDispatchFrame, PreparedDispatchStream};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use timing::calibrated_spin_threshold_us;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use timing::derive_spin_threshold_us;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use timing::signed_ticks_to_us;
 #[cfg(test)]
 pub(crate) use timing::{
     adjust_spin_threshold, anchored_dispatch_target_ticks, anchored_dispatch_target_ticks_typed,
     deadline_target_ticks, exact_sender_durations,
 };
-#[cfg(any(test, feature = "test-support"))]
-#[allow(unused_imports)]
-pub(crate) use timing::{calibrated_spin_threshold_us, derive_spin_threshold_us};
 pub(crate) use timing::{
-    signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks, supervisor_lease_expired,
-    wait_failure_message, wake_lateness_ticks,
+    signed_delta, signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
+    wake_lateness_ticks,
 };
-#[allow(unused_imports)]
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
-    wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals,
+    next_stale_metadata_deadline_qpc, record_wait_failure, wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;
@@ -292,8 +318,8 @@ impl DispatchPreparationProbe {
     }
 
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn record_conflict(&self) {
-        #[cfg(any(test, feature = "test-support"))]
         self.conflict_calls.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -414,17 +440,18 @@ pub(crate) struct WorkerRuntime {
     /// A missed mixed boundary whose prepared Up-prefix remains pending until
     /// its physical hold floor. This does not authorize its discarded Down.
     pub(crate) pending_up_recovery: Option<PendingUpRecovery>,
-    future_physical_wait_target_qpc: Option<QpcTicks>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) terminal_error: Option<String>,
     pub(crate) terminal_trigger: Option<TerminalTrigger>,
+    #[cfg(any(test, feature = "test-support"))]
     focus_loss_fault_injected: bool,
     pub(crate) manual_pause_suspension_pending: bool,
     /// True only after the first successful authored musical commit. A
     /// final foreground mismatch before that point is startup failure, not a
     /// pause/rebase event.
     pub(crate) musical_physical_commit_started: bool,
-    allow_pre_epoch_startup_dispatch: bool,
+    pub(crate) allow_pre_epoch_startup_dispatch: bool,
+    #[cfg(any(test, feature = "test-support"))]
     chord_integrity_lost: u64,
 }
 
@@ -474,12 +501,11 @@ impl WorkerRuntime {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn chord_integrity_lost_count(&self) -> u64 {
         self.chord_integrity_lost
     }
 
-    #[allow(dead_code)]
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
         self.last_dispatch_deadline_wake_qpc = ticks;
@@ -497,6 +523,7 @@ impl WorkerRuntime {
     }
 
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn observe_future_down_boundary(&mut self, boundary: PhysicalBoundaryStamp) {
         if self.down_boundary_state != DownBoundaryState::FutureAuthorized(boundary) {
             self.down_boundary_state = DownBoundaryState::FutureAuthorized(boundary);
@@ -504,6 +531,7 @@ impl WorkerRuntime {
     }
 
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn authorize_down_boundary(&mut self, boundary: PhysicalBoundaryStamp) -> bool {
         self.down_boundary_state.authorization() == Some(boundary)
     }
@@ -521,7 +549,6 @@ impl WorkerRuntime {
     pub(crate) fn record_due_without_wait_for_test(&mut self) {
         self.last_dispatch_deadline_wake_qpc = None;
         self.last_dispatch_deadline_target_qpc = None;
-        self.future_physical_wait_target_qpc = None;
     }
 }
 
@@ -619,7 +646,6 @@ pub(crate) struct WorkerResources {
     pub(super) waiter: HybridWaiter,
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
-    pub(super) prepared_stream: Option<PreparedDispatchStream>,
     pub(super) playback: PlaybackClockState,
     pub(super) telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
     pub(super) scheduling: WorkerSchedulingGuards,
@@ -664,7 +690,7 @@ pub(super) fn update_deferred_worker_metrics(
         timing.last_cpu_metrics_sample_us = wall_now_us;
     }
     local_metrics.playback_wall_time_us = wall_now_us.saturating_sub(timing.start_wall_time_us);
-    if local_metrics.playback_wall_time_us > 0 {
+    if local_metrics.idle_wake_count > 0 && local_metrics.playback_wall_time_us > 0 {
         local_metrics.spin_duty_cycle_ppm = (local_metrics.spin_time_us as u128 * 1_000_000
             / local_metrics.playback_wall_time_us as u128)
             as u64;

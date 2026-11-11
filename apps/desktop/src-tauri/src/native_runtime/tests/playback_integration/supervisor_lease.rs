@@ -72,6 +72,7 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 250_000,
+                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     test_spin_threshold_us: None,
                     test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
                 },

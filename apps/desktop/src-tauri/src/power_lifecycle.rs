@@ -769,6 +769,7 @@ mod tests {
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 0,
+                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     #[cfg(feature = "tauri-test")]
                     test_spin_threshold_us: None,
                     #[cfg(feature = "tauri-test")]

@@ -1,10 +1,12 @@
+#[cfg(any(test, feature = "test-support"))]
+use super::ActiveGeneration;
 #[cfg(feature = "test-support")]
 use super::AuthoredPreparationEvidence;
 use super::{
-    ActiveGeneration, AuthoredUpIdentity, CoordinatorError, CoordinatorInvariantError,
-    GenerationStatus, PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame,
-    PreparedAuthoredPacket, PreparedBatch, PreparedDownIntent, PreparedStalePacket,
-    PreparedUpIntent, RuntimeDispatchCoordinator, physical_packet_kind,
+    AuthoredUpIdentity, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
+    PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame, PreparedAuthoredPacket,
+    PreparedBatch, PreparedDownIntent, PreparedUpIntent, RuntimeDispatchCoordinator,
+    physical_packet_kind,
 };
 use crate::model::*;
 #[cfg(test)]
@@ -819,7 +821,7 @@ impl RuntimeDispatchCoordinator {
         })
     }
 
-    fn commit_prepared_up_intents_frozen(
+    pub(super) fn commit_prepared_up_intents_frozen(
         &mut self,
         prepared: PreparedAuthoredFrame,
         up_intents: &[PreparedUpIntent],
@@ -924,71 +926,6 @@ impl RuntimeDispatchCoordinator {
             .get(identity.generation_id() as usize)
             .is_some_and(|state| *state == GenerationStatus::DroppedExpired)
             && self.validate_dropped_expired_up_identity(identity).is_ok()
-    }
-
-    /// Apply a frozen authored commit after a successful physical send.
-    /// There is no schedule or packet traversal on this path.
-    pub fn commit_prepared_authored_frame_success_frozen(
-        &mut self,
-        commit: &PreparedAuthoredCommit,
-        started: TimelineTicks,
-        _completed: TimelineTicks,
-    ) -> Result<(), CoordinatorError> {
-        let prepared = commit.frame;
-        if prepared.first_batch_index != self.cursor {
-            return Err(CoordinatorError::PreparedBatchMismatch {
-                prepared: prepared.first_batch_index,
-                cursor: self.cursor,
-            });
-        }
-        self.validate_frozen_authored_commit(commit)?;
-        let release_not_before_ticks = prepared
-            .authored_ticks
-            .checked_add_duration(self.min_hold_ticks)?;
-
-        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
-
-        for down in &commit.down_intents {
-            let generation_id = down.generation_id();
-            if generation_id == NO_GENERATION_ID {
-                continue;
-            }
-            let slot = down.key_slot();
-            let bit = Self::bit_for_slot(slot);
-            if self.active_by_slot[usize::from(slot)].is_some()
-                || self.active_mask & bit != 0
-                || self.blocked_mask & bit != 0
-            {
-                return Err(CoordinatorError::Invariant(
-                    CoordinatorInvariantError::Accounting(
-                        "authored Down would overwrite an active or blocked key slot".into(),
-                    ),
-                ));
-            }
-            self.transition_generation(
-                generation_id,
-                GenerationStatus::Scheduled,
-                GenerationStatus::Active,
-            )?;
-            self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
-                generation_id,
-                scan_code: down.scan_code(),
-                key_slot: slot,
-                source_action_index: commit.down_source_action_index.unwrap_or(0),
-                release_not_before_ticks,
-            });
-            self.active_mask |= bit;
-            self.blocked_mask |= bit;
-        }
-
-        self.cursor =
-            self.cursor
-                .checked_add(prepared.packet_batch_count)
-                .ok_or(CoordinatorError::Time(
-                    crate::time::TimeArithmeticError::Overflow,
-                ))?;
-        self.validate_local_slot_masks()?;
-        Ok(())
     }
 
     /// Commit an authored physical frame whose musical Down deadline was
@@ -1380,143 +1317,6 @@ impl RuntimeDispatchCoordinator {
         self.prepare_next_due_authored_uncompensated(now)
     }
 
-    /// Prepare the current compiler packet when it contains only unmatched Up
-    /// metadata.  This is intentionally separate from physical batch
-    /// preparation so stale metadata cannot acquire a DispatchPath or timing
-    /// lead by accident.
-    pub fn prepare_current_stale_packet(
-        &self,
-    ) -> Result<Option<PreparedStalePacket>, CoordinatorError> {
-        let Some(batch) = self.schedule.batches.get(self.cursor) else {
-            return Ok(None);
-        };
-        let packet_index = usize::try_from(batch.packet_id).map_err(|_| {
-            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
-                "packet id does not fit in usize".to_string(),
-            ))
-        })?;
-        let packet = self
-            .schedule
-            .packets
-            .get(packet_index)
-            .ok_or(CoordinatorError::Schedule(
-                RuntimeScheduleError::InvalidPacketIndex {
-                    index: packet_index,
-                },
-            ))?;
-        if packet.first_batch_index as usize != self.cursor {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "stale packet first batch does not match coordinator cursor".to_string(),
-                ),
-            ));
-        }
-        if packet.up_mask != 0 || packet.down_mask != 0 {
-            return Ok(None);
-        }
-        if packet.up_intent_len == 0 || packet.down_intent_len != 0 {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "empty compiled packet is not a stale unmatched-Up packet".to_string(),
-                ),
-            ));
-        }
-        let packet_batch_count = usize::from(packet.batch_count);
-        if packet_batch_count == 0 {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "stale packet must contain at least one authored batch".to_string(),
-                ),
-            ));
-        }
-        let batch_end =
-            self.cursor
-                .checked_add(packet_batch_count)
-                .ok_or(CoordinatorError::Time(
-                    crate::time::TimeArithmeticError::Overflow,
-                ))?;
-        let batch_range = self
-            .schedule
-            .batches
-            .get(self.cursor..batch_end)
-            .ok_or(CoordinatorError::InvalidBatchIndex { index: self.cursor })?;
-        if batch_range.iter().any(|candidate| {
-            candidate.packet_id != batch.packet_id
-                || candidate.kind != ActionKind::Up
-                || candidate.intent_len == 0
-        }) {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "stale packet contains an invalid authored batch".to_string(),
-                ),
-            ));
-        }
-        let up_start = packet.up_intent_start as usize;
-        let up_end = up_start
-            .checked_add(usize::from(packet.up_intent_len))
-            .ok_or(CoordinatorError::Schedule(
-                RuntimeScheduleError::InvalidPacketIntentRange {
-                    index: packet_index,
-                },
-            ))?;
-        let up_intents =
-            self.schedule
-                .intents
-                .get(up_start..up_end)
-                .ok_or(CoordinatorError::Schedule(
-                    RuntimeScheduleError::InvalidPacketIntentRange {
-                        index: packet_index,
-                    },
-                ))?;
-        if !up_intents
-            .iter()
-            .all(|intent| intent.generation_id() == NO_GENERATION_ID)
-        {
-            return Err(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "zero-mask authored packet contains an owned Up intent".to_string(),
-                ),
-            ));
-        }
-        let effective_scheduled_ticks = self.effective_batch_scheduled_ticks(self.cursor)?;
-        Ok(Some(PreparedStalePacket {
-            first_batch_index: self.cursor,
-            packet_index,
-            packet_batch_count,
-            effective_scheduled_ticks,
-            source_action_index: batch.source_action_index,
-            suppressed_intent_count: up_intents.len(),
-        }))
-    }
-
-    /// Atomically consume one prepared stale compiler packet.
-    pub fn commit_stale_packet(
-        &mut self,
-        prepared: PreparedStalePacket,
-    ) -> Result<(), CoordinatorError> {
-        let current = self
-            .prepare_current_stale_packet()?
-            .ok_or(CoordinatorError::Invariant(
-                CoordinatorInvariantError::Accounting(
-                    "prepared stale packet is no longer current".to_string(),
-                ),
-            ))?;
-        if current != prepared {
-            return Err(CoordinatorError::PreparedBatchMismatch {
-                prepared: prepared.first_batch_index,
-                cursor: self.cursor,
-            });
-        }
-        self.cursor =
-            self.cursor
-                .checked_add(prepared.packet_batch_count)
-                .ok_or(CoordinatorError::Time(
-                    crate::time::TimeArithmeticError::Overflow,
-                ))?;
-        self.validate_local_slot_masks()?;
-        Ok(())
-    }
-
     /// Commit one physical packet after the sender reported a complete
     /// transaction. The logical Up transition is applied before Down for
     /// disjoint mixed packets; same-key retriggers require an admitted
@@ -1765,7 +1565,7 @@ impl RuntimeDispatchCoordinator {
     /// explicit cleanup and test validation, never for a stale or physical
     /// packet deadline path.
     #[inline]
-    fn validate_local_slot_masks(&self) -> Result<(), CoordinatorError> {
+    pub(super) fn validate_local_slot_masks(&self) -> Result<(), CoordinatorError> {
         #[cfg(any(test, debug_assertions))]
         {
             self.validate_local_slot_masks_full()

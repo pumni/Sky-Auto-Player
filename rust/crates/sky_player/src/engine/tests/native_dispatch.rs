@@ -269,8 +269,8 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
     let snapshot = session.snapshot();
     assert_eq!(snapshot.status, "finished");
     assert_eq!(snapshot.terminal_error, None);
-    assert_eq!(snapshot.generation_status_counts["released"], 2);
-    assert_eq!(snapshot.generation_status_counts["cancelled"], 0);
+    assert_eq!(snapshot.generation_status_counts["released"], 1);
+    assert_eq!(snapshot.generation_status_counts["cancelled"], 1);
     assert_eq!(snapshot.generation_status_counts["scheduled"], 0);
     assert_eq!(snapshot.generation_status_counts["active"], 0);
     assert_eq!(snapshot.generation_status_counts["dropped_expired"], 0);
@@ -278,8 +278,11 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
     assert_eq!(snapshot.generation_status_counts["dropped_conflict"], 0);
     let accounting = session.generation_accounting_for_test();
     assert_eq!(accounting.total, accounting.activated);
-    assert_eq!(accounting.total, accounting.released);
-    sky_dispatch_core::testing::assert_clean_generation_completion(accounting);
+    assert_eq!(accounting.total, accounting.released + accounting.cancelled);
+    assert_eq!(accounting.released, 1);
+    assert_eq!(accounting.cancelled, 1);
+    assert_eq!(accounting.scheduled, 0);
+    assert_eq!(accounting.active, 0);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.failed_release_count, 0);
@@ -299,7 +302,7 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
             .expect("valid telemetry JSON");
     let records = telemetry["records"].as_array().expect("records array");
-    for event_index in 0..4 {
+    for event_index in [0, 2, 3] {
         let record = records
             .iter()
             .find(|record| record["event_index"].as_u64() == Some(event_index))
@@ -307,6 +310,12 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
         assert_eq!(record["send_attempts"].as_u64(), Some(1));
         assert_eq!(record["sent_count"].as_u64(), Some(1));
     }
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["event_index"].as_u64() == Some(1)),
+        "cancelled generation Up must not be physically sent"
+    );
 }
 
 #[test]
@@ -757,7 +766,7 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
 
     let _observer_hooks = observer_test_hook_guard();
     set_observer_artificial_cost_us(20_000);
-    let stale_count = 64usize;
+    let stale_count = 256usize;
     let expected_stale_packets = stale_count + 1;
     let mut actions = vec![
         KeyActionInput {
@@ -1041,4 +1050,117 @@ fn physical_bucket_after_stale_metadata_uses_event_count_not_metadata() {
         .expect("two-down record");
     assert_eq!(two_down["requested_count"].as_u64(), Some(2));
     assert_eq!(two_down["applied_lead_ticks"].as_u64(), Some(0));
+}
+
+#[test]
+fn trailing_stale_packet_after_many_physical_packets_is_committed_without_early_finish() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    // Other tests deliberately delay the process-wide observer. This test
+    // requires normal observer throughput to inspect the bounded trace.
+    let _observer_hooks = crate::engine::observer_test_hooks::observer_test_hook_guard();
+    let allowed: Vec<u16> = (0x15..0x15 + 15).collect();
+    let mut actions = Vec::with_capacity(69);
+    let mut action_idx = 0u32;
+    for i in 0..34 {
+        let t_down = i as u64 * 10_000;
+        let t_up = t_down + 5_000;
+        let sc = allowed[i % allowed.len()];
+        actions.push(KeyActionInput {
+            source_action_index: action_idx,
+            kind: ActionKind::Down,
+            scheduled_us: t_down,
+            scan_codes: smallvec::smallvec![sc],
+            reason: format!("phys-down-{i}").into(),
+        });
+        action_idx += 1;
+        actions.push(KeyActionInput {
+            source_action_index: action_idx,
+            kind: ActionKind::Up,
+            scheduled_us: t_up,
+            scan_codes: smallvec::smallvec![sc],
+            reason: format!("phys-up-{i}").into(),
+        });
+        action_idx += 1;
+    }
+    let stale_action_index = action_idx;
+    actions.push(KeyActionInput {
+        source_action_index: stale_action_index,
+        kind: ActionKind::Up,
+        scheduled_us: 340_000 + 10_000,
+        scan_codes: smallvec::smallvec![0x15],
+        reason: "trailing-unmatched-up".into(),
+    });
+
+    let schedule = compile_runtime_intents(&actions, &allowed)
+        .expect("valid 34-pair schedule with trailing stale metadata");
+
+    assert!(
+        schedule.packets.len() >= 66,
+        "must have >= 65 physical packets + 1 stale"
+    );
+
+    let (snapshot, telemetry) = run_mock_schedule(schedule, 15, 1024);
+    assert_eq!(
+        snapshot.outcome,
+        Some("finished".into()),
+        "session must finish cleanly: {snapshot:?}"
+    );
+    assert_eq!(snapshot.terminal_error, None);
+
+    let stale = telemetry["records"]
+        .as_array()
+        .expect("telemetry records")
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(stale_action_index as u64));
+    assert!(
+        stale.is_some(),
+        "trailing stale metadata packet at index {stale_action_index} must be committed: {telemetry}"
+    );
+}
+
+#[test]
+fn production_and_strict_timing_execute_same_15_slot_executor_cleanly() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let allowed: Vec<u16> = (0x15..0x15 + 15).collect();
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "chord-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "chord-up".into(),
+        },
+    ];
+
+    for profile in [
+        DispatchProfile::Production,
+        DispatchProfile::StrictTimingDiagnostic,
+    ] {
+        let schedule =
+            compile_runtime_intents(&actions, &allowed).expect("valid two-key chord schedule");
+        let (snapshot, _telemetry) = run_mock_schedule_with_profile(schedule, 15, 32, profile);
+        assert_eq!(
+            snapshot.outcome,
+            Some("finished".into()),
+            "{profile:?} must finish cleanly: {snapshot:?}"
+        );
+        assert_eq!(snapshot.terminal_error, None);
+        assert_eq!(snapshot.generation_status_counts["released"], 2);
+        assert_eq!(snapshot.generation_status_counts["cancelled"], 0);
+        assert_eq!(snapshot.generation_status_counts["active"], 0);
+        let accounting = snapshot.generation_accounting;
+        assert_eq!(accounting.total, 2);
+        assert_eq!(accounting.activated, 2);
+        assert_eq!(accounting.released, 2);
+        assert_eq!(accounting.cancelled, 0);
+    }
 }

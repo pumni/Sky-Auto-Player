@@ -1,6 +1,7 @@
 use super::{
     ActiveGeneration, AuthoredUpIdentity, CoordinatorError, CoordinatorInvariantError,
-    GenerationStatus, PreparedAuthoredCommit, RuntimeDispatchCoordinator,
+    GenerationStatus, PreparedAuthoredCommit, PreparedAuthoredCommitProof,
+    RuntimeDispatchCoordinator,
 };
 use crate::model::*;
 use crate::time::TimelineTicks;
@@ -42,6 +43,12 @@ impl RuntimeDispatchCoordinator {
                 },
             ));
         }
+        let next_state_revision = self.state_revision.checked_add(1).ok_or_else(|| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "coordinator state revision overflow".into(),
+            ))
+        })?;
+        self.state_revision = next_state_revision;
         if matches!(
             (expected, next),
             (GenerationStatus::Scheduled, GenerationStatus::Active)
@@ -128,10 +135,141 @@ impl RuntimeDispatchCoordinator {
                 "released generation counter overflow during suspension reconciliation".into(),
             ))
         })?;
+        let next_state_revision = self.state_revision.checked_add(1).ok_or_else(|| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "coordinator state revision overflow".into(),
+            ))
+        })?;
         self.counters.cancelled -= 1;
         self.counters.released = released;
         self.generation_states[generation_id as usize] = GenerationStatus::Released;
         self.cancelled_up_by_slot[usize::from(slot)] = None;
+        self.state_revision = next_state_revision;
+        Ok(())
+    }
+
+    /// Validate the frozen authored identities for the current cursor and
+    /// return a one-use proof for a prepared send that may wait before commit.
+    pub fn prove_prepared_authored_commit<'a>(
+        &self,
+        commit: &'a PreparedAuthoredCommit,
+    ) -> Result<PreparedAuthoredCommitProof<'a>, CoordinatorError> {
+        if commit.frame.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: commit.frame.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        self.validate_frozen_authored_commit(commit)?;
+        Ok(PreparedAuthoredCommitProof {
+            commit,
+            coordinator_id: self.coordinator_id,
+            state_revision: self.state_revision,
+            cursor: self.cursor,
+        })
+    }
+
+    /// Apply a frozen authored commit after a successful physical send.
+    /// There is no schedule or packet traversal on this path.
+    pub fn commit_prepared_authored_frame_success_frozen(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        _completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let prepared = commit.frame;
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        self.validate_frozen_authored_commit(commit)?;
+        self.commit_prepared_authored_frame_success_validated(commit, started)
+    }
+
+    /// Consume the proof created for the exact prepared stream entry before
+    /// its wait. The sender only reaches this method after a successful send.
+    pub fn commit_prepared_authored_frame_success_proven(
+        &mut self,
+        proof: PreparedAuthoredCommitProof<'_>,
+        expected_commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        _completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        if !std::ptr::eq(proof.commit, expected_commit)
+            || proof.coordinator_id != self.coordinator_id
+            || proof.state_revision != self.state_revision
+        {
+            return Err(CoordinatorError::PreparedAuthoredProofMismatch);
+        }
+        if proof.cursor != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: proof.cursor,
+                cursor: self.cursor,
+            });
+        }
+        self.commit_prepared_authored_frame_success_validated(proof.commit, started)
+    }
+
+    fn commit_prepared_authored_frame_success_validated(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        let prepared = commit.frame;
+        if prepared.first_batch_index != self.cursor {
+            return Err(CoordinatorError::PreparedBatchMismatch {
+                prepared: prepared.first_batch_index,
+                cursor: self.cursor,
+            });
+        }
+        let release_not_before_ticks = prepared
+            .authored_ticks
+            .checked_add_duration(self.min_hold_ticks)?;
+
+        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
+
+        for down in &commit.down_intents {
+            let generation_id = down.generation_id();
+            if generation_id == NO_GENERATION_ID {
+                continue;
+            }
+            let slot = down.key_slot();
+            let bit = Self::bit_for_slot(slot);
+            if self.active_by_slot[usize::from(slot)].is_some()
+                || self.active_mask & bit != 0
+                || self.blocked_mask & bit != 0
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Down would overwrite an active or blocked key slot".into(),
+                    ),
+                ));
+            }
+            self.transition_generation(
+                generation_id,
+                GenerationStatus::Scheduled,
+                GenerationStatus::Active,
+            )?;
+            self.active_by_slot[usize::from(slot)] = Some(ActiveGeneration {
+                generation_id,
+                scan_code: down.scan_code(),
+                key_slot: slot,
+                source_action_index: commit.down_source_action_index.unwrap_or(0),
+                release_not_before_ticks,
+            });
+            self.active_mask |= bit;
+            self.blocked_mask |= bit;
+        }
+
+        self.cursor =
+            self.cursor
+                .checked_add(prepared.packet_batch_count)
+                .ok_or(CoordinatorError::Time(
+                    crate::time::TimeArithmeticError::Overflow,
+                ))?;
+        self.validate_local_slot_masks()?;
         Ok(())
     }
 

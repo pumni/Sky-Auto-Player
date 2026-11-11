@@ -1,0 +1,4 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.70s
+     Running `rust\target\debug\xtask.exe check static`
+[xtask] cargo vet --version
+[xtask] cargo vet --manifest-path rust/Cargo.toml --locked

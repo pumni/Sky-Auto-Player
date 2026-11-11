@@ -71,11 +71,14 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let target = helper
-        .find("final_down_target_admission")
-        .expect("modifier guard foreground and owner proof");
+        .find("final_down_target_hint")
+        .expect("early target and focus hint");
     let modifier = helper
         .find("final_down_modifier_verdict")
         .expect("fixed modifier guard");
+    let fresh_target = helper
+        .find("final_down_fresh_target_admission")
+        .expect("post-modifier foreground and owner proof");
     let post_modifier = helper
         .find("final_down_post_modifier_verdict")
         .expect("shared post-modifier authority gate");
@@ -85,7 +88,8 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
     assert!(final_control < target);
     assert!(target < control_gates[1]);
     assert!(control_gates[1] < modifier);
-    assert!(modifier < post_modifier);
+    assert!(modifier < fresh_target);
+    assert!(fresh_target < post_modifier);
     assert!(helper.contains("lease_timeout_ticks"));
     assert!(
         helper.contains("let final_policy_qpc = None;"),
@@ -101,7 +105,8 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         "the prepared suffix must not add a post-gate QPC sample"
     );
     assert!(post_modifier < sender, "final atomics must precede sender");
-    assert!(helper.contains("final_down_target_admission"));
+    assert!(helper.contains("final_down_target_hint"));
+    assert!(helper.contains("final_down_fresh_target_admission"));
     assert!(helper.contains("test_now_ticks"));
     assert!(!helper.contains("inline(never)"));
     assert!(!helper.contains("record_prepared_normal_send_outcome"));
@@ -331,47 +336,6 @@ fn normal_stream_materializes_only_physical_boundaries_and_keeps_authored_order(
     assert_eq!(offsets[1].as_u64(), 20_000);
     assert_eq!(offsets[2].as_u64(), 40_000);
     assert_eq!(offsets[3].as_u64(), 60_000);
-}
-
-#[test]
-fn prepared_commit_identity_is_revalidated_after_each_due_wait() {
-    let source = include_str!("../dispatch_loop.rs");
-    let prepared = source
-        .split("if prepared_stream")
-        .nth(1)
-        .expect("prepared stream dispatch section")
-        .split("if prepared_stream_requires_terminal(")
-        .next()
-        .expect("prepared stream dispatch body");
-    let wait = prepared
-        .find("wait_for_next_boundary(WaitBoundaryInput")
-        .expect("prepared wait");
-    let replan = prepared
-        .find("WaitBoundary::Replan {")
-        .expect("interrupt/replan handling");
-    let replan_continue = prepared
-        .find("let Some((_wait_result, target_qpc, dispatch_qpc)) = dispatch_result else {")
-        .expect("replan exits before due processing");
-    let validation = prepared
-        .find("validate_frozen_authored_commit(")
-        .expect("fresh frozen-commit validation");
-    let dispatch = prepared
-        .find("dispatch_prepared_normal_frame(")
-        .expect("final prepared admission");
-
-    assert!(wait < replan, "the wait precedes interrupt classification");
-    assert!(
-        replan < replan_continue && replan_continue < validation,
-        "an interrupted wait exits the iteration before coordinator validation"
-    );
-    assert!(
-        validation < dispatch,
-        "every due physical entry is checked against current coordinator ownership before admission"
-    );
-    assert!(
-        !source.contains("PreparedAuthoredCommitWitness"),
-        "no validation witness may survive a wait or replan"
-    );
 }
 
 #[test]

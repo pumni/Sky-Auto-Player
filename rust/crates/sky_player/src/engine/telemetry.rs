@@ -1,14 +1,16 @@
 pub(crate) mod metrics;
+mod output;
 
 pub use metrics::WorkerMetricsLocal;
 pub(crate) use metrics::{
     SharedMetrics, cpu_metrics_sample_due, publish_lifecycle_metrics, publish_terminal_metrics,
     try_publish_metrics, try_publish_observer_metrics,
 };
+pub use output::NativeTelemetryOutput;
+pub(crate) use output::UpSlotLossReason;
 
 use sky_dispatch_core::time::{TimeArithmeticError, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionStatus;
-use std::collections::VecDeque;
 
 /// Provenance assigned to every exported QPC observation.
 #[repr(u8)]
@@ -21,6 +23,8 @@ pub enum TimestampProvenance {
     Unavailable = 2,
     DerivedFromWakeQpc = 3,
     DerivedFromSendInputCompletion = 4,
+    ConfiguredTarget = 5,
+    DerivedFromTimerArm = 6,
 }
 
 /// Fixed-size record retained on the real-time worker path.
@@ -29,9 +33,27 @@ pub enum TimestampProvenance {
 /// microsecond projections are deliberately materialized only after the
 /// worker has stopped.  This is the only representation kept in the bounded
 /// native ring.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct UpSlotTrace {
+    pub trace_record_index: u32,
+    pub slot: u8,
+    pub scan_code: u16,
+    pub source_action_index: u32,
+    pub authored_offset_ticks: u64,
+    pub release_floor_offset_ticks: u64,
+    pub floor_displacement_ticks: u64,
+    pub pre_call_qpc_ticks: Option<u64>,
+    pub completion_qpc_ticks: u64,
+    pub residual_ticks: Option<i64>,
+    pub confirmed: bool,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct RtTraceRecord {
+    pub up_slot_attribution_missing: bool,
+    pub wait_sequence: Option<u64>,
+    pub wait_spin_ticks: Option<u64>,
     pub compiled_packet_index: u64,
     /// Authored and effective positions relative to the immutable playback
     /// epoch. These are schedule offsets, not sampled wall-clock timestamps.
@@ -40,6 +62,14 @@ pub struct RtTraceRecord {
     pub wake_offset_ticks: u64,
     /// Absolute QPC values below are present only when an actual sample exists.
     pub wake_qpc_ticks: u64,
+    pub physical_eligibility_qpc_ticks: u64,
+    pub timer_arm_qpc_ticks: u64,
+    pub timer_arm_target_qpc_ticks: u64,
+    pub timer_return_qpc_ticks: u64,
+    pub timer_arm_generation: u64,
+    pub timer_return_generation: u64,
+    pub waiter_deadline_crossing_qpc_ticks: u64,
+    pub waiter_return_qpc_ticks: u64,
     pub target_crossing_qpc_ticks: u64,
     pub final_policy_qpc_ticks: u64,
     pub pre_call_qpc_ticks: u64,
@@ -88,6 +118,14 @@ pub struct RtTraceRecord {
     pub compiled_packet_index_available: bool,
     pub wake_offset_available: bool,
     pub wake_qpc_available: bool,
+    pub physical_eligibility_qpc_available: bool,
+    pub timer_arm_qpc_available: bool,
+    pub timer_arm_target_qpc_available: bool,
+    pub timer_return_qpc_available: bool,
+    pub timer_arm_generation_available: bool,
+    pub timer_return_generation_available: bool,
+    pub waiter_deadline_crossing_qpc_available: bool,
+    pub waiter_return_qpc_available: bool,
     pub target_crossing_qpc_available: bool,
     pub final_policy_qpc_available: bool,
     pub pre_call_qpc_available: bool,
@@ -104,6 +142,12 @@ pub struct RtTraceRecord {
     pub transport_anomaly: bool,
     pub wake_offset_provenance: TimestampProvenance,
     pub wake_qpc_provenance: TimestampProvenance,
+    pub physical_eligibility_qpc_provenance: TimestampProvenance,
+    pub timer_arm_qpc_provenance: TimestampProvenance,
+    pub timer_arm_target_qpc_provenance: TimestampProvenance,
+    pub timer_return_qpc_provenance: TimestampProvenance,
+    pub waiter_deadline_crossing_qpc_provenance: TimestampProvenance,
+    pub waiter_return_qpc_provenance: TimestampProvenance,
     pub target_crossing_qpc_provenance: TimestampProvenance,
     pub final_policy_qpc_provenance: TimestampProvenance,
     pub pre_call_qpc_provenance: TimestampProvenance,
@@ -124,13 +168,15 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 19;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 25;
+pub const NATIVE_UP_SLOT_TRACE_CAPACITY: usize = 4_096;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
 pub(crate) const TRACE_KIND_MIXED: u8 = 2;
 pub(crate) const TRACE_FLAG_SENT_FULL: u8 = 1 << 0;
 pub(crate) const TRACE_FLAG_RECOVERY: u8 = 1 << 1;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) const TRACE_FLAG_DEFERRED: u8 = 1 << 2;
 pub(crate) const TRACE_FLAG_ANOMALY: u8 = 1 << 3;
 
@@ -163,6 +209,14 @@ pub(crate) struct TraceTiming {
     pub(crate) effective_deadline_ticks: TimelineTicks,
     pub(crate) wake_ticks: Option<TimelineTicks>,
     pub(crate) wake_qpc_ticks: Option<u64>,
+    pub(crate) physical_eligibility_qpc_ticks: Option<u64>,
+    pub(crate) timer_arm_qpc_ticks: Option<u64>,
+    pub(crate) timer_arm_target_qpc_ticks: Option<u64>,
+    pub(crate) timer_return_qpc_ticks: Option<u64>,
+    pub(crate) timer_arm_generation: Option<u64>,
+    pub(crate) timer_return_generation: Option<u64>,
+    pub(crate) waiter_deadline_crossing_qpc_ticks: Option<u64>,
+    pub(crate) waiter_return_qpc_ticks: Option<u64>,
     pub(crate) target_crossing_qpc_ticks: Option<u64>,
     pub(crate) physical_target_qpc_ticks: Option<u64>,
     pub(crate) physical_not_before_qpc_ticks: Option<u64>,
@@ -303,16 +357,17 @@ impl RtTraceRecord {
             ),
             _ => None,
         };
-        let authored_lateness_ticks = checked_signed_delta(
-            timing.pre_call_qpc_ticks.or(timing.observation_qpc_ticks),
-            timing.physical_target_qpc_ticks,
-        )?;
+        let authored_lateness_ticks =
+            checked_signed_delta(timing.pre_call_qpc_ticks, timing.physical_target_qpc_ticks)?;
         let wake_offset_ticks = timing.wake_qpc_ticks.and(timing.wake_ticks);
         let send_started_ticks = timing.pre_call_qpc_ticks.and(timing.pre_call_ticks);
         let send_completed_ticks = timing
             .sendinput_completion_qpc_ticks
             .and(timing.sendinput_completion_ticks);
         Ok(Self {
+            up_slot_attribution_missing: false,
+            wait_sequence: None,
+            wait_spin_ticks: None,
             trace_record_index: 0,
             compiled_packet_index: context.compiled_packet_index.unwrap_or_default(),
             compiled_packet_index_available: context.compiled_packet_index.is_some(),
@@ -331,6 +386,34 @@ impl RtTraceRecord {
             wake_offset_available: wake_offset_ticks.is_some(),
             wake_qpc_ticks: timing.wake_qpc_ticks.unwrap_or_default(),
             wake_qpc_available: timing.wake_qpc_ticks.is_some(),
+            physical_eligibility_qpc_ticks: timing
+                .physical_eligibility_qpc_ticks
+                .or(timing.physical_not_before_qpc_ticks)
+                .or(timing.physical_target_qpc_ticks)
+                .unwrap_or_default(),
+            physical_eligibility_qpc_available: timing
+                .physical_eligibility_qpc_ticks
+                .or(timing.physical_not_before_qpc_ticks)
+                .or(timing.physical_target_qpc_ticks)
+                .is_some(),
+            timer_arm_qpc_ticks: timing.timer_arm_qpc_ticks.unwrap_or_default(),
+            timer_arm_qpc_available: timing.timer_arm_qpc_ticks.is_some(),
+            timer_arm_target_qpc_ticks: timing.timer_arm_target_qpc_ticks.unwrap_or_default(),
+            timer_arm_target_qpc_available: timing.timer_arm_target_qpc_ticks.is_some(),
+            timer_return_qpc_ticks: timing.timer_return_qpc_ticks.unwrap_or_default(),
+            timer_return_qpc_available: timing.timer_return_qpc_ticks.is_some(),
+            timer_arm_generation: timing.timer_arm_generation.unwrap_or_default(),
+            timer_arm_generation_available: timing.timer_arm_generation.is_some(),
+            timer_return_generation: timing.timer_return_generation.unwrap_or_default(),
+            timer_return_generation_available: timing.timer_return_generation.is_some(),
+            waiter_deadline_crossing_qpc_ticks: timing
+                .waiter_deadline_crossing_qpc_ticks
+                .unwrap_or_default(),
+            waiter_deadline_crossing_qpc_available: timing
+                .waiter_deadline_crossing_qpc_ticks
+                .is_some(),
+            waiter_return_qpc_ticks: timing.waiter_return_qpc_ticks.unwrap_or_default(),
+            waiter_return_qpc_available: timing.waiter_return_qpc_ticks.is_some(),
             target_crossing_qpc_ticks: timing.target_crossing_qpc_ticks.unwrap_or_default(),
             target_crossing_qpc_available: timing.target_crossing_qpc_ticks.is_some(),
             final_policy_qpc_ticks: timing.final_policy_qpc_ticks.unwrap_or_default(),
@@ -375,6 +458,27 @@ impl RtTraceRecord {
                 TimestampProvenance::Unavailable
             },
             wake_qpc_provenance: provenance(timing.wake_qpc_ticks.is_some()),
+            physical_eligibility_qpc_provenance: if timing
+                .physical_eligibility_qpc_ticks
+                .or(timing.physical_not_before_qpc_ticks)
+                .or(timing.physical_target_qpc_ticks)
+                .is_some()
+            {
+                TimestampProvenance::ConfiguredTarget
+            } else {
+                TimestampProvenance::Unavailable
+            },
+            timer_arm_qpc_provenance: provenance(timing.timer_arm_qpc_ticks.is_some()),
+            timer_arm_target_qpc_provenance: if timing.timer_arm_target_qpc_ticks.is_some() {
+                TimestampProvenance::DerivedFromTimerArm
+            } else {
+                TimestampProvenance::Unavailable
+            },
+            timer_return_qpc_provenance: provenance(timing.timer_return_qpc_ticks.is_some()),
+            waiter_deadline_crossing_qpc_provenance: provenance(
+                timing.waiter_deadline_crossing_qpc_ticks.is_some(),
+            ),
+            waiter_return_qpc_provenance: provenance(timing.waiter_return_qpc_ticks.is_some()),
             target_crossing_qpc_provenance: provenance(timing.target_crossing_qpc_ticks.is_some()),
             final_policy_qpc_provenance: provenance(timing.final_policy_qpc_ticks.is_some()),
             pre_call_qpc_provenance: provenance(timing.pre_call_qpc_ticks.is_some()),
@@ -504,6 +608,11 @@ pub struct TimingSemantics {
     pub completion_metric: &'static str,
     pub scheduled_boundary: &'static str,
     pub wake_boundary: &'static str,
+    pub physical_eligibility_boundary: &'static str,
+    pub timer_arm_target_boundary: &'static str,
+    pub timer_return_boundary: &'static str,
+    pub waiter_deadline_crossing_boundary: &'static str,
+    pub waiter_return_boundary: &'static str,
     pub sender_start_boundary: &'static str,
     pub sender_completion_boundary: &'static str,
     pub timestamp_provenance: &'static str,
@@ -520,11 +629,16 @@ impl Default for TimingSemantics {
             completion_metric: "completion_error_ticks_diagnostic_only",
             scheduled_boundary: "authored_timeline",
             wake_boundary: "worker_wake_before_sendinput",
+            physical_eligibility_boundary: "current_physical_not_before_target",
+            timer_arm_target_boundary: "qpc_sample_before_timer_arm_plus_relative_timeout_passed_to_timer_api",
+            timer_return_boundary: "first_existing_qpc_sample_after_timer_return",
+            waiter_deadline_crossing_boundary: "qpc_sample_that_detected_deadline",
+            waiter_return_boundary: "wait_boundary_qpc_sample_before_admission",
             sender_start_boundary: "pre_call_qpc_before_sendinput",
             sender_completion_boundary: "sendinput_completion_qpc",
             timestamp_provenance: concat!(
                 "measured|derived_from_wake_qpc|derived_from_pre_call|",
-                "derived_from_send_input_completion|unavailable",
+                "derived_from_send_input_completion|configured_target|derived_from_timer_arm|unavailable",
             ),
             final_policy_boundary: "sampled_when_present_else_unavailable",
             observer_boundary: "post_send_capture_and_observer_drain_are_distinct",
@@ -624,70 +738,6 @@ impl NativeTelemetrySummary {
         }
     }
 }
-
-#[derive(Debug, Default, serde::Serialize)]
-pub struct NativeTelemetryOutput {
-    pub schema_version: u32,
-    pub qpc_frequency_hz: u64,
-    pub records: VecDeque<RtTraceRecord>,
-    pub summary: NativeTelemetrySummary,
-    pub attempted: u64,
-    pub accepted: u64,
-    pub dropped: u64,
-    /// Observations dropped by the bounded producer queue before telemetry
-    /// could inspect them. Kept separate from ring-capacity drops.
-    pub observer_queue_dropped: u64,
-    pub truncated: bool,
-    pub timing_semantics: TimingSemantics,
-}
-
-impl NativeTelemetryOutput {
-    pub(crate) fn try_new(mode: TelemetryMode, capacity: usize) -> Result<Self, String> {
-        let mut records = VecDeque::new();
-        if matches!(mode, TelemetryMode::Ring) {
-            records
-                .try_reserve_exact(capacity)
-                .map_err(|error| format!("telemetry ring allocation failed: {error}"))?;
-        }
-        Ok(Self {
-            schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
-            qpc_frequency_hz: 0,
-            records,
-            summary: NativeTelemetrySummary::default(),
-            attempted: 0,
-            accepted: 0,
-            dropped: 0,
-            observer_queue_dropped: 0,
-            truncated: false,
-            timing_semantics: TimingSemantics::default(),
-        })
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn new(mode: TelemetryMode, capacity: usize) -> Self {
-        Self {
-            schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
-            qpc_frequency_hz: 0,
-            records: if matches!(mode, TelemetryMode::Ring) {
-                // Reserve the complete bounded buffer at construction time so no
-                // heap allocation occurs on the first push_back during dispatch.
-                let mut records = VecDeque::with_capacity(capacity);
-                records.reserve_exact(capacity);
-                records
-            } else {
-                VecDeque::new()
-            },
-            summary: NativeTelemetrySummary::default(),
-            attempted: 0,
-            accepted: 0,
-            dropped: 0,
-            observer_queue_dropped: 0,
-            truncated: false,
-            timing_semantics: TimingSemantics::default(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryMode {
     Off,
@@ -703,6 +753,7 @@ pub(crate) struct TelemetryCollector {
 
 impl TelemetryCollector {
     pub(crate) const MAX_RING_CAPACITY: usize = 65_536;
+    pub(crate) const MAX_UP_SLOT_RECORDS: usize = NATIVE_UP_SLOT_TRACE_CAPACITY;
 
     pub(crate) fn try_new(mode: TelemetryMode, capacity: usize) -> Result<Self, String> {
         if matches!(mode, TelemetryMode::Ring) && capacity > Self::MAX_RING_CAPACITY {

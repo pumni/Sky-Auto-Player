@@ -1,3 +1,4 @@
+use crate::engine::config::EffectiveRuntimePolicy;
 use crate::engine::telemetry::SharedMetrics;
 use parking_lot::Mutex;
 use sky_dispatch_win32::mmcss::{MmcssGuard, PriorityMode};
@@ -75,22 +76,32 @@ pub(super) struct StartupResources {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn initialize_startup(
     priority_mode: PriorityMode,
-    production_wait: bool,
+    effective_policy: EffectiveRuntimePolicy,
     enable_waitable_timer: bool,
     enable_event_wait: bool,
     requested_wait_policy: &'static str,
-    effective_wait_policy: &'static str,
     priority_acquired: &Mutex<String>,
     metrics: &SharedMetrics,
 ) -> StartupResources {
+    let production_wait = effective_policy.production_wait;
+    let effective_wait_policy = if production_wait {
+        "production_calibrated"
+    } else {
+        "legacy_test_wide_spin"
+    };
     *priority_acquired.lock() = "pending".to_string();
     *metrics.requested_priority_mode.lock() = priority_mode.requested_label().to_string();
     *metrics.requested_wait_policy.lock() = requested_wait_policy.to_string();
     *metrics.effective_wait_policy.lock() = effective_wait_policy.to_string();
+    let capture_timer_provenance = effective_policy.observer_enabled;
     let waiter = if production_wait {
-        HybridWaiter::production()
+        HybridWaiter::production_with_timer_provenance(capture_timer_provenance)
     } else {
-        HybridWaiter::with_options(enable_waitable_timer, enable_event_wait)
+        HybridWaiter::with_options_and_timer_provenance(
+            enable_waitable_timer,
+            enable_event_wait,
+            capture_timer_provenance,
+        )
     };
     *metrics.wait_strategy_acquired.lock() = waiter.mode().to_string();
     StartupResources { waiter }

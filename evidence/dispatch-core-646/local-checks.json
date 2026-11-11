@@ -1,0 +1,240 @@
+{
+  "schema": "final_rt_r5_local_evidence_v1",
+  "raw_logs_directory": "%TEMP%\\sky-auto-player-final-rt-r5-evidence-final",
+  "runs": [
+    {
+      "name": "fmt-all-check",
+      "command": "cargo fmt --all -- --check",
+      "working_directory": "rust",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 2759,
+      "stdout_file": "fmt-all-check.stdout.log",
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_file": "fmt-all-check.stderr.log",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy-workspace-strict",
+      "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "working_directory": "rust",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 15836,
+      "stdout_file": "clippy-workspace-strict.stdout.log",
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_file": "clippy-workspace-strict.stderr.log",
+      "stderr_bytes": 611,
+      "stderr_sha256": "11de9ee7491c965d7e1caafdc44384334181bd16572534b7fc3da6e0a653f2c4"
+    },
+    {
+      "name": "test-sky-dispatch-core",
+      "command": "cargo test -p sky_dispatch_core",
+      "working_directory": "rust",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 2808,
+      "stdout_file": "test-sky-dispatch-core.stdout.log",
+      "stdout_bytes": 11943,
+      "stdout_sha256": "c711de024cd9dc40ea87b42da823c0fd1d33ff93221435493552a42c5a0a9a8d",
+      "stderr_file": "test-sky-dispatch-core.stderr.log",
+      "stderr_bytes": 359,
+      "stderr_sha256": "b8cd0fea7eedc79dd4780c0fd4047022ea8fbb5740fdccb396eb377dfd406584"
+    },
+    {
+      "name": "test-sky-dispatch-win32",
+      "command": "cargo test -p sky_dispatch_win32",
+      "working_directory": "rust",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 3644,
+      "stdout_file": "test-sky-dispatch-win32.stdout.log",
+      "stdout_bytes": 21184,
+      "stdout_sha256": "d878ad3f6a0a365410f3c0a9f7029585d03c83384fa778265c58b7cd7ce9e3fc",
+      "stderr_file": "test-sky-dispatch-win32.stderr.log",
+      "stderr_bytes": 407,
+      "stderr_sha256": "d845651852557eb1fa8969dfc4d2ac56221f4bedf46502cb4dfe0f740f4b5528"
+    },
+    {
+      "name": "test-sky-player-test-support",
+      "command": "cargo test -p sky_player --features test-support",
+      "working_directory": "rust",
+      "environment": {
+        "RUST_TEST_NOCAPTURE": "1"
+      },
+      "exit_code": 0,
+      "duration_ms": 134551,
+      "stdout_file": "test-sky-player-test-support.stdout.log",
+      "stdout_bytes": 59387,
+      "stdout_sha256": "a44be846fc0d1c66affd9dbd349dd78015ac6b605d8311600b225e5030e9aa79",
+      "stderr_file": "test-sky-player-test-support.stderr.log",
+      "stderr_bytes": 167552,
+      "stderr_sha256": "1da93503ec0ce86f7733f0576ead0025963e87d9586825725c339912402aa605"
+    },
+    {
+      "name": "test-sky-player-rt-dispatch-no-alloc",
+      "command": "cargo test -p sky_player --features test-support --test rt_dispatch_no_alloc",
+      "working_directory": "rust",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 2420,
+      "stdout_file": "test-sky-player-rt-dispatch-no-alloc.stdout.log",
+      "stdout_bytes": 1715,
+      "stdout_sha256": "bf53b3eecc6696c65796a474ca85e9fb1a2301d996622ceb00a75427dd679f52",
+      "stderr_file": "test-sky-player-rt-dispatch-no-alloc.stderr.log",
+      "stderr_bytes": 178,
+      "stderr_sha256": "6f270eb6ee31a50d29809ba51d4850683b87bd142fa162f09d2c4db9db3db093"
+    },
+    {
+      "name": "test-tauri-test",
+      "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-test",
+      "working_directory": "repository root",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 38491,
+      "stdout_file": "test-tauri-test.stdout.log",
+      "stdout_bytes": 33705,
+      "stdout_sha256": "674605023cb48184386992c6d6d7dbaecf4a8e88947cd2d65eac92dcc9c0a8c4",
+      "stderr_file": "test-tauri-test.stderr.log",
+      "stderr_bytes": 13474,
+      "stderr_sha256": "474f4bde014cfa22338fec3f505adb945928a2efae1c34032c632083c6d932e4"
+    },
+    {
+      "name": "check-tauri-default",
+      "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
+      "working_directory": "repository root",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 10194,
+      "stdout_file": "check-tauri-default.stdout.log",
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_file": "check-tauri-default.stderr.log",
+      "stderr_bytes": 423,
+      "stderr_sha256": "14a693523c4eb30f36733970fb6899bfcecf00f01a49d01d6d2c354340a4077c"
+    },
+    {
+      "name": "xtask-check-all",
+      "command": "cargo xtask check all",
+      "working_directory": "repository root",
+      "environment": {},
+      "exit_code": 0,
+      "duration_ms": 801687,
+      "stdout_file": "xtask-check-all.stdout.log",
+      "stdout_bytes": 18109,
+      "stdout_sha256": "751d55bb8b38dea040124377c531ada0dd2b1ef3799224308f0848dd56e999c1",
+      "stderr_file": "xtask-check-all.stderr.log",
+      "stderr_bytes": 1034,
+      "stderr_sha256": "853efbc5642247d6469a34f4d0ebe0d64f6c51865ce3782736a0b4750f785c94"
+    },
+    {
+      "name": "one-million-admission-nocapture",
+      "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-test valid_one_million_single_key_actions_are_rejected_by_combined_startup_budget -- --nocapture",
+      "working_directory": "repository root",
+      "exit_code": 0,
+      "duration_ms": 45343,
+      "stdout_file": "one-million-admission-nocapture.stdout.log",
+      "stdout_bytes": 383,
+      "stdout_sha256": "2b34c0a85651d4569ab3f8158d0ecf74a62e975d221e4a33212ed72de5038630",
+      "stderr_file": "one-million-admission-nocapture.stderr.log",
+      "stderr_bytes": 1448,
+      "stderr_sha256": "28f660e64ea857721eceda3f8785b3deb13eb91d3de6a48c3a8a051c3808c645"
+    },
+    {
+      "name": "docs-integrity-focused",
+      "command": "cargo test -p sky_xtask current_repository_docs_integrity_passes",
+      "working_directory": "rust",
+      "exit_code": 0,
+      "duration_ms": 21955,
+      "stdout_file": "docs-integrity-focused.stdout.log",
+      "stdout_bytes": 311,
+      "stdout_sha256": "d5d7e68544d919499bfdee79997a37a39337947b20fb3e7b7dc63a8dd0b363e1",
+      "stderr_file": "docs-integrity-focused.stderr.log",
+      "stderr_bytes": 335,
+      "stderr_sha256": "fe1d4ac69814276cf62a96d0fe29097a6498fa1c23b09d8f4149ededaa5077de"
+    }
+  ],
+  "additional_evidence": {
+    "tauri_dev_audit": [
+      {
+        "attempt": "startup interrupted before native window",
+        "command": "bun run tauri dev",
+        "working_directory": "apps/desktop",
+        "exit_code": 1,
+        "duration_ms": null,
+        "stdout_file": "tauri-dev-warning-audit.stdout.log",
+        "stdout_bytes": 73,
+        "stdout_sha256": "d0ebe1b1a30a66334556c050b50a49e2d10c9691505f069ba0cf0a27ac8bffda",
+        "stderr_file": "tauri-dev-warning-audit.stderr.log",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "attempt": "native desktop window observed, intentionally stopped with Ctrl+C",
+        "command": "bun run tauri dev",
+        "working_directory": "apps/desktop",
+        "exit_code": 1,
+        "duration_ms_approximate": 394540,
+        "stdout_file": "tauri-dev-warning-audit-final.stdout.log",
+        "stdout_bytes": 72,
+        "stdout_sha256": "f854d2fe6e2f0b57efa58e3ab67196f82dac20dc590667da941554a83c1d96cf",
+        "stderr_file": "tauri-dev-warning-audit-final.stderr.log",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "handoff_benchmark": {
+      "command": "cargo run -p sky_player --example rt_handoff_bench --features test-support --profile dist",
+      "working_directory": "rust",
+      "environment": {
+        "RT_HANDOFF_BENCH_ITERATIONS": "100"
+      },
+      "exit_code": 0,
+      "outer_elapsed_ms": 119037,
+      "stdout_file": "rt-handoff-iterations-100-final.stdout.log",
+      "stdout_bytes": 604096,
+      "stdout_sha256": "f9e4bc18604d9c40c1c2e21ef192a13720913df51a88822be9b91c7717189788",
+      "stderr_file": "rt-handoff-iterations-100-final.stderr.log",
+      "stderr_bytes": 199,
+      "stderr_sha256": "0a2aaf3034c75347715d5679c4f42056e794d457b9cda9ad4a128c4e5a1bdb34",
+      "summary_file": "handoff-benchmark-summary.json",
+      "summary_sha256": "e7725536163b50fd8e4779bc5f3b890e2448eb51e25499e5bd598b1dc844c693"
+    },
+    "stale_timing_matrix": {
+      "command": "cargo test -p sky_player --features test-support",
+      "environment": {
+        "RUST_TEST_NOCAPTURE": "1"
+      },
+      "exit_code": 0,
+      "stdout_file": "test-sky-player-test-support.stdout.log",
+      "stdout_sha256": "a44be846fc0d1c66affd9dbd349dd78015ac6b605d8311600b225e5030e9aa79",
+      "stderr_file": "test-sky-player-test-support.stderr.log",
+      "stderr_sha256": "1da93503ec0ce86f7733f0576ead0025963e87d9586825725c339912402aa605",
+      "sample_file": "stale-dispatch-timing-matrix.json",
+      "sample_sha256": "13081a28eb2c7973183a2488b0db021b12462599be7901d9bab909e2a0e68669"
+    },
+    "superseded_benchmark_attempts": [
+      {
+        "command": "cargo run -p sky_player --example rt_handoff_bench --features test-support --profile dist",
+        "exit_code": 101,
+        "result": "compile failed after queue push signature change; stale test call sites still passed the removed occupancy argument",
+        "stdout_file": "rt-handoff-iterations-100.stdout.log",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_file": "rt-handoff-iterations-100.stderr.log",
+        "stderr_sha256": "93124bccd2e2caf94811b8869d2f2abd7587ca6067b04ad7b71992d75683283d"
+      },
+      {
+        "command": "cargo run -p sky_player --example rt_handoff_bench --features test-support --profile dist",
+        "exit_code_recorded": null,
+        "result": "superseded output marked expected WaitObservation records as unexpected; final parser fix now accepts the expected records and records packet/wait counts separately",
+        "stdout_file": "rt-handoff-iterations-100-pass.stdout.log",
+        "stdout_sha256": "9693ba3c4005a3d2db7d3238cc22a0ea07a0a7eaa2ea672ba81c64c2f946b7be",
+        "stderr_file": "rt-handoff-iterations-100-pass.stderr.log",
+        "stderr_sha256": "2055d79787c2c43926e30b3fe3b0ea7c4a48f5c9bcd6eeee78f682620b8244b4"
+      }
+    ]
+  }
+}

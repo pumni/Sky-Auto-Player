@@ -31,8 +31,8 @@ evidence:
     label: README — workflow and technical summary
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
-    label: Real-time dispatch architecture
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/rt-dispatch-architecture.md
+    label: Playback engine architecture
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
 ---
 
 ## What the software does

@@ -13,7 +13,7 @@ music-sheet player for Sky: Children of the Light.
   anti-cheat bypass. See [SECURITY.md](SECURITY.md).
 - Keep domain/orchestration separate from Win32 effects. The native timing
   and focus contracts matter; see [architecture](docs/architecture.md) and
-  [dispatch](docs/rt-dispatch-architecture.md) for changes to those boundaries.
+  [playback engine](docs/playback-engine.md) for changes to those boundaries.
 - Rust and Bun are the canonical product/development toolchains; do not
   introduce a Python product runtime or general-purpose repository toolchain.
   The existing Python ClamAV scanner is a narrowly scoped hosted-release
@@ -31,8 +31,9 @@ music-sheet player for Sky: Children of the Light.
   behavior changes.
 - Local editing and testing are within scope. Remote branch/PR/issue/release
   changes need authorization for the requested action.
-- Run focused checks as appropriate. The pre-review full gate for implementation
-  changes is `cargo xtask check all`; native timing, packaging, and release
-  qualification are task-specific. Report what actually ran and what did not.
+- Run focused checks as appropriate. Pre-CI review is allowed; required GitHub
+  CI and Hosted Signing checks must be green at exact HEAD before merge.
+  The pre-review full local gate is `cargo xtask check all`. Report what actually
+  ran and what did not.
 - Maintained names describe responsibilities rather than past project phases;
   genuine version/schema IDs and immutable historical names are exceptions.

@@ -1,0 +1,5 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src\lib.rs (rust\target\debug\deps\sky_dispatch_core-5b3d0910ee6e07e6.exe)
+     Running tests\golden.rs (rust\target\debug\deps\golden-94d902229274bec7.exe)
+     Running tests\properties.rs (rust\target\debug\deps\properties-f36345d6948a657e.exe)
+   Doc-tests sky_dispatch_core

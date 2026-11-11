@@ -15,6 +15,22 @@ use sky_dispatch_win32::input::TrackedKeyState;
 use std::num::NonZeroU64;
 use std::time::Instant;
 
+fn observed_timer_wait_result(sample: &PacketSample) -> WaitResult {
+    WaitResult {
+        outcome: WaitOutcome::Deadline,
+        wake_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
+        spin_ticks: DurationTicks::ZERO,
+        timer_return_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
+        timer_arm_target_qpc: Some(QpcTicks::from_raw(sample.target_ticks)),
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_qpc: Some(QpcTicks::from_raw(sample.target_ticks.saturating_sub(10))),
+        #[cfg(any(test, feature = "test-support"))]
+        timer_arm_generation: Some(1),
+        #[cfg(any(test, feature = "test-support"))]
+        timer_return_generation: Some(1),
+    }
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore = "manual Windows component-cost qualification; see docs/dispatch-forensics-cost-qualification.md"]
@@ -123,17 +139,15 @@ fn dispatch_cost_qualification() {
             for sample in &samples {
                 let wait = record_wait_attempt(
                     Some(&wait_queue),
-                    Some(WaitResult {
-                        outcome: WaitOutcome::Deadline,
-                        wake_qpc: Some(QpcTicks::from_raw(sample.pre_call_ticks)),
-                        spin_ticks: DurationTicks::ZERO,
-                    }),
+                    Some(observed_timer_wait_result(sample)),
                     QpcTicks::from_raw(sample.target_ticks),
                     DurationTicks::from_raw(
                         sample.pre_call_ticks.saturating_sub(sample.target_ticks),
                     ),
                     TimelineTicks::from_raw(sample.target_ticks),
                     QpcTicks::ZERO,
+                    Some(QpcTicks::from_raw(sample.pre_call_ticks)),
+                    &mut wait_metrics,
                 );
                 wait_runtime.pending_wait_observation = wait;
                 publish_pending_wait_observation(
@@ -146,7 +160,7 @@ fn dispatch_cost_qualification() {
             costs
                 .pending_wait_capture_and_queue
                 .push(started.elapsed().as_nanos() as f64 / operations);
-            assert_eq!(wait_metrics.observer_queue_high_watermark, 1);
+            assert_eq!(wait_metrics.observer_queue_high_watermark, 0);
 
             let mut telemetry = TelemetryCollector::new(TelemetryMode::Ring, samples.len());
             let observations = samples
@@ -164,11 +178,15 @@ fn dispatch_cost_qualification() {
                     true,
                     0,
                     0,
-                    Some(TimelineTicks::from_raw(observation.pre_call_qpc.as_u64())),
+                    observation
+                        .pre_call_qpc
+                        .map(|ticks| TimelineTicks::from_raw(ticks.as_u64())),
                     Some(TimelineTicks::from_raw(
                         observation.sendinput_completion_qpc.as_u64(),
                     )),
-                    Some(TimelineTicks::from_raw(observation.pre_call_qpc.as_u64())),
+                    observation
+                        .pre_call_qpc
+                        .map(|ticks| TimelineTicks::from_raw(ticks.as_u64())),
                     QpcTicks::from_raw(observation.sendinput_completion_qpc.as_u64() + 2),
                     false,
                     false,
@@ -199,7 +217,7 @@ fn make_down_observation(sample: PacketSample, index: u32) -> DownObservation {
     observation.physical_target_qpc = QpcTicks::from_raw(sample.target_ticks);
     observation.physical_timing_window = sample.timing_window;
     observation.final_policy_qpc = Some(QpcTicks::from_raw(sample.pre_call_ticks));
-    observation.pre_call_qpc = QpcTicks::from_raw(sample.pre_call_ticks);
+    observation.pre_call_qpc = Some(QpcTicks::from_raw(sample.pre_call_ticks));
     observation.sendinput_completion_qpc = QpcTicks::from_raw(sample.completion_ticks);
     observation.dispatch_ready_qpc = Some(QpcTicks::from_raw(sample.completion_ticks + 2));
     observation.wake_qpc = Some(QpcTicks::from_raw(sample.pre_call_ticks));

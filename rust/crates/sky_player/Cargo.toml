@@ -11,6 +11,7 @@ name = "sky_player"
 default = []
 test-support = ["sky_dispatch_core/test-support", "sky_dispatch_win32/test-support"]
 real-input-acceptance = ["test-support"]
+qpc-read-counting = ["sky_dispatch_win32/qpc-read-counting"]
 
 [dependencies]
 sky_dispatch_core = { path = "../sky_dispatch_core" }
@@ -42,6 +43,10 @@ required-features = ["test-support"]
 
 [[example]]
 name = "rt_corpus_packet_probe"
+required-features = ["test-support"]
+
+[[example]]
+name = "rt_prepared_acceptance"
 required-features = ["test-support"]
 
 [[bin]]

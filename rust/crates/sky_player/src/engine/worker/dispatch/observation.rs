@@ -1,13 +1,16 @@
+#[cfg(any(test, feature = "test-support"))]
+use super::super::super::{QpcClock, TRACE_FLAG_DEFERRED, TraceTiming};
 use super::super::super::{
-    QpcClock, RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
-    trace_outcome_code, trace_send_status_code,
+    RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL,
+    TelemetryCollector, TraceContext, TraceDelivery, UpSlotLossReason, trace_outcome_code,
+    trace_send_status_code,
 };
 use super::super::physical_timing_guard::PhysicalTimingWindow;
+#[cfg(any(test, feature = "test-support"))]
+use super::super::release_runtime_outcome;
 use super::super::wait::WaitObservation;
 use super::super::{
-    DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, release_runtime_outcome,
-    wake_lateness_ticks,
+    DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, wake_lateness_ticks,
 };
 use super::timing::DispatchObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
@@ -40,17 +43,27 @@ pub enum ObserverLifecycle {
     ResetAll,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum DispatchObservation {
     Down(DownObservation),
+    #[cfg(any(test, feature = "test-support"))]
     DownMiss(DownMissObservation),
-    // Retained for the observer schema and test/support scenarios; the
-    // production path currently does not construct this variant.
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-support"))]
     Up(UpObservation),
     Wait(WaitObservation),
     StaleMetadata(StaleMetadataObservation),
+    #[cfg(any(test, feature = "test-support"))]
     BlockedUnfocused(BlockedUnfocusedObservation),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UpSlotObservation {
+    pub timing: sky_dispatch_core::executor::UpSlotTiming,
+    pub epoch_qpc: QpcTicks,
+    pub pre_call_qpc: Option<QpcTicks>,
+    pub packet_not_before_qpc: QpcTicks,
+    pub completion_qpc: QpcTicks,
+    pub confirmed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +73,7 @@ pub struct StaleMetadataObservation {
     pub suppressed_intent_count: usize,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct BlockedUnfocusedObservation {
     pub event_index: u32,
@@ -73,16 +87,19 @@ pub struct BlockedUnfocusedObservation {
     pub down_mask: u16,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DownMissKind {
     UnobservedBacklog,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DownMissTimingEvidence {
     Physical(PhysicalTimingWindow),
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct DownMissObservation {
     pub source_action_index: u32,
@@ -96,17 +113,14 @@ pub struct DownMissObservation {
     pub kind: DownMissKind,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl DownMissObservation {
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn physical_authored_target_qpc(&self) -> QpcTicks {
         match self.timing_evidence {
             DownMissTimingEvidence::Physical(window) => window.authored_target_qpc,
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
@@ -152,18 +166,37 @@ pub struct DownTraceObservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrecisionHandoffEvidence {
     pub admission_wake_qpc: Option<QpcTicks>,
-    pub target_crossing_qpc: QpcTicks,
+    pub target_crossing_qpc: Option<QpcTicks>,
     pub final_policy_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub waiter_deadline_crossing_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_target_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_arm_generation: Option<u64>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_return_generation: Option<u64>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub timer_return_qpc: Option<QpcTicks>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub waiter_return_qpc: Option<QpcTicks>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct DownObservation {
+    pub wait_sequence: u64,
+    pub wait_spin_ticks: u64,
+    pub up_slots: Option<super::observer::PooledUpSlots>,
+    pub up_slot_count: u8,
+    pub up_pre_call_available: bool,
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
     pub physical_target_qpc: QpcTicks,
     pub(crate) physical_timing_window: PhysicalTimingWindow,
     pub final_policy_qpc: Option<QpcTicks>,
-    pub pre_call_qpc: QpcTicks,
+    pub pre_call_qpc: Option<QpcTicks>,
     pub sendinput_completion_qpc: QpcTicks,
     pub previous_sendinput_completion_qpc: Option<QpcTicks>,
     pub previous_sender_completion_known: bool,
@@ -171,7 +204,6 @@ pub struct DownObservation {
     /// Raw QPC wake sample; derivation is deferred to the observer drain.
     pub wake_qpc: Option<QpcTicks>,
     /// Retained as raw handoff evidence for diagnostics and test-support inspection.
-    #[allow(dead_code)]
     pub precision_handoff: Option<PrecisionHandoffEvidence>,
     pub requested_packet: PhysicalPacket,
     pub confirmed_mask: u16,
@@ -187,10 +219,14 @@ impl DownTraceObservation {
 
 impl DownObservation {
     #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
+            wait_sequence: 0,
+            wait_spin_ticks: 0,
+            up_slots: None,
+            up_slot_count: 0,
+            up_pre_call_available: false,
             epoch_qpc: QpcTicks::ZERO,
             allow_pre_epoch_startup_dispatch: false,
             physical_target_qpc: authored_target_qpc,
@@ -203,7 +239,7 @@ impl DownObservation {
                 release_floor_mask: 0,
             },
             final_policy_qpc: None,
-            pre_call_qpc: QpcTicks::ZERO,
+            pre_call_qpc: Some(QpcTicks::ZERO),
             sendinput_completion_qpc: QpcTicks::ZERO,
             previous_sendinput_completion_qpc: None,
             previous_sender_completion_known: false,
@@ -228,7 +264,7 @@ impl DownObservation {
         }
     }
 
-    pub(super) const fn path(self) -> DispatchPath {
+    pub(super) const fn path(&self) -> DispatchPath {
         match (
             self.requested_packet.up_mask != 0,
             self.requested_packet.down_mask != 0,
@@ -247,7 +283,7 @@ impl DownObservation {
         }
     }
 
-    pub(super) const fn requested_count(self) -> usize {
+    pub(super) const fn requested_count(&self) -> usize {
         down_transport_counts(
             self.requested_packet,
             self.confirmed_mask,
@@ -257,7 +293,7 @@ impl DownObservation {
         .0
     }
 
-    pub(super) const fn confirmed_count(self) -> usize {
+    pub(super) const fn confirmed_count(&self) -> usize {
         down_transport_counts(
             self.requested_packet,
             self.confirmed_mask,
@@ -267,7 +303,7 @@ impl DownObservation {
         .1
     }
 
-    pub(super) const fn skipped_count(self) -> usize {
+    pub(super) const fn skipped_count(&self) -> usize {
         down_transport_counts(
             self.requested_packet,
             self.confirmed_mask,
@@ -351,6 +387,7 @@ pub(super) fn record_down_recovery_metrics(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct UpTraceObservation {
     pub event_index: u32,
@@ -369,18 +406,17 @@ pub struct UpTraceObservation {
     pub recovery_required: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct UpObservation {
     pub physical_target_qpc: QpcTicks,
     pub final_policy_qpc: QpcTicks,
-    #[allow(dead_code)]
     pub pre_call_qpc: QpcTicks,
     pub sendinput_completion_qpc: QpcTicks,
     pub dispatch_ready_qpc: Option<QpcTicks>,
     pub pre_call_to_completion_ticks: DurationTicks,
     pub wake_qpc: Option<QpcTicks>,
     /// Retained as raw handoff evidence for diagnostics and test-support inspection.
-    #[allow(dead_code)]
     pub precision_handoff: Option<PrecisionHandoffEvidence>,
     pub requested_mask: u16,
     pub confirmed_mask: u16,
@@ -395,7 +431,7 @@ pub struct UpObservation {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn record_down_send_telemetry(
+pub(crate) fn record_down_send_telemetry(
     observation: &DownObservation,
     telemetry: &mut TelemetryCollector,
     core_post_send_us: u64,
@@ -437,8 +473,9 @@ pub(super) fn record_down_send_telemetry(
     if down_outcome != "sent" {
         trace_flags |= TRACE_FLAG_ANOMALY;
     }
+    let accepted_before = telemetry.output.accepted;
     if let Err(error) = telemetry.try_push(|| {
-        RtTraceRecord::dispatched(
+        let mut record = RtTraceRecord::dispatched(
             TraceContext {
                 event_index: trace.event_index,
                 source_action_index: trace.event_index,
@@ -452,67 +489,56 @@ pub(super) fn record_down_send_telemetry(
                 up_mask: observation.requested_packet.up_mask,
                 down_mask: observation.requested_packet.down_mask,
             },
-            TraceTiming {
-                authored_ticks: trace.authored_ticks,
-                effective_deadline_ticks: trace.effective_deadline_ticks,
-                wake_ticks,
-                wake_qpc_ticks: observation.wake_qpc.map(|ticks| ticks.as_u64()),
-                target_crossing_qpc_ticks: observation
-                    .precision_handoff
-                    .map(|handoff| handoff.target_crossing_qpc.as_u64()),
-                physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
-                physical_not_before_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .packet_not_before_qpc
-                        .as_u64(),
-                ),
-                hold_floor_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .musical_up_not_before_qpc
-                        .as_u64(),
-                ),
-                release_floor_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .down_not_before_qpc
-                        .as_u64(),
-                ),
-                previous_sendinput_completion_qpc_ticks: observation
-                    .previous_sendinput_completion_qpc
-                    .map(|ticks| ticks.as_u64()),
-                previous_sender_completion_known: observation.previous_sender_completion_known,
-                hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
-                release_floor_mask: observation.physical_timing_window.release_floor_mask,
-                final_policy_qpc_ticks: observation.final_policy_qpc.map(|ticks| ticks.as_u64()),
-                pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
-                sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
-                post_send_qpc_ticks: observation.dispatch_ready_qpc.map(|ticks| ticks.as_u64()),
-                observation_qpc_ticks: Some(observer_qpc_ticks.as_u64()),
-                pre_call_ticks,
-                sendinput_completion_ticks,
-                completion_residual_us,
-                core_post_send_duration_us: core_post_send_us,
-                post_send_metrics_available,
-                completion_error_ticks,
-                authored_completion_error_ticks,
-            },
+            super::observer_trace::trace_timing::down_send_trace_timing(
+                observation,
+                super::observer_trace::trace_timing::DownSendTraceTiming {
+                    core_post_send_us,
+                    completion_residual_us,
+                    post_send_metrics_available,
+                    completion_error_ticks,
+                    authored_completion_error_ticks,
+                    pre_call_ticks,
+                    sendinput_completion_ticks,
+                    wake_ticks,
+                    observer_qpc_ticks,
+                },
+            ),
             TraceDelivery {
                 requested: observation.requested_count(),
                 sent: observation.confirmed_count(),
                 skipped: observation.skipped_count(),
                 send_attempts: usize::from(trace.send_attempts),
             },
-        )
+        )?;
+        record.up_slot_attribution_missing =
+            observation.up_slot_count != 0 && observation.up_slots.is_none();
+        record.wait_sequence =
+            (observation.wait_sequence != 0).then_some(observation.wait_sequence);
+        record.wait_spin_ticks = record.wait_sequence.map(|_| observation.wait_spin_ticks);
+        Ok(record)
     }) {
         return Err(DispatchStep::Terminate(format!(
             "native telemetry record overflow: {error}"
         )));
     }
+    if telemetry.output.accepted != accepted_before {
+        super::observer_trace::attach_up_slot_traces(telemetry, observation)?;
+    } else if observation.up_slot_count != 0 {
+        let loss_reason = if observation.up_slots.is_none() {
+            UpSlotLossReason::PoolStorage
+        } else if telemetry.mode == super::super::super::TelemetryMode::Off {
+            UpSlotLossReason::CaptureModeOff
+        } else {
+            UpSlotLossReason::TelemetryRing
+        };
+        telemetry
+            .output
+            .account_up_slot_loss(loss_reason, u64::from(observation.up_slot_count));
+    }
     Ok((down_outcome, force_publish))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn record_release_telemetry(
     telemetry: &mut TelemetryCollector,
     observation: &UpObservation,
@@ -567,9 +593,17 @@ pub(super) fn record_release_telemetry(
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: Some(trace.wake_ticks),
                 wake_qpc_ticks: observation.wake_qpc.map(|ticks| ticks.as_u64()),
+                physical_eligibility_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                waiter_deadline_crossing_qpc_ticks: None,
+                timer_arm_qpc_ticks: None,
+                timer_arm_target_qpc_ticks: None,
+                timer_return_qpc_ticks: None,
+                timer_arm_generation: None,
+                timer_return_generation: None,
+                waiter_return_qpc_ticks: None,
                 target_crossing_qpc_ticks: observation
                     .precision_handoff
-                    .map(|handoff| handoff.target_crossing_qpc.as_u64()),
+                    .and_then(|handoff| handoff.target_crossing_qpc.map(|ticks| ticks.as_u64())),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
@@ -606,6 +640,7 @@ pub(super) fn record_release_telemetry(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const fn up_transport_counts(observation: &UpObservation) -> (usize, usize, usize) {
     up_transport_counts_from_masks(
         observation.requested_mask,
@@ -614,6 +649,7 @@ pub(super) const fn up_transport_counts(observation: &UpObservation) -> (usize, 
     )
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const fn up_transport_counts_from_masks(
     requested_mask: u16,
     confirmed_mask: u16,
@@ -626,6 +662,7 @@ pub(super) const fn up_transport_counts_from_masks(
     )
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn up_dispatch_evidence(observation: &UpObservation) -> DispatchObservationEvidence {
     let (requested_count, confirmed_count, skipped_count) = up_transport_counts(observation);
     DispatchObservationEvidence {
@@ -754,109 +791,5 @@ pub(crate) fn drain_wait_observation(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::DispatchHealthOptions;
-    use std::num::NonZeroU64;
-
-    #[test]
-    fn raw_down_masks_derive_transport_counts_when_observed() {
-        assert_eq!(
-            down_transport_counts(PhysicalPacket::new(0b001, 0b010), 0b010, 0, true,),
-            (2, 2, 0)
-        );
-        assert_eq!(
-            down_transport_counts(PhysicalPacket::new(0b001, 0b110), 0b110, 0, true,),
-            (3, 3, 0)
-        );
-    }
-
-    #[test]
-    fn raw_up_masks_derive_transport_counts_when_observed() {
-        assert_eq!(
-            up_transport_counts_from_masks(0b111, 0b101, 0b010),
-            (3, 2, 1)
-        );
-    }
-
-    #[test]
-    fn wait_observation_defers_conversion_and_health_updates() {
-        let qpc_clock = sky_dispatch_win32::clock::QpcClock::from_frequency_hz(
-            NonZeroU64::new(1_000_000).unwrap(),
-        );
-        let mut health = WorkerHealthState::new(DispatchHealthOptions::default());
-        let mut local_metrics = WorkerMetricsLocal::default();
-        let observation = WaitObservation {
-            outcome: WaitOutcome::Deadline,
-            wake_qpc: Some(QpcTicks::from_raw(2_500)),
-            spin_ticks: DurationTicks::from_raw(100),
-            physical_target_qpc: QpcTicks::from_raw(2_000),
-            planned_wait_ticks: DurationTicks::from_raw(25_000),
-            deadline_ticks: TimelineTicks::from_raw(1_000),
-            epoch_qpc: QpcTicks::from_raw(1_000),
-            allow_pre_epoch_startup_dispatch: false,
-        };
-
-        drain_wait_observation(&observation, &mut health, &mut local_metrics, qpc_clock)
-            .expect("raw wait observation should be drainable");
-
-        assert_eq!(local_metrics.idle_wake_count, 1);
-        assert_eq!(local_metrics.spin_time_us, 100);
-        assert_eq!(local_metrics.wait_target_error_us, 500);
-        assert_eq!(local_metrics.wait_planned_gap_cold_count, 1);
-        assert_eq!(local_metrics.wait_planned_gap_hot_count, 0);
-        assert_eq!(local_metrics.wait_planned_gap_max_us, 0);
-        assert_eq!(local_metrics.physical_target_to_wake_max_ticks, 500);
-        assert_eq!(local_metrics.wait_degraded_samples, 1);
-        assert_eq!(local_metrics.wait_window_sample_count, 1);
-    }
-
-    #[test]
-    fn wait_gap_classification_uses_existing_cold_threshold_boundary() {
-        assert_eq!(
-            classify_wait_gap(
-                DurationTicks::from_raw(19_999),
-                DurationTicks::from_raw(20_000)
-            ),
-            WaitGapClass::Hot
-        );
-        assert_eq!(
-            classify_wait_gap(
-                DurationTicks::from_raw(20_000),
-                DurationTicks::from_raw(20_000)
-            ),
-            WaitGapClass::Cold
-        );
-    }
-
-    #[test]
-    fn interrupted_wait_is_excluded_from_deadline_gap_population() {
-        let qpc_clock = sky_dispatch_win32::clock::QpcClock::from_frequency_hz(
-            NonZeroU64::new(1_000_000).unwrap(),
-        );
-        let mut health = WorkerHealthState::new(DispatchHealthOptions::default());
-        let mut local_metrics = WorkerMetricsLocal::default();
-        let observation = WaitObservation {
-            outcome: WaitOutcome::Interrupted,
-            wake_qpc: None,
-            spin_ticks: DurationTicks::from_raw(100),
-            physical_target_qpc: QpcTicks::from_raw(2_000),
-            planned_wait_ticks: DurationTicks::from_raw(25_000),
-            deadline_ticks: TimelineTicks::from_raw(1_000),
-            epoch_qpc: QpcTicks::from_raw(1_000),
-            allow_pre_epoch_startup_dispatch: false,
-        };
-
-        drain_wait_observation(&observation, &mut health, &mut local_metrics, qpc_clock)
-            .expect("interrupted wait observation should be drainable");
-
-        assert_eq!(local_metrics.idle_wake_count, 1);
-        assert_eq!(local_metrics.spin_time_us, 100);
-        assert_eq!(local_metrics.wait_planned_gap_hot_count, 0);
-        assert_eq!(local_metrics.wait_planned_gap_cold_count, 0);
-        assert_eq!(local_metrics.wait_planned_gap_max_us, 0);
-        assert_eq!(local_metrics.physical_target_to_wake_max_ticks, 0);
-        assert_eq!(local_metrics.wait_degraded_samples, 0);
-        assert_eq!(local_metrics.wait_window_sample_count, 0);
-    }
-}
+#[path = "observation_tests.rs"]
+mod tests;

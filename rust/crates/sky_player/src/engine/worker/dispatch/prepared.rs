@@ -4,9 +4,9 @@ use super::super::{
     FinalControlSignals, FinalDownVerdict, FinalTargetSignals, PreparedDispatchFrame, QpcClock,
     RuntimeDispatchCoordinator, TargetStamp, TrackedKeyState, WorkerConfig, WorkerHealthState,
     WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState,
-    apply_final_down_rejection, final_down_control_verdict, final_down_modifier_verdict,
-    final_down_post_modifier_verdict, final_down_target_admission, focus_matches,
-    handle_final_focus_loss, modifier_guard_rejection_step, owner_rejection_reason,
+    apply_final_down_rejection, final_down_control_verdict, final_down_fresh_target_admission,
+    final_down_modifier_verdict, final_down_post_modifier_verdict, final_down_target_hint,
+    focus_matches, handle_final_focus_loss, modifier_guard_rejection_step, owner_rejection_reason,
     record_final_gate_rejection, record_sendinput_pre_call_lateness,
 };
 use super::authored::record_prepared_normal_send_outcome;
@@ -14,9 +14,10 @@ use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SessionTarget;
 use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
 use crate::engine::telemetry::metrics::PrecisionPacketTimingObservation;
+use sky_dispatch_core::coordinator::PreparedAuthoredCommitProof;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 enum PreparedNormalPrecisionResult {
     Rejected(FinalDownVerdict),
@@ -84,7 +85,7 @@ fn send_prepared_normal_precision_frame(
         let Some(expected) = preflight_target else {
             return Err("prepared Down reached final admission without target proof");
         };
-        let down_admission = final_down_target_admission(FinalTargetSignals {
+        let target_hint = final_down_target_hint(&FinalTargetSignals {
             expected,
             require_focus,
             focus_active,
@@ -94,8 +95,8 @@ fn send_prepared_normal_precision_frame(
             #[cfg(any(test, feature = "test-support"))]
             post_focus_control_signals: Some(control_signals),
         });
-        if down_admission != FinalDownVerdict::Allowed {
-            return Ok(PreparedNormalPrecisionResult::Rejected(down_admission));
+        if target_hint != FinalDownVerdict::Allowed {
+            return Ok(PreparedNormalPrecisionResult::Rejected(target_hint));
         }
     }
 
@@ -130,6 +131,21 @@ fn send_prepared_normal_precision_frame(
             system_power,
         );
         let expected = preflight_target.expect("prepared Down target was checked above");
+        let fresh_target_verdict = final_down_fresh_target_admission(FinalTargetSignals {
+            expected,
+            require_focus,
+            focus_active,
+            target,
+            #[cfg(any(test, feature = "test-support"))]
+            post_focus_race_hook,
+            #[cfg(any(test, feature = "test-support"))]
+            post_focus_control_signals: Some(control_signals),
+        });
+        if fresh_target_verdict != FinalDownVerdict::Allowed {
+            return Ok(PreparedNormalPrecisionResult::Rejected(
+                fresh_target_verdict,
+            ));
+        }
         #[cfg(test)]
         if let Some(hook) = final_lease_age_hook {
             hook(supervisor_expired);
@@ -227,6 +243,7 @@ fn finish_prepared_normal_precision_result(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_prepared_normal_frame(
     frame: &PreparedDispatchFrame,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
     config: &WorkerConfig,
     resources: &mut WorkerResources,
     health: &mut WorkerHealthState,
@@ -364,6 +381,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     debug_assert_eq!(view.prepared_packet.packet(), view.packet_masks);
     record_prepared_normal_send_outcome(
         view,
+        authored_commit_proof,
         config,
         health,
         timing,
@@ -386,6 +404,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_down_send_result(
     view: &AuthoredBatchView,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
     config: &WorkerConfig,
     health: &mut WorkerHealthState,
     timing: &WorkerTimingState,
@@ -410,7 +429,15 @@ pub(super) fn record_down_send_result(
         && result.evidence.attempts != 0
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
-        hook.record_down_sender_attempt(result.evidence.started_ticks.map(|ticks| ticks.as_u64()));
+        hook.record_down_sender_attempt(
+            result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
+            physical_timing_window.authored_target_qpc.as_u64(),
+            physical_timing_window.packet_not_before_qpc.as_u64(),
+            runtime
+                .last_dispatch_deadline_wake_qpc
+                .map(|ticks| ticks.as_u64()),
+            hook.stale_packet_commit_count.load(Ordering::Acquire),
+        );
     }
     if result.evidence.attempts != 0 {
         local_metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
@@ -439,7 +466,7 @@ pub(super) fn record_down_send_result(
             local_metrics,
         )
     {
-        return DispatchStep::Terminate(error);
+        return DispatchStep::TerminateStatic(error);
     }
     runtime.previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
     runtime.previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();
@@ -519,6 +546,7 @@ pub(super) fn record_down_send_result(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
+        authored_commit_proof,
         observer,
     )
 }

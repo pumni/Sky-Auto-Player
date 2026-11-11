@@ -1,0 +1,395 @@
+{
+  "schema": "final-rt-r6-local-checks-v1",
+  "repository": "pumni/Sky-Auto-Player",
+  "branch": "perf/dispatch-core-20261109",
+  "starting_commit": "3c155c127c8f609aa3b2ac4a91351f6444999287",
+  "tested_source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+  "baseline_instrumentation_tree": "0498afa1c6e1eefdc93984cb5a983c0399055a27",
+  "environment": {
+    "os": "Windows 11 x64",
+    "qpc_frequency_hz": 10000000,
+    "captured_at": "2026-11-11 Asia/Bangkok",
+    "benchmark_sender": "deterministic test-support mock",
+    "benchmark_waiter": "Frozen production-calibrated"
+  },
+  "checks": [
+    {
+      "name": "fmt-all-check",
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 2.548,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/fmt-all-check.stdout.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/fmt-all-check.stderr.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "name": "clippy-workspace-strict",
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.999,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/clippy-workspace-strict.stdout.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/clippy-workspace-strict.stderr.log",
+        "bytes": 73,
+        "sha256": "00de11d07ee4f8ab8f90ab52110f7d24da5bcf56e5625e392183b140c3dbdb0e"
+      }
+    },
+    {
+      "name": "test-sky-dispatch-core",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_core --locked",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 2.447,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-sky-dispatch-core.stdout.log",
+        "bytes": 12039,
+        "sha256": "ab3567e7726574320509965e55d4bc9b930a795f18c9ecaa96053cb6efb859ec"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-sky-dispatch-core.stderr.log",
+        "bytes": 379,
+        "sha256": "13c0602fd4344ac3386fd03375cbe6fb0c3a2ced0d6c8dbdbc3a23c30a65e21d"
+      }
+    },
+    {
+      "name": "test-sky-dispatch-win32",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --locked",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 2.614,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-sky-dispatch-win32.stdout.log",
+        "bytes": 21184,
+        "sha256": "052f0ee019bc880d326391dbd40ec33b8827c3ffb50c33b6e5845424994837bc"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-sky-dispatch-win32.stderr.log",
+        "bytes": 422,
+        "sha256": "95cd5d54ec819009c83141d129bf48155e78f9ea0561a8b17bcf56929cb1d487"
+      }
+    },
+    {
+      "name": "test-sky-player-test-support",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support --locked",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 137.115,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-sky-player-test-support.stdout.log",
+        "bytes": 56874,
+        "sha256": "13b5a93f02033a5f63e9ce0eaafc2a46dd29741cda7a0c83151e3c769b7ebc7d"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-sky-player-test-support.stderr.log",
+        "bytes": 382,
+        "sha256": "e3d83aa25f0b8150f5e107c0c1b1a9cffd0b4fadc46ccd7f643b32a2f6fd765d"
+      }
+    },
+    {
+      "name": "rt-dispatch-no-alloc",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc --locked",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 2.219,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/rt-dispatch-no-alloc.stdout.log",
+        "bytes": 1715,
+        "sha256": "6f64c89014b20868a50d54846cb2dba31c41d67fc666473c1a53431d42c8a3bd"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/rt-dispatch-no-alloc.stderr.log",
+        "bytes": 185,
+        "sha256": "f10680c905fd209a88ed8dc7401a22cb7c9dd8b1b7bd9b9ad659166d704e880a"
+      }
+    },
+    {
+      "name": "test-tauri-test",
+      "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-test --locked",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 67.25,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-tauri-test.stdout.log",
+        "bytes": 33705,
+        "sha256": "3431b555ca12f70debd48180e9f17caf4f6569d7c0486e937b0fa6ccc45d5a69"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/test-tauri-test.stderr.log",
+        "bytes": 13687,
+        "sha256": "8e0329207514d40ee0a4afa2d015195b4ad22058d5a1df49415c5eaa218a49ac"
+      }
+    },
+    {
+      "name": "check-tauri-default",
+      "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --locked",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 5.566,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/check-tauri-default.stdout.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/check-tauri-default.stderr.log",
+        "bytes": 240,
+        "sha256": "f48b457e5cf4544e905fdb29101459f4a9205105d380fd18213ce9da21174d0f"
+      }
+    },
+    {
+      "name": "xtask-check-all",
+      "command": "cargo xtask check all",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 822.425,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/xtask-check-all.stdout.log",
+        "bytes": 18109,
+        "sha256": "e5013b307057a222d8b4dbd95257085c34d873e9305286435f8ee5ec94f11b85"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/xtask-check-all.stderr.log",
+        "bytes": 1048,
+        "sha256": "51168af9abecdea00d1362b223203b698ea18d7a164e548406c26b14d9d6d19d"
+      }
+    },
+    {
+      "name": "core-stale-lookahead-regression",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_dispatch_core next_stale_packet_target_ticks --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.368,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/core-stale-lookahead-regression.stdout.log",
+        "bytes": 520,
+        "sha256": "14f2675953c0c4b298376f9d308e3fa58a53bc68984940062ec53d6d32d22530"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/core-stale-lookahead-regression.stderr.log",
+        "bytes": 347,
+        "sha256": "29fa26c53acd7f1dd6db4e4218eec26b659df1c581a2e25c8cbdd2f1241f33f2"
+      }
+    },
+    {
+      "name": "stale-before-down-regression",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support actual_b_worker_waits_for_stale_metadata_before_the_next_physical_down --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 4.47,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stale-before-down-regression.stdout.log",
+        "bytes": 345,
+        "sha256": "8fa99fd041b8419bcea1879c8742661b26c024d5af0430257141e6ce8c59d19c"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stale-before-down-regression.stderr.log",
+        "bytes": 357,
+        "sha256": "d575cb129c35c28d4595e46c2bac5ff37073c879491506120c6fe939d995a298"
+      }
+    },
+    {
+      "name": "floor-held-mixed-timestamp",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.595,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/floor-held-timestamp-regression.stdout.log",
+        "bytes": 350,
+        "sha256": "73c385606891c3fed109c6f585184bcf764f17a184ffaa02914fe438b873d22f"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/floor-held-timestamp-regression.stderr.log",
+        "bytes": 277,
+        "sha256": "564ba879b9d31af5f19e69ce354e4790487fd71919c6b6227c13e4e6953fa09c"
+      }
+    },
+    {
+      "name": "up-only-timestamp",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support actual_b_worker_timestamp_hook_records_up_only_sender_provenance --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.402,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/up-only-timestamp-regression.stdout.log",
+        "bytes": 339,
+        "sha256": "0f0d787bfced3dfb999edf9a6a6642367c7b94dea107ef471e214df35a12b43d"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/up-only-timestamp-regression.stderr.log",
+        "bytes": 277,
+        "sha256": "541037b12578a8a98905205834835ab18e9628c18b81e7cf1dc8441db6756ea4"
+      }
+    },
+    {
+      "name": "simultaneous-up-down-final-control",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support final_control_rejects_staged_down_and_up_before_send --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.597,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/simultaneous-up-down-final-control.stdout.log",
+        "bytes": 331,
+        "sha256": "c5239e9bdf63fb07fe253dff9e271b05d1cfc3de7f4dc8adbc6c69e984eda32c"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/simultaneous-up-down-final-control.stderr.log",
+        "bytes": 277,
+        "sha256": "2a475c978ec578d26ca2c7f5731323ac0e0fb691e30136aa55fb8ffaa443f09d"
+      }
+    },
+    {
+      "name": "stop-skip-candidate-calibration-control",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support accepted_stop_or_skip_during_candidate_calibration_cannot_publish_armed --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.435,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stop-skip-candidate-calibration-control.stdout.log",
+        "bytes": 346,
+        "sha256": "322e2e1d2756f4bfe0d57ee536210cd6c06dbcf40632ec31cf219daa82154117"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stop-skip-candidate-calibration-control.stderr.log",
+        "bytes": 277,
+        "sha256": "6a85a710b34b85931c1569581610bb4f4122a8f8e420b10d293b60320ca85acb"
+      }
+    },
+    {
+      "name": "quit-after-armed-first-down-gate",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support quit_after_armed_publication_wait_and_first_down_gate_never_sends --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 0.432,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/quit-after-armed-first-down-gate.stdout.log",
+        "bytes": 340,
+        "sha256": "394b377163b9a4088815ae6d133d9f440f7504bad35c8d9d41027cadcd966ab9"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/quit-after-armed-first-down-gate.stderr.log",
+        "bytes": 277,
+        "sha256": "f93afae2a6905492b902a6dbc921eb02ef9b2e50a3cd7e88a2251397cdd02766"
+      }
+    },
+    {
+      "name": "late-quit-32-33-10k",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 1.105,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/late-quit-32-33-10k-regression.stdout.log",
+        "bytes": 342,
+        "sha256": "25e563bdda69a9b9c087a79ed6fbe1e9794de7ef6c2c52bd521d5ffda01635fc"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/late-quit-32-33-10k-regression.stderr.log",
+        "bytes": 277,
+        "sha256": "7dd84143ce3fd2472eab9d785ca41ebc38fbf90cbda6bdd8e945b7aba9c66396"
+      }
+    },
+    {
+      "name": "stale-timing-matrix-after",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support actual_b_worker_reports_stale_dispatch_timing_matrix --locked -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 121.27,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stale-after-arbitration.stdout.log",
+        "bytes": 458,
+        "sha256": "a90e6da3ba2fbb9eac4d6a0d080dd0dd24a1a0aef771a813898e4a291df0a182"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stale-after-arbitration.stderr.log",
+        "bytes": 492247,
+        "sha256": "5aa4996435ef7b0b9561ab19c20d1d60f26c8e3e21b98e21b72528ed4af97ec9"
+      }
+    },
+    {
+      "name": "stale-timing-matrix-before",
+      "command": "cargo test --manifest-path rust/Cargo.toml -p sky_player --features test-support actual_b_worker_reports_stale_dispatch_timing_matrix -- --nocapture",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "0498afa1c6e1eefdc93984cb5a983c0399055a27",
+      "exit_code": 0,
+      "duration_seconds": 128.752,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stale-before-arbitration.stdout.log",
+        "bytes": 458,
+        "sha256": "23258bd2e44956c69d7704664a87f2809b9d59a7c2a9d08dc2dbcf14eda62cad"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/stale-before-arbitration.stderr.log",
+        "bytes": 488691,
+        "sha256": "575bcb885d5d8cda77045afb207c7269e29e343e8725c09442a1186b44668801"
+      }
+    },
+    {
+      "name": "rt-handoff-iterations-100",
+      "command": "RT_HANDOFF_BENCH_ITERATIONS=100 cargo run --manifest-path rust/Cargo.toml -p sky_player --example rt_handoff_bench --features test-support --profile dist",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 115.064,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/benchmarks/rt-handoff-iterations-100.raw.json",
+        "bytes": 604582,
+        "sha256": "bd1c59972a6cd5993cda80fae2898394e3a5860014843702f7bb6ce252d675dd"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/rt-handoff-benchmark.stderr.log",
+        "bytes": 204,
+        "sha256": "027539f6ffe2d3d3db441ccb2b0a585868678717249261d3c2d2a0a407ec8803"
+      }
+    },
+    {
+      "name": "xtask-check-static-after-evidence",
+      "command": "cargo xtask check static",
+      "cwd": "D:\\Dev\\Sky-Auto-Player",
+      "source_tree": "121aecb4a08b80d59efbaa26dbf2fb0cab378fd3",
+      "exit_code": 0,
+      "duration_seconds": 35.468,
+      "stdout": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/xtask-check-static-after-evidence.stdout.log",
+        "bytes": 17965,
+        "sha256": "0a9226de52dc4935f3b24d83a0fe444296d71a7d06e0a55e7fc52727a062b29d"
+      },
+      "stderr": {
+        "path": "evidence/dispatch-core-646/final-rt-r6/logs/xtask-check-static-after-evidence.stderr.log",
+        "bytes": 219,
+        "sha256": "52fb365719e2ff0d44fe1856fe24ff2729b8211ae677380afbfa4d3f59a6502b"
+      }
+    }
+  ]
+}

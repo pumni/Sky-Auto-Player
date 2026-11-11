@@ -7,6 +7,9 @@ use thiserror::Error;
 use crate::time::TimelineTicks;
 
 pub const MAX_KEYS: usize = 15;
+/// Combined capacity budget for retained schedule, coordinator and executor
+/// storage. This is a calculated allocation bound, not a process RSS limit.
+pub const MAX_RETAINED_DISPATCH_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RuntimeScheduleError {
@@ -150,6 +153,31 @@ pub struct CompiledBatch {
     pub packet_id: PacketId,
 }
 
+/// A single musical Down intent within an immutable Down chord.
+///
+/// Pairs each Down generation with its exact authored Up counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledDownIntent {
+    pub generation_id: GenerationId,
+    pub key_slot: KeySlot,
+    pub scan_code: u16,
+    pub source_action_index: u32,
+    pub reason_id: ReasonId,
+    pub paired_up_offset_us: u64,
+    pub paired_up_source_action_index: u32,
+}
+
+/// One immutable Down chord representing an atomic transport batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledDownChord {
+    pub chord_index: usize,
+    pub scheduled_us: u64,
+    pub down_mask: u16,
+    pub source_action_index: u32,
+    pub reason_id: ReasonId,
+    pub intents: SmallVec<[CompiledDownIntent; MAX_KEYS]>,
+}
+
 /// One physical dispatch boundary for every authored timestamp.
 ///
 /// The intent arena ranges are canonicalized: all release intents are stored
@@ -188,9 +216,110 @@ pub struct RuntimeSchedule {
     pub generation_count: u64,
     pub key_registry: KeyRegistry,
     pub reason_table: Vec<String>,
+    pub down_chords: Vec<CompiledDownChord>,
+    pub schedule_end_offset_us: u64,
+    /// Compile-phase capacity accounting carried into startup admission.
+    pub compile_memory: CompileMemoryMetrics,
+}
+
+/// Calculated capacity for overlapping compilation allocations. This is not
+/// a complete application/process peak and excludes allocator metadata and
+/// unrelated caller allocations not supplied to the compiler.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompileMemoryMetrics {
+    pub caller_retained_capacity_bytes: usize,
+    pub input_capacity_bytes: usize,
+    pub temporary_capacity_bytes: usize,
+    pub schedule_capacity_bytes: usize,
+    pub phase_peak_capacity_bytes: usize,
+}
+
+/// Capacity-based storage report for the compiler-owned runtime schedule.
+/// Allocator metadata and external allocations such as source actions are not
+/// included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeScheduleMemoryMetrics {
+    pub packets_capacity: usize,
+    pub batches_capacity: usize,
+    pub intents_capacity: usize,
+    pub down_chords_capacity: usize,
+    pub reason_table_capacity: usize,
+    pub reason_text_capacity_bytes: usize,
+    pub heap_payload_bytes: usize,
+    pub struct_bytes: usize,
+    pub compile_memory: CompileMemoryMetrics,
 }
 
 impl RuntimeSchedule {
+    pub fn memory_metrics(&self) -> Result<RuntimeScheduleMemoryMetrics, String> {
+        let packets = self
+            .packets
+            .capacity()
+            .checked_mul(std::mem::size_of::<CompiledPacket>())
+            .ok_or_else(|| "schedule packet capacity size overflow".to_string())?;
+        let batches = self
+            .batches
+            .capacity()
+            .checked_mul(std::mem::size_of::<CompiledBatch>())
+            .ok_or_else(|| "schedule batch capacity size overflow".to_string())?;
+        let intents = self
+            .intents
+            .capacity()
+            .checked_mul(std::mem::size_of::<CompactIntent>())
+            .ok_or_else(|| "schedule intent capacity size overflow".to_string())?;
+        let down_chords = self
+            .down_chords
+            .capacity()
+            .checked_mul(std::mem::size_of::<CompiledDownChord>())
+            .ok_or_else(|| "schedule Down chord capacity size overflow".to_string())?;
+        let reason_headers = self
+            .reason_table
+            .capacity()
+            .checked_mul(std::mem::size_of::<String>())
+            .ok_or_else(|| "schedule reason table capacity size overflow".to_string())?;
+        let reason_text_capacity_bytes =
+            self.reason_table.iter().try_fold(0usize, |total, reason| {
+                total
+                    .checked_add(reason.capacity())
+                    .ok_or_else(|| "schedule reason text capacity size overflow".to_string())
+            })?;
+        let heap_payload_bytes = [
+            packets,
+            batches,
+            intents,
+            down_chords,
+            reason_headers,
+            reason_text_capacity_bytes,
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, value| {
+            total
+                .checked_add(value)
+                .ok_or_else(|| "schedule heap payload size overflow".to_string())
+        })?;
+        Ok(RuntimeScheduleMemoryMetrics {
+            packets_capacity: self.packets.capacity(),
+            batches_capacity: self.batches.capacity(),
+            intents_capacity: self.intents.capacity(),
+            down_chords_capacity: self.down_chords.capacity(),
+            reason_table_capacity: self.reason_table.capacity(),
+            reason_text_capacity_bytes,
+            heap_payload_bytes,
+            struct_bytes: std::mem::size_of::<Self>(),
+            compile_memory: self.compile_memory,
+        })
+    }
+
+    #[inline]
+    pub fn down_chords(&self) -> &[CompiledDownChord] {
+        &self.down_chords
+    }
+
+    #[inline]
+    pub fn schedule_end_offset_us(&self) -> u64 {
+        self.schedule_end_offset_us
+    }
+
     pub fn view_packet_ticks(
         &self,
         index: usize,

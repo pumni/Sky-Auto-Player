@@ -61,16 +61,39 @@ full pinned SHA. Gzip traces and test logs were removed from the current tree,
 - [Dispatch forensics native sessions](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/dispatch-forensics-native-sessions.csv)
 - [Final Down admission native runs](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/final-down-admission-native-runs.csv)
 
+## Issue #646 qualification evidence (Phase A2 & C0)
+
+Archived from `perf/dispatch-core-20261109` at immutable commit [`536f7fb2a7f1e180684e0211c26bef22d6ee1b77`](https://github.com/pumni/Sky-Auto-Player/tree/536f7fb2a7f1e180684e0211c26bef22d6ee1b77):
+
+| Report | Description | Pinned Record |
+| --- | --- | --- |
+| Issue #646 Phase A2 Candidate Smoke Summary | 22/22 native safety scenarios on candidate `4b1cec7` (clean) | [read](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/evidence/dispatch-core-646/a2-smoke-4b1cec7-summary.md) |
+| Issue #646 Phase C0 Requalification | Oracle R4 requalification for frozen C0 comparator `b52106b4` | [read](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/evidence/dispatch-core-646/c0-requalification-b52106b4-r4.md) |
+
+## Retired Architecture Decision Records (Phase D)
+
+The following ADRs were superseded by the unified 15-slot executor and Frozen waiter architecture ([`docs/playback-engine.md`](playback-engine.md)) and retired from the active tree. They remain preserved at immutable commit [`536f7fb2a7f1e180684e0211c26bef22d6ee1b77`](https://github.com/pumni/Sky-Auto-Player/tree/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr):
+
+- `ADR-0001`: Packetized native input dispatch
+- `ADR-0010`: Physical timing feasibility
+- `ADR-0011`: Normal playback down continuity
+- `ADR-0012`: User-configurable normal down continuity
+- `ADR-0013`: Extended normal down continuity range
+- `ADR-0014`: Deterministic prepared dispatch
+- `ADR-0015`: Prepared down validity and causal admission
+- `ADR-0016`: Causal authorization and floor-only physical timing
+- `ADR-0017`: Current down continuity and physical min hold
+- `ADR-0018`: Resumable release barrier and final lease age
+
 ## Kept under `docs/evidence/` because active material references them
 
 - [Native playback test parity baseline](evidence/issue-540-native-playback-test-parity.json):
   referenced by [architecture](architecture.md) for the original test inventory.
 - [Wake-calibration projection](evidence/wake-calibration-qualification-20261018.json)
   and [checksum](evidence/wake-calibration-qualification-20261018.json.sha256):
-  referenced by [timing evidence](rt-dispatch-timing-evidence.md),
-  `scripts/test_startup_calibration_evidence_export.ps1`, and line-ending rules.
+  referenced by startup calibration verification, `scripts/test_startup_calibration_evidence_export.ps1`, and line-ending rules.
 
-Keep `docs/releases/` and `docs/adr/`: release notes are inputs to the
-Rust release tooling, and ADRs preserve decision history. The held
+Keep `docs/releases/` and maintained `docs/adr/`: release notes are inputs to the
+Rust release tooling, and active ADRs preserve decision history. The held
 `docs/v4-hosted-signing-proof.md` path is also a checked toolchain-pin consumer.
 No release tooling or native input/timing semantics are changed here.

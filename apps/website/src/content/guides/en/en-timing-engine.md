@@ -22,14 +22,11 @@ related:
   - troubleshooting
 evidence:
   - category: architecture
-    label: Timing principles
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/timing-principles.md
+    label: Playback engine architecture
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
   - category: architecture
-    label: Hold-frame timing model
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/hold-frame-model.md
-  - category: architecture
-    label: Real-time dispatch architecture
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/rt-dispatch-architecture.md
+    label: Playback verification and qualification protocol
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-verification.md
   - category: implementation
     label: README — timing summary
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
@@ -46,27 +43,24 @@ guarantee that the game receives keystrokes at exactly the intended musical time
 
 ## Note scheduling
 
-Instead of replaying a fixed list of delays, Sky Auto Player places every note on a
-timeline driven by the sheet's tempo and the FPS setting you configure inside Sky.
-When the scheduler reaches a note's position on that timeline, it dispatches the keystroke.
-
-The scheduler is **pure**: it has no wall-clock dependency and no `SendInput` calls. It
-produces a schedule of events; the infrastructure and platform layers execute those events.
-This separation makes the timing logic unit-testable against a controlled clock.
+Instead of replaying a fixed list of delays, Sky Auto Player compiles notes into an
+ordered stream driven by the sheet's tempo, your target FPS, and hold parameters.
+A 15-slot executor manages key-hold obligations ($H$) and release gaps ($G$)
+deterministically without dual cursors.
 
 ## Chord alignment
 
 Notes that belong to the same chord are submitted in a single `SendInput` call containing
-all the keys in that chord. This eliminates sender-side skew between notes that should
-sound simultaneously. Whether the game processes them simultaneously depends on the
-game's own sampling loop.
+all the keys in that chord. When disjoint key releases and down chords coincide, they are
+batched together (with Up events preceding Down events in the same call) to eliminate
+sender-side skew.
 
-## Hold semantics
+## Hold semantics and timing floors
 
-A hold note (sustained key) is pressed at the note's start time and released after its
-full notated duration. The next note starting close behind does not cause the hold to be
-clipped short — the hold and the next note are submitted as separate `SendInput` events
-on their own timeline positions.
+A hold note (sustained key) is held for at least the minimum hold floor $H$:
+$$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$$
+where $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$. Retriggering the same key respects
+the release gap floor $G = T$ before sending the next Down.
 
 ## Hold-frame selection
 
@@ -81,24 +75,24 @@ The hold duration is expressed as a multiple of one game frame at the configured
 Choose 1.25 or 1.5 if short holds are not registering reliably on your machine.
 The FPS setting must match the FPS configured inside Sky for hold timing to be correct.
 
-## Latency adaptation
+## Calibration and robust wake guard
 
-Sky Auto Player measures the time between when a `SendInput` call is scheduled and when
-it actually completes, building a running profile of sender-side completion error. It
-uses this measurement to adjust the lead time of future dispatches — sending slightly
-earlier to compensate for observed delay.
+Sky Auto Player measures Windows kernel timer wake errors during startup host calibration,
+deriving a robust wake guard ($\text{median} + 6 \times \text{MAD}$). During playback, the
+production waiter uses this frozen wake guard to combine efficient kernel-timer sleep
+with a microsecond-accurate QPC spin loop, eliminating drift without uncalibrated runtime jitter.
 
-This is **sender-side compensation only**. The adaptation reduces systematic drift caused
-by OS scheduling jitter on your machine. It does not correct for network latency, game
-frame pacing, or any factor on the game's side. The telemetry displayed in the HUD
-reports the measured sender-side result, not a universal timing guarantee.
+This is **sender-side timing only**. It reduces systematic delay caused by OS scheduling
+jitter on your machine. It does not correct for network latency or game frame pacing.
+The telemetry displayed in the Diagnostics panel reports the measured sender-side result,
+not an audible or in-game guarantee.
 
 ## Rust dispatch worker
 
-A Rust worker owns the dispatch loop: compilation of the note schedule, the
-high-resolution timing wait, focus tracking, `SendInput` calls, cleanup, and native
-telemetry. The Tauri/React shell renders the canonical desktop UI and native Rust services own
-the application policy. The production path runs through the native Rust services and Tauri shell.
+A dedicated Rust worker thread owns the dispatch loop: compilation of the note schedule,
+the high-resolution timing wait, focus tracking, `SendInput` calls, cleanup, and native
+telemetry. The Tauri/React shell renders the desktop UI, while native Rust services own
+the playback state and safety policies.
 
 ## Known limitations
 

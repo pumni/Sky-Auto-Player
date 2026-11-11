@@ -83,18 +83,21 @@ fn assert_final_gate_source_order(source: &str) {
         .nth(1)
         .expect("authored finalizer");
     let crossing = finalizer
-        .find("let target_crossing_qpc")
+        .find("let Some(target_crossing_qpc) = resolve_target_crossing(")
         .expect("target crossing handoff");
     assert!(!finalizer.contains("wait_to_precision_boundary"));
     let control = finalizer
         .find("final_down_control_verdict")
         .expect("final control gate");
-    let target = finalizer
-        .find("final_down_target_admission")
-        .expect("final target/focus gate");
+    let target_hint = finalizer
+        .find("final_down_target_hint")
+        .expect("cheap target/focus hint");
     let modifier_guard = finalizer
         .find("final_down_modifier_verdict")
         .expect("fixed modifier guard");
+    let fresh_target = finalizer
+        .find("final_down_fresh_target_admission")
+        .expect("post-modifier foreground and owner proof");
     let post_modifier = finalizer
         .find("final_down_post_modifier_verdict")
         .expect("shared post-modifier authority policy");
@@ -102,11 +105,16 @@ fn assert_final_gate_source_order(source: &str) {
         .find("let final_policy_qpc")
         .expect("final policy timestamp");
     assert!(crossing < control);
-    assert!(control < target);
-    assert!(target < modifier_guard);
-    assert!(modifier_guard < post_modifier);
+    assert!(control < target_hint);
+    assert!(target_hint < modifier_guard);
+    assert!(modifier_guard < fresh_target);
+    assert!(fresh_target < post_modifier);
     assert!(post_modifier < pre_call);
-    assert!(target < pre_call);
+    assert!(target_hint < pre_call);
+
+    let admission_helpers = include_str!("authored/admission.rs");
+    assert!(admission_helpers.contains("super::resolve_target_crossing_qpc("));
+    assert!(admission_helpers.contains("Err(DispatchStep::Continue) => Ok(None)"));
 
     let finalizer_body = finalizer
         .split("\nfn final_atomic_revalidation")
@@ -144,16 +152,13 @@ fn assert_final_gate_source_order(source: &str) {
     assert!(lease_proof < final_control);
 
     let target_admission = admission
-        .split("pub(crate) fn final_down_target_admission")
+        .split("pub(crate) fn final_down_fresh_target_admission")
         .nth(1)
-        .expect("final target admission");
+        .expect("fresh final target admission");
     let target_admission_body = target_admission
-        .split("/// Recheck only bounded atomic target")
+        .split("/// Compatibility helper")
         .next()
         .expect("target admission body");
-    let atomic_focus = target_admission_body
-        .find("focus_matches(target.require_focus")
-        .expect("published focus hint check");
     let identity = target_admission_body
         .find("owner_identity_status(")
         .expect("generation-bound owner proof");
@@ -166,7 +171,6 @@ fn assert_final_gate_source_order(source: &str) {
     let final_atomic_recheck = target_admission_body
         .find("final_down_atomic_revalidation(")
         .expect("post-focus atomic revalidation");
-    assert!(atomic_focus < identity);
     assert!(identity < foreground);
     assert!(foreground < post_focus_hook);
     assert!(post_focus_hook < final_atomic_recheck);
@@ -190,6 +194,7 @@ fn assert_final_gate_source_order(source: &str) {
         .expect("final owner status check");
     assert!(atomic_target < atomic_focus);
     assert!(atomic_focus < atomic_owner);
+    assert!(final_atomic_body.contains("expected_owner_pid.is_some_and"));
 
     let sender = source
         .split("fn record_down_send_outcome")

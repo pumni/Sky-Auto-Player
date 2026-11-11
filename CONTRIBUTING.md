@@ -14,8 +14,8 @@ keeps process proportional to the risk of the boundary being changed.
 
 Use [`docs/INDEX.md`](docs/INDEX.md) for relevant active contracts; don't preload historical
 records. Update the owning contract when behavior changes and preserve earlier evidence at its
-recorded revision. Agent-context reviews can use
-[`docs/agent-context-maintenance.md`](docs/agent-context-maintenance.md).
+recorded revision. For playback contracts, see [`docs/playback-engine.md`](docs/playback-engine.md)
+and [`docs/playback-verification.md`](docs/playback-verification.md).
 
 ## Required naming rule
 
@@ -49,7 +49,7 @@ configuration.
 ## Architecture
 
 The current architecture is documented in `docs/architecture.md` and
-`docs/rt-dispatch-architecture.md`. In particular, keep domain/orchestration independent from direct
+`docs/playback-engine.md`. In particular, keep domain/orchestration independent from direct
 Win32/input effects unless the contribution explicitly changes the architecture and updates the
 corresponding executable boundary checks and documentation.
 

@@ -5,6 +5,9 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
+#[path = "dispatch_harness/wait_boundary.rs"]
+mod wait_boundary;
+
 use crate::engine::config::{DispatchProfile, WorkerConfig};
 use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
@@ -17,13 +20,12 @@ use crate::engine::worker::dispatch::{
 use crate::engine::worker::dispatch::{DispatchObservation, PendingObservationQueue};
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts,
-    PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState,
-    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
-    dispatch_due_from_plan, dispatch_prepared_normal_frame, physical_wait_target_for_plan,
-    plan_next_dispatch, plan_next_dispatch_projected, preflight_prepared_plan,
-    publish_backend_counters, publish_live_metrics_after_dispatch, target_stamp_still_current,
-    wait_for_next_boundary,
+    PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundaryInput, WaitDeadline,
+    WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState, WorkerResources,
+    WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan,
+    dispatch_prepared_normal_frame, physical_wait_target_for_plan, plan_next_dispatch,
+    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
+    publish_live_metrics_after_dispatch, target_stamp_still_current, wait_for_next_boundary,
 };
 use crate::engine::{SystemPowerEndpoint, SystemPowerState};
 use sky_dispatch_core::clock::{PauseReason, PlaybackClockState};
@@ -233,6 +235,122 @@ impl ProductionDispatchTestHarness {
             coordinator,
             qpc_clock,
         })
+    }
+
+    pub fn current_executor_chord_for_test(
+        &self,
+    ) -> Option<sky_dispatch_core::executor::DownChordTicks> {
+        self.resources
+            .coordinator
+            .executor
+            .as_ref()
+            .and_then(|e| e.current_chord().cloned())
+    }
+
+    pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
+        let frame_ticks = self
+            .resources
+            .clock
+            .duration_from_us(16_667)
+            .map_err(|e| format!("{e:?}"))?;
+        let min_hold_ticks = self
+            .resources
+            .clock
+            .duration_from_us(10_000)
+            .map_err(|e| format!("{e:?}"))?;
+        let clock = self.resources.clock;
+        self.resources
+            .coordinator
+            .attach_executor_with_cancellation(
+                min_hold_ticks,
+                frame_ticks,
+                |us| clock.timeline_from_us(us).map_err(|e| format!("{e:?}")),
+                || Ok(()),
+            )
+    }
+
+    pub fn stage_candidate_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<sky_dispatch_core::executor::DownChordTicks>,
+        fallback_ticks: TimelineTicks,
+    ) -> Result<Option<crate::engine::worker::StagedCandidate>, String> {
+        crate::engine::worker::stage_candidate(
+            up_mask,
+            down_chord,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
+            fallback_ticks,
+        )
+    }
+
+    pub fn dispatch_staged_candidate_for_test(
+        &mut self,
+        candidate: crate::engine::worker::StagedCandidate,
+        with_observer: bool,
+    ) -> crate::engine::worker::StagedDispatchOutcome {
+        let qpc_clock = self.resources.clock;
+        let ctx = crate::engine::worker::StagedDispatchContext {
+            target: &self.target,
+            config: &self.config,
+            control: crate::engine::worker::StagedControlSignals {
+                focus_active: &self.focus_active,
+                quit_requested: &self.quit_requested,
+                skip_requested: &self.skip_requested,
+                panic_requested: &self.panic_requested,
+                desired_pause: &self.desired_pause,
+                supervisor_expired: &self.supervisor_expired,
+                system_power: &self.system_power,
+            },
+            timing: &self.timing,
+            qpc_clock,
+            progress_clock: &self.progress_clock,
+            metrics: &self.metrics,
+        };
+
+        let observer_ref = if with_observer {
+            Some(&self.observer)
+        } else {
+            None
+        };
+
+        crate::engine::worker::dispatch_staged_candidate(
+            candidate,
+            ctx,
+            &mut self.resources,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            observer_ref,
+        )
+    }
+
+    pub fn execute_shipping_b_sendinput_suffix_for_test(
+        &mut self,
+        prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
+        up_mask: u16,
+        down_chord: Option<&sky_dispatch_core::executor::DownChordTicks>,
+        target_qpc: QpcTicks,
+    ) -> Result<(), String> {
+        let completion_qpc = target_qpc;
+        let completion_ticks = TimelineTicks::from_raw(completion_qpc.as_u64());
+        let send_result = self
+            .resources
+            .backend
+            .send_prepared_physical_packet_at_final_boundary(prepared_packet, None);
+        if !send_result.is_success() {
+            return Err("send failed".to_string());
+        }
+        let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
+        let confirmed_up_mask = send_result.evidence.confirmed_mask & up_mask;
+        let confirmed_down_mask = send_result.evidence.confirmed_mask & down_mask;
+        if let Some(exec) = self.resources.coordinator.executor.as_mut() {
+            exec.on_send_completed(confirmed_up_mask, confirmed_down_mask, completion_ticks)?;
+        }
+        self.resources
+            .coordinator
+            .record_executor_completion(confirmed_up_mask, down_chord);
+        Ok(())
     }
 
     pub fn new_down_only() -> Self {
@@ -1447,7 +1565,7 @@ impl ProductionDispatchTestHarness {
         }
     }
 
-    fn create_harness(actions: &[KeyActionInput]) -> Self {
+    pub(crate) fn create_harness(actions: &[KeyActionInput]) -> Self {
         Self::create_harness_with_min_hold(actions, 0)
     }
 
@@ -1524,7 +1642,6 @@ impl ProductionDispatchTestHarness {
             waiter,
             backend,
             coordinator,
-            prepared_stream: None,
             playback,
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling,
@@ -1928,6 +2045,15 @@ impl ProductionDispatchTestHarness {
         self.local_metrics.prepared_normal_backlog_boundaries
     }
 
+    pub fn observer_loss_counts_for_test(&self) -> (u64, u64, u64, u64) {
+        (
+            self.local_metrics.observer_dropped_samples,
+            self.local_metrics.spin_observation_expected_samples,
+            self.local_metrics.spin_observation_dropped_samples,
+            self.local_metrics.spin_observation_missing_samples,
+        )
+    }
+
     pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
         publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
         (
@@ -2050,6 +2176,7 @@ impl ProductionDispatchTestHarness {
         &mut self,
         post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
     ) -> Result<(), String> {
+        let playback = self.resources.playback.clone();
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2057,6 +2184,15 @@ impl ProductionDispatchTestHarness {
             Ok(self.effective_now_ticks),
             self.target.hwnd_for_safety_release(),
             post_cleanup_qpc,
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
+            },
         )
     }
 
@@ -2068,6 +2204,7 @@ impl ProductionDispatchTestHarness {
         let effective_now_ticks = self.effective_now_ticks;
         let target_hwnd = self.target.hwnd_for_safety_release();
         let qpc_clock = self.resources.clock;
+        let playback = self.resources.playback.clone();
         super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2078,6 +2215,15 @@ impl ProductionDispatchTestHarness {
                 qpc_clock
                     .now()
                     .map_err(|error| format!("test cleanup QPC: {error:?}"))
+            },
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
             },
         )
     }
@@ -2097,6 +2243,7 @@ impl ProductionDispatchTestHarness {
             .get_elapsed_allow_pre_epoch(pause_qpc, false)
             .map_err(|error| format!("manual pause probe clock: {error}"))?;
         self.effective_now_ticks = effective_now;
+        let playback = self.resources.playback.clone();
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2104,6 +2251,15 @@ impl ProductionDispatchTestHarness {
             Ok(effective_now),
             self.target.hwnd_for_safety_release(),
             || Ok(pause_qpc),
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
+            },
         )?;
         self.resources
             .playback
@@ -2139,6 +2295,7 @@ impl ProductionDispatchTestHarness {
             .playback
             .get_elapsed_allow_pre_epoch(restore_qpc, false)
             .map_err(|error| format!("focus restore probe clock: {error}"))?;
+        let playback = self.resources.playback.clone();
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2149,6 +2306,15 @@ impl ProductionDispatchTestHarness {
                 qpc_clock
                     .now()
                     .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
+            },
+            move |qpc| {
+                if qpc < playback.epoch {
+                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                } else {
+                    playback
+                        .get_elapsed(qpc)
+                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
+                }
             },
         )?;
         self.resources
@@ -2305,7 +2471,7 @@ impl ProductionDispatchTestHarness {
 
     pub fn pop_send_observation_for_test(
         &mut self,
-    ) -> Option<(PhysicalPacket, QpcTicks, QpcTicks, u8)> {
+    ) -> Option<(PhysicalPacket, Option<QpcTicks>, QpcTicks, u8)> {
         match self.observer.pop_front()? {
             DispatchObservation::Down(observation) => Some((
                 observation.requested_packet,
@@ -2315,7 +2481,7 @@ impl ProductionDispatchTestHarness {
             )),
             DispatchObservation::Up(observation) => Some((
                 PhysicalPacket::new(observation.requested_mask, 0),
-                observation.pre_call_qpc,
+                Some(observation.pre_call_qpc),
                 observation.sendinput_completion_qpc,
                 observation.trace.send_attempts,
             )),
@@ -2848,6 +3014,7 @@ impl ProductionDispatchTestHarness {
             .expect("prepared timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
+            None,
             &self.config,
             &mut self.resources,
             &mut self.health,
@@ -3034,6 +3201,7 @@ impl ProductionDispatchTestHarness {
             .expect("prepared synthetic timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
+            None,
             &self.config,
             &mut self.resources,
             &mut self.health,
@@ -3180,24 +3348,13 @@ impl ProductionDispatchTestHarness {
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
-        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = match boundary {
-            WaitBoundary::Due {
-                wait_result,
-                target_qpc,
-                dispatch_qpc,
-                planned_wait_ticks,
-            } => (wait_result, dispatch_qpc, planned_wait_ticks, target_qpc),
-            WaitBoundary::Replan { .. } => {
-                return Err("prepared wait unexpectedly required a replan".to_string());
-            }
-            WaitBoundary::Exit => {
-                return Err(self
-                    .runtime
-                    .terminal_error
-                    .take()
-                    .unwrap_or_else(|| "prepared wait exited".to_string()));
-            }
-        };
+        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = self
+            .resolve_wait_boundary(
+                boundary,
+                frame.view.prepared_batch.effective_scheduled_ticks,
+                "prepared wait interrupted and was published independently",
+                "prepared wait exited",
+            )?;
         self.last_wait_result = wait_result;
         self.last_wait_observation = record_wait_attempt(
             Some(&self.observer),
@@ -3206,6 +3363,8 @@ impl ProductionDispatchTestHarness {
             planned_wait_ticks,
             frame.view.prepared_batch.effective_scheduled_ticks,
             self.resources.playback.epoch,
+            Some(dispatch_qpc),
+            &mut self.local_metrics,
         );
         self.runtime.pending_wait_observation = self.last_wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
@@ -3228,6 +3387,7 @@ impl ProductionDispatchTestHarness {
             .expect("prepared timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
+            None,
             &self.config,
             &mut self.resources,
             &mut self.health,
@@ -3337,6 +3497,7 @@ impl ProductionDispatchTestHarness {
             .expect("prepared timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
+            None,
             &self.config,
             &mut self.resources,
             &mut self.health,
@@ -3540,42 +3701,13 @@ impl ProductionDispatchTestHarness {
         let wait_deadline_ticks = plan
             .deadline_ticks()
             .ok_or_else(|| "benchmark wait plan has no deadline".to_string())?;
-        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = match boundary {
-            WaitBoundary::Due {
-                wait_result: Some(wait_result),
-                target_qpc,
-                dispatch_qpc,
-                planned_wait_ticks,
-            } => {
-                self.runtime.set_deadline_wait_evidence_for_test(
-                    Some(dispatch_qpc),
-                    plan.physical_target_qpc(),
-                );
-                (
-                    Some(wait_result),
-                    dispatch_qpc,
-                    planned_wait_ticks,
-                    target_qpc,
-                )
-            }
-            WaitBoundary::Due {
-                wait_result: None,
-                target_qpc,
-                dispatch_qpc,
-                planned_wait_ticks,
-                ..
-            } => (None, dispatch_qpc, planned_wait_ticks, target_qpc),
-            WaitBoundary::Replan { .. } => {
-                return Err("benchmark wait unexpectedly required replan".to_string());
-            }
-            WaitBoundary::Exit => {
-                return Err(self
-                    .runtime
-                    .terminal_error
-                    .take()
-                    .unwrap_or_else(|| "benchmark wait exited".to_string()));
-            }
-        };
+        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = self
+            .resolve_wait_boundary(
+                boundary,
+                wait_deadline_ticks,
+                "benchmark wait interrupted and was published independently",
+                "benchmark wait exited",
+            )?;
         self.last_wait_result = wait_result;
         self.last_wait_observation = record_wait_attempt(
             Some(&self.observer),
@@ -3584,6 +3716,8 @@ impl ProductionDispatchTestHarness {
             planned_wait_ticks,
             wait_deadline_ticks,
             self.resources.playback.epoch,
+            Some(dispatch_qpc),
+            &mut self.local_metrics,
         );
         self.runtime.pending_wait_observation = self.last_wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
@@ -4303,176 +4437,5 @@ impl ProductionDispatchTestHarness {
 }
 
 #[cfg(test)]
-mod lifecycle_dispatch_tests {
-    use super::*;
-    use std::num::NonZeroU64;
-
-    fn qpc_at(clock: QpcClock, microseconds: u64) -> QpcTicks {
-        QpcTicks::from_raw(
-            clock
-                .duration_from_us(microseconds)
-                .expect("dispatch test QPC conversion")
-                .as_u64(),
-        )
-    }
-
-    #[test]
-    fn lifecycle_fixture_admission_and_config_metadata_match_native_contract() {
-        let mut fixtures = vec![
-            ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
-                .expect("lifecycle fixture admission"),
-            ProductionDispatchTestHarness::new_hol_sequence_for_test(10_000_000)
-                .expect("HOL fixture admission"),
-            ProductionDispatchTestHarness::new_prepared_mixed_for_test(1, 1, 20_000)
-                .expect("Mixed fixture admission"),
-            ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 20_000)
-                .expect("Down/UpOnly fixture admission"),
-        ];
-
-        for fixture in &mut fixtures {
-            let config = fixture
-                .dispatch_timing_config_for_test()
-                .expect("dispatch timing metadata");
-            assert!(config.native_admission_passed);
-            assert_eq!(config.frame_us, DISPATCH_FRAME_US);
-            assert_eq!(config.frame_base_hold_us, DISPATCH_FRAME_US);
-            assert_eq!(config.timing_margin_us, DISPATCH_MARGIN_US);
-            assert_eq!(config.effective_hold_us, DISPATCH_EFFECTIVE_HOLD_US);
-            assert_eq!(config.min_release_gap_us, DISPATCH_RELEASE_GAP_US);
-            assert_eq!(
-                config.frame_ticks,
-                fixture
-                    .resources
-                    .clock
-                    .duration_from_us(DISPATCH_FRAME_US)
-                    .unwrap()
-                    .as_u64()
-            );
-            assert_eq!(
-                config.effective_hold_ticks,
-                fixture
-                    .resources
-                    .clock
-                    .duration_from_us(DISPATCH_EFFECTIVE_HOLD_US)
-                    .unwrap()
-                    .as_u64()
-            );
-        }
-    }
-
-    #[test]
-    fn lifecycle_not_due_dispatch_preserves_sender_cursor_and_generation_until_floor() {
-        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
-        let mut harness =
-            ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
-                .expect("lifecycle fixture admission");
-        let packets = harness.configure_mock_packet_sender_for_test(&[0, 50, 0, 0]);
-        harness.prepare_prepared_stream_for_test();
-        harness
-            .reanchor_playback_clock_for_test(qpc_at(clock, 82_700))
-            .expect("playback epoch");
-
-        let down_at = qpc_at(clock, 100_000);
-        let down_floor = harness
-            .prepared_physical_floor_for_test()
-            .expect("initial Down floor");
-        assert!(down_at >= down_floor.packet_not_before_qpc);
-        harness.set_mock_sender_start_qpc_for_test(down_at);
-        assert!(matches!(
-            harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(down_at,)
-                .expect("due initial Down"),
-            Some(DispatchStep::Dispatched)
-        ));
-        let up_floor = harness
-            .prepared_physical_floor_for_test()
-            .expect("musical Up floor");
-        harness.set_mock_sender_start_qpc_for_test(up_floor.packet_not_before_qpc);
-        assert!(matches!(
-            harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(
-                    up_floor.packet_not_before_qpc,
-                )
-                .expect("due musical Up"),
-            Some(DispatchStep::Dispatched)
-        ));
-
-        let released_at = evidence_completion_for_harness(&packets, 1);
-        let expected_floor = released_at
-            .checked_add_duration(clock.duration_from_us(DISPATCH_FRAME_US).unwrap())
-            .expect("release floor");
-        let floor_evidence = harness
-            .prepared_physical_floor_for_test()
-            .expect("next Down floor");
-        let floor = floor_evidence.packet_not_before_qpc;
-        assert_eq!(floor, expected_floor);
-
-        let early = qpc_at(clock, 118_300);
-        let cursor_before = harness.prepared_cursor_for_test();
-        let attempts_before = packets.lock().unwrap().len();
-        let accounting_before = harness.generation_accounting_for_test();
-        let obligation_before = harness.release_obligation_mask_for_test();
-        harness.set_mock_sender_start_qpc_for_test(early);
-        assert!(
-            harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(early,)
-                .expect("not-due check")
-                .is_none()
-        );
-        assert_eq!(packets.lock().unwrap().len(), attempts_before);
-        assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
-        let accounting_after = harness.generation_accounting_for_test();
-        assert_eq!(accounting_after.activated, accounting_before.activated);
-        assert_eq!(accounting_after.released, accounting_before.released);
-        assert_eq!(accounting_after.cancelled, accounting_before.cancelled);
-        assert_eq!(
-            harness.release_obligation_mask_for_test(),
-            obligation_before
-        );
-
-        harness.set_mock_sender_start_qpc_for_test(floor);
-        assert!(matches!(
-            harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(floor,)
-                .expect("due next Down"),
-            Some(DispatchStep::Dispatched)
-        ));
-        assert_eq!(packets.lock().unwrap().len(), attempts_before + 1);
-        assert_eq!(harness.prepared_cursor_for_test(), cursor_before + 1);
-    }
-
-    #[test]
-    fn lifecycle_precision_fixture_lease_config_materializes_qpc_timeout() {
-        let mut harness =
-            ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 20_000)
-                .expect("precision fixture admission");
-        harness
-            .set_supervisor_lease_timeout_for_test(3_000_000)
-            .expect("lease timeout conversion");
-        let config = harness
-            .dispatch_timing_config_for_test()
-            .expect("dispatch timing metadata");
-        assert!(config.native_admission_passed);
-        assert!(config.lease_enabled);
-        assert_eq!(config.lease_timeout_us, 3_000_000);
-        assert_eq!(
-            config.lease_timeout_ticks,
-            harness
-                .resources
-                .clock
-                .duration_from_us(3_000_000)
-                .unwrap()
-                .as_u64()
-        );
-    }
-
-    fn evidence_completion_for_harness(
-        packets: &Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>>,
-        index: usize,
-    ) -> QpcTicks {
-        packets.lock().unwrap()[index]
-            .1
-            .completed_ticks
-            .expect("mock completion evidence")
-    }
-}
+#[path = "dispatch_harness_tests.rs"]
+mod lifecycle_dispatch_tests;

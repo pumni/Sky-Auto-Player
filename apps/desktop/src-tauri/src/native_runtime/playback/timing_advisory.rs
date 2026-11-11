@@ -187,7 +187,7 @@ fn analyze_variant_with_assumptions_and_hook(
         return unavailable(result, "analysis was cancelled before packet compilation");
     }
 
-    let compiled = match super::session::compile_dispatch_schedule(schedule) {
+    let compiled = match super::session::compile_dispatch_schedule(schedule, cancelled) {
         Ok(compiled) => compiled,
         Err(error) => {
             return unavailable(

@@ -39,7 +39,6 @@ pub(super) fn queue_down_miss_observation(
             kind: DownMissKind::UnobservedBacklog,
         }),
         &mut local_metrics.observer_dropped_samples,
-        &mut local_metrics.observer_queue_high_watermark,
     );
 }
 

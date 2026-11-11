@@ -7,21 +7,27 @@
 //! unit-testable (no wall-clock beyond the QPC samples already captured by the
 //! caller into `result_started_ticks` / `result_completed_ticks`).
 
+#[cfg(any(test, feature = "test-support"))]
 use super::super::super::{
     ActionKind, DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
     TimelineTicks,
 };
+#[cfg(any(test, feature = "test-support"))]
 use super::super::{
     DispatchPath, DispatchPreparationProbe, WorkerConfig, WorkerHealthState, WorkerRuntime,
     WorkerTimingState, signed_timeline_delta_ticks,
 };
+#[cfg(any(test, feature = "test-support"))]
 use super::{AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit, RecoveryDescriptor};
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::PreparedAuthoredFrame;
-use sky_dispatch_core::coordinator::{PreparedAuthoredPacket, PreparedBatch};
-use sky_dispatch_win32::input::{
-    MaterializedInstrumentKeyProfile, PacketRetryReason, PhysicalPacket, SendTransactionStatus,
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_core::coordinator::{
+    PreparedAuthoredCommitProof, PreparedAuthoredPacket, PreparedBatch,
 };
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_win32::input::{MaterializedInstrumentKeyProfile, PhysicalPacket};
+use sky_dispatch_win32::input::{PacketRetryReason, SendTransactionStatus};
 
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
 /// dispatch observations.  The observer applies the one canonical predicate
@@ -55,6 +61,7 @@ pub fn is_clean_dispatch_observation(evidence: DispatchObservationEvidence) -> b
         && !evidence.chord_integrity_lost
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 fn physical_event_counts(
     packet_masks: PhysicalPacket,
@@ -213,6 +220,7 @@ pub(crate) fn prepare_authored_batch_view(
 /// Materialize the physical packet from the coordinator's one-pass logical
 /// product.  The borrowed packet view and frozen commit are consumed here;
 /// this stage must not re-read schedule ranges or rebuild the commit token.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn prepare_authored_frame_view_from_prepared(
     coordinator: &RuntimeDispatchCoordinator,
     prepared: PreparedAuthoredPacket<'_>,
@@ -294,6 +302,7 @@ pub(crate) fn prepare_authored_frame_view_from_prepared(
     }))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn prepare_pending_release_view(
     coordinator: &RuntimeDispatchCoordinator,
     release_mask: u16,
@@ -347,6 +356,7 @@ pub(crate) fn prepare_pending_release_view(
     }))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn prepare_up_recovery_descriptor(packet: PhysicalPacket) -> RecoveryDescriptor {
     if packet.down_mask == 0 || packet.up_mask == 0 {
         return RecoveryDescriptor::None;
@@ -358,6 +368,7 @@ fn prepare_up_recovery_descriptor(packet: PhysicalPacket) -> RecoveryDescriptor 
 }
 
 /// Timing-derived evidence captured from the note-on SendInput call.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct DownSendTiming {
     pub(crate) epoch_qpc: QpcTicks,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
@@ -374,9 +385,11 @@ pub(crate) struct DownSendTiming {
 /// Resolves the QPC evidence, commits the prepared batch, and computes the
 /// boundary values shared by the SLO flags and telemetry.
 /// Mutates `coordinator` (commit) and `runtime` (last-send boundary).
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 fn resolve_send_boundaries(
     view: &AuthoredBatchView,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     coordinator: &mut RuntimeDispatchCoordinator,
@@ -437,17 +450,30 @@ fn resolve_send_boundaries(
             )));
         }
     };
-    let commit_result = match &view.commit {
-        PhysicalCommit::Authored(commit) => coordinator
+    let commit_result = match (&view.commit, authored_commit_proof) {
+        (PhysicalCommit::Authored(commit), Some(proof)) => coordinator
+            .commit_prepared_authored_frame_success_proven(
+                proof,
+                commit,
+                pre_call_effective_ticks,
+                completed_effective_ticks,
+            ),
+        (PhysicalCommit::Authored(commit), None) => coordinator
             .commit_prepared_authored_frame_success_frozen(
                 commit,
                 pre_call_effective_ticks,
                 completed_effective_ticks,
             ),
-        PhysicalCommit::PendingRelease {
-            release_mask,
-            due_ticks,
-        } => {
+        (PhysicalCommit::PendingRelease { .. } | PhysicalCommit::Coalesced { .. }, Some(_)) => {
+            Err(sky_dispatch_core::coordinator::CoordinatorError::PreparedAuthoredProofMismatch)
+        }
+        (
+            PhysicalCommit::PendingRelease {
+                release_mask,
+                due_ticks,
+            },
+            None,
+        ) => {
             if pre_call_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "pending release started before its due boundary".to_string(),
@@ -455,11 +481,14 @@ fn resolve_send_boundaries(
             }
             coordinator.commit_pending_release_success(*release_mask, pre_call_effective_ticks)
         }
-        PhysicalCommit::Coalesced {
-            authored,
-            release_mask,
-            due_ticks,
-        } => {
+        (
+            PhysicalCommit::Coalesced {
+                authored,
+                release_mask,
+                due_ticks,
+            },
+            None,
+        ) => {
             if pre_call_effective_ticks < *due_ticks {
                 return Err(DispatchStep::Terminate(
                     "coalesced pending release started before its due boundary".to_string(),
@@ -495,6 +524,7 @@ fn resolve_send_boundaries(
 /// Resolves the QPC evidence, commits the prepared batch, computes timing
 /// SLO flags. Mutates `coordinator` (commit) and `runtime` (last-send
 /// boundary), but does not mutate health or record telemetry.
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn interpret_down_send_timing(
     view: &AuthoredBatchView,
@@ -518,6 +548,7 @@ pub(crate) fn interpret_down_send_timing(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    authored_commit_proof: Option<PreparedAuthoredCommitProof<'_>>,
 ) -> Result<DownSendTiming, DispatchStep> {
     if let Some(completed_qpc) = result_completed_ticks
         && completed_qpc
@@ -535,6 +566,7 @@ pub(crate) fn interpret_down_send_timing(
         completion_lateness_ticks,
     ) = resolve_send_boundaries(
         view,
+        authored_commit_proof,
         clock_state,
         runtime,
         coordinator,

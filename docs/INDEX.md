@@ -7,12 +7,13 @@ invariants that must not be discarded because an implementation differs.
 
 ## Active contracts and references
 
-- **Architecture and ownership:** [architecture](architecture.md);
-  [native dispatch](rt-dispatch-architecture.md) for real-time boundaries.
-- **Timing and playback:** [timing principles](timing-principles.md),
-  [hold frames](hold-frame-model.md), [presets](tuning-presets.md);
-  [timing observation semantics](rt-dispatch-timing-evidence.md)
-  (field definitions are current; dated qualification results are historical).
+- **Architecture and ownership:** [architecture](architecture.md) for repository-wide
+  structure and module ownership; [playback engine](playback-engine.md) for
+  the normative realtime playback architecture.
+- **Timing and playback qualification:** [playback engine](playback-engine.md)
+  (15-slot executor, $H$ and $G$ floors, final Down admission, Frozen production waiter);
+  [playback verification](playback-verification.md) (22 native safety scenarios,
+  interactive desktop foreground guard, noalloc qualification).
 - **Desktop UI:** [workbench](desktop-workbench.md),
   [current UI image reference](ui/README.md) when visual inspection is needed,
   [React Aria type boundary](desktop-type-boundary.md),
@@ -37,10 +38,7 @@ invariants that must not be discarded because an implementation differs.
   [Rust toolchain](rust-toolchain-policy.md),
   [contributing](../CONTRIBUTING.md).
 - **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),
-  [physical-key study method](physical-key-study-method.md),
   [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md).
-- **When auditing agent context:** [maintenance approach](agent-context-maintenance.md)
-  and [optional behavioral probes](agent-context-evals.md).
 
 ## Revision-bound records
 
@@ -48,10 +46,11 @@ These are useful when tracing a decision or reproducing an earlier result,
 not as instructions for current code. Keep recorded SHAs, hardware,
 measurements, and limitations intact.
 
-- **Decisions:** [ADRs](adr/).
+- **Decisions:** [ADRs](adr/) (retired ADR-0001 and ADR-0010 through ADR-0018
+  remain indexed with immutable links in [HISTORY.md](HISTORY.md)).
 - **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
   (original reports, run logs, binary traces and screenshot provenance are
-  retrievable at a pinned main commit; not current qualification).
+  retrievable at pinned commit URLs; not current qualification).
 - **Retained reproduction datasets:** [native test parity baseline](evidence/issue-540-native-playback-test-parity.json)
   and [wake-calibration checksum-backed projection](evidence/wake-calibration-qualification-20261018.json).
 - **Legacy PowerShell audit:** [migration ledger](powershell-dependency-ledger.md)

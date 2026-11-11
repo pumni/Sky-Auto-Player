@@ -1,5 +1,5 @@
 use super::{
-    ACCEPTANCE_FRAME_US, ACCEPTANCE_FOCUS_RESTORE_GRACE_US, ACCEPTANCE_HOLD_FRAMES,
+    ACCEPTANCE_FOCUS_RESTORE_GRACE_US, ACCEPTANCE_HOLD_FRAMES,
     ACCEPTANCE_INPUT_PATH_WARN_US, PhysicalExpectation, Scenario, ScenarioPlan,
     release_gap_scenario_plan,
 };
@@ -46,10 +46,32 @@ pub(crate) fn noncanonical_profile_spec() -> InstrumentKeyProfileSpec {
     spec
 }
 
+#[cfg(test)]
 pub(super) fn scenario_plan(
     scenario: Scenario,
     timing_margin_us: u64,
 ) -> Result<ScenarioPlan, String> {
+    scenario_plan_for_settings(scenario, timing_margin_us, 60, None)
+}
+
+#[cfg(test)]
+pub(super) fn scenario_plan_with_sample_seconds(
+    scenario: Scenario,
+    timing_margin_us: u64,
+    sample_seconds: Option<u8>,
+) -> Result<ScenarioPlan, String> {
+    scenario_plan_for_settings(scenario, timing_margin_us, 60, sample_seconds)
+}
+
+pub(super) fn scenario_plan_for_settings(
+    scenario: Scenario,
+    timing_margin_us: u64,
+    game_fps: u16,
+    sample_seconds: Option<u8>,
+) -> Result<ScenarioPlan, String> {
+    if !matches!(game_fps, 60 | 120) {
+        return Err("acceptance workload game FPS must be 60 or 120".to_string());
+    }
     let (actions, profile, expected_down_slots, expected_up_slots, allow_unpaired_cleanup_ups) =
         match scenario {
             Scenario::CanonicalSingle | Scenario::NoncanonicalProfile => (
@@ -103,8 +125,8 @@ pub(super) fn scenario_plan(
                 false,
             ),
             Scenario::LongSingleSequence => {
-                let hold_us = acceptance_min_hold_us(timing_margin_us);
-                let gap_us = acceptance_min_release_gap_us(timing_margin_us);
+                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let gap_us = acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
                 let mut actions = Vec::with_capacity(48);
                 let mut down_slots = Vec::with_capacity(24);
                 let mut up_slots = Vec::with_capacity(24);
@@ -124,8 +146,8 @@ pub(super) fn scenario_plan(
                 (actions, None, down_slots, up_slots, false)
             }
             Scenario::DenseAlternating => {
-                let hold_us = acceptance_min_hold_us(timing_margin_us);
-                let gap_us = acceptance_min_release_gap_us(timing_margin_us);
+                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let gap_us = acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
                 let mut actions = Vec::with_capacity(32);
                 let mut down_slots = Vec::with_capacity(16);
                 let mut up_slots = Vec::with_capacity(16);
@@ -146,7 +168,7 @@ pub(super) fn scenario_plan(
                 (actions, None, down_slots, up_slots, false)
             }
             Scenario::ChordSweep => {
-                let hold_us = acceptance_min_hold_us(timing_margin_us);
+                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
                 // Keep the chord-size sweep physically observable on the
                 // receive-only Windows sink. Dense minimum-geometry timing is
                 // covered independently by DenseAlternating.
@@ -173,8 +195,8 @@ pub(super) fn scenario_plan(
                 (actions, None, down_slots, up_slots, false)
             }
             Scenario::NearMinimumRetrigger => {
-                let hold_us = acceptance_min_hold_us(timing_margin_us);
-                let gap_us = acceptance_min_release_gap_us(timing_margin_us);
+                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let gap_us = acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
                 let mut actions = Vec::with_capacity(8);
                 let mut down_slots = Vec::with_capacity(4);
                 let mut up_slots = Vec::with_capacity(4);
@@ -325,10 +347,10 @@ pub(super) fn scenario_plan(
                 let mut actions = Vec::with_capacity(42);
                 let mut down = 50_000;
                 for pair in 0..21_u32 {
-                    let up = down + acceptance_min_hold_us(timing_margin_us);
+                    let up = down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
                     actions.push(action(2 * pair, ActionKind::Down, down, &[0]));
                     actions.push(action(2 * pair + 1, ActionKind::Up, up, &[0]));
-                    down = up + acceptance_min_release_gap_us(timing_margin_us);
+                    down = up + acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
                 }
                 (
                     actions,
@@ -368,7 +390,7 @@ pub(super) fn scenario_plan(
                         action(
                             1,
                             ActionKind::Up,
-                            down + acceptance_min_hold_us(timing_margin_us),
+                            down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps),
                             &[0],
                         ),
                     ],
@@ -382,9 +404,9 @@ pub(super) fn scenario_plan(
             }
             Scenario::TimingMarginSweep => {
                 let down = 50_000;
-                let up = down + acceptance_min_hold_us(timing_margin_us);
-                let next_down = up + acceptance_min_release_gap_us(timing_margin_us);
-                let next_up = next_down + acceptance_min_hold_us(timing_margin_us);
+                let up = down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let next_down = up + acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
+                let next_up = next_down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
                 (
                     vec![
                         action(0, ActionKind::Down, down, &[0]),
@@ -398,7 +420,95 @@ pub(super) fn scenario_plan(
                     false,
                 )
             }
+            Scenario::LongIdle => {
+                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let mut actions = Vec::with_capacity(8);
+                let mut down_slots = Vec::with_capacity(4);
+                let mut up_slots = Vec::with_capacity(4);
+                let mut down_us = 50_000_u64;
+                for index in 0..4_u32 {
+                    let slot = if index % 2 == 0 { 0 } else { 1 };
+                    actions.push(action(index * 2, ActionKind::Down, down_us, &[slot]));
+                    let up_us = down_us
+                        .checked_add(hold_us)
+                        .ok_or("long-idle schedule overflow")?;
+                    actions.push(action(index * 2 + 1, ActionKind::Up, up_us, &[slot]));
+                    down_slots.push(slot);
+                    up_slots.push(slot);
+                    let idle_us = if index % 2 == 0 { 250_000 } else { 2_000_000 };
+                    down_us = up_us
+                        .checked_add(idle_us)
+                        .ok_or("long-idle schedule overflow")?;
+                }
+                (actions, None, down_slots, up_slots, false)
+            }
+            Scenario::HolInterleaved => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 84_000, &[0]),
+                    action(2, ActionKind::Down, 85_000, &[1]),
+                    action(3, ActionKind::Up, 119_000, &[1]),
+                ],
+                None,
+                vec![0, 1],
+                vec![0, 1],
+                false,
+            ),
         };
+    let mut actions = actions;
+    let mut expected_down_slots = expected_down_slots;
+    let mut expected_up_slots = expected_up_slots;
+    if let Some(sample_seconds) = sample_seconds {
+        if !scenario.supports_timed_sample() {
+            return Err(format!(
+                "{scenario:?} does not support a repeated timed sample"
+            ));
+        }
+        let first_scheduled_us = actions
+            .first()
+            .map(|action| action.scheduled_us)
+            .ok_or_else(|| "timed sample scenario has no authored actions".to_string())?;
+        let last_scheduled_us = actions
+            .last()
+            .map(|action| action.scheduled_us)
+            .ok_or_else(|| "timed sample scenario has no authored actions".to_string())?;
+        let cycle_gap_us = if scenario == Scenario::LongIdle {
+            2_000_000
+        } else if scenario == Scenario::HolInterleaved {
+            31_000
+        } else {
+            acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps)
+        };
+        let cycle_duration_us = last_scheduled_us
+            .checked_sub(first_scheduled_us)
+            .and_then(|span| span.checked_add(cycle_gap_us))
+            .filter(|duration| *duration > 0)
+            .ok_or_else(|| "timed sample cycle duration is invalid".to_string())?;
+        let required_duration_us = u64::from(sample_seconds)
+            .saturating_mul(1_000_000)
+            .saturating_add(cycle_gap_us);
+        let repetitions = required_duration_us
+            .saturating_add(cycle_duration_us - 1)
+            / cycle_duration_us;
+        let base_actions = actions.clone();
+        let base_down_slots = expected_down_slots.clone();
+        let base_up_slots = expected_up_slots.clone();
+        for repetition in 1..repetitions {
+            let schedule_offset_us = cycle_duration_us.saturating_mul(repetition);
+            for action in &base_actions {
+                let mut repeated = action.clone();
+                repeated.source_action_index = u32::try_from(actions.len())
+                    .map_err(|_| "timed sample exceeds source action index capacity".to_string())?;
+                repeated.scheduled_us = repeated
+                    .scheduled_us
+                    .checked_add(schedule_offset_us)
+                    .ok_or_else(|| "timed sample schedule overflow".to_string())?;
+                actions.push(repeated);
+            }
+            expected_down_slots.extend_from_slice(&base_down_slots);
+            expected_up_slots.extend_from_slice(&base_up_slots);
+        }
+    }
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
         .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
     let expected_safety_up_slots = match scenario {
@@ -427,14 +537,34 @@ pub(super) fn scenario_plan(
     })
 }
 
+#[cfg(test)]
 pub(super) fn acceptance_min_hold_us(timing_margin_us: u64) -> u64 {
-    ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + timing_margin_us
+    acceptance_min_hold_us_for_fps(timing_margin_us, 60)
 }
 
+#[cfg(test)]
 pub(super) fn acceptance_min_release_gap_us(timing_margin_us: u64) -> u64 {
-    ACCEPTANCE_FRAME_US + timing_margin_us
+    acceptance_min_release_gap_us_for_fps(timing_margin_us, 60)
 }
 
+pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
+    ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
+}
+
+pub(super) fn scenario_min_hold_us_for_fps(scenario: Scenario, timing_margin_us: u64, game_fps: u16) -> u64 {
+    let frames = if scenario == Scenario::HolInterleaved { 2 } else { ACCEPTANCE_HOLD_FRAMES };
+    frames * frame_period_us(game_fps) + timing_margin_us
+}
+
+pub(super) fn acceptance_min_release_gap_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
+    frame_period_us(game_fps) + timing_margin_us
+}
+
+const fn frame_period_us(game_fps: u16) -> u64 {
+    1_000_000_u64.div_ceil(game_fps as u64)
+}
+
+#[cfg(test)]
 pub(super) fn production_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     profile: Option<InstrumentKeyProfileSpec>,
@@ -442,18 +572,47 @@ pub(super) fn production_options(
     scenario: Scenario,
     modifier_query_count: Arc<AtomicU64>,
 ) -> NativeSessionOptions {
+    production_options_for_fps(
+        schedule,
+        profile,
+        timing_margin_us,
+        scenario,
+        modifier_query_count,
+        super::modifier_guard::ModifierHeldAfterOwnedLatch::default(),
+        60,
+    )
+}
+
+pub(super) fn production_options_for_fps(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    profile: Option<InstrumentKeyProfileSpec>,
+    timing_margin_us: u64,
+    scenario: Scenario,
+    modifier_query_count: Arc<AtomicU64>,
+    after_owned_latch: super::modifier_guard::ModifierHeldAfterOwnedLatch,
+    game_fps: u16,
+) -> NativeSessionOptions {
+    let frame_us = frame_period_us(game_fps);
     let modifier_key_state_query_for_test =
-        super::modifier_guard::query_for_scenario(scenario, Arc::clone(&modifier_query_count));
+        super::modifier_guard::query_for_scenario(
+            scenario,
+            Arc::clone(&modifier_query_count),
+            after_owned_latch,
+        );
     NativeSessionOptions {
         schedule,
         backend: BackendConfig::Production,
         profile: DispatchProfile::Production,
         timing: TimingOptions {
-            game_fps: 60,
-            min_hold_us: acceptance_min_hold_us(timing_margin_us),
-            min_release_gap_us: acceptance_min_release_gap_us(timing_margin_us),
-            frame_us: ACCEPTANCE_FRAME_US,
-            frame_base_hold_us: ACCEPTANCE_FRAME_US,
+            game_fps,
+            min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
+            min_release_gap_us: acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps),
+            frame_us,
+            frame_base_hold_us: if scenario == Scenario::HolInterleaved {
+                2 * frame_us
+            } else {
+                frame_us
+            },
             timing_margin_us,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
@@ -468,6 +627,7 @@ pub(super) fn production_options(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
             #[cfg(feature = "test-support")]
             test_spin_threshold_us: None,
             #[cfg(feature = "test-support")]

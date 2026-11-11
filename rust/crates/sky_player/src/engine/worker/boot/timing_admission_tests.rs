@@ -9,6 +9,7 @@ fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions 
         enable_waitable_timer,
         enable_event_wait,
         supervisor_lease_timeout_us: 0,
+        guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
         #[cfg(any(test, feature = "test-support"))]
         test_spin_threshold_us: None,
         #[cfg(any(test, feature = "test-support"))]

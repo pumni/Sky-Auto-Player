@@ -592,7 +592,6 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
         waiter,
         backend,
         coordinator,
-        prepared_stream: None,
         playback,
         telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
         scheduling: guards,

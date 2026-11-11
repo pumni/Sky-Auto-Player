@@ -1,6 +1,12 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
+pub(in crate::native_runtime) struct NativeDispatchStartupContext<'a> {
+    caller_retained_capacity_bytes: usize,
+    startup_cancellation: &'a AtomicBool,
+    event_delivery_failure: &'a AtomicBool,
+}
+
 impl SenderTraceState {
     pub(in crate::native_runtime) fn begin_physical_session(&mut self, session_id: &str) {
         self.collecting_session_id = Some(session_id.to_string());
@@ -91,8 +97,12 @@ impl NativePlaybackService {
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity,
+            startup_cancellation: Arc::new(AtomicBool::new(false)),
+            startup_arm_gate: Mutex::new(()),
             #[cfg(test)]
             startup_failure: None,
+            #[cfg(test)]
+            startup_compile_test_hook: Mutex::new(None),
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(test)]
@@ -111,6 +121,8 @@ impl NativePlaybackService {
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            post_compile_prepublication_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_retired_test_hook: None,
         }
@@ -726,6 +738,10 @@ impl NativePlaybackService {
         settings: &ApplicationSettings,
         events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<PlaybackSessionDto, String> {
+        let startup_cancellation = Arc::clone(&self.startup_cancellation);
+        if startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
         let mut active_slot = self
             .active
             .lock()
@@ -733,15 +749,18 @@ impl NativePlaybackService {
         if active_slot.is_some() {
             return Err("another playback session is active".into());
         }
+        if startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
         let mut prepared = self
             .prepared
             .lock()
             .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
-        let record = prepared
+        let prepared_index = prepared
             .iter()
-            .find(|(id, _)| id == &request.prepared_id)
-            .map(|(_, record)| record.clone())
+            .position(|(id, _)| id == &request.prepared_id)
             .ok_or_else(|| "prepared playback is stale or already consumed".to_string())?;
+        let record = &prepared[prepared_index].1;
         if record.settings_fingerprint != settings_fingerprint(settings)? {
             return Err("prepared playback is stale after settings mutation".into());
         }
@@ -770,11 +789,11 @@ impl NativePlaybackService {
             }
             accepted[0].decision
         };
-        let variant = record
+        let selected_variant = record
             .variants
             .get(&selected)
-            .cloned()
             .ok_or_else(|| "selected risk decision has no prepared plan".to_string())?;
+        let dry_run = selected_variant.config.dry_run;
         let session_id = opaque_native_id()?;
         let event_delivery_failure = events
             .lock()
@@ -783,7 +802,10 @@ impl NativePlaybackService {
         if event_delivery_failure.load(Ordering::Acquire) {
             return Err("native playback lifecycle delivery is unavailable".into());
         }
-        let activity_lease = if variant.config.dry_run {
+        if startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
+        let activity_lease = if dry_run {
             None
         } else {
             Some(
@@ -792,12 +814,33 @@ impl NativePlaybackService {
                     .map_err(playback_activity_error)?,
             )
         };
-        let prepared_index = prepared
-            .iter()
-            .position(|(id, _)| id == &request.prepared_id)
-            .expect("prepared record was found above");
-        prepared.remove(prepared_index);
+        let other_prepared_capacity_bytes =
+            prepared_cache_retained_capacity_bytes(&prepared, Some(prepared_index))?;
+        let caller_retained_capacity_bytes = native_start_caller_retained_capacity_bytes(
+            selected_variant,
+            &record.song_id,
+            &record.song.name,
+            &request.prepared_id,
+            &session_id,
+            other_prepared_capacity_bytes,
+        )?;
+        let record = prepared
+            .remove(prepared_index)
+            .expect("prepared record was found above")
+            .1;
         drop(prepared);
+        let NativePreparedPlan {
+            song_id,
+            song,
+            mut variants,
+            ..
+        } = record;
+        let song_title = song.name;
+        drop(song.notes);
+        let variant = variants
+            .remove(&selected)
+            .expect("selected variant was checked before consuming the plan");
+        drop(variants);
         let power_lifecycle = Arc::new(PowerLifecycleDiagnostics::default());
         let power_platform = system_power_platform();
         let mut power_request = None;
@@ -805,11 +848,17 @@ impl NativePlaybackService {
         let physical_creation = if variant.config.dry_run {
             Ok((None, None))
         } else {
+            let startup_context = NativeDispatchStartupContext {
+                caller_retained_capacity_bytes,
+                startup_cancellation: &startup_cancellation,
+                event_delivery_failure: &event_delivery_failure,
+            };
             self.create_native_player(
                 &variant.schedule,
                 &variant.config,
                 &variant.timing_policy,
                 settings,
+                &startup_context,
             )
             .and_then(|(player, target)| {
                 let result: Result<_, String> = (|| {
@@ -841,8 +890,8 @@ impl NativePlaybackService {
                     activity: self.activity.clone(),
                     session_id: session_id.clone(),
                     prepared_id: request.prepared_id.clone(),
-                    song_id: record.song_id.clone(),
-                    title: record.song.name.clone(),
+                    song_id: song_id.clone(),
+                    title: song_title.clone(),
                     total_us: variant.schedule.duration_us,
                     config: variant.config.clone(),
                     timing_policy: variant.timing_policy.clone(),
@@ -978,8 +1027,8 @@ impl NativePlaybackService {
             activity: self.activity.clone(),
             session_id: session_id.clone(),
             prepared_id: request.prepared_id.clone(),
-            song_id: record.song_id.clone(),
-            title: record.song.name.clone(),
+            song_id: song_id.clone(),
+            title: song_title.clone(),
             total_us: variant.schedule.duration_us,
             config: variant.config.clone(),
             timing_policy: variant.timing_policy.clone(),
@@ -1221,6 +1270,17 @@ impl NativePlaybackService {
         if let Some(hook) = &self.before_arm_test_hook {
             hook();
         }
+        let _arm_gate = self
+            .startup_arm_gate
+            .lock()
+            .map_err(|_| "native playback startup-arm lock poisoned".to_string())?;
+        if startup_cancellation.load(Ordering::Acquire)
+            && let Some(player) = &active.player
+        {
+            // A shutdown accepted before this gate won the pre-arm race.
+            // Latch Quit before arm so the B worker cannot admit a Down.
+            let _ = player.quit();
+        }
         if let Some(player) = &active.player
             && let Err(error) = player.arm(0)
         {
@@ -1274,16 +1334,67 @@ impl NativePlaybackService {
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
         settings: &ApplicationSettings,
+        startup_context: &NativeDispatchStartupContext<'_>,
     ) -> Result<(Arc<NativeDispatchSession>, isize), String> {
         #[cfg(test)]
         if let Some(error) = &self.startup_failure {
             return Err(error.clone());
         }
+        if startup_context
+            .event_delivery_failure
+            .load(Ordering::Acquire)
+        {
+            return Err("native playback lifecycle delivery is unavailable".into());
+        }
+        let runtime_schedule = {
+            #[cfg(test)]
+            {
+                let hook = self
+                    .startup_compile_test_hook
+                    .lock()
+                    .ok()
+                    .and_then(|hook| hook.clone());
+                if let Some(hook) = hook {
+                    compile_dispatch_schedule_with_checkpoint(
+                        schedule,
+                        startup_context.caller_retained_capacity_bytes,
+                        startup_context.startup_cancellation,
+                        |index| hook(index),
+                    )?
+                } else {
+                    compile_dispatch_schedule_with_prepared_capacity(
+                        schedule,
+                        startup_context.caller_retained_capacity_bytes,
+                        startup_context.startup_cancellation,
+                    )?
+                }
+            }
+            #[cfg(not(test))]
+            {
+                compile_dispatch_schedule_with_prepared_capacity(
+                    schedule,
+                    startup_context.caller_retained_capacity_bytes,
+                    startup_context.startup_cancellation,
+                )?
+            }
+        };
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(hook) = &self.post_compile_prepublication_test_hook {
+            hook();
+        }
+        if startup_context.startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
         #[cfg(all(test, feature = "tauri-test"))]
         if let Some(player) = &self.test_player {
             return Ok((Arc::clone(player), 0));
         }
-        let runtime_schedule = compile_dispatch_schedule(schedule)?;
+        if startup_context
+            .event_delivery_failure
+            .load(Ordering::Acquire)
+        {
+            return Err("native playback lifecycle delivery is unavailable".into());
+        }
         let target = sky_dispatch_win32::focus::find_sky_window(
             &settings.sky_process_names,
             settings.allow_title_fallback,
@@ -1351,6 +1462,7 @@ impl NativePlaybackService {
                     enable_event_wait: true,
                     supervisor_lease_timeout_us:
                         sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     #[cfg(feature = "tauri-test")]
                     test_spin_threshold_us: None,
                     #[cfg(feature = "tauri-test")]
@@ -2004,7 +2116,17 @@ impl NativePlaybackService {
     }
 
     pub(in crate::native_runtime) fn shutdown(&self, _events: Arc<Mutex<NativeEventHub>>) -> bool {
+        let arm_gate = self
+            .startup_arm_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.startup_cancellation.store(true, Ordering::Release);
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
+        if let Some(player) = active.as_ref().and_then(|active| active.player.as_ref()) {
+            // The worker's own pre-arm Quit latch is the physical-send gate.
+            let _ = player.quit();
+        }
+        drop(arm_gate);
         if let Some(active) = active {
             let current = active.state.lock().ok().map(|state| *state);
             if matches!(
@@ -2081,8 +2203,12 @@ impl NativePlaybackServiceHandle {
             diagnostics_gate: self.diagnostics_gate.clone(),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity: self.activity.clone(),
+            startup_cancellation: Arc::new(AtomicBool::new(false)),
+            startup_arm_gate: Mutex::new(()),
             #[cfg(test)]
             startup_failure: None,
+            #[cfg(test)]
+            startup_compile_test_hook: Mutex::new(None),
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(test)]
@@ -2103,6 +2229,8 @@ impl NativePlaybackServiceHandle {
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            post_compile_prepublication_test_hook: None,
         };
         service.monitor(active, events, activation);
     }
@@ -2120,8 +2248,45 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
     active: &NativeActivePlayback,
     telemetry: &Value,
 ) -> Result<String, serde_json::Error> {
+    let records = telemetry
+        .get("records")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let up_slot_records = telemetry
+        .get("up_slot_records")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let up_slot_records_dropped = telemetry
+        .get("up_slot_records_dropped")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let up_slot_records_expected = telemetry
+        .get("up_slot_records_expected")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let up_slot_capture_mode = telemetry
+        .get("up_slot_capture_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable");
+    let loss_counts = serde_json::json!({
+        "observer_queue": telemetry.get("up_slot_records_dropped_by_observer_queue").and_then(Value::as_u64).unwrap_or_default(),
+        "pool_storage": telemetry.get("up_slot_records_dropped_by_pool_storage").and_then(Value::as_u64).unwrap_or_default(),
+        "telemetry_ring": telemetry.get("up_slot_records_dropped_by_telemetry_ring").and_then(Value::as_u64).unwrap_or_default(),
+        "sidecar_capacity": telemetry.get("up_slot_records_dropped_by_sidecar_capacity").and_then(Value::as_u64).unwrap_or_default(),
+        "not_captured_by_mode": telemetry.get("up_slot_records_not_captured_by_mode").and_then(Value::as_u64).unwrap_or_default(),
+    });
+    let up_slot_attribution_missing_records = records
+        .iter()
+        .filter(|record| {
+            record
+                .get("up_slot_attribution_missing")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
     serde_json::to_string(&serde_json::json!({
-        "export_schema_version": 2,
+        "export_schema_version": 4,
         "raw_packet_trace_status": "not_captured",
         "session_id": active.session_id,
         "song_id": active.song_id,
@@ -2135,6 +2300,21 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
             "timing_margin_us": active.timing_policy.timing_margin_us,
             "target_hold_us": active.timing_policy.min_hold_us,
             "release_gap_us": active.timing_policy.min_release_gap_us,
+        },
+        "analytics": {
+            "aggregate_scope": "packet_trace_records",
+            "per_key_p95_p99_supported": false,
+            "per_key_p95_p99_refusal_reason": "per-slot sidecar evidence is exported as records but is not consumed by the aggregate summary",
+            "up_slot_sidecar_consumed_by_summary": false,
+            "up_slot_capture_mode": up_slot_capture_mode,
+            "up_slot_records_expected": up_slot_records_expected,
+            "up_slot_sidecar_record_count": up_slot_records,
+            "up_slot_sidecar_dropped_count": up_slot_records_dropped,
+            "up_slot_sidecar_loss_counts": loss_counts,
+            "up_slot_sidecar_not_captured_by_mode_count": telemetry.get("up_slot_records_not_captured_by_mode").and_then(Value::as_u64).unwrap_or_default(),
+            "up_slot_sidecar_accounting": "expected = captured + dropped_by_cause + not_captured_by_mode",
+            "per_key_measurement_semantics": "only retained sidecar records contain per-slot evidence; packet aggregates are not expanded or imputed into per-key samples",
+            "up_slot_attribution_missing_packet_count": up_slot_attribution_missing_records,
         },
         "telemetry": telemetry,
     }))
@@ -2479,28 +2659,351 @@ fn recommended_schedule(
 
 pub(super) fn compile_dispatch_schedule(
     schedule: &ScheduleMetadata,
+    cancelled: &AtomicBool,
 ) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
-    let actions = schedule
-        .actions
-        .iter()
-        .enumerate()
-        .map(|(index, action)| KeyActionInput {
-            source_action_index: index as u32,
+    compile_dispatch_schedule_with_checkpoint(schedule, 0, cancelled, |_| {})
+}
+
+fn compile_dispatch_schedule_with_checkpoint(
+    schedule: &ScheduleMetadata,
+    caller_retained_capacity_bytes: usize,
+    cancelled: &AtomicBool,
+    mut checkpoint: impl FnMut(usize),
+) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("native schedule compilation cancelled".into());
+    }
+    if schedule.actions.len() > sky_player::adapter_support::MAX_COMPILED_ACTIONS {
+        return Err("native schedule exceeds compiler action limit".into());
+    }
+    let mut actions = Vec::new();
+    actions
+        .try_reserve(schedule.actions.len())
+        .map_err(|error| format!("native action allocation failed: {error}"))?;
+    for (index, action) in schedule.actions.iter().enumerate() {
+        if index.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
+            return Err("native schedule compilation cancelled".into());
+        }
+        if action.scan_codes.is_empty()
+            || action.scan_codes.len() > sky_app_core::song::SKY_SCAN_CODES.len()
+        {
+            return Err(format!("native action {index} has invalid scan code count"));
+        }
+        if action.reason.len() > sky_player::adapter_support::MAX_COMPILED_REASON_BYTES {
+            return Err(format!(
+                "native action {index} reason exceeds compiler limit"
+            ));
+        }
+        let mut scan_codes = SmallVec::<[u16; 4]>::new();
+        scan_codes
+            .try_reserve(action.scan_codes.len())
+            .map_err(|error| format!("native scan code allocation failed: {error}"))?;
+        scan_codes.extend_from_slice(&action.scan_codes);
+        actions.push(KeyActionInput {
+            source_action_index: u32::try_from(index)
+                .map_err(|_| "native action index overflow")?,
             kind: match action.kind {
                 ActionKind::Down => DispatchActionKind::Down,
                 ActionKind::Up => DispatchActionKind::Up,
             },
             scheduled_us: action.at_us,
-            scan_codes: action
-                .scan_codes
-                .iter()
-                .copied()
-                .collect::<SmallVec<[u16; 4]>>(),
+            scan_codes,
             reason: Arc::<str>::from(action.reason.as_str()),
+        });
+        if (index + 1).is_multiple_of(256) {
+            checkpoint(index + 1);
+        }
+    }
+    let caller_retained_capacity_bytes = caller_retained_capacity_bytes
+        .checked_add(schedule_metadata_heap_capacity_bytes(schedule)?)
+        .ok_or_else(|| "native caller-retained startup capacity overflow".to_string())?;
+    sky_player::adapter_support::compile_runtime_intents_with_memory_accounting(
+        &actions,
+        &sky_app_core::song::SKY_SCAN_CODES,
+        actions.capacity(),
+        caller_retained_capacity_bytes,
+        || cancelled.load(Ordering::Acquire),
+    )
+    .map_err(|error| format!("native schedule compilation failed: {error}"))
+}
+
+fn compile_dispatch_schedule_with_prepared_capacity(
+    schedule: &ScheduleMetadata,
+    caller_retained_capacity_bytes: usize,
+    cancelled: &AtomicBool,
+) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+    compile_dispatch_schedule_with_checkpoint(
+        schedule,
+        caller_retained_capacity_bytes,
+        cancelled,
+        |_| {},
+    )
+}
+
+fn checked_capacity_bytes(count: usize, element_size: usize) -> Result<usize, String> {
+    count
+        .checked_mul(element_size)
+        .ok_or_else(|| "native startup capacity size overflow".to_string())
+}
+
+fn checked_capacity_sum(values: impl IntoIterator<Item = usize>) -> Result<usize, String> {
+    values.into_iter().try_fold(0usize, |total, value| {
+        total
+            .checked_add(value)
+            .ok_or_else(|| "native startup capacity sum overflow".to_string())
+    })
+}
+
+/// Heap payload retained by one source schedule. Struct headers are counted
+/// by the containing prepared variant; allocator metadata is excluded.
+fn schedule_metadata_heap_capacity_bytes(schedule: &ScheduleMetadata) -> Result<usize, String> {
+    let action_headers = checked_capacity_bytes(
+        schedule.actions.capacity(),
+        std::mem::size_of::<sky_app_core::song::KeyAction>(),
+    )?;
+    let action_payloads = schedule.actions.iter().try_fold(0usize, |total, action| {
+        let scan_codes =
+            checked_capacity_bytes(action.scan_codes.capacity(), std::mem::size_of::<u16>())?;
+        total
+            .checked_add(scan_codes)
+            .and_then(|bytes| bytes.checked_add(action.reason.capacity()))
+            .ok_or_else(|| "native action source capacity overflow".to_string())
+    })?;
+    let warning_headers =
+        checked_capacity_bytes(schedule.warnings.capacity(), std::mem::size_of::<String>())?;
+    let warning_payloads = schedule
+        .warnings
+        .iter()
+        .try_fold(0usize, |total, warning| {
+            total
+                .checked_add(warning.capacity())
+                .ok_or_else(|| "native warning source capacity overflow".to_string())
+        })?;
+    checked_capacity_sum([
+        action_headers,
+        action_payloads,
+        warning_headers,
+        warning_payloads,
+    ])
+}
+
+fn native_start_caller_retained_capacity_bytes(
+    variant: &NativePlaybackVariant,
+    song_id: &String,
+    song_title: &String,
+    prepared_id: &String,
+    session_id: &String,
+    other_prepared_capacity_bytes: usize,
+) -> Result<usize, String> {
+    // The selected source schedule is counted by the compiler adapter. This
+    // covers the variant header and its other heap strings, the complete
+    // remaining prepared-plan cache payload, and current plus subsequently
+    // cloned active-session identifiers.
+    let copied_session_strings = checked_capacity_sum([
+        song_id.capacity(),
+        song_title.capacity(),
+        song_id.capacity(),
+        song_title.capacity(),
+        song_id.capacity(),
+        prepared_id.capacity(),
+        prepared_id.capacity(),
+        prepared_id.capacity(),
+        session_id.capacity(),
+        session_id.capacity(),
+        variant.fingerprint.capacity(),
+        variant.fingerprint.capacity(),
+    ])?;
+    checked_capacity_sum([
+        std::mem::size_of::<NativePlaybackVariant>(),
+        variant.timing_margin_recommendation.source.capacity(),
+        copied_session_strings,
+        other_prepared_capacity_bytes,
+    ])
+}
+
+fn optional_string_capacity(value: Option<&String>) -> usize {
+    value.map_or(0, String::capacity)
+}
+
+fn string_vec_capacity_bytes(values: &[String], capacity: usize) -> Result<usize, String> {
+    let headers = checked_capacity_bytes(capacity, std::mem::size_of::<String>())?;
+    let payloads = values.iter().try_fold(0usize, |total, value| {
+        total
+            .checked_add(value.capacity())
+            .ok_or_else(|| "prepared string-vector capacity overflow".to_string())
+    })?;
+    checked_capacity_sum([headers, payloads])
+}
+
+fn risk_summary_capacity_bytes(risk: &crate::commands::RiskSummaryDto) -> Result<usize, String> {
+    checked_capacity_sum([
+        risk.level.capacity(),
+        risk.headline.capacity(),
+        string_vec_capacity_bytes(&risk.reasons, risk.reasons.capacity())?,
+        string_vec_capacity_bytes(&risk.recommendations, risk.recommendations.capacity())?,
+    ])
+}
+
+fn sheet_analysis_capacity_bytes(
+    analysis: Option<&crate::commands::SheetAnalysisDto>,
+) -> Result<usize, String> {
+    let Some(analysis) = analysis else {
+        return Ok(0);
+    };
+    let track_headers = checked_capacity_bytes(
+        analysis.tracks.capacity(),
+        std::mem::size_of::<crate::commands::SheetTrackDto>(),
+    )?;
+    let track_strings = analysis.tracks.iter().try_fold(0usize, |total, track| {
+        total
+            .checked_add(optional_string_capacity(track.instrument.as_ref()))
+            .and_then(|total| {
+                total.checked_add(optional_string_capacity(track.effective_pitch.as_ref()))
+            })
+            .ok_or_else(|| "prepared sheet-track capacity overflow".to_string())
+    })?;
+    checked_capacity_sum([
+        analysis.format_label.capacity(),
+        track_headers,
+        track_strings,
+        string_vec_capacity_bytes(&analysis.loss_reasons, analysis.loss_reasons.capacity())?,
+        optional_string_capacity(analysis.error_message.as_ref()),
+        optional_string_capacity(analysis.confirmation_fingerprint.as_ref()),
+    ])
+}
+
+fn whole_stream_advisory_capacity_bytes(
+    advisory: Option<&crate::commands::WholeStreamTimingAdvisoryDto>,
+) -> Result<usize, String> {
+    let Some(advisory) = advisory else {
+        return Ok(0);
+    };
+    checked_capacity_sum([
+        advisory.plan_fingerprint.capacity(),
+        advisory.explanation.capacity(),
+    ])
+}
+
+fn prepared_dto_capacity_bytes(
+    dto: &crate::commands::PreparedPlaybackDto,
+) -> Result<usize, String> {
+    let song = &dto.song;
+    let mut total = checked_capacity_sum([
+        optional_string_capacity(dto.prepared_id.as_ref()),
+        song.song_id.capacity(),
+        song.title.capacity(),
+        song.format_label.capacity(),
+        risk_summary_capacity_bytes(&song.risk)?,
+        sheet_analysis_capacity_bytes(song.sheet_analysis.as_ref())?,
+        risk_summary_capacity_bytes(&dto.risk)?,
+        checked_capacity_bytes(
+            dto.decisions.capacity(),
+            std::mem::size_of::<crate::commands::RiskDecisionDto>(),
+        )?,
+        optional_string_capacity(dto.plan_fingerprint.as_ref()),
+        checked_capacity_bytes(
+            dto.variants.capacity(),
+            std::mem::size_of::<crate::commands::PlaybackPlanVariantDto>(),
+        )?,
+        optional_string_capacity(dto.error_code.as_ref()),
+        optional_string_capacity(dto.error_message.as_ref()),
+    ])?;
+    if let Some(recommendation) = &song.recommendation {
+        total = total
+            .checked_add(recommendation.summary.capacity())
+            .ok_or_else(|| "prepared recommendation capacity overflow".to_string())?;
+    }
+    for decision in &dto.decisions {
+        total = total
+            .checked_add(decision.label.capacity())
+            .ok_or_else(|| "prepared decision capacity overflow".to_string())?;
+    }
+    for variant in &dto.variants {
+        let advisory_bytes =
+            whole_stream_advisory_capacity_bytes(variant.timing_advisory.as_ref())?;
+        total = checked_capacity_sum([total, variant.plan_fingerprint.capacity(), advisory_bytes])?;
+    }
+    Ok(total)
+}
+
+fn prepared_plan_capacity_bytes(id: &String, record: &NativePreparedPlan) -> Result<usize, String> {
+    let note_headers = checked_capacity_bytes(
+        record.song.notes.capacity(),
+        std::mem::size_of::<sky_app_core::song::Note>(),
+    )?;
+    let note_keys = record.song.notes.iter().try_fold(0usize, |total, note| {
+        total
+            .checked_add(note.key.capacity())
+            .ok_or_else(|| "prepared song-key capacity overflow".to_string())
+    })?;
+    let variant_entry_size =
+        std::mem::size_of::<(crate::commands::PlaybackDecision, NativePlaybackVariant)>();
+    let variant_bucket_count = if record.variants.capacity() == 0 {
+        0
+    } else {
+        record
+            .variants
+            .capacity()
+            .checked_mul(8)
+            .and_then(|value| value.checked_add(6))
+            .map(|value| value / 7)
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or_else(|| "prepared variant-map capacity overflow".to_string())?
+    };
+    let variant_map_bytes = if variant_bucket_count == 0 {
+        0
+    } else {
+        checked_capacity_bytes(variant_bucket_count, variant_entry_size.saturating_add(1))?
+            .checked_add(16 + std::mem::align_of::<usize>() - 1)
+            .ok_or_else(|| "prepared variant-map bytes overflow".to_string())?
+    };
+    let mut variant_payloads = 0usize;
+    for variant in record.variants.values() {
+        variant_payloads = checked_capacity_sum([
+            variant_payloads,
+            variant.fingerprint.capacity(),
+            variant.timing_margin_recommendation.source.capacity(),
+            schedule_metadata_heap_capacity_bytes(&variant.schedule)?,
+        ])?;
+    }
+    checked_capacity_sum([
+        id.capacity(),
+        record.song_id.capacity(),
+        record.settings_fingerprint.capacity(),
+        record.song.name.capacity(),
+        note_headers,
+        note_keys,
+        record.source_path.capacity(),
+        record.source_hash.capacity(),
+        variant_map_bytes,
+        variant_payloads,
+        prepared_dto_capacity_bytes(&record.dto)?,
+    ])
+}
+
+fn prepared_cache_retained_capacity_bytes(
+    prepared: &std::collections::VecDeque<(String, NativePreparedPlan)>,
+    excluded_index: Option<usize>,
+) -> Result<usize, String> {
+    let queue_buffer_bytes = checked_capacity_bytes(
+        prepared.capacity(),
+        std::mem::size_of::<(String, NativePreparedPlan)>(),
+    )?;
+    prepared
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != excluded_index)
+        .try_fold(0usize, |total, (_, (id, record))| {
+            let plan_bytes = prepared_plan_capacity_bytes(id, record)?;
+            total
+                .checked_add(plan_bytes)
+                .ok_or_else(|| "prepared-cache retained capacity overflow".to_string())
         })
-        .collect::<Vec<_>>();
-    compile_runtime_intents(&actions, &sky_app_core::song::SKY_SCAN_CODES)
-        .map_err(|error| format!("native schedule compilation failed: {error}"))
+        .and_then(|record_bytes| {
+            queue_buffer_bytes
+                .checked_add(record_bytes)
+                .ok_or_else(|| "prepared-cache queue capacity overflow".to_string())
+        })
 }
 
 #[cfg(test)]
@@ -2508,14 +3011,105 @@ mod preparation_cancellation_tests {
     use super::super::{
         NativePreparedInput, analyze_schedule_with_context, build_schedule_with_policy,
     };
-    use super::NativePlaybackService;
+    use super::{
+        NativePlaybackService, compile_dispatch_schedule_with_checkpoint,
+        schedule_metadata_heap_capacity_bytes,
+    };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
+    use crate::native_runtime::NativeEventHub;
+    use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::parse_song_json;
     use sky_app_core::timing::MaterializedTimingPolicy;
     use std::path::PathBuf;
-    use std::sync::{Arc, Barrier, mpsc};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn valid_one_million_single_key_actions_are_rejected_by_combined_startup_budget() {
+        const ACTION_COUNT: usize = 1_000_000;
+        let mut actions = Vec::with_capacity(ACTION_COUNT);
+        for index in 0..(ACTION_COUNT / 2) {
+            let start = (index as u64) * 2;
+            actions.push(sky_app_core::song::KeyAction {
+                at_us: start,
+                scan_codes: vec![0x15],
+                kind: sky_app_core::song::ActionKind::Down,
+                reason: "one-key".into(),
+            });
+            actions.push(sky_app_core::song::KeyAction {
+                at_us: start + 1,
+                scan_codes: vec![0x15],
+                kind: sky_app_core::song::ActionKind::Up,
+                reason: "one-key".into(),
+            });
+        }
+        let schedule = sky_app_core::song::ScheduleMetadata {
+            actions,
+            source_duration_us: ACTION_COUNT as u64,
+            playback_duration_us: ACTION_COUNT as u64,
+            duration_us: ACTION_COUNT as u64,
+            note_count: ACTION_COUNT / 2,
+            deduplicated_note_count: ACTION_COUNT / 2,
+            duplicate_note_count: 0,
+            compressed_holds: 0,
+            impossible_same_key_repeats: 0,
+            risky_same_key_repeats: 0,
+            max_polyphony: 1,
+            shortest_same_key_interval_us: None,
+            min_same_key_up_gap_us: None,
+            recommended_hold_frames: None,
+            recommended_tempo_scale: None,
+            warnings: Vec::new(),
+        };
+        let source_capacity_bytes =
+            schedule_metadata_heap_capacity_bytes(&schedule).expect("source schedule capacity");
+        let compiled = compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            0,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| {},
+        )
+        .expect("one-million-action source fits the compiler phase bound");
+        assert_eq!(compiled.generation_count, (ACTION_COUNT / 2) as u64);
+        let compile_memory = compiled.compile_memory;
+        let schedule_heap_bytes = compiled
+            .memory_metrics()
+            .expect("compiled schedule capacity")
+            .heap_payload_bytes;
+        let error = sky_player::adapter_support::RuntimeDispatchCoordinator::try_new_ticks(
+            compiled,
+            0,
+            sky_player::adapter_support::DurationTicks::ZERO,
+            |microseconds| {
+                Ok::<_, sky_player::adapter_support::CoordinatorError>(
+                    sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
+                )
+            },
+        )
+        .expect_err("combined schedule, coordinator, and executor exceeds 512 MiB");
+        let error = error.to_string();
+        eprintln!(
+            "dispatch_memory workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_heap_bytes} compiler_phase_peak_capacity_bytes={} policy_bytes={} disposition=combined_dispatch_rejected memory_basis=calculated_size_and_capacity lifetime_model=source_schedule_overlaps_compile_input_output_and_coordinator_materialization;compiler_input_and_temp_drop_before_coordinator_materialization complete_application_process_peak=not_measured windows_process_memory=not_measured reason={error}",
+            compile_memory.caller_retained_capacity_bytes,
+            compile_memory.input_capacity_bytes,
+            compile_memory.temporary_capacity_bytes,
+            compile_memory.phase_peak_capacity_bytes,
+            sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES,
+        );
+        assert!(error.contains("exceeds dispatch budget"), "{error}");
+        assert!(
+            error.contains("536870912 bytes"),
+            "the fixed 512 MiB admission limit must remain visible: {error}"
+        );
+        assert!(
+            !error.to_ascii_lowercase().contains("out of memory")
+                && error.contains("exceeds dispatch budget of 536870912 bytes"),
+            "budget rejection must not be mislabeled as OOM: {error}"
+        );
+    }
 
     fn input(generation: u64, settings_fingerprint: &str) -> NativePreparedInput {
         let song = parse_song_json(
@@ -2566,6 +3160,216 @@ mod preparation_cancellation_tests {
             plan_source: None,
             source_epoch: 0,
         }
+    }
+
+    #[test]
+    fn native_schedule_compilation_honors_cancelled_request() {
+        let prepared = input(1, "cancelled");
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let error = super::compile_dispatch_schedule(&prepared.schedule, &cancelled).unwrap_err();
+        assert!(error.contains("cancelled"));
+        cancelled.store(false, std::sync::atomic::Ordering::Release);
+        assert!(super::compile_dispatch_schedule(&prepared.schedule, &cancelled).is_ok());
+    }
+
+    #[test]
+    fn shutdown_cancels_an_in_flight_startup_compiler_and_releases_activity() {
+        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let settings = ApplicationSettings::default();
+        let fingerprint =
+            super::super::settings_fingerprint(&settings).expect("default settings fingerprint");
+        let mut prepared = input(1, &fingerprint);
+        let actions = (0..150u64)
+            .flat_map(|index| {
+                let base = index * 100_000;
+                [
+                    KeyAction {
+                        at_us: base,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Down,
+                        reason: "startup-cancel-down".into(),
+                    },
+                    KeyAction {
+                        at_us: base + 50_000,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Up,
+                        reason: "startup-cancel-up".into(),
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        prepared.schedule.duration_us = actions.last().expect("last action").at_us;
+        prepared.schedule.playback_duration_us = prepared.schedule.duration_us;
+        prepared.schedule.source_duration_us = prepared.schedule.duration_us;
+        prepared.schedule.actions = actions;
+        let prepared = service
+            .prepare(prepared)
+            .expect("prepare physical schedule");
+        let prepared_id = prepared.prepared_id.expect("prepared identity");
+
+        let (compiler_entered_tx, compiler_entered_rx) = mpsc::channel();
+        let (compiler_release_tx, compiler_release_rx) = mpsc::channel();
+        let compiler_release_rx = Mutex::new(compiler_release_rx);
+        *service
+            .startup_compile_test_hook
+            .lock()
+            .expect("startup compiler hook") = Some(Arc::new(move |action_count| {
+            if action_count == 256 {
+                compiler_entered_tx
+                    .send(action_count)
+                    .expect("startup test is waiting at the compiler checkpoint");
+                compiler_release_rx
+                    .lock()
+                    .expect("startup compiler release lock")
+                    .recv()
+                    .expect("startup test releases the compiler checkpoint");
+            }
+        }));
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let start_service = Arc::clone(&service);
+        let start_events = Arc::clone(&events);
+        let start_thread = thread::spawn(move || {
+            start_service.start(
+                super::super::NativePlaybackStartRequest {
+                    prepared_id,
+                    decisions: Vec::new(),
+                }
+                .into_public(),
+                &settings,
+                start_events,
+            )
+        });
+
+        match compiler_entered_rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(256) => {}
+            Ok(action_count) => panic!("unexpected compiler checkpoint {action_count}"),
+            Err(error) => {
+                let startup_result = start_thread.join().expect("startup thread");
+                panic!(
+                    "startup compiler did not reach the in-flight checkpoint: {error}; result={startup_result:?}"
+                );
+            }
+        }
+        let shutdown_service = Arc::clone(&service);
+        let shutdown_events = Arc::clone(&events);
+        let shutdown_thread = thread::spawn(move || shutdown_service.shutdown(shutdown_events));
+        let cancellation_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.startup_cancellation.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < cancellation_deadline,
+                "shutdown did not publish startup cancellation"
+            );
+            thread::yield_now();
+        }
+        compiler_release_tx
+            .send(())
+            .expect("compiler is paused at its in-flight checkpoint");
+
+        let error = start_thread
+            .join()
+            .expect("startup thread")
+            .expect_err("shutdown cancels startup compilation");
+        assert!(error.contains("native schedule compilation cancelled"));
+        assert!(shutdown_thread.join().expect("shutdown thread"));
+        assert!(!service.activity.physical_release_is_quarantined());
+        let lease = service
+            .activity
+            .reserve_playback("post-startup-cancellation")
+            .expect("startup cancellation releases its physical activity lease");
+        drop(lease);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn shutdown_after_compilation_before_publication_retires_start_without_dispatch() {
+        let activity = ActivityCoordinator::default();
+        let mut service = NativePlaybackService::new(activity.clone());
+        let (compiled_tx, compiled_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        service.post_compile_prepublication_test_hook = Some(Arc::new(move || {
+            compiled_tx
+                .send(())
+                .expect("test waits for the post-compile barrier");
+            release_rx
+                .lock()
+                .expect("post-compile release lock")
+                .recv()
+                .expect("test releases the post-compile barrier");
+        }));
+        let service = Arc::new(service);
+        let settings = ApplicationSettings::default();
+        let fingerprint =
+            super::super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let prepared = service
+            .prepare(input(1, &fingerprint))
+            .expect("prepare physical plan");
+        let prepared_id = prepared.prepared_id.expect("prepared identity");
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let start_service = Arc::clone(&service);
+        let start_events = Arc::clone(&events);
+        let start_settings = settings.clone();
+        let start_prepared_id = prepared_id.clone();
+        let start_thread = thread::spawn(move || {
+            start_service.start(
+                super::super::NativePlaybackStartRequest {
+                    prepared_id: start_prepared_id,
+                    decisions: Vec::new(),
+                }
+                .into_public(),
+                &start_settings,
+                start_events,
+            )
+        });
+
+        compiled_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("compile reaches post-compile/pre-publication barrier");
+        let shutdown_service = Arc::clone(&service);
+        let shutdown_events = Arc::clone(&events);
+        let shutdown_thread = thread::spawn(move || shutdown_service.shutdown(shutdown_events));
+        let cancellation_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.startup_cancellation.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < cancellation_deadline,
+                "shutdown did not accept cancellation at the pre-publication boundary"
+            );
+            thread::yield_now();
+        }
+        release_tx.send(()).expect("release the completed compiler");
+
+        let error = start_thread
+            .join()
+            .expect("startup thread")
+            .expect_err("shutdown wins before active publication");
+        assert!(error.contains("native playback startup was cancelled during shutdown"));
+        assert!(shutdown_thread.join().expect("shutdown thread"));
+        assert!(!service.activity.physical_release_is_quarantined());
+        assert!(service.active.lock().expect("active slot").is_none());
+        let lease = activity
+            .reserve_playback("after-cancelled-start")
+            .expect("cancelled startup releases activity ownership");
+        drop(lease);
+
+        let restart_prepared = service
+            .prepare(input(2, &fingerprint))
+            .expect("shutdown does not silently clear the prepared plan");
+        let restart_error = service
+            .start(
+                super::super::NativePlaybackStartRequest {
+                    prepared_id: restart_prepared.prepared_id.expect("prepared identity"),
+                    decisions: Vec::new(),
+                }
+                .into_public(),
+                &settings,
+                events,
+            )
+            .expect_err("sticky shutdown disables restart");
+        assert!(restart_error.contains("startup was cancelled during shutdown"));
     }
 
     #[test]

@@ -10,10 +10,12 @@
 /// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
+    pub use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
     pub use sky_dispatch_core::model::{
-        ActionKind, CompactIntent, CompiledBatch, CompiledPacket, KeyActionInput, MAX_KEYS,
-        RuntimeSchedule,
+        ActionKind, CompactIntent, CompileMemoryMetrics, CompiledBatch, CompiledPacket,
+        KeyActionInput, MAX_KEYS, RuntimeSchedule,
     };
+    pub use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     pub use sky_dispatch_core::validation::ScheduleTimingError;
     pub use sky_dispatch_win32::calibration::{
         CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, HostFingerprint,
@@ -24,11 +26,43 @@ pub mod adapter_support {
     pub use sky_dispatch_win32::mmcss::PriorityMode;
 
     pub const SCHEMA_VERSION: u32 = sky_dispatch_core::SCHEMA_VERSION;
+    pub const MAX_COMPILED_ACTIONS: usize = sky_dispatch_core::compile::MAX_ACTIONS;
+    pub const MAX_COMPILED_REASON_BYTES: usize = sky_dispatch_core::compile::MAX_REASON_BYTES;
+    pub const MAX_RETAINED_DISPATCH_BYTES: usize =
+        sky_dispatch_core::model::MAX_RETAINED_DISPATCH_BYTES;
     pub fn compile_runtime_intents(
         actions: &[KeyActionInput],
         allowed_scan_codes: &[u16],
     ) -> Result<RuntimeSchedule, CompileError> {
         sky_dispatch_core::compile::compile_runtime_intents(actions, allowed_scan_codes)
+    }
+
+    pub fn compile_runtime_intents_with_cancellation(
+        actions: &[KeyActionInput],
+        allowed_scan_codes: &[u16],
+        cancelled: impl FnMut() -> bool,
+    ) -> Result<RuntimeSchedule, CompileError> {
+        sky_dispatch_core::compile::compile_runtime_intents_with_cancellation(
+            actions,
+            allowed_scan_codes,
+            cancelled,
+        )
+    }
+
+    pub fn compile_runtime_intents_with_memory_accounting(
+        actions: &[KeyActionInput],
+        allowed_scan_codes: &[u16],
+        action_vector_capacity: usize,
+        caller_retained_capacity_bytes: usize,
+        cancelled: impl FnMut() -> bool,
+    ) -> Result<RuntimeSchedule, CompileError> {
+        sky_dispatch_core::compile::compile_runtime_intents_with_memory_metrics(
+            actions,
+            allowed_scan_codes,
+            action_vector_capacity,
+            caller_retained_capacity_bytes,
+            cancelled,
+        )
     }
 
     pub fn validate_min_hold_and_release_gap_feasibility(

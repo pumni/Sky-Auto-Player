@@ -529,6 +529,8 @@ fn interrupted_wait_replan_preserves_sender_completion_anchors() {
         DurationTicks::from_raw(100),
         TimelineTicks::from_raw(200),
         QpcTicks::ZERO,
+        None,
+        &mut metrics,
     )
     .expect("interrupted replan observation");
     let mut runtime = WorkerRuntime {

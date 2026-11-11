@@ -632,6 +632,9 @@ fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
                 generation_count: GENERATIONS,
                 key_registry: KeyRegistry::new(&[]),
                 reason_table: Vec::new(),
+                down_chords: Vec::new(),
+                schedule_end_offset_us: 0,
+                compile_memory: Default::default(),
             },
             0,
             DurationTicks::ZERO,
@@ -1329,6 +1332,7 @@ fn due_frozen_plan_does_not_reenter_preparation_or_preflight() {
 }
 
 #[test]
+#[cfg(feature = "qpc-read-counting")]
 fn frozen_dispatch_qpc_probe_has_no_redundant_effective_now_sample() {
     use super::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_win32::clock::{qpc_read_count, reset_qpc_read_count};
@@ -1376,4 +1380,48 @@ fn frozen_target_reaches_dispatch_and_observation_without_reconstruction() {
         }
         other => panic!("unexpected observation variant: {other:?}"),
     }
+}
+
+#[test]
+fn post_cleanup_conversion_failure_fails_closed_without_resuming() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_packet_capture();
+    let target_hwnd = harness.target.hwnd_for_safety_release();
+    let qpc_clock = harness.resources.clock;
+
+    let result = super::worker::suspend_live_input(
+        &mut harness.resources.backend,
+        &mut harness.resources.coordinator,
+        &mut harness.runtime,
+        Ok(sky_dispatch_core::time::TimelineTicks::ZERO),
+        target_hwnd,
+        || qpc_clock.now().map_err(|e| format!("{e:?}")),
+        |_| Err("simulated clock error after cleanup".to_string()),
+    );
+
+    assert!(result.is_err(), "post-cleanup failure must fail closed");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("post-cleanup timeline ticks conversion failure"),
+        "error must identify post-cleanup timeline conversion: {err}"
+    );
+}
+
+#[test]
+fn timing_guard_overflow_invalidates_and_returns_error() {
+    use super::worker::PhysicalTimingGuard;
+    use sky_dispatch_win32::clock::{DurationTicks, QpcTicks};
+
+    let mut guard = PhysicalTimingGuard::new(
+        DurationTicks::from_raw(10_000),
+        DurationTicks::from_raw(16_000),
+    );
+
+    // Provide a completion QPC that will cause overflow when adding min hold
+    let near_max_qpc = QpcTicks::from_raw(u64::MAX - 5);
+    let result = guard.observe_successful_packet(near_max_qpc, 0, 0b1);
+    assert!(result.is_err(), "guard arithmetic overflow must fail");
+    assert!(!guard.is_valid(), "guard must be invalidated on failure");
 }
