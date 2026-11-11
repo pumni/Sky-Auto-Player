@@ -41,41 +41,53 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
       >
         <div className="admission-copy">
           <strong id="playback-confirmation-title">Playback confirmation</strong>
-          <span>{prepared.risk.headline}</span>
-          <span id="playback-confirmation-reason" className="muted">
-            {prepared.risk.reasons[0] ?? 'Review the selected song before starting.'}
-          </span>
-          <span className="muted">
-            Review the offline timing estimate for each plan. It is informational and does not
-            change authored timing or playback admission.
-          </span>
+          <span className="admission-risk">{prepared.risk.headline}</span>
+          <p id="playback-confirmation-reason" className="admission-risk-reason">
+            {prepared.risk.reasons.join(' ') || 'Review the selected song before starting.'}
+          </p>
+          <p className="admission-estimate-note">
+            Offline timing estimates are informational; they do not change the authored song or
+            automatically remove timing risk.
+          </p>
         </div>
         <div className="admission-actions">
-          {prepared.decisions.map((decision, index) => {
-            const variant = prepared.variants.find((item) => item.decision === decision.decision);
-            return (
-              <div className="admission-option" key={decision.decision}>
-                <button
-                  className={`button${decision.decision === 'proceed' ? ' button-primary' : ''}`}
-                  type="button"
-                  disabled={transportOperation !== null}
-                  ref={index === 0 ? admissionActionRef : undefined}
-                  onClick={() => void start(decision.decision)}
-                >
-                  {admissionDecisionLabel(decision.decision, decision.label)}
-                </button>
-                <TimingAdvisory advisory={variant?.timing_advisory} />
-              </div>
-            );
-          })}
+          <div className="admission-decisions">
+            {prepared.decisions.map((decision, index) => {
+              const variant = prepared.variants.find((item) => item.decision === decision.decision);
+              const status = variant?.timing_advisory?.status;
+              const estimateLabel =
+                status === 'modeled_risk'
+                  ? 'Modeled timing pressure'
+                  : status === 'no_modeled_risk'
+                    ? 'No modeled timing pressure'
+                    : 'View timing estimate';
+              return (
+                <div className="admission-option" key={decision.decision}>
+                  <button
+                    className={`button${decision.decision === 'proceed' ? ' button-primary' : ''}`}
+                    type="button"
+                    disabled={transportOperation !== null}
+                    ref={index === 0 ? admissionActionRef : undefined}
+                    onClick={() => void start(decision.decision)}
+                  >
+                    {admissionDecisionLabel(decision.decision, decision.label)}
+                  </button>
+                  <details className="admission-option-estimate">
+                    <summary>{estimateLabel}</summary>
+                    <TimingAdvisory advisory={variant?.timing_advisory} />
+                  </details>
+                </div>
+              );
+            })}
+          </div>
           <button
-            className="button"
+            className="button admission-cancel"
             type="button"
-            aria-label="Cancel playback confirmation"
+            title="Dismiss the prepared playback without starting"
             disabled={transportOperation !== null}
             onClick={cancel}
           >
-            Cancel
+            Not now
           </button>
         </div>
       </section>

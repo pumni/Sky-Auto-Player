@@ -865,7 +865,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
   await expect(player.getByRole('button', { name: 'Next' })).toBeDisabled();
   await expect(
-    confirmation.getByRole('button', { name: 'Cancel playback confirmation' }),
+    confirmation.getByRole('button', { name: 'Not now' }),
   ).toBeEnabled();
   const transportStatus = player.locator('.player-transport-status');
   await expect(transportStatus).toHaveText('Awaiting confirmation');
@@ -884,7 +884,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
     confirmation.getByRole('button', { name: 'Test playback (no input)' }),
   ).toBeVisible();
 
-  await confirmation.getByRole('button', { name: 'Cancel playback confirmation' }).click();
+  await confirmation.getByRole('button', { name: 'Not now' }).click();
   await expect(page.getByRole('group', { name: 'Playback confirmation' })).toHaveCount(0);
   await idlePrimary.waitFor({ state: 'visible' });
   await idlePrimary.click();

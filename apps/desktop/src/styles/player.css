@@ -777,12 +777,22 @@
   border-left-color: var(--danger-border);
 }
 
-.player-admission-confirmation {
+.player-bar .player-admission-confirmation {
+  right: auto;
+  left: 50%;
   display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 1.8fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  max-height: min(72vh, 600px);
+  width: min(600px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(68dvh, 520px);
+  box-sizing: border-box;
+  gap: 12px;
+  padding: 15px 16px 12px;
   overflow: auto;
+  overscroll-behavior: contain;
+  transform: translateX(-50%);
+  border-radius: var(--radius-panel);
 }
 
 .player-admission-timing {
@@ -824,6 +834,38 @@
 }
 
 .admission-copy .muted {
+  color: var(--text-tertiary);
+}
+
+.player-admission-confirmation .admission-copy {
+  gap: 5px;
+}
+
+.player-admission-confirmation .admission-copy strong {
+  font-size: 14px;
+}
+
+.player-admission-confirmation .admission-copy .admission-risk {
+  overflow: visible;
+  color: var(--warning-fg);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.player-admission-confirmation .admission-copy p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.player-admission-confirmation .admission-risk-reason {
+  color: var(--text-primary);
+}
+
+.player-admission-confirmation .admission-estimate-note {
   color: var(--text-tertiary);
 }
 
@@ -943,23 +985,58 @@
 
 .admission-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   min-width: 0;
-  gap: 7px;
+  gap: 10px;
+}
+
+.admission-decisions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  align-items: start;
+  min-width: 0;
+  gap: 10px;
 }
 
 .admission-option {
   display: grid;
   align-content: start;
   min-width: 0;
-  gap: 6px;
+  gap: 5px;
 }
 
 .admission-option > .button {
-  min-height: 30px;
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
   padding-inline: 9px;
   font-size: var(--type-metadata);
   white-space: normal;
+}
+
+.admission-option-estimate {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.admission-option-estimate > summary {
+  padding-block: 4px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.admission-option-estimate > summary:hover {
+  color: var(--text-primary);
+}
+
+.admission-option-estimate > .timing-advisory {
+  margin-top: 4px;
+}
+
+.admission-cancel {
+  justify-self: end;
+  min-width: 100px;
+  min-height: 32px;
 }
 
 .timing-advisory {
@@ -1033,10 +1110,6 @@
 }
 
 @media (max-width: 700px) {
-  .player-admission-confirmation {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .player-admission-timing {
     grid-template-columns: minmax(0, 1fr);
   }
