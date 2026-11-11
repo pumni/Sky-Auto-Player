@@ -12,7 +12,7 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => store.getState().initialize());
     render(<PlayerTools useStore={store} />);
 
-    const testPlayback = screen.getByRole('button', { name: 'Test playback (no input)' });
+    const testPlayback = screen.getByRole('button', { name: 'Test without keyboard input' });
     expect(testPlayback).toBeEnabled();
     const autoPlay = screen.getByRole('button', { name: 'Auto Play' });
     const profile = screen.getByRole('button', { name: 'Configure playback profile' });
@@ -66,7 +66,7 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => store.getState().selectSong(row.song_id));
     render(<PlayerTools useStore={store} />);
 
-    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Test without keyboard input' })).toBeEnabled();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
@@ -82,7 +82,7 @@ describe('PlayerTools playback modes and profile', () => {
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
-    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test without keyboard input' })).toBeDisabled();
   });
 
   it('offers a direct dry-run action without opening the profile menu', async () => {
@@ -96,7 +96,7 @@ describe('PlayerTools playback modes and profile', () => {
     render(<PlayerTools useStore={store} />);
 
     await act(async () =>
-      screen.getByRole('button', { name: 'Test playback (no input)' }).click(),
+      screen.getByRole('button', { name: 'Test without keyboard input' }).click(),
     );
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);

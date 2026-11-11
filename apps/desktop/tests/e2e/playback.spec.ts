@@ -576,8 +576,8 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
   await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
 
   const playbackStatus = player.locator('.player-track-status');
-  await expect(playbackStatus).toHaveText('Dry run · Playing');
-  await expect(playbackStatus).toHaveAttribute('aria-label', /No physical input is sent/);
+  await expect(playbackStatus).toHaveText('Playing');
+  await expect(playbackStatus).toHaveAttribute('aria-label', /no physical input is sent/i);
   await expect(playbackStatus).toHaveCount(1);
   const playbackStatusLayout = await playbackStatus.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -600,7 +600,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await expect(playbackStatus).toHaveText('Dry run · Playing');
+    await expect(playbackStatus).toHaveText('Playing');
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
     const titleBox = await player.locator('.player-track-copy strong').boundingBox();
     const trackInfoBox = await player.locator('.player-track-info').boundingBox();

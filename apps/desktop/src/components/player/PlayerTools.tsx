@@ -64,7 +64,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
       <button
         className="button player-test-button"
         type="button"
-        aria-label="Test playback (no input)"
+        aria-label="Test without keyboard input"
         title="Preview with no physical keyboard input"
         disabled={!canPreparePlayback}
         onClick={() => void prepareAndMaybeStart()}

@@ -28,7 +28,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
     'aria-selected',

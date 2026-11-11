@@ -587,6 +587,7 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   const status = player.locator('.player-track-status');
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
+  await expect(player.locator('.player-mode-badge')).toContainText('TEST');
   await expect(status).toHaveCount(1);
   await expect(player.getByText('Now Playing', { exact: true })).toHaveCount(0);
 
@@ -607,8 +608,8 @@ test('compact Player Dock presents one readable dry-run status without moving tr
     .click();
 
   await expect(title).toHaveText('Blue Bird');
-  await expect(status).toHaveText('Dry run · Playing');
-  await expect(status).toHaveAttribute('aria-label', /No physical input is sent/);
+  await expect(status).toHaveText('Playing');
+  await expect(status).toHaveAttribute('aria-label', /no physical input is sent/i);
   await expect(status).toHaveCount(1);
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
   await expect(player.getByRole('button', { name: 'Add to Liked Songs' })).toBeVisible();
@@ -933,7 +934,7 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   });
   const [traceDownload] = await Promise.all([
     page.waitForEvent('download'),
-    diagnostics.getByRole('button', { name: 'Export last sender trace' }).click(),
+    diagnostics.getByRole('button', { name: 'Export sender metadata' }).click(),
   ]);
   expect(traceDownload.suggestedFilename()).toBe('sky-sender-trace.json');
 
