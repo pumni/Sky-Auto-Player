@@ -224,7 +224,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           disabled={!stopCanAct || playback.transportOperation === 'stopping'}
           onClick={() => void stop()}
         >
-          <Square size={12} aria-hidden="true" />
+          <Square size={14} aria-hidden="true" />
         </button>
       </div>
       <PlayerTransportTimeline useStore={useStore} transportStatus={transportStatus} />

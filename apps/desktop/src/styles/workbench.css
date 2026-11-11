@@ -422,6 +422,7 @@ body.is-resizing * {
   font-size: 14px;
   font-weight: 600;
   line-height: 1;
+  text-transform: uppercase;
 }
 
 .library-collapsed-playlist-tile:hover .library-playlist-monogram,

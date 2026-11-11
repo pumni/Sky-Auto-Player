@@ -1,5 +1,5 @@
 import { memo, type CSSProperties, type ReactNode } from 'react';
-import { Heart, Volume2 } from 'lucide-react';
+import { Heart, Music2 } from 'lucide-react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectNowPlayingSongId, selectRowAtIndex } from '../../state/store';
@@ -87,7 +87,7 @@ export const TrackRow = memo(function TrackRow({
       }}
     >
       <span className="track-cell track-cell-index" role="gridcell">
-        {playing ? <Volume2 size={14} aria-hidden="true" /> : ordinal}
+        {playing ? <Music2 size={14} aria-hidden="true" /> : ordinal}
       </span>
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         <span className="track-title-text">{row.title}</span>
