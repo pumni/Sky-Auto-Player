@@ -16,7 +16,9 @@ for (const viewport of [
     const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByText('Medium timing risk')).toBeVisible();
-    await expect(confirmation.getByRole('button', { name: 'Proceed with current settings' })).toBeFocused();
+    await expect(
+      confirmation.getByRole('button', { name: 'Proceed with current settings' }),
+    ).toBeFocused();
     const notNow = confirmation.getByRole('button', { name: 'Not now' });
     await expect(notNow).toBeVisible();
     await expect(confirmation.locator('.admission-option')).toHaveCount(3);

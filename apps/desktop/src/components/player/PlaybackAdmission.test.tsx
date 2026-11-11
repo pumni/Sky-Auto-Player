@@ -74,16 +74,18 @@ describe('PlaybackAdmission recovery actions', () => {
     if (!prepared || prepared.admission !== 'confirmation_required') {
       throw new Error('expected a prepared playback requiring confirmation');
     }
-    act(() => store.setState({
-      playback: {
-        ...playback,
-        prepared: {
-          ...prepared,
-          decisions: prepared.decisions.filter((decision) => decision.decision === 'proceed'),
-          variants: prepared.variants.filter((variant) => variant.decision === 'proceed'),
+    act(() =>
+      store.setState({
+        playback: {
+          ...playback,
+          prepared: {
+            ...prepared,
+            decisions: prepared.decisions.filter((decision) => decision.decision === 'proceed'),
+            variants: prepared.variants.filter((variant) => variant.decision === 'proceed'),
+          },
         },
-      },
-    }));
+      }),
+    );
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
     expect(container.querySelectorAll('.admission-option')).toHaveLength(1);
