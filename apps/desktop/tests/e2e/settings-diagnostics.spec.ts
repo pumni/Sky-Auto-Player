@@ -204,7 +204,7 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await expect(dialog.getByRole('button', { name: 'Copy account' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Copy note' })).toBeVisible();
 
-  const qr = dialog.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ });
+  const qr = dialog.getByRole('img', { name: 'VietQR bank transfer code' });
   await qr.scrollIntoViewIfNeeded();
   await expect(qr).toBeVisible();
   await expect(qr).toHaveAttribute('src', '/donate-vietqr-mbbank.png');
@@ -291,6 +291,13 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
       element.scrollWidth > element.clientWidth,
     );
     expect(overflow).toBe(false);
+    const stacked = await bank.evaluate((element) => {
+      const qrBounds = element.querySelector('.donate-qr-frame')?.getBoundingClientRect();
+      const infoBounds = element.querySelector('.donate-bank-information')?.getBoundingClientRect();
+      if (!qrBounds || !infoBounds) return false;
+      return infoBounds.top >= qrBounds.bottom;
+    });
+    expect(stacked).toBe(true);
   }
 });
 

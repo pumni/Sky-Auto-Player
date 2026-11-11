@@ -635,6 +635,10 @@
   user-select: text;
 }
 
+.donate-bank-details > div:nth-child(2) dd {
+  font-weight: 600;
+}
+
 .donate-bank-account {
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 14px;

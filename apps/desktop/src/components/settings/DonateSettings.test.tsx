@@ -40,7 +40,7 @@ describe('DonateSettings', () => {
     expect(screen.getByText(DONATION_CONFIG.transferMemo)).toBeInTheDocument();
     expect(screen.queryByText(/No fixed amount|· VND/)).not.toBeInTheDocument();
     expect(document.querySelector('.donate-qr-card')).toBeNull();
-    expect(screen.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ })).toHaveAttribute(
+    expect(screen.getByRole('img', { name: 'VietQR bank transfer code' })).toHaveAttribute(
       'src',
       DONATION_CONFIG.vietQrImagePath,
     );

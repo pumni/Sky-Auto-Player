@@ -108,7 +108,7 @@ export function DonateSettings() {
           <div className="donate-qr-frame">
             <img
               src={DONATION_CONFIG.vietQrImagePath}
-              alt="MBBank VietQR for Nguyen Duc Hoa, account 0857288363"
+              alt="VietQR bank transfer code"
               width={200}
               height={200}
             />
