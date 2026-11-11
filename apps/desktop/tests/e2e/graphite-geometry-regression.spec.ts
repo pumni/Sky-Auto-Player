@@ -526,14 +526,9 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       fontSize: '13px',
       fontWeight: '600',
     });
-    expect(runtimeAppearance.elements.senderStatus).toMatchObject({
-      fontSize: '12px',
-      fontWeight: '600',
-    });
-    expect(runtimeAppearance.elements.runtimeMetricLabel?.fontSize).toBe('12px');
-    expect(runtimeAppearance.elements.runtimeMetricValue).toMatchObject({
-      fontSize: '12px',
-      fontWeight: '600',
-    });
+    // Dry-run sends no physical input; absent sender measurements must not appear as real metrics.
+    expect(runtimeAppearance.elements.senderStatus).toBeNull();
+    expect(runtimeAppearance.elements.runtimeMetricLabel).toBeNull();
+    expect(runtimeAppearance.elements.runtimeMetricValue).toBeNull();
   }
 });
