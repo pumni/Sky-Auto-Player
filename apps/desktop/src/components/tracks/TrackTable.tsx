@@ -1,5 +1,13 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type Ref,
+} from 'react';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import {
   LIBRARY_PAGE_SIZE,
@@ -12,8 +20,13 @@ import {
 import { VirtualTrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
 
+export interface TrackTableHandle {
+  locateSelected: () => Promise<void>;
+}
+
 interface TrackTableProps {
   useStore: DesktopStoreHook;
+  locateSelectedRef?: Ref<TrackTableHandle>;
 }
 
 function libraryScopeKey(library: DesktopStore['library']): string {
@@ -66,7 +79,7 @@ interface PendingKeyboardNavigation {
   scopeKey: string;
 }
 
-export function TrackTable({ useStore }: TrackTableProps) {
+export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
   const resultTotal = useStore((store) => store.library.resultTotal);
@@ -78,6 +91,12 @@ export function TrackTable({ useStore }: TrackTableProps) {
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
   const pendingKeyboardNavigation = useRef<PendingKeyboardNavigation | null>(null);
+  const pendingLocate = useRef<{
+    page: number;
+    index: number;
+    songId: string;
+    generation: number;
+  } | null>(null);
   const keyboardNavigationId = useRef(0);
   const isBuiltin = searchSource.kind === 'smart' && searchSource.id === 'builtin';
   const pageOffset = isBuiltin ? (committedPage - 1) * LIBRARY_PAGE_SIZE : 0;
@@ -93,6 +112,54 @@ export function TrackTable({ useStore }: TrackTableProps) {
     estimateSize: () => 46,
     overscan: 10,
   });
+  useImperativeHandle(
+    locateSelectedRef,
+    () => ({
+      locateSelected: async () => {
+        const library = useStore.getState().library;
+        const index = library.selectedSongIndex;
+        if (
+          index === null ||
+          !library.selectedSongId ||
+          index < 0 ||
+          index >= library.resultTotal ||
+          library.membershipRevision !== library.indexMembershipRevision
+        ) {
+          return;
+        }
+        const targetPage = isBuiltin ? Math.floor(index / LIBRARY_PAGE_SIZE) + 1 : 1;
+        if (isBuiltin && targetPage !== library.builtinPage.committedPage) {
+          pendingLocate.current = {
+            page: targetPage,
+            index,
+            songId: library.selectedSongId,
+            generation: library.generation,
+          };
+          await useStore.getState().navigateBuiltinPage(targetPage);
+          if (useStore.getState().library.builtinPage.committedPage !== targetPage) {
+            pendingLocate.current = null;
+          }
+          return;
+        }
+        virtualizer.scrollToIndex(index - pageOffset, { align: 'center' });
+        parentRef.current?.focus({ preventScroll: true });
+      },
+    }),
+    [isBuiltin, locateSelectedRef, pageOffset, useStore, virtualizer],
+  );
+
+  useLayoutEffect(() => {
+    const pending = pendingLocate.current;
+    if (!pending || !isBuiltin || committedPage !== pending.page) return;
+    pendingLocate.current = null;
+    const library = useStore.getState().library;
+    if (library.selectedSongId !== pending.songId || library.generation !== pending.generation) {
+      return;
+    }
+    virtualizer.scrollToIndex(pending.index - pageOffset, { align: 'center' });
+    parentRef.current?.focus({ preventScroll: true });
+  }, [committedPage, isBuiltin, pageOffset, useStore, virtualizer]);
+
   const virtualItems = virtualizer.getVirtualItems();
   const renderedItems =
     virtualItems.length > 0
