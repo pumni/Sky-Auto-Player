@@ -201,8 +201,8 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await expect(dialog.getByText('MoMo')).toHaveCount(0);
   await expect(dialog.getByText('PSP2603710800000415')).toHaveCount(0);
   await expect(dialog.getByText('Techcombank')).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: 'Copy account' })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Copy note' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Copy account' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Copy note' })).toHaveCount(0);
 
   const qr = dialog.getByRole('img', { name: 'VietQR bank transfer code' });
   await qr.scrollIntoViewIfNeeded();
@@ -229,7 +229,7 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('Donate groups transfer details and aligns its GitHub external-link icon', async ({
+test('Donate prioritizes QR scanning and aligns manual fallback details and GitHub icon', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -239,29 +239,34 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
   const bank = dialog.locator('.donate-bank-card');
-  const copyAccount = bank.getByRole('button', { name: 'Copy account' });
-  const copyNote = bank.getByRole('button', { name: 'Copy note' });
   const qr = bank.locator('.donate-qr-frame');
-  const detailRows = bank.locator('.donate-bank-copy-row');
+  const detailRows = bank.locator('.donate-bank-reference-row');
   const guidance = bank.getByText(
-    'Scan the QR or copy the details. Check the recipient before sending.',
+    'Scan with your phone’s banking app. Verify the recipient before confirming.',
   );
   await expect(guidance).toBeVisible();
   await expect(detailRows).toHaveCount(2);
-  await expect(copyAccount).toBeVisible();
-  await expect(copyNote).toBeVisible();
+  await expect(bank.getByRole('button')).toHaveCount(0);
 
   const bankGeometry = await bank.evaluate((element) => {
     const rect = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
     const qrBounds = rect('.donate-qr-frame');
     const detailsBounds = rect('.donate-bank-information');
-    const accountBounds = rect('.donate-bank-copy-row');
+    const accountBounds = rect('.donate-bank-reference-row');
     const guidanceBounds = rect('.donate-bank-guidance');
     const detailListBounds = rect('.donate-bank-details');
-    const buttons = Array.from(element.querySelectorAll('.donate-bank-copy-row')).map((row) => {
-      const button = row.querySelector('button')?.getBoundingClientRect();
-      const value = row.querySelector('dd')?.getBoundingClientRect();
-      return { buttonLeft: button?.left ?? 0, valueRight: value?.right ?? 0 };
+    const referenceRows = Array.from(
+      element.querySelectorAll('.donate-bank-reference-row'),
+    ).map((row) => {
+      const rowBounds = row.getBoundingClientRect();
+      const valueBounds = row.querySelector('dd')?.getBoundingClientRect();
+      return {
+        valueVisible: Boolean(
+          valueBounds &&
+            valueBounds.left >= rowBounds.left &&
+            valueBounds.right <= rowBounds.right + 1,
+        ),
+      };
     });
     return {
       qrTop: qrBounds?.top ?? 0,
@@ -274,7 +279,7 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
       guidanceBottom: guidanceBounds?.bottom ?? 0,
       detailListTop: detailListBounds?.top ?? 0,
       accountTop: accountBounds?.top ?? 0,
-      buttons,
+      referenceRows,
     };
   });
   expect(Math.abs(bankGeometry.qrTop - bankGeometry.detailsTop)).toBeLessThanOrEqual(2);
@@ -283,8 +288,8 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
   expect(bankGeometry.detailListTop).toBeGreaterThan(bankGeometry.guidanceBottom);
   expect(bankGeometry.accountTop).toBeGreaterThan(bankGeometry.detailListTop);
   expect(bankGeometry.detailsBottom).toBeLessThanOrEqual(bankGeometry.qrBottom + 2);
-  for (const row of bankGeometry.buttons) {
-    expect(row.buttonLeft).toBeGreaterThanOrEqual(row.valueRight);
+  for (const row of bankGeometry.referenceRows) {
+    expect(row.valueVisible).toBe(true);
   }
 
   const github = dialog.getByRole('link', { name: /star on GitHub/ });

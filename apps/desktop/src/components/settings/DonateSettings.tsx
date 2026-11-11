@@ -1,15 +1,13 @@
-import { Check, Coffee, Copy, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
+import { Coffee, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { openExternalUrl } from '../../platform/externalLinks';
 import { isTauriRuntime } from '../../platform/runtime';
 import { DONATION_CONFIG } from './donationConfig';
 
 type Notice = { kind: 'success' | 'error'; text: string };
-type CopyField = 'account' | 'memo';
 
 export function DonateSettings() {
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [copiedField, setCopiedField] = useState<CopyField | null>(null);
 
   function openSupportLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
     if (!isTauriRuntime()) return;
@@ -27,20 +25,6 @@ export function DonateSettings() {
     })();
   }
 
-  async function copyToClipboard(field: CopyField, value: string) {
-    setNotice(null);
-    setCopiedField(null);
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedField(field);
-      setNotice({
-        kind: 'success',
-        text: `${field === 'account' ? 'Account number' : 'Transfer note'} copied.`,
-      });
-    } catch {
-      setNotice({ kind: 'error', text: 'Could not copy. Select and copy the text manually.' });
-    }
-  }
 
   return (
     <section className="settings-section donate-settings" aria-labelledby="donate-settings-title">
@@ -112,7 +96,7 @@ export function DonateSettings() {
 
           <div className="donate-bank-information">
             <p className="donate-bank-guidance">
-              Scan the QR or copy the details. Check the recipient before sending.
+              Scan with your phone’s banking app. Verify the recipient before confirming.
             </p>
             <dl className="donate-bank-details">
               <div>
@@ -123,41 +107,13 @@ export function DonateSettings() {
                 <dt>Account holder</dt>
                 <dd>{DONATION_CONFIG.accountHolder}</dd>
               </div>
-              <div className="donate-bank-copy-row">
+              <div className="donate-bank-reference-row">
                 <dt>Account number</dt>
                 <dd className="donate-bank-account">{DONATION_CONFIG.accountNumber}</dd>
-                <button
-                  className="button donate-copy-button"
-                  type="button"
-                  aria-label="Copy account"
-                  title="Copy account number"
-                  onClick={() => void copyToClipboard('account', DONATION_CONFIG.accountNumber)}
-                >
-                  {copiedField === 'account' ? (
-                    <Check size={14} aria-hidden="true" />
-                  ) : (
-                    <Copy size={14} aria-hidden="true" />
-                  )}
-                  Copy
-                </button>
               </div>
-              <div className="donate-bank-copy-row">
+              <div className="donate-bank-reference-row">
                 <dt>Transfer note</dt>
                 <dd>{DONATION_CONFIG.transferMemo}</dd>
-                <button
-                  className="button donate-copy-button"
-                  type="button"
-                  aria-label="Copy note"
-                  title="Copy transfer note"
-                  onClick={() => void copyToClipboard('memo', DONATION_CONFIG.transferMemo)}
-                >
-                  {copiedField === 'memo' ? (
-                    <Check size={14} aria-hidden="true" />
-                  ) : (
-                    <Copy size={14} aria-hidden="true" />
-                  )}
-                  Copy
-                </button>
               </div>
             </dl>
           </div>

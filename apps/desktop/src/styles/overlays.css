@@ -552,8 +552,7 @@
   line-height: 1.35;
 }
 
-.donate-external-link,
-.donate-copy-button {
+.donate-external-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -655,38 +654,13 @@
   font-weight: 600;
 }
 
-.donate-bank-details .donate-bank-copy-row {
-  display: grid;
+.donate-bank-details .donate-bank-reference-row {
   grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  align-items: center;
-  gap: 3px 10px;
+  gap: 4px;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
 }
 
-.donate-bank-copy-row dt {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.donate-bank-copy-row dd {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.donate-copy-button {
-  grid-column: 2;
-  grid-row: 1 / 3;
-  align-self: center;
-  min-width: 66px;
-  min-height: 30px;
-  padding-inline: 8px;
-  white-space: nowrap;
-}
-
-.donate-copy-button:focus-visible,
 .donate-disclaimer a:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -724,9 +698,6 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .donate-bank-details .donate-bank-copy-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
 }
 
 .calibration-copy {
