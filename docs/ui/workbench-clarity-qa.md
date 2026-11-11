@@ -36,6 +36,8 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 - Check the native Tauri/Windows app; Chromium mock screenshots alone cannot verify keyboard input or focus handling. With no song selected, Inspector should show a centered action cue instead of a tiny top-left line.
 - Lucide icon semantics: BookMusic for built-in sheets, Heart for likes, ListMusic for playlists/auto-queue, RefreshCw for reload, SlidersHorizontal for profile, PanelRight for Inspector, FlaskConical for a safe test, Music2 for current-track identity, and the usual transport shapes for playback. All icon-only controls need accessible names and tooltips.
 - In Song Details, loss reasons and conversion consent remain visible. Technical counters expand independently, and low-risk explanations collapse.
+- A risk confirmation no longer stretches across the library: visible risk text, compact option buttons, collapsible per-option timing estimates, and a small Not now action cancel prepared playback without starting. Check both one-decision (native screenshot) and three-decision (mock) variants; opening estimates must not clip at 800×560.
+- In Playback profile, Timing Margin is a compact single-line setting (label/recommendation plus increment controls) rather than a large separate card; its min/max disable behavior and persisted backend values must remain correct.
 - In Runtime → Performance, dry run shows a single unmeasured-state message; real samples remain visible for physical sessions.
 - Inspect Light mode, forced colors, focus rings, reduced-motion behavior, and scrollbars.
 - Validate sender-metadata export with and without a real session. Export remains backend-owned because frontend session identity alone does not establish trace availability.
