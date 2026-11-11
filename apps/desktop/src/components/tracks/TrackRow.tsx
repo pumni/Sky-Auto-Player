@@ -1,5 +1,5 @@
 import { memo, type CSSProperties, type ReactNode } from 'react';
-import { Volume2 } from 'lucide-react';
+import { Heart, Volume2 } from 'lucide-react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectNowPlayingSongId, selectRowAtIndex } from '../../state/store';
@@ -30,7 +30,7 @@ function metadataStatus(state: SongRow['metadata_state']): {
 } {
   switch (state) {
     case 'pending':
-      return { label: 'Metadata loading', value: '…' };
+      return { label: 'Metadata loading', value: 'Loading' };
     case 'unsupported':
       return { label: 'Unsupported sheet format', value: 'Unsupported' };
     case 'malformed':
@@ -91,6 +91,15 @@ export const TrackRow = memo(function TrackRow({
       </span>
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         <span className="track-title-text">{row.title}</span>
+        {metadata && (
+          <span
+            className={`track-metadata-status is-${row.metadata_state}`}
+            aria-label={metadata.label}
+            title={metadata.label}
+          >
+            {metadata.value}
+          </span>
+        )}
         {selected && <span className="visually-hidden">Selected for inspection</span>}
         {playing && <span className="visually-hidden">Now Playing</span>}
         {actions}
@@ -110,34 +119,14 @@ export const TrackRow = memo(function TrackRow({
           }}
           onKeyDown={(event) => event.stopPropagation()}
         >
-          <span aria-hidden="true">{row.liked ? '♥' : '♡'}</span>
+          <Heart size={16} fill={row.liked ? 'currentColor' : 'none'} aria-hidden="true" />
         </button>
       </span>
       <span className="track-cell track-cell-notes" role="gridcell">
-        {metadata ? (
-          <span
-            className={`track-metadata-status is-${row.metadata_state}`}
-            aria-label={metadata.label}
-            title={metadata.label}
-          >
-            {metadata.value}
-          </span>
-        ) : (
-          (row.note_count ?? '—')
-        )}
+        {metadata ? '—' : (row.note_count ?? '—')}
       </span>
       <span className="track-cell track-cell-duration" role="gridcell">
-        {metadata ? (
-          <span
-            className={`track-metadata-status is-${row.metadata_state}`}
-            aria-label={metadata.label}
-            title={metadata.label}
-          >
-            {metadata.value}
-          </span>
-        ) : (
-          formatDuration(row.duration_us)
-        )}
+        {metadata ? '—' : formatDuration(row.duration_us)}
       </span>
     </div>
   );

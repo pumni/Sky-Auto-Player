@@ -87,9 +87,19 @@
 }
 
 .track-row.is-playing:not(.is-selected) {
-  border-left-color: var(--workbench-playing-indicator);
-  color: var(--text-secondary);
   background: var(--workbench-navigation);
+}
+
+/* Selected is the inspected row; playing is the audible/input identity.
+   Preserve both signals when the same row owns both states. */
+.track-row.is-playing {
+  border-left-color: var(--workbench-playing-indicator);
+}
+
+.track-row.is-playing .track-title-text,
+.track-row.is-playing .track-cell-index {
+  color: var(--accent-ink);
+  font-weight: 650;
 }
 
 .track-cell {
@@ -123,6 +133,7 @@
 
 .track-title-text {
   min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -157,12 +168,31 @@
 }
 
 .track-metadata-status {
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-panel);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
-.track-metadata-status.is-error {
-  font-size: var(--type-metadata);
+.track-metadata-status:is(.is-physical_risk, .is-requires_confirmation) {
+  color: var(--warning-fg);
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.track-metadata-status:is(.is-error, .is-malformed, .is-unsupported, .is-unplayable) {
+  color: var(--danger-fg);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
 }
 
 .track-like-button {

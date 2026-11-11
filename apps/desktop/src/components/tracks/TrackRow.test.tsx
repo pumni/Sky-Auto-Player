@@ -64,6 +64,7 @@ describe('Track Browser primitives', () => {
     expect(screen.getByRole('gridcell', { name: '2:05' })).toBeInTheDocument();
     const likeButton = screen.getByRole('button', { name: 'Add Liminal Garden to Liked Songs' });
     expect(likeButton).toHaveAttribute('aria-pressed', 'false');
+    expect(likeButton.querySelector('svg')).toHaveClass('lucide-heart');
     fireEvent.click(likeButton);
     expect(onToggleLiked).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
@@ -81,6 +82,7 @@ describe('Track Browser primitives', () => {
     expect(renderedRow).toHaveAttribute('aria-selected', 'true');
     expect(renderedRow).toHaveAttribute('aria-current', 'true');
     expect(renderedRow).toHaveClass('is-selected', 'is-playing');
+    expect(renderedRow.querySelector('.track-title-text')).toHaveTextContent(row.title);
     expect(renderedRow.style.transform).toBe('translateY(276px)');
     expect(renderedRow.querySelector('.track-cell-index svg')).toHaveAttribute(
       'aria-hidden',
@@ -119,8 +121,13 @@ describe('Track Browser primitives', () => {
       </>,
     );
 
-    expect(screen.getAllByRole('gridcell', { name: 'Metadata loading' })).toHaveLength(2);
-    expect(screen.getAllByRole('gridcell', { name: 'Metadata unavailable' })).toHaveLength(2);
+    expect(screen.getByText('Loading')).toHaveAttribute('aria-label', 'Metadata loading');
+    expect(screen.getByText('Unavailable')).toHaveAttribute(
+      'aria-label',
+      'Metadata unavailable',
+    );
+    expect(document.querySelectorAll('.track-metadata-status')).toHaveLength(2);
+    expect(screen.getAllByRole('gridcell', { name: '—' })).toHaveLength(4);
     expect(screen.queryByText('Unknown')).toBeNull();
     expect(document.querySelectorAll('.risk-dot')).toHaveLength(0);
   });
