@@ -7,7 +7,7 @@ test('Locate selected returns to an off-screen row without scrolling the list au
   await page.goto('/?mockCatalogCount=112');
 
   const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
-  const selected = page.getByRole('row', { name: /Aurora Landing/ });
+  const selected = page.locator('.track-row').first();
   await selected.click();
   await expect(selected).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('button', { name: 'Locate selected' })).toHaveCount(0);
@@ -31,7 +31,7 @@ test('Locate selected restores the original built-in page after browsing another
   await page.setViewportSize({ width: 987, height: 691 });
   await page.goto('/?mockCatalogCount=112');
 
-  const selected = page.getByRole('row', { name: /Aurora Landing/ });
+  const selected = page.locator('.track-row').first();
   await selected.click();
   await page.getByRole('button', { name: 'Next page' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();

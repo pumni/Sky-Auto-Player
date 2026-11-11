@@ -42,10 +42,10 @@ for (const viewport of [
 
     const estimate = confirmation.locator('.admission-option-estimate').first();
     await expect(estimate).not.toHaveAttribute('open');
-    await estimate.locator('summary').click();
+    await estimate.locator(':scope > summary').click();
     await expect(estimate).toHaveAttribute('open');
     await expect(estimate.getByLabel('Offline whole-stream timing advisory')).toBeVisible();
-    await estimate.locator('summary').click();
+    await estimate.locator(':scope > summary').click();
     await notNow.click();
     await expect(confirmation).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();

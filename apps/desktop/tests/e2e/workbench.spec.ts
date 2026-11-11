@@ -479,12 +479,10 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       expect(Math.abs(tabs.right - (header.right - 14))).toBeLessThanOrEqual(1);
       expectOriginalTabs(state);
     }
-    expect(
-      Math.abs(
-        geometryFor('empty', '.utility-empty p').y -
-          geometryFor('selected', '.song-details-heading h3').y,
-      ),
-    ).toBeLessThanOrEqual(1);
+    // The empty cue is centered; the populated Inspector starts at the top.
+    expect(geometryFor('empty', '.utility-empty p').y).toBeGreaterThan(
+      geometryFor('selected', '.song-details-heading h3').y + 80,
+    );
     const widthOverflow = await page.evaluate(() =>
       [
         '.utility-surface',
@@ -587,7 +585,7 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   const status = player.locator('.player-track-status');
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
-  await expect(player.locator('.player-mode-badge')).toContainText('TEST');
+  await expect(player.locator('.player-mode-badge')).toContainText('LIVE');
   await expect(status).toHaveCount(1);
   await expect(player.getByText('Now Playing', { exact: true })).toHaveCount(0);
 

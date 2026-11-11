@@ -384,8 +384,8 @@ test('Graphite Dark keeps selected and playing rows distinct without changing it
   expect(rowStyles.playingBackground).toBe('rgb(25, 26, 27)');
   expect(rowStyles.selectedBackground).not.toBe(rowStyles.playingBackground);
   expect(rowStyles.workbenchDivider).toBe('#2a2b2c');
-  expect(rowStyles.playingIndicatorToken).toBe(rowStyles.workbenchDivider);
-  expect(rowStyles.playingIndicator).toBe('rgb(42, 43, 44)');
+  expect(rowStyles.playingIndicatorToken).toBe('#b2a5e9');
+  expect(rowStyles.playingIndicator).toBe('rgb(178, 165, 233)');
   expect(rowStyles.selectedIndicator).not.toBe(rowStyles.playingIndicator);
   const summary = await textAudit(page, 'Graphite Dark populated library');
   expect(summary.minimumApplicableRatio).toBeGreaterThanOrEqual(4.5);

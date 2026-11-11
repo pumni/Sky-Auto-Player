@@ -174,7 +174,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   const player = await startDryRunWithSelection(page);
   const details = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
-  await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'Inspector' })).toBeVisible();
   const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await page.mouse.move(0, 0);
   await search.evaluate((input: HTMLInputElement) => input.blur());

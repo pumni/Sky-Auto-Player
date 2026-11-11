@@ -79,7 +79,8 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
           className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
           aria-label="Auto Play"
           aria-pressed={autoPlayEnabled}
-          isDisabled={!settings || autoPlayPending}
+          isDisabled={!settings}
+          aria-busy={autoPlayPending}
           onPress={() => void toggleAutoPlay()}
         >
           <ListVideo size={18} aria-hidden="true" />

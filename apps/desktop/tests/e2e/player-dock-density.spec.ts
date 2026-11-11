@@ -18,6 +18,7 @@ for (const viewport of [
     await expect(profileTrigger).toBeVisible();
     const autoPlay = dock.getByRole('button', { name: 'Auto Play' });
     await expect(autoPlay).toBeVisible();
+    await expect(autoPlay).toBeEnabled();
     await expect(autoPlay.locator('svg')).toHaveClass(/lucide-list-video/);
     await autoPlay.hover();
     await expect(page.getByRole('tooltip')).toContainText('Auto Play on');

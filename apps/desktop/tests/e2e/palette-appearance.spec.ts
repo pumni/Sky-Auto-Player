@@ -928,9 +928,11 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   const separatorLine = separator.locator('span');
   await separator.hover();
-  await assertBorderUsesToken(page, separatorLine, '--control-border', 'borderLeftColor');
+  await expect
+    .poll(() => styleValue(separatorLine, 'backgroundColor'))
+    .not.toBe('rgba(0, 0, 0, 0)');
   await focusSeparatorWithKeyboard(page, separator);
-  await expect(styleValue(separatorLine, 'borderLeftColor')).resolves.toBe(
+  await expect(styleValue(separatorLine, 'backgroundColor')).resolves.toBe(
     await resolvedTokenColor(page, '--focus-ring'),
   );
   const separatorBox = await separator.boundingBox();
@@ -941,7 +943,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
     separatorBox.y + separatorBox.height / 2,
   );
   await page.mouse.down();
-  await expect(styleValue(separatorLine, 'borderLeftColor')).resolves.toBe(
+  await expect(styleValue(separatorLine, 'backgroundColor')).resolves.toBe(
     await resolvedTokenColor(page, '--accent-ink'),
   );
   await page.mouse.up();
@@ -1121,5 +1123,5 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   await focusSeparatorWithKeyboard(page, separator);
   await expectSystemColor(separator, 'outlineColor', 'Highlight');
-  await expectSystemColor(separator.locator('span'), 'borderLeftColor', 'Highlight');
+  await expectSystemColor(separator.locator('span'), 'backgroundColor', 'Highlight');
 });

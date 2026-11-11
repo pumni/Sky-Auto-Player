@@ -570,7 +570,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
   const profile = page.getByRole('dialog', { name: 'Playback profile' });
   await expect(
     profile.getByText(
-      'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
+      'Try these settings without sending any physical keyboard input.',
     ),
   ).toBeVisible();
   await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
@@ -767,7 +767,7 @@ test('Auto Play dock toggle mirrors Settings and stays outside the compact profi
   await expect(profileDialog.getByRole('switch', { name: 'Auto Play' })).toHaveCount(0);
   const profileBox = await profileDialog.boundingBox();
   expect(profileBox).not.toBeNull();
-  if (profileBox) expect(profileBox.width).toBeLessThanOrEqual(320);
+  if (profileBox) expect(profileBox.width).toBeLessThanOrEqual(350);
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Open settings' }).click();

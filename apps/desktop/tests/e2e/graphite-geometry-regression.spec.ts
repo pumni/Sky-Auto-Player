@@ -215,7 +215,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   await startDryRunWithSelection(page);
   const details = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
-  await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'Inspector' })).toBeVisible();
   const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   const collapseButton = page.getByRole('button', { name: 'Collapse library navigator' });
   await page.mouse.move(0, 0);
