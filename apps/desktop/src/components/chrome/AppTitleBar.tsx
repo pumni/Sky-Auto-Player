@@ -81,13 +81,17 @@ export function AppTitleBar({
               </Button>
             </span>
           )}
-          <Button className="icon-button" aria-label="Reload library" onPress={() => void reload()}>
+          <Button className="icon-button"
+            aria-label="Reload library"
+            title="Reload library"
+            onPress={() => void reload()}>
             <RefreshCw size={17} aria-hidden="true" />
           </Button>
           <Button
             ref={settingsTriggerRef}
             className="icon-button"
             aria-label="Open settings"
+            title="Open settings"
             onPress={() => {
               onSettingsOpen?.();
               setSettingsOpen(true);

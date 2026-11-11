@@ -15,7 +15,12 @@ for (const viewport of [
     const profileTrigger = dock.getByRole('button', { name: 'Configure playback profile' });
     await expect(dock).toBeVisible();
     await expect(profileTrigger).toBeVisible();
-    await expect(dock.getByRole('button', { name: 'Auto Play' })).toBeVisible();
+    const autoPlay = dock.getByRole('button', { name: 'Auto Play' });
+    await expect(autoPlay).toBeVisible();
+    await expect(autoPlay.locator('svg')).toHaveClass(/lucide-list-video/);
+    await autoPlay.hover();
+    await expect(page.getByRole('tooltip')).toContainText('Auto Play on');
+    await page.mouse.move(0, 0);
     await expect(dock.locator('.player-test-button')).toHaveCount(0);
     await expect(dock.locator('.player-auto-play-label')).toHaveCount(0);
     await expect(dock.locator('.profile-summary-button')).not.toContainText('FPS');
@@ -66,6 +71,21 @@ for (const viewport of [
     await expect(profile.getByRole('heading', { name: 'Playback profile' })).toBeVisible();
     await expect(profile.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
     await expect(profile.getByText('Calculated timing')).toBeVisible();
+    await expect(
+      profile.getByText('Select a song to enable a dry-run preview. No keyboard input will be sent.'),
+    ).toBeVisible();
+    const basicControls = await profile.locator('.profile-fields > label select').evaluateAll(
+      (selects) => selects.map((select) => {
+        const box = select.getBoundingClientRect();
+        return { x: box.x, y: box.y, right: box.right, bottom: box.bottom, width: box.width };
+      }),
+    );
+    expect(basicControls).toHaveLength(3);
+    expect(Math.max(...basicControls.map((box) => box.y)) - Math.min(...basicControls.map((box) => box.y))).toBeLessThanOrEqual(1);
+    for (const control of basicControls) expect(control.width).toBeGreaterThanOrEqual(60);
+    const marginBounds = await profile.locator('.timing-margin-control').boundingBox();
+    expect(marginBounds).not.toBeNull();
+    expect(marginBounds!.y).toBeGreaterThanOrEqual(Math.max(...basicControls.map((box) => box.bottom)) + 4);
     const popoverBounds = await page.locator('.profile-popover').boundingBox();
     expect(popoverBounds).not.toBeNull();
     if (popoverBounds) {

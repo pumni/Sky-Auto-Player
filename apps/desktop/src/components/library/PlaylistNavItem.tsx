@@ -36,6 +36,7 @@ export function PlaylistNavItem({
         <Button
           className="icon-button library-more-button"
           aria-label={`More actions for ${playlist.name}`}
+          title={`More actions for ${playlist.name}`}
           isDisabled={pending}
         >
           <MoreHorizontal size={16} aria-hidden="true" />

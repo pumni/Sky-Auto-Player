@@ -47,6 +47,14 @@ describe('AppTitleBar', () => {
     );
     expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Maximize window' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reload library' })).toHaveAttribute(
+      'title',
+      'Reload library',
+    );
+    expect(screen.getByRole('button', { name: 'Open settings' })).toHaveAttribute(
+      'title',
+      'Open settings',
+    );
     expect(screen.getByRole('button', { name: 'Close window' })).toBeInTheDocument();
     expect(screen.queryByText(`v${bootstrap.app_version}`)).toBeNull();
 
