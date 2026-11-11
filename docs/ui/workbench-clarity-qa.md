@@ -27,6 +27,7 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 
 ## Manual acceptance
 
+- When an inspected built-in song is outside the current scroll range or on another page, Locate selected appears and returns to it on demand. It should not appear for a visible song and should not auto-scroll the table.
 - At 1366×768 and 800×560, distinguish the playing row (accent title and rail) from the selected row (neutral rail and selected background), including their combined state.
 - At 1649×927, 1005×615 and 800×560, the player dock is icon-only on the right: no standalone Test button, Auto label or long numeric profile string. Its controls must not overlap or clip.
 - Playback profile is a labeled, scrollable popover with three aligned Hold/Tempo/FPS selectors, a full-width Timing Margin stepper and readable recommendation, and a collapsed Calculated timing section. Its Test playback (no input) action remains available and must never send physical keystrokes.
