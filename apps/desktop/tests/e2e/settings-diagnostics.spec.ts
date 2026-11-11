@@ -183,7 +183,9 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
   await expect(dialog.getByRole('heading', { name: 'Support Sky Auto Player' })).toBeVisible();
-  await expect(dialog.getByRole('heading', { name: 'MBBank · VietQR' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Bank transfer · VietQR' })).toBeVisible();
+  await expect(dialog.getByText('MBBank', { exact: true })).toHaveCount(1);
+  await expect(dialog.getByText(/No fixed amount|· VND/)).toHaveCount(0);
   await expect(dialog.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
     'href',
     'https://ko-fi.com/pumni',
@@ -241,6 +243,7 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
   const copyNote = bank.getByRole('button', { name: 'Copy note' });
   const qr = bank.locator('.donate-qr-frame');
   const detailRows = bank.locator('.donate-bank-copy-row');
+  await expect(bank.getByText('Scan the QR or copy the details. Check the recipient before sending.')).toBeVisible();
   await expect(detailRows).toHaveCount(2);
   await expect(copyAccount).toBeVisible();
   await expect(copyNote).toBeVisible();

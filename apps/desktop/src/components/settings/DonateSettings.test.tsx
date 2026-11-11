@@ -32,12 +32,14 @@ describe('DonateSettings', () => {
         ?.querySelector('svg'),
     ).toHaveClass('lucide-wallet-cards');
 
-    expect(screen.getByRole('heading', { name: 'MBBank · VietQR' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Bank transfer · VietQR' })).toBeInTheDocument();
+    expect(screen.getAllByText(DONATION_CONFIG.bankName)).toHaveLength(1);
     expect(screen.getByText(DONATION_CONFIG.bankName)).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.accountHolder)).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.accountNumber)).toBeInTheDocument();
     expect(screen.getByText(DONATION_CONFIG.transferMemo)).toBeInTheDocument();
-    expect(screen.getByText('No fixed amount · VND')).toBeInTheDocument();
+    expect(screen.queryByText(/No fixed amount|· VND/)).not.toBeInTheDocument();
+    expect(document.querySelector('.donate-qr-card')).toBeNull();
     expect(screen.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ })).toHaveAttribute(
       'src',
       DONATION_CONFIG.vietQrImagePath,

@@ -584,14 +584,6 @@
   gap: 18px;
 }
 
-.donate-qr-card {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  width: 200px;
-  margin: 0;
-}
-
 .donate-qr-frame {
   display: grid;
   place-items: center;
@@ -608,12 +600,6 @@
   width: 200px;
   height: 200px;
   image-rendering: pixelated;
-}
-
-.donate-qr-card figcaption {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  text-align: center;
 }
 
 .donate-bank-information {
@@ -651,7 +637,7 @@
 
 .donate-bank-account {
   font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 13px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }

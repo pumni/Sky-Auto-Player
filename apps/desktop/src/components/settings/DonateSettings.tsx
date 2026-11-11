@@ -98,24 +98,21 @@ export function DonateSettings() {
       <div className="donate-bank-card">
         <div className="donate-provider-heading">
           <Landmark size={17} aria-hidden="true" />
-          <h4>MBBank · VietQR</h4>
+          <h4>Bank transfer · VietQR</h4>
         </div>
         <p className="settings-note">
-          Scan with a banking app or transfer manually. Verify the recipient before confirming.
+          Scan the QR or copy the details. Check the recipient before sending.
         </p>
 
         <div className="donate-bank-content">
-          <figure className="donate-qr-card">
-            <div className="donate-qr-frame">
-              <img
-                src={DONATION_CONFIG.vietQrImagePath}
-                alt="MBBank VietQR for Nguyen Duc Hoa, account 0857288363"
-                width={200}
-                height={200}
-              />
-            </div>
-            <figcaption>No fixed amount · VND</figcaption>
-          </figure>
+          <div className="donate-qr-frame">
+            <img
+              src={DONATION_CONFIG.vietQrImagePath}
+              alt="MBBank VietQR for Nguyen Duc Hoa, account 0857288363"
+              width={200}
+              height={200}
+            />
+          </div>
 
           <div className="donate-bank-information">
             <dl className="donate-bank-details">
