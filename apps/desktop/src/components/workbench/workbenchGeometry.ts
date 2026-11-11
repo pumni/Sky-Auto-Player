@@ -7,8 +7,10 @@ import {
 } from '../../state/workbenchPreferences';
 
 export const MIN_TRACK_BROWSER_WIDTH = 420;
-export const WORKBENCH_GUTTER = 4;
-export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
+// A visible 1px seam separates panes. Its interactive hit target is larger in CSS.
+export const WORKBENCH_GUTTER = 1;
+// Outer breathing room is independent of the internal draggable divider.
+export const OUTER_INLINE_PADDING = 8;
 export const MIN_UTILITY_OVERLAY_WIDTH = 288;
 export const MAX_UTILITY_OVERLAY_WIDTH = 352;
 export const UTILITY_OVERLAY_WIDTH_FRACTION = 0.45;

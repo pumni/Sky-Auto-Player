@@ -19,13 +19,13 @@ describe('Inspector topology and preference ownership', () => {
     act(() => result.current.beginUtilityDrag());
     rerender({ width: 900, docked: true });
     act(() => {
-      result.current.setUtilityWidth(264, true);
+      result.current.setUtilityWidth(270, true);
       result.current.endUtilityDrag();
     });
     expect(result.current.geometry).toMatchObject({
       navigatorWidth: 200,
       trackBrowserWidth: 420,
-      utilityWidth: 264,
+      utilityWidth: 270,
     });
     rerender({ width: 900, docked: false });
     expect(result.current.utilityWidth).toBe(0);
@@ -33,7 +33,7 @@ describe('Inspector topology and preference ownership', () => {
     expect(result.current.geometry).toMatchObject({
       navigatorWidth: 200,
       trackBrowserWidth: 420,
-      utilityWidth: 264,
+      utilityWidth: 270,
     });
     rerender({ width: 901, docked: true });
     expect(result.current.navigatorCollapsed).toBe(true);
@@ -44,10 +44,10 @@ describe('Inspector topology and preference ownership', () => {
     });
   });
   it.each([
-    [900, 264],
-    [915, 279],
-    [916, 280],
-    [917, 281],
+    [900, 270],
+    [915, 285],
+    [916, 286],
+    [917, 287],
   ])('retains effective geometry on release at %s without violating v5', (width, effective) => {
     const { result, rerender } = renderHook(({ width }) => useWorkbenchLayout(width, true), {
       initialProps: { width: 1024 },
@@ -72,10 +72,10 @@ describe('Inspector topology and preference ownership', () => {
     expect(result.current.navigatorCollapsed).toBe(false);
   });
   it.each([
-    // Independent budget: viewport - 8 padding - 8 separators - 200 navigator - 420 tracks.
-    [1024, 388, 388],
+    // Independent budget: viewport - 8 padding - 2 separators - 200 navigator - 420 tracks.
+    [1024, 394, 394],
     [1100, 320, 440],
-    [960, 320, 324],
+    [960, 320, 330],
   ])('locks the expanded navigator at viewport %s', (viewport, initialWidth, maximum) => {
     localStorage.setItem(
       WORKBENCH_STORAGE_KEY,
@@ -89,7 +89,7 @@ describe('Inspector topology and preference ownership', () => {
     const { result } = renderHook(() => useWorkbenchLayout(viewport, true));
     act(() => result.current.beginUtilityDrag());
     expect(result.current.utilityWidthMax).toBe(maximum);
-    for (const requested of [388, 389, 388]) {
+    for (const requested of viewport === 1024 ? [394, 395, 394] : [388, 389, 388]) {
       act(() =>
         result.current.setUtilityWidth(Math.min(requested, result.current.utilityWidthMax)),
       );
@@ -97,7 +97,7 @@ describe('Inspector topology and preference ownership', () => {
       expect(result.current.navigatorWidth).toBeGreaterThanOrEqual(200);
       expect(result.current.geometry.trackBrowserWidth).toBeGreaterThanOrEqual(420);
       if (viewport === 1024) {
-        expect(result.current.utilityWidth).toBe(388);
+        expect(result.current.utilityWidth).toBe(394);
         expect(result.current.navigatorWidth).toBe(200);
         expect(result.current.geometry.trackBrowserWidth).toBe(420);
       }
@@ -126,7 +126,7 @@ describe('Inspector topology and preference ownership', () => {
       result.current.setUtilityWidth(440, true);
       result.current.endUtilityDrag();
     });
-    expect(result.current.geometry.trackBrowserWidth).toBe(520);
+    expect(result.current.geometry.trackBrowserWidth).toBe(526);
     act(() => {
       result.current.setUtilityWidth(320);
       result.current.setNavigatorPreference('expanded', true);
@@ -146,14 +146,14 @@ describe('Inspector topology and preference ownership', () => {
     );
     act(() => result.current.beginUtilityDrag());
     rerender({ width: 900, docked: true });
-    expect(result.current.utilityWidth).toBe(264);
+    expect(result.current.utilityWidth).toBe(270);
     expect(result.current.navigatorWidth).toBe(200);
     expect(result.current.geometry.trackBrowserWidth).toBe(420);
     rerender({ width: 640, docked: false });
     expect(result.current.navigatorWidth).toBe(48);
     rerender({ width: 800, docked: true });
     expect(result.current.navigatorWidth).toBe(48);
-    expect(result.current.utilityWidth).toBe(316);
+    expect(result.current.utilityWidth).toBe(322);
   });
   it('makes identical queued patches no-ops while still persisting the final width once', () => {
     let renders = 0;

@@ -305,7 +305,7 @@ describe('workbench layout persistence', () => {
     expect(getNavigatorWidthMax(900)).toBe(340);
     expect(getNavigatorWidthMax(1200, 340)).toBe(340);
     expect(getNavigatorWidthMax(920, 320)).toBe(MIN_NAVIGATOR_WIDTH);
-    expect(getUtilityWidthMax(920)).toBe(436);
+    expect(getUtilityWidthMax(920)).toBe(442);
     const minimum = solveWorkbenchGeometry({
       viewportWidth: 800,
       navigatorWidth: COMPACT_NAVIGATOR_WIDTH,
@@ -318,7 +318,7 @@ describe('workbench layout persistence', () => {
   });
 
   it('uses the shared compact rail width in inspector limits', () => {
-    expect(getUtilityWidthMax(800)).toBe(316);
+    expect(getUtilityWidthMax(800)).toBe(322);
     const geometry = solveWorkbenchGeometry({
       viewportWidth: 800,
       navigatorWidth: COMPACT_NAVIGATOR_WIDTH,
@@ -345,7 +345,7 @@ describe('workbench layout persistence', () => {
     expect(write).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand navigator' }));
-    expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('false:208:expanded:286');
+    expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('false:211:expanded:286');
     expect(write).not.toHaveBeenCalled();
 
     rerender(<ResponsiveNavigatorHarness viewportWidth={800} viewportRevision={1} />);
@@ -360,7 +360,7 @@ describe('workbench layout persistence', () => {
   });
 
   it('uses one shared spacing and geometry calculation', () => {
-    expect(WORKBENCH_GUTTER).toBe(4);
+    expect(WORKBENCH_GUTTER).toBe(1);
     expect(OUTER_INLINE_PADDING).toBe(8);
 
     const geometry = solveWorkbenchGeometry({
@@ -370,30 +370,30 @@ describe('workbench layout persistence', () => {
     });
     expect(geometry).toMatchObject({
       outerInlinePadding: 8,
-      gutter: 4,
-      separatorSpace: 8,
+      gutter: 1,
+      separatorSpace: 2,
       navigatorWidth: 240,
-      trackBrowserWidth: 790,
+      trackBrowserWidth: 796,
       utilityWidth: 320,
       fits: true,
     });
 
-    expect(getUtilityWidthMax(764)).toBe(280);
-    expect(getUtilityWidthMax(763)).toBe(279);
-    expect(getUtilityPresentationMode(764, true)).toBe('docked');
-    expect(getUtilityPresentationMode(763, true)).toBe('overlay');
+    expect(getUtilityWidthMax(758)).toBe(280);
+    expect(getUtilityWidthMax(757)).toBe(279);
+    expect(getUtilityPresentationMode(758, true)).toBe('docked');
+    expect(getUtilityPresentationMode(757, true)).toBe('overlay');
   });
 
   it('chooses docked presentation only when the minimum inspector width fits', () => {
-    for (const viewportWidth of [1920, 1366, 1024, 900, 800, 788, 787, 780, 764]) {
+    for (const viewportWidth of [1920, 1366, 1024, 900, 800, 788, 787, 780, 758]) {
       expect(getUtilityPresentationMode(viewportWidth, true)).toBe('docked');
     }
-    for (const viewportWidth of [763, 640]) {
+    for (const viewportWidth of [757, 640]) {
       expect(getUtilityPresentationMode(viewportWidth, true)).toBe('overlay');
     }
     expect(getUtilityPresentationMode(640, false)).toBe('closed');
-    expect(getUtilityWidthMax(788)).toBe(304);
-    expect(getUtilityWidthMax(787)).toBe(303);
+    expect(getUtilityWidthMax(788)).toBe(310);
+    expect(getUtilityWidthMax(787)).toBe(309);
   });
 
   it('computes a compact overlay width independently from docked width preferences', () => {

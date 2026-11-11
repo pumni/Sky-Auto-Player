@@ -14,7 +14,7 @@ export type PaletteId = (typeof palettes)[number];
 // Independent E2E oracle for the approved Inspector breakpoint. Keep this
 // separate from the production layout helper so browser tests can detect drift.
 export function expectedUtilityPresentation(viewportWidth: number): 'docked' | 'overlay' {
-  return viewportWidth >= 764 ? 'docked' : 'overlay';
+  return viewportWidth >= 758 ? 'docked' : 'overlay';
 }
 
 export async function expectNoSeriousAccessibilityViolations(page: Page) {
@@ -42,7 +42,9 @@ export async function expectWorkbenchWithinBounds(
       viewportWidth: window.innerWidth,
       presentation: document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation,
       gutter: Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+        getComputedStyle(document.querySelector<HTMLElement>('.workbench')!).getPropertyValue(
+          '--workbench-separator-width',
+        ),
       ),
       solverGutter: Number.parseFloat(
         document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',

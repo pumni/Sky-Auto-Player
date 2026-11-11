@@ -29,7 +29,9 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   if (navigatorPane && trackPane && playerBar) {
     const geometry = await page.evaluate(() => ({
       cssGutter: Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+        getComputedStyle(document.querySelector<HTMLElement>('.workbench')!).getPropertyValue(
+          '--workbench-separator-width',
+        ),
       ),
       solverGutter: Number.parseFloat(
         document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
@@ -39,8 +41,13 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
     expect(Math.round(trackPane.x - (navigatorPane.x + navigatorPane.width))).toBe(
       geometry.cssGutter,
     );
+    const verticalOuterPadding = await page.evaluate(() =>
+      Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+      ),
+    );
     expect(Math.round(playerBar.y - (navigatorPane.y + navigatorPane.height))).toBe(
-      geometry.cssGutter,
+      verticalOuterPadding,
     );
   }
   const titlebar = await page.locator('.app-titlebar').boundingBox();
@@ -99,7 +106,7 @@ test('configured Tauri minimum keeps Inspector docked in the Chromium UI contrac
 test('Chromium fallback emulation uses overlay below the docked threshold', async ({ page }) => {
   // These widths are Chromium responsive simulations below Tauri's 800×560 minimum.
   for (const viewport of [
-    { width: 763, height: 540 },
+    { width: 757, height: 540 },
     { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
