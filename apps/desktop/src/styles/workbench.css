@@ -86,19 +86,20 @@
 
 .resizable-separator span {
   position: absolute;
-  /* Highlight the whole gutter, not a 1px line inside a visually empty gap. */
-  inset: 0;
+  /* Fill the 4px lane, leaving space to round off both ends of the highlight. */
+  inset: 6px 0;
+  border-radius: 999px;
   background: transparent;
   pointer-events: none;
   transition: background-color 120ms ease;
 }
 
 .resizable-separator:hover:not(.is-disabled) span {
-  background: color-mix(in srgb, var(--accent-ink) 28%, transparent);
+  background: color-mix(in srgb, var(--accent-ink) 85%, transparent);
 }
 
 .resizable-separator:focus-visible span {
-  background: color-mix(in srgb, var(--focus-ring) 40%, transparent);
+  background: var(--focus-ring);
 }
 
 .resizable-separator.is-dragging span {

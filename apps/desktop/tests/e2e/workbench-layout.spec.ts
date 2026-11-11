@@ -336,8 +336,17 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
       ),
       separators: separators.map((separator) => {
         const area = rect(separator);
-        const fill = rect(separator.querySelector('span')!);
-        return { x: area.x, right: area.right, width: area.width, fillWidth: fill.width };
+        const fillElement = separator.querySelector('span')!;
+        const fill = rect(fillElement);
+        return {
+          x: area.x,
+          right: area.right,
+          width: area.width,
+          fillWidth: fill.width,
+          fillTopInset: fill.top - area.top,
+          fillBottomInset: area.bottom - fill.bottom,
+          fillRadius: getComputedStyle(fillElement).borderTopLeftRadius,
+        };
       }),
       navigatorRight: rect(navigator).right,
       browserLeft: rect(browser).left,
@@ -352,6 +361,9 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
   for (const separator of geometry.separators) {
     expect(separator.width).toBe(geometry.gap);
     expect(separator.fillWidth).toBe(geometry.gap);
+    expect(separator.fillTopInset).toBe(6);
+    expect(separator.fillBottomInset).toBe(6);
+    expect(separator.fillRadius).toBe('999px');
   }
   expect(geometry.separators[0]!.x).toBe(geometry.navigatorRight);
   expect(geometry.separators[0]!.right).toBe(geometry.browserLeft);
@@ -364,8 +376,16 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
   await expect(highlight).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await separator.hover();
   await expect
-    .poll(() => highlight.evaluate((element) => getComputedStyle(element).backgroundColor))
-    .not.toBe('rgba(0, 0, 0, 0)');
+    .poll(() =>
+      highlight.evaluate((element) => {
+        const fill = getComputedStyle(element).backgroundColor;
+        const rgba = fill.match(/^rgba?\(([^)]+)\)$/);
+        if (!rgba) return 0;
+        const components = rgba[1]!.split(/[\s,/]+/).filter(Boolean);
+        return components.length >= 4 ? Number(components[3]) : 1;
+      }),
+    )
+    .toBeGreaterThanOrEqual(0.8);
   const box = await separator.boundingBox();
   if (!box) throw new Error('Missing utility separator bounds');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);

@@ -45,7 +45,7 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 
 ## Workbench resize lane
 
-- Pane borders, rounded corners and the **4px visual gutter** remain unchanged. The separator occupies all 4px of the existing gutter, while the transparent pointer-acquisition zone extends slightly beyond it; hover/focus/drag highlights the full 4px lane.
+- Pane borders, rounded corners and the **4px visual gutter** remain unchanged. The separator occupies all 4px of the existing gutter, while the transparent pointer-acquisition zone extends slightly beyond it; hover/focus/drag highlights the full 4px lane with a clearly visible accent and 6px inset at both ends so the highlight has rounded caps.
 - Drag the Navigator and docked Inspector dividers at 1366×768 and 800×560; verify there are no dead pixels in the gutter, no surprising pane jump, unchanged keyboard arrows / Home / End / Enter reset, and that one final persisted width survives reload.
 - The layout policy still updates live widths on animation frames without persisting each pointer movement; review performance on native WebView2 rather than treating simulated event counts as measured FPS.
 
