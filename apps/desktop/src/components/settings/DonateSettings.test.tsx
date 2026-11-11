@@ -42,6 +42,13 @@ describe('DonateSettings', () => {
       'src',
       DONATION_CONFIG.vietQrImagePath,
     );
+    const copyRows = document.querySelectorAll('.donate-bank-copy-row');
+    expect(copyRows).toHaveLength(2);
+    expect(copyRows[0]).toContainElement(screen.getByRole('button', { name: 'Copy account' }));
+    expect(copyRows[1]).toContainElement(screen.getByRole('button', { name: 'Copy note' }));
+    const githubLink = screen.getByRole('link', { name: /star on GitHub/ });
+    expect(githubLink.querySelector('span')).toHaveTextContent('star on GitHub');
+    expect(githubLink.querySelector('svg')).toHaveClass('lucide-external-link');
     expect(screen.queryByText(/MoMo|PSP2603710800000415|Techcombank/i)).not.toBeInTheDocument();
   });
 

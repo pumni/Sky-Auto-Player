@@ -580,8 +580,8 @@
 .donate-bank-content {
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
+  align-items: start;
+  gap: 18px;
 }
 
 .donate-qr-card {
@@ -617,15 +617,14 @@
 }
 
 .donate-bank-information {
-  display: grid;
-  gap: 13px;
   min-width: 0;
+  padding-top: 2px;
 }
 
 .donate-bank-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 12px 14px;
   margin: 0;
 }
 
@@ -657,24 +656,57 @@
   font-weight: 600;
 }
 
-.donate-copy-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.donate-bank-details .donate-bank-copy-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 3px 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.donate-bank-copy-row dt {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.donate-bank-copy-row dd {
+  grid-column: 1;
+  grid-row: 2;
 }
 
 .donate-copy-button {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  min-width: 66px;
   min-height: 30px;
-  padding-inline: 10px;
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
+.donate-copy-button:focus-visible,
+.donate-disclaimer a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .donate-disclaimer a {
   display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
   color: var(--accent-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.donate-disclaimer a svg {
+  display: block;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 760px) {
@@ -691,6 +723,10 @@
 @media (max-width: 560px) {
   .donate-bank-details {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .donate-bank-details .donate-bank-copy-row {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 

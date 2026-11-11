@@ -127,41 +127,43 @@ export function DonateSettings() {
                 <dt>Account holder</dt>
                 <dd>{DONATION_CONFIG.accountHolder}</dd>
               </div>
-              <div>
+              <div className="donate-bank-copy-row">
                 <dt>Account number</dt>
                 <dd className="donate-bank-account">{DONATION_CONFIG.accountNumber}</dd>
+                <button
+                  className="button donate-copy-button"
+                  type="button"
+                  aria-label="Copy account"
+                  title="Copy account number"
+                  onClick={() => void copyToClipboard('account', DONATION_CONFIG.accountNumber)}
+                >
+                  {copiedField === 'account' ? (
+                    <Check size={14} aria-hidden="true" />
+                  ) : (
+                    <Copy size={14} aria-hidden="true" />
+                  )}
+                  Copy
+                </button>
               </div>
-              <div>
+              <div className="donate-bank-copy-row">
                 <dt>Transfer note</dt>
                 <dd>{DONATION_CONFIG.transferMemo}</dd>
+                <button
+                  className="button donate-copy-button"
+                  type="button"
+                  aria-label="Copy note"
+                  title="Copy transfer note"
+                  onClick={() => void copyToClipboard('memo', DONATION_CONFIG.transferMemo)}
+                >
+                  {copiedField === 'memo' ? (
+                    <Check size={14} aria-hidden="true" />
+                  ) : (
+                    <Copy size={14} aria-hidden="true" />
+                  )}
+                  Copy
+                </button>
               </div>
             </dl>
-            <div className="donate-copy-actions">
-              <button
-                className="button donate-copy-button"
-                type="button"
-                onClick={() => void copyToClipboard('account', DONATION_CONFIG.accountNumber)}
-              >
-                {copiedField === 'account' ? (
-                  <Check size={14} aria-hidden="true" />
-                ) : (
-                  <Copy size={14} aria-hidden="true" />
-                )}
-                Copy account
-              </button>
-              <button
-                className="button donate-copy-button"
-                type="button"
-                onClick={() => void copyToClipboard('memo', DONATION_CONFIG.transferMemo)}
-              >
-                {copiedField === 'memo' ? (
-                  <Check size={14} aria-hidden="true" />
-                ) : (
-                  <Copy size={14} aria-hidden="true" />
-                )}
-                Copy note
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -182,7 +184,8 @@ export function DonateSettings() {
           rel="noopener noreferrer"
           onClick={(event) => openSupportLink(event, DONATION_CONFIG.githubUrl)}
         >
-          star on GitHub <ExternalLink size={12} aria-hidden="true" />
+          <span>star on GitHub</span>
+          <ExternalLink size={12} aria-hidden="true" />
         </a>
         .
       </p>

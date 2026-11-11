@@ -227,6 +227,70 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test('Donate groups transfer details and aligns its GitHub external-link icon', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Donate' }).click();
+
+  const bank = dialog.locator('.donate-bank-card');
+  const copyAccount = bank.getByRole('button', { name: 'Copy account' });
+  const copyNote = bank.getByRole('button', { name: 'Copy note' });
+  const qr = bank.locator('.donate-qr-frame');
+  const detailRows = bank.locator('.donate-bank-copy-row');
+  await expect(detailRows).toHaveCount(2);
+  await expect(copyAccount).toBeVisible();
+  await expect(copyNote).toBeVisible();
+
+  const bankGeometry = await bank.evaluate((element) => {
+    const rect = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+    const qrBounds = rect('.donate-qr-frame');
+    const detailsBounds = rect('.donate-bank-information');
+    const accountBounds = rect('.donate-bank-copy-row');
+    const buttons = Array.from(element.querySelectorAll('.donate-bank-copy-row')).map((row) => {
+      const button = row.querySelector('button')?.getBoundingClientRect();
+      const value = row.querySelector('dd')?.getBoundingClientRect();
+      return { buttonLeft: button?.left ?? 0, valueRight: value?.right ?? 0 };
+    });
+    return {
+      qrTop: qrBounds?.top ?? 0,
+      detailsTop: detailsBounds?.top ?? 0,
+      accountTop: accountBounds?.top ?? 0,
+      buttons,
+    };
+  });
+  expect(Math.abs(bankGeometry.qrTop - bankGeometry.detailsTop)).toBeLessThanOrEqual(5);
+  expect(bankGeometry.accountTop).toBeGreaterThan(bankGeometry.detailsTop);
+  for (const row of bankGeometry.buttons) {
+    expect(row.buttonLeft).toBeGreaterThanOrEqual(row.valueRight);
+  }
+
+  const github = dialog.getByRole('link', { name: /star on GitHub/ });
+  await github.scrollIntoViewIfNeeded();
+  const iconAlignment = await github.evaluate((element) => {
+    const label = element.querySelector('span')?.getBoundingClientRect();
+    const icon = element.querySelector('svg')?.getBoundingClientRect();
+    if (!label || !icon) return Infinity;
+    return Math.abs((label.top + label.bottom) / 2 - (icon.top + icon.bottom) / 2);
+  });
+  expect(iconAlignment).toBeLessThanOrEqual(2);
+  await expect(qr).toBeVisible();
+
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const overflow = await dialog.locator('.settings-content').evaluate((element) =>
+      element.scrollWidth > element.clientWidth,
+    );
+    expect(overflow).toBe(false);
+  }
+});
+
 test('Donate provider cards align their text and Open actions at desktop width', async ({
   page,
 }) => {
