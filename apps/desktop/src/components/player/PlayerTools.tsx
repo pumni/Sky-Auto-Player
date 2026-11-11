@@ -3,6 +3,7 @@ import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { playbackSessionStatusConcern } from '../../state/store';
 
 interface PlayerToolsProps {
   useStore: DesktopStoreHook;
@@ -22,6 +23,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const selectedSongId = useStore((store) => store.library.selectedSongId);
   const playback = useStore((store) => store.playback);
   const hasPreparedPlayback = playback.prepared !== null;
+  const sessionStatusConcern = useStore((store) => playbackSessionStatusConcern(store.playback));
   const [profileOpen, setProfileOpen] = useState(false);
   const [autoPlayPending, setAutoPlayPending] = useState(false);
   const autoPlayMutationPending = useRef(false);
@@ -30,6 +32,9 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
     Boolean(playback.currentSong || selectedSongId) &&
     playback.sessionId === null &&
     playback.transportOperation === null &&
+    playback.startRequestId === null &&
+    !playback.statusRetryPending &&
+    sessionStatusConcern === null &&
     !hasPreparedPlayback;
   const profileSummary = defaults
     ? `${defaults.hold_frames}f + ${(defaults.timing_margin_us / 1_000).toFixed(1)}ms · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
@@ -57,6 +62,16 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   return (
     <div className="player-tools">
       <button
+        className="button player-test-button"
+        type="button"
+        aria-label="Test playback (no input)"
+        title="Preview with no physical keyboard input"
+        disabled={!canPreparePlayback}
+        onClick={() => void prepareAndMaybeStart()}
+      >
+        Test
+      </button>
+      <button
         className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
         type="button"
         aria-label="Auto Play"
@@ -66,6 +81,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         onClick={() => void toggleAutoPlay()}
       >
         <ListMusic size={16} aria-hidden="true" />
+        <span className="player-auto-play-label" aria-hidden="true">Auto</span>
       </button>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>

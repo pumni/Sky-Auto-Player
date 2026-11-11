@@ -278,10 +278,14 @@ describe('PlayerTrackInfo', () => {
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     const status = container.querySelector<HTMLElement>('.player-track-status');
     expect(status).not.toBeNull();
-    expect(status).toHaveTextContent('Dry run · Playing');
+    expect(status).toHaveTextContent('Playing');
     expect(status).toHaveAttribute(
       'aria-label',
-      `${row.title}: Dry run · Playing. No physical input is sent.`,
+      `${row.title}: Playing. Dry run; no physical input is sent.`,
+    );
+    expect(screen.getByText('TEST · No keys')).toHaveAttribute(
+      'aria-label',
+      'Dry run: no physical keyboard input is sent.',
     );
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
   });
@@ -306,7 +310,8 @@ describe('PlayerTrackInfo', () => {
 
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     const status = container.querySelector<HTMLElement>('.player-track-status');
-    expect(status).toHaveTextContent('Dry run · Playback status uncertain');
+    expect(status).toHaveTextContent('Playback status uncertain');
+    expect(screen.getByText('TEST · No keys')).toBeInTheDocument();
     expect(status).toHaveAttribute(
       'aria-label',
       expect.stringContaining('No physical input is sent.'),

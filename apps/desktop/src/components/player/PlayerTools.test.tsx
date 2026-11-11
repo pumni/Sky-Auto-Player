@@ -12,10 +12,15 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => store.getState().initialize());
     render(<PlayerTools useStore={store} />);
 
+    const testPlayback = screen.getByRole('button', { name: 'Test playback (no input)' });
+    expect(testPlayback).toBeEnabled();
     const autoPlay = screen.getByRole('button', { name: 'Auto Play' });
     const profile = screen.getByRole('button', { name: 'Configure playback profile' });
     const utility = screen.getByRole('button', { name: 'Open utility panel' });
     expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      testPlayback.compareDocumentPosition(autoPlay) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(autoPlay).toHaveAttribute('title', 'Auto Play on');
     expect(autoPlay.querySelector('svg')).toHaveClass('lucide-list-music');
     expect(autoPlay.querySelector('svg')).not.toHaveClass('lucide-list-end');
@@ -61,6 +66,7 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => store.getState().selectSong(row.song_id));
     render(<PlayerTools useStore={store} />);
 
+    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
@@ -76,5 +82,24 @@ describe('PlayerTools playback modes and profile', () => {
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
+    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeDisabled();
+  });
+
+  it('offers a direct dry-run action without opening the profile menu', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 120_000, startDelayMs: 1 }),
+    );
+    await act(async () => store.getState().initialize());
+    const row = store.getState().library.pages.get(0)?.[1];
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    render(<PlayerTools useStore={store} />);
+
+    await act(async () =>
+      screen.getByRole('button', { name: 'Test playback (no input)' }).click(),
+    );
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(store.getState().playback.context?.dryRun).toBe(true);
+    expect(screen.queryByRole('dialog', { name: 'Playback profile' })).toBeNull();
   });
 });
