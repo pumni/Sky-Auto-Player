@@ -29,7 +29,8 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 
 - At 1366×768 and 800×560, distinguish the playing row (accent title and rail) from the selected row (neutral rail and selected background), including their combined state.
 - At 1649×927, 1005×615 and 800×560, the player dock is icon-only on the right: no standalone Test button, Auto label or long numeric profile string. Its controls must not overlap or clip.
-- Playback profile is a labeled, scrollable popover with editable Hold/Tempo/FPS/Margin and a collapsed Calculated timing section. Its Test playback (no input) action remains available and must never send physical keystrokes.
+- Playback profile is a labeled, scrollable popover with three aligned Hold/Tempo/FPS selectors, a full-width Timing Margin stepper and readable recommendation, and a collapsed Calculated timing section. Its Test playback (no input) action remains available and must never send physical keystrokes.
+- Hover and keyboard-focus the Auto Play button. The explicit tooltip must describe On/Off and next-song continuation; changing Auto Play must update the Settings switch. Inspect the same tooltip treatment on the Inspector toggle.
 - Built-in pager has a compact footer (about 37px including border and padding), 32px click targets, stable inline page-jump editing, and no extra bottom padding.
 - Test playback shows a TEST badge and sends no physical keyboard input. Normal playback displays a LIVE badge without falsely claiming that paused or nonadmitted sessions are sending keys.
 - Check the native Tauri/Windows app; Chromium mock screenshots alone cannot verify keyboard input or focus handling. With no song selected, Inspector should show a centered action cue instead of a tiny top-left line.
@@ -38,6 +39,10 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 - In Runtime → Performance, dry run shows a single unmeasured-state message; real samples remain visible for physical sessions.
 - Inspect Light mode, forced colors, focus rings, reduced-motion behavior, and scrollbars.
 - Validate sender-metadata export with and without a real session. Export remains backend-owned because frontend session identity alone does not establish trace availability.
+
+## Full UI audit
+
+The prioritized review and remaining tasks are recorded in [Desktop UI/UX audit — real Windows captures](desktop-ui-audit-2026-11.md). The screenshots only show Library, Player Dock and Inspector; Settings, Update, Calibration, Import, Runtime recovery and other dialogs still require a separate native visual pass.
 
 ## Screenshot evidence
 

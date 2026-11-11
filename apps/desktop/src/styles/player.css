@@ -500,6 +500,12 @@
   outline-offset: 2px;
 }
 
+.profile-popover [role='dialog'] {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
 .profile-popover-header h3 {
   margin: 0;
   color: var(--text-primary);
