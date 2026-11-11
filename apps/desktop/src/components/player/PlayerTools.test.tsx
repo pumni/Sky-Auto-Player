@@ -7,7 +7,7 @@ import { PlayerTools } from './PlayerTools';
 describe('PlayerTools playback modes and profile', () => {
   afterEach(cleanup);
 
-  it('keeps Auto Play, Profile and Utility as compact controls with an accessible profile menu', async () => {
+  it('keeps playback tools compact with an accessible profile menu', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     render(<PlayerTools useStore={store} />);
@@ -82,7 +82,9 @@ describe('PlayerTools playback modes and profile', () => {
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
     const runningDialog = screen.getByRole('dialog', { name: 'Playback profile' });
-    expect(within(runningDialog).getByRole('button', { name: 'Test playback (no input)' })).toBeDisabled();
+    expect(
+      within(runningDialog).getByRole('button', { name: 'Test playback (no input)' }),
+    ).toBeDisabled();
   });
 
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {

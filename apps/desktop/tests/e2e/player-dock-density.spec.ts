@@ -19,6 +19,8 @@ for (const viewport of [
     await expect(dock.locator('.player-test-button')).toHaveCount(0);
     await expect(dock.locator('.player-auto-play-label')).toHaveCount(0);
     await expect(dock.locator('.profile-summary-button')).not.toContainText('FPS');
+    expect(await dock.locator('.profile-summary-button').innerText()).toBe('');
+    expect(await dock.getByRole('button', { name: 'Auto Play' }).innerText()).toBe('');
 
     const geometry = await page.evaluate(() => {
       const required = (selector: string) => {
