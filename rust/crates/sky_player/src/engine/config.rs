@@ -3,6 +3,11 @@ use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
 
+#[cfg(any(test, feature = "test-support"))]
+mod startup_ordering;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use startup_ordering::InterruptedWaitEvidence;
+
 mod effective_policy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod hol;
@@ -259,6 +264,7 @@ pub struct StartupOrderingHook {
     pause_ack_pending: AtomicBool,
     down_authored_target_qpc_ticks: AtomicU64,
     down_not_before_qpc_ticks: AtomicU64,
+    down_window_sequence: AtomicU64,
     down_sender_start_qpc_ticks: AtomicU64,
     down_sender_authored_target_qpc_ticks: AtomicU64,
     down_sender_packet_not_before_qpc_ticks: AtomicU64,
@@ -266,6 +272,8 @@ pub struct StartupOrderingHook {
     down_sender_wake_qpc_ticks: AtomicU64,
     down_sender_stale_commit_count: AtomicU64,
     down_sender_attempt_count: AtomicU64,
+    interrupted_wait_count: AtomicU64,
+    interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
     pub(crate) metadata_only_wait_count: AtomicU64,
     pub(crate) metadata_only_wait_target_qpc_ticks: AtomicU64,
     pub(crate) metadata_only_wait_wake_qpc_ticks: AtomicU64,
@@ -315,6 +323,8 @@ pub enum StartupCheckpoint {
     StaleMetadataChunk = 14,
     #[cfg(any(test, feature = "test-support"))]
     MetadataOnlyWait = 15,
+    #[cfg(any(test, feature = "test-support"))]
+    PhysicalWait = 16,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -526,13 +536,6 @@ impl StartupOrderingHook {
         self.pause_ack_qpc_ticks.load(Ordering::Acquire)
     }
 
-    pub fn last_down_window(&self) -> (u64, u64) {
-        (
-            self.down_authored_target_qpc_ticks.load(Ordering::Acquire),
-            self.down_not_before_qpc_ticks.load(Ordering::Acquire),
-        )
-    }
-
     pub fn last_down_sender_start_qpc_ticks(&self) -> u64 {
         self.down_sender_start_qpc_ticks.load(Ordering::Acquire)
     }
@@ -594,13 +597,6 @@ impl StartupOrderingHook {
     pub(crate) fn pause_ack_pending(&self) -> bool {
         self.release_floor_control_enabled.load(Ordering::Acquire)
             && self.pause_ack_pending.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn record_down_window(&self, authored_target: u64, not_before: u64) {
-        self.down_authored_target_qpc_ticks
-            .store(authored_target, Ordering::Release);
-        self.down_not_before_qpc_ticks
-            .store(not_before, Ordering::Release);
     }
 
     pub(crate) fn record_down_sender_attempt(

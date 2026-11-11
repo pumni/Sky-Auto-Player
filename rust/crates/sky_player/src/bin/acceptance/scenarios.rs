@@ -578,6 +578,7 @@ pub(super) fn production_options(
         timing_margin_us,
         scenario,
         modifier_query_count,
+        super::modifier_guard::ModifierHeldAfterOwnedLatch::default(),
         60,
     )
 }
@@ -588,11 +589,16 @@ pub(super) fn production_options_for_fps(
     timing_margin_us: u64,
     scenario: Scenario,
     modifier_query_count: Arc<AtomicU64>,
+    after_owned_latch: super::modifier_guard::ModifierHeldAfterOwnedLatch,
     game_fps: u16,
 ) -> NativeSessionOptions {
     let frame_us = frame_period_us(game_fps);
     let modifier_key_state_query_for_test =
-        super::modifier_guard::query_for_scenario(scenario, Arc::clone(&modifier_query_count));
+        super::modifier_guard::query_for_scenario(
+            scenario,
+            Arc::clone(&modifier_query_count),
+            after_owned_latch,
+        );
     NativeSessionOptions {
         schedule,
         backend: BackendConfig::Production,

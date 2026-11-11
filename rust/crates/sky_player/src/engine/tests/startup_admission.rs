@@ -299,6 +299,199 @@ fn actual_b_worker_waits_for_stale_metadata_before_the_next_physical_down() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
+fn first_down_committed_checkpoint_follows_successful_backend_send() {
+    use super::MockSendInputCapture;
+
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("actual B worker session");
+
+    session.arm(TEST_WALL_CLOCK_PREROLL_US).expect("worker arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        captures.lock().expect("mock input captures").as_slice(),
+        [MockSendInputCapture::Packet {
+            packet: PhysicalPacket {
+                down_mask: 1,
+                up_mask: 0
+            },
+            ..
+        }]
+    ));
+
+    session
+        .quit()
+        .expect("quit while first Down is checkpointed");
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(send_calls.load(Ordering::Acquire), 2);
+    let captures = captures.lock().expect("terminal mock input captures");
+    assert!(matches!(
+        captures.as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    down_mask: 1,
+                    up_mask: 0
+                },
+                ..
+            },
+            MockSendInputCapture::SingleEmitter { key_up: true, .. }
+        ]
+    ));
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn actual_b_worker_publishes_interrupted_wait_before_resumed_packet_dispatch() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 150_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "interrupted-physical-wait-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 190_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "interrupted-physical-wait-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 250_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "interrupted-physical-wait-resumed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 300_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "interrupted-physical-wait-resumed-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("interrupted-wait regression schedule");
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::PhysicalWait, 2);
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.profile = DispatchProfile::Production;
+    options.timing_observer_for_qualification = true;
+    options.telemetry.mode = TelemetryMode::Ring;
+    options.telemetry.capacity = 128;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("actual B worker session");
+
+    session.arm(0).expect("worker arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    let (staged_sequence, staged_authored_target, staged_not_before) =
+        hook.last_down_window_snapshot();
+    assert!(
+        staged_sequence > 0,
+        "B worker staged a Down window before its physical wait"
+    );
+    assert!(staged_authored_target > 0);
+    assert!(staged_not_before >= staged_authored_target);
+    session.pause().expect("interrupt physical wait with pause");
+    hook.release_startup_checkpoint();
+    let pause_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_paused {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "interrupted physical wait lost the worker: {snapshot:?}; terminal_error={:?}",
+            session.snapshot().terminal_error
+        );
+        assert!(
+            Instant::now() < pause_deadline,
+            "pause acknowledgment timed out: {snapshot:?}"
+        );
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while waiting for pause");
+        std::thread::yield_now();
+    }
+
+    let interrupted = hook
+        .last_interrupted_wait_evidence()
+        .expect("actual B worker interrupted-wait evidence");
+    assert_eq!(hook.interrupted_wait_count(), 1);
+    assert_eq!(
+        interrupted.outcome,
+        sky_dispatch_win32::wait::WaitOutcome::Interrupted
+    );
+    assert!(interrupted.planned_wait_ticks > 0);
+    assert!(interrupted.spin_ticks <= interrupted.planned_wait_ticks);
+    assert_eq!(interrupted.wake_qpc_ticks, None);
+    assert_eq!(interrupted.deadline_crossing_qpc_ticks, None);
+    assert_eq!(interrupted.waiter_return_qpc_ticks, None);
+    assert!(interrupted.physical_target_qpc_ticks > 0);
+
+    session.resume().expect("resume after interrupted wait");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    let (resumed_sequence, resumed_authored_target, resumed_not_before) =
+        hook.last_down_window_snapshot();
+    assert!(resumed_sequence > staged_sequence);
+    assert!(resumed_authored_target > 0);
+    assert!(resumed_not_before >= resumed_authored_target);
+    assert_eq!(snapshot.wait_interrupted_count, 1);
+    assert!(snapshot.spin_observation_expected_samples >= 2);
+    assert_eq!(snapshot.spin_observation_dropped_samples, 0);
+    assert_eq!(snapshot.spin_observation_missing_samples, 0);
+    assert_eq!(snapshot.spin_observation_pending_samples, 0);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("worker telemetry"))
+            .expect("telemetry JSON");
+    let down = telemetry["records"]
+        .as_array()
+        .expect("trace records")
+        .iter()
+        .find(|record| record["down_mask"].as_u64().unwrap_or_default() != 0)
+        .expect("resumed physical Down trace");
+    assert_ne!(down["wait_sequence"].as_u64(), Some(interrupted.sequence));
+    assert_eq!(down["waiter_return_qpc_available"], false);
+    assert_eq!(down["waiter_return_qpc_provenance"], "unavailable");
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
 fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct() {
     let actions = [
         KeyActionInput {

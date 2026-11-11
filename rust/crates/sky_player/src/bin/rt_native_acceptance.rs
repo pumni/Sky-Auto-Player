@@ -8,6 +8,7 @@ mod acceptance {
 #[path = "acceptance_limits.rs"] mod acceptance_limits;
 #[path = "entrypoint.rs"] mod entrypoint;
 #[path = "modifier_guard.rs"] mod modifier_guard;
+#[path = "sink_event_log.rs"] mod sink_event_log;
 #[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
 #[cfg(windows)]
@@ -25,10 +26,11 @@ use lifecycle_wait::{
 #[cfg(windows)]
 use lifecycle_wait::publish_foreground_focus_hint;
 #[cfg(windows)]
-use preterminal::{finish_preterminal, wait_for_sink_events};
+use preterminal::{PreTerminalResult, finish_preterminal, wait_for_sink_events};
 #[cfg(all(test, windows))]
-use preterminal::{PreTerminalResult, wait_for_sink_events_with};
+use preterminal::wait_for_sink_events_with;
 use evidence_report::{Verdict, write_report};
+use sink_event_log::read_log_window_status;
 use acceptance_limits::*;
 pub(super) use entrypoint::main;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
@@ -47,7 +49,7 @@ use snapshot_report::{
 };
 #[cfg(test)]
 use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sky_dispatch_win32::focus::{
     WindowIdentity, focus_window_and_verify, foreground_window_matches, inspect_window_identity,
@@ -88,7 +90,7 @@ const SCRIPT_MARKER: &str = "native_acceptance_sink.ps1";
 const INPUT_POLICY: &str = concat!("receives_only; benchmark must use ", "Send", "Input");
 const REQUIRED_IMAGE_BASENAME: &str = "pwsh.exe";
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct ReadyRecord { schema_version: u32, run_id: String, role: String, sink_kind: String, pid: u32, hwnd: i64, title: String, process: String, input_policy: String, event_log_id: String, event_schema_version: u32, process_start_time_filetime: u64 }
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] struct LogCursor { offset: u64, sequence: u64 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] struct PhysicalExpectation { scan_code: u16, extended: bool }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] enum DrainMode { ExpectedEvents { allow_unpaired_cleanup_ups: bool }, ZeroEventSafety }
@@ -199,36 +201,6 @@ fn read_log_cursor(path: &Path, ready: &ReadyRecord, role: &str) -> Result<LogCu
     let records = parse_event_log(&bytes, "event log")?;
     let sequence = validate_event_stream(&records, ready, role)?;
     Ok(LogCursor { offset: bytes.len() as u64, sequence })
-}
-fn read_log_window_status(
-    path: &Path,
-    cursor: LogCursor,
-    ready: &ReadyRecord,
-    role: &str,
-) -> Result<EventWindow, String> {
-    let all = fs::read(path).map_err(|error| format!("failed to read event log window: {error}"))?;
-    let all_complete_len = if all.ends_with(b"\n") { all.len() } else { all.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1) };
-    let prefix = parse_event_log(&all[..all_complete_len], "event log window prefix")?;
-    let prefix_sequence = validate_event_stream(&prefix, ready, role)?;
-    if all.len() < cursor.offset as usize || prefix_sequence < cursor.sequence { return Err("event log was truncated or rebound after authorization".into()); }
-    let bytes = all.get(cursor.offset as usize..).ok_or_else(|| "event log was truncated after authorization".to_string())?;
-    let complete = bytes.is_empty() || bytes.ends_with(b"\n");
-    let complete_len = if complete {
-        bytes.len()
-    } else {
-        bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1)
-    };
-    let text = String::from_utf8(bytes[..complete_len].to_vec()).map_err(|_| "event log window is not UTF-8".to_string())?;
-    let mut previous_sequence = cursor.sequence;
-    let mut events = Vec::new();
-    for line in text.lines().filter(|line| !line.is_empty()) {
-        let event: EventRecord = serde_json::from_str(line).map_err(|error| format!("event log window contains malformed JSON: {error}"))?;
-        if event.run_id != ready.run_id || event.role != role || event.event_log_id != ready.event_log_id || event.schema_version != EVENT_SCHEMA_VERSION { return Err("event log window is not bound to the authorized process stream".into()); }
-        if event.sequence != previous_sequence.saturating_add(1) { return Err("event log sequence has a duplicate or gap".to_string()); }
-        previous_sequence = event.sequence;
-        if event.kind != "stream_start" { events.push(event); }
-    }
-    Ok(EventWindow { events, complete })
 }
 fn physical_event(event: &EventRecord) -> PhysicalExpectation {
     PhysicalExpectation { scan_code: event.scan_code, extended: event.extended }
@@ -402,7 +374,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let (mut options, modifier_query_count) = modifier_guard::native_session_options(
+    let (mut options, modifier_query_count, modifier_held_latch) = modifier_guard::native_session_options(
         plan.schedule, plan.profile, args.timing_margin_us, args.scenario, args.game_fps,
     );
     options.wait.guard_mode = args.guard_mode;
@@ -538,6 +510,24 @@ fn run_windows(args: RunArgs) -> i32 {
                 snapshot_json(&session.snapshot())
             );
         }
+        false
+    } else if args.scenario == Scenario::ModifierHeldAfterOwned {
+        let hook = acceptance_hook
+            .as_deref()
+            .expect("modifier-held-after-owned commit checkpoint");
+        if let Err(exit_code) = modifier_guard::arm_after_owned_down(
+            &args,
+            &session,
+            hook,
+            sink_cursor,
+            &fresh_sink,
+            expected_down[0],
+            &modifier_held_latch,
+            &modifier_query_count,
+        ) {
+            return exit_code;
+        }
+        first_physical_commit_observed = true;
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false

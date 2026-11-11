@@ -5,6 +5,9 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
+#[path = "dispatch_harness/wait_boundary.rs"]
+mod wait_boundary;
+
 use crate::engine::config::{DispatchProfile, WorkerConfig};
 use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
@@ -17,13 +20,12 @@ use crate::engine::worker::dispatch::{
 use crate::engine::worker::dispatch::{DispatchObservation, PendingObservationQueue};
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts,
-    PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState,
-    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
-    dispatch_due_from_plan, dispatch_prepared_normal_frame, physical_wait_target_for_plan,
-    plan_next_dispatch, plan_next_dispatch_projected, preflight_prepared_plan,
-    publish_backend_counters, publish_live_metrics_after_dispatch, target_stamp_still_current,
-    wait_for_next_boundary,
+    PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundaryInput, WaitDeadline,
+    WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState, WorkerResources,
+    WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan,
+    dispatch_prepared_normal_frame, physical_wait_target_for_plan, plan_next_dispatch,
+    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
+    publish_live_metrics_after_dispatch, target_stamp_still_current, wait_for_next_boundary,
 };
 use crate::engine::{SystemPowerEndpoint, SystemPowerState};
 use sky_dispatch_core::clock::{PauseReason, PlaybackClockState};
@@ -3346,24 +3348,13 @@ impl ProductionDispatchTestHarness {
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
-        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = match boundary {
-            WaitBoundary::Due {
-                wait_result,
-                target_qpc,
-                dispatch_qpc,
-                planned_wait_ticks,
-            } => (wait_result, dispatch_qpc, planned_wait_ticks, target_qpc),
-            WaitBoundary::Replan => {
-                return Err("prepared wait unexpectedly required a replan".to_string());
-            }
-            WaitBoundary::Exit => {
-                return Err(self
-                    .runtime
-                    .terminal_error
-                    .take()
-                    .unwrap_or_else(|| "prepared wait exited".to_string()));
-            }
-        };
+        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = self
+            .resolve_wait_boundary(
+                boundary,
+                frame.view.prepared_batch.effective_scheduled_ticks,
+                "prepared wait interrupted and was published independently",
+                "prepared wait exited",
+            )?;
         self.last_wait_result = wait_result;
         self.last_wait_observation = record_wait_attempt(
             Some(&self.observer),
@@ -3710,42 +3701,13 @@ impl ProductionDispatchTestHarness {
         let wait_deadline_ticks = plan
             .deadline_ticks()
             .ok_or_else(|| "benchmark wait plan has no deadline".to_string())?;
-        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = match boundary {
-            WaitBoundary::Due {
-                wait_result: Some(wait_result),
-                target_qpc,
-                dispatch_qpc,
-                planned_wait_ticks,
-            } => {
-                self.runtime.set_deadline_wait_evidence_for_test(
-                    Some(dispatch_qpc),
-                    plan.physical_target_qpc(),
-                );
-                (
-                    Some(wait_result),
-                    dispatch_qpc,
-                    planned_wait_ticks,
-                    target_qpc,
-                )
-            }
-            WaitBoundary::Due {
-                wait_result: None,
-                target_qpc,
-                dispatch_qpc,
-                planned_wait_ticks,
-                ..
-            } => (None, dispatch_qpc, planned_wait_ticks, target_qpc),
-            WaitBoundary::Replan => {
-                return Err("benchmark wait unexpectedly required replan".to_string());
-            }
-            WaitBoundary::Exit => {
-                return Err(self
-                    .runtime
-                    .terminal_error
-                    .take()
-                    .unwrap_or_else(|| "benchmark wait exited".to_string()));
-            }
-        };
+        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = self
+            .resolve_wait_boundary(
+                boundary,
+                wait_deadline_ticks,
+                "benchmark wait interrupted and was published independently",
+                "benchmark wait exited",
+            )?;
         self.last_wait_result = wait_result;
         self.last_wait_observation = record_wait_attempt(
             Some(&self.observer),

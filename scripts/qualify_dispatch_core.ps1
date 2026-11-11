@@ -151,6 +151,27 @@ function Get-Percentiles {
     }
 }
 
+function Get-DeadlineCrossingToPreCallSample {
+    param($Record, [double]$QpcFrequencyHz)
+    $crossingAvailable = [bool](Get-OptionalProperty $Record 'waiter_deadline_crossing_qpc_available')
+    $crossingProvenance = Get-OptionalProperty $Record 'waiter_deadline_crossing_qpc_provenance'
+    $preCallAvailable = [bool](Get-OptionalProperty $Record 'pre_call_qpc_available')
+    $preCallProvenance = Get-OptionalProperty $Record 'pre_call_qpc_provenance'
+    if (-not $crossingAvailable -or $crossingProvenance -ne 'measured' -or
+        -not $preCallAvailable -or $preCallProvenance -ne 'measured' -or $QpcFrequencyHz -le 0) {
+        return [pscustomobject]@{ available = $false; negative_order = $false; value_us = $null }
+    }
+    $delta = [double]$Record.pre_call_qpc_ticks - [double]$Record.waiter_deadline_crossing_qpc_ticks
+    if ($delta -lt 0) {
+        return [pscustomobject]@{ available = $false; negative_order = $true; value_us = $null }
+    }
+    [pscustomobject]@{
+        available = $true
+        negative_order = $false
+        value_us = ($delta * 1000000.0) / $QpcFrequencyHz
+    }
+}
+
 function Get-TimingMetrics {
     param($Report)
     $details = Get-OptionalProperty $Report 'details'
@@ -160,7 +181,8 @@ function Get-TimingMetrics {
     if ($frequency -le 0) { return $null }
     $metricNames = @(
         'authored_lateness_per_chord_us', 'floor_displacement_us', 'residual_lateness_us',
-        'waiter_to_pre_call_us', 'sender_envelope_per_syscall_us', 'timer_requested_delay_us',
+        'waiter_to_pre_call_us', 'deadline_crossing_to_pre_call_us',
+        'sender_envelope_per_syscall_us', 'timer_requested_delay_us',
         'timer_arm_to_return_us', 'timer_wake_residual_us', 'eligibility_minus_timer_arm_target_us',
         'realized_hold_H_us', 'realized_gap_G_us'
     )
@@ -210,6 +232,7 @@ function Get-TimingMetrics {
         missing_floor_displacement = 0
         missing_residual = 0
         missing_waiter_to_pre_call = 0
+        missing_deadline_crossing_to_pre_call = 0
         missing_sender_envelope = 0
         missing_timer_arm = 0
         missing_timer_return = 0
@@ -301,6 +324,15 @@ function Get-TimingMetrics {
             if ($delta -lt 0) { $counts.negative_order++ }
             else { $values.waiter_to_pre_call_us.Add(($delta * 1000000.0) / $frequency) }
         } else { $counts.missing_waiter_to_pre_call++ }
+
+        $crossingSample = Get-DeadlineCrossingToPreCallSample $record $frequency
+        if ($crossingSample.available) {
+            $values.deadline_crossing_to_pre_call_us.Add([double]$crossingSample.value_us)
+        } elseif ($crossingSample.negative_order) {
+            $counts.negative_order++
+        } else {
+            $counts.missing_deadline_crossing_to_pre_call++
+        }
 
         if ([bool]$record.sendinput_envelope_available) {
             $value = ([double]$record.sendinput_envelope_ticks * 1000000.0) / $frequency
@@ -581,8 +613,31 @@ function Invoke-NativeCase {
         $script:failureRows.Add([pscustomobject]@{ scenario = $Scenario; workload = $Workload; role = $Role; cell_id = $CellId; pair_id = $PairId; exit_code = $caseExit; status = $status; reason = $reason; evidence_directory = $caseDirectory })
         if ($caseExit -eq 2 -or $status -eq 'RUNNER_FAILURE' -or $status -eq 'MISSING_REPORT') { $script:exitCode = 2 } else { $script:exitCode = [Math]::Max($script:exitCode, 1) }
     }
-    Write-Output ($Role + ' ' + $Scenario + ' [' + $Load + '] ' + $status + ' exit=' + $caseExit + $(if ($caseDirectory) { ' evidence=' + $caseDirectory } else { '' }))
+    Write-Host ($Role + ' ' + $Scenario + ' [' + $Load + '] ' + $status + ' exit=' + $caseExit + $(if ($caseDirectory) { ' evidence=' + $caseDirectory } else { '' }))
     $row
+}
+
+function Invoke-NativeCaseFailStopSequence {
+    param([object[]]$Cases, [scriptblock]$InvokeCase)
+    $attemptedRows = [System.Collections.Generic.List[object]]::new()
+    foreach ($case in $Cases) {
+        # InvokeCase is synchronous: a native process completes before its row
+        # is inspected, so fail-stop never interrupts an in-flight case.
+        $row = & $InvokeCase $case
+        if ($null -eq $row) { throw 'native case callback did not return a completed case row' }
+        $attemptedRows.Add($row)
+        if ([int](Get-OptionalProperty $row 'case_exit_code') -ne 0 -or
+            [string](Get-OptionalProperty $row 'status') -ne 'PASS') {
+            return [pscustomobject]@{
+                attempted_rows = $attemptedRows.ToArray()
+                stopped_at_first_native_failure = $true
+            }
+        }
+    }
+    [pscustomobject]@{
+        attempted_rows = $attemptedRows.ToArray()
+        stopped_at_first_native_failure = $false
+    }
 }
 
 function Invoke-PairedWorkloads {
@@ -773,19 +828,28 @@ try {
     }
 
     if ($Stage -eq 'Smoke') {
-        foreach ($scenario in $scenarios) {
-            [void](Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
+        $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $scenarios -InvokeCase {
+            param($scenario)
+            Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false
         }
+        if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
     } elseif ($Stage -eq 'Compare') {
         Invoke-PairedWorkloads $performanceWorkloads
     } else {
         Invoke-PairedWorkloads $performanceWorkloads
         if ($script:exitCode -eq 0) {
-            foreach ($scenario in $scenarios) {
-                [void](Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'final-safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
+            $finalSafetyCases = @(
+                foreach ($scenario in $scenarios) {
+                    [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-smoke'; margin = $TimingMarginUs; fps = 60 }
+                }
+                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; cell_id = 'boundary-safety'; margin = 0; fps = 60 }
+                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; cell_id = 'boundary-safety'; margin = 500; fps = 120 }
+            )
+            $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases -InvokeCase {
+                param($case)
+                Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId $case.cell_id -PairId '' -Order '' -Margin $case.margin -Fps $case.fps -Sample 0 -Historical $false
             }
-            [void](Invoke-NativeCase -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'boundary-safety' -PairId '' -Order '' -Margin 0 -Fps 60 -Sample 0 -Historical $false)
-            [void](Invoke-NativeCase -Scenario 'timing-margin-sweep' -Workload 'boundary-120fps-margin-500' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'boundary-safety' -PairId '' -Order '' -Margin 500 -Fps 120 -Sample 0 -Historical $false)
+            if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
         }
     }
 

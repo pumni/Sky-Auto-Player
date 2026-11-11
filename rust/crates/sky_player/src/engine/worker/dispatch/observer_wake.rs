@@ -1,10 +1,100 @@
 use super::super::WorkerRuntime;
-use super::super::wait::WaitObservation;
+use super::super::wait::{WaitBoundary, WaitObservation};
 use super::observation::PrecisionHandoffEvidence;
 use super::observer::PendingObservationQueue;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-use sky_dispatch_win32::clock::QpcTicks;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+use sky_dispatch_win32::event::OwnedEvent;
+use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
+
+impl WaitBoundary {
+    pub(crate) fn wake_qpc(&self) -> Option<QpcTicks> {
+        match self {
+            Self::Due { wait_result, .. } => {
+                wait_result.as_ref().and_then(|result| result.wake_qpc)
+            }
+            Self::Interrupted(wait_result, _, _) => wait_result.wake_qpc,
+            Self::Exit => None,
+        }
+    }
+}
+
+pub(crate) fn wait_for_metadata_only_deadline(
+    metadata_target_qpc: QpcTicks,
+    qpc_clock: QpcClock,
+    waiter: &HybridWaiter,
+    interrupt: &OwnedEvent,
+    local_metrics: &mut WorkerMetricsLocal,
+    terminal_error: &mut Option<String>,
+) -> WaitBoundary {
+    let wait_result = waiter.wait_until_ticks_with_metrics_typed(
+        qpc_clock,
+        metadata_target_qpc,
+        DurationTicks::ZERO,
+        interrupt,
+    );
+    match wait_result.outcome {
+        WaitOutcome::Deadline => WaitBoundary::Due {
+            dispatch_qpc: wait_result.wake_qpc.unwrap_or(metadata_target_qpc),
+            planned_wait_ticks: DurationTicks::ZERO,
+            wait_result: Some(wait_result),
+            target_qpc: metadata_target_qpc,
+        },
+        WaitOutcome::Failed(failure) => {
+            super::super::wait::record_wait_failure(failure, local_metrics, terminal_error);
+            WaitBoundary::Exit
+        }
+        WaitOutcome::Interrupted => {
+            local_metrics.wait_interrupted_count =
+                local_metrics.wait_interrupted_count.saturating_add(1);
+            WaitBoundary::Interrupted(wait_result, metadata_target_qpc, DurationTicks::ZERO)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_interrupted_physical_wait(
+    runtime: &mut WorkerRuntime,
+    observer: Option<&PendingObservationQueue>,
+    local_metrics: &mut WorkerMetricsLocal,
+    wait_result: sky_dispatch_win32::wait::WaitResult,
+    target_qpc: QpcTicks,
+    planned_wait_ticks: DurationTicks,
+    deadline_ticks: TimelineTicks,
+    epoch_qpc: QpcTicks,
+) {
+    publish_pending_wait_observation(runtime, observer, local_metrics);
+    let observation = record_wait_attempt(
+        observer,
+        Some(wait_result),
+        target_qpc,
+        planned_wait_ticks,
+        deadline_ticks,
+        epoch_qpc,
+        None,
+        local_metrics,
+    );
+    #[cfg(any(test, feature = "test-support"))]
+    if let (Some(hook), Some(observation)) =
+        (runtime.startup_ordering_hook.as_ref(), observation.as_ref())
+    {
+        hook.record_interrupted_wait(crate::engine::config::InterruptedWaitEvidence {
+            sequence: observation.sequence,
+            outcome: observation.outcome,
+            spin_ticks: observation.spin_ticks.as_u64(),
+            physical_target_qpc_ticks: observation.physical_target_qpc.as_u64(),
+            planned_wait_ticks: observation.planned_wait_ticks.as_u64(),
+            wake_qpc_ticks: observation.wake_qpc.map(|ticks| ticks.as_u64()),
+            deadline_crossing_qpc_ticks: observation
+                .deadline_crossing_qpc
+                .map(|ticks| ticks.as_u64()),
+            waiter_return_qpc_ticks: observation.waiter_return_qpc.map(|ticks| ticks.as_u64()),
+        });
+    }
+    runtime.pending_wait_observation = observation;
+    publish_pending_wait_observation(runtime, observer, local_metrics);
+}
 
 pub(crate) fn precision_handoff(
     runtime: &WorkerRuntime,

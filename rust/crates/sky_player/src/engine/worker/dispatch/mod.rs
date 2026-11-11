@@ -23,6 +23,9 @@ mod observer_trace;
 #[cfg(test)]
 pub(super) use observer_trace::attach_up_slot_traces;
 mod observer_wake;
+pub(crate) use observer_wake::{
+    publish_interrupted_physical_wait, wait_for_metadata_only_deadline,
+};
 #[cfg(any(test, feature = "test-support"))]
 mod prepared;
 #[cfg(test)]
