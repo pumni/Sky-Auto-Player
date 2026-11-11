@@ -379,10 +379,13 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
     .poll(() =>
       highlight.evaluate((element) => {
         const fill = getComputedStyle(element).backgroundColor;
-        const rgba = fill.match(/^rgba?\(([^)]+)\)$/);
-        if (!rgba) return 0;
-        const components = rgba[1]!.split(/[\s,/]+/).filter(Boolean);
-        return components.length >= 4 ? Number(components[3]) : 1;
+        if (fill === 'transparent' || fill === 'rgba(0, 0, 0, 0)') return 0;
+        // Chromium may serialize color-mix as color(srgb ... / alpha) or rgba(...).
+        const colorAlpha = fill.match(/\/\s*([\d.]+)\s*\)$/);
+        if (colorAlpha) return Number(colorAlpha[1]);
+        const rgba = fill.match(/^rgba\(([^)]+)\)$/);
+        if (rgba) return Number(rgba[1]!.split(/[\s,]+/).at(-1));
+        return 1;
       }),
     )
     .toBeGreaterThanOrEqual(0.8);

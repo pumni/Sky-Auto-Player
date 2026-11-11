@@ -73,6 +73,7 @@
   /* Occupies the complete 4px gutter; the panes keep their rounded edges. */
   flex: 0 0 var(--workbench-gap);
   min-height: 0;
+  border-radius: 999px;
   cursor: col-resize;
   touch-action: none;
   user-select: none;
