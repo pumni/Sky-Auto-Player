@@ -237,7 +237,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
   await selectedRow.click();
   await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
@@ -640,7 +640,7 @@ test('Graphite A and Soft Graphite preview consume semantic roles with contrast 
     );
     const playingFill = await renderedColor(playingRow, 'backgroundColor');
     expect(selectedFill).not.toBe(playingFill);
-    await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+    await expect(player.locator('.player-track-status')).toHaveText('Playing');
 
     await page.keyboard.press('Tab');
     await primary.focus();

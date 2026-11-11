@@ -30,7 +30,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
 
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
   await selectedRow.click();
@@ -303,7 +303,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       compactSearch.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')),
     )
     .toBe(true);
-  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Playing');
   await expect(compactInspector).toBeVisible();
   const compactInspectorBox = await compactInspector.boundingBox();
   expect(compactInspectorBox).not.toBeNull();
