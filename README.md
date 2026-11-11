@@ -48,7 +48,7 @@ Unlike a generic sequence of keyboard macros, the player follows the sheet's mus
 2. **Install and launch** Sky Auto Player, then select a song under **Built-in Songs**.
 3. **Open Sky**, equip a compatible 15-key instrument, and return focus to the game when starting playback.
 
-Want to check a playback profile first? Choose **Playback profile → Test playback (no input)** to run a dry-run preview without sending keystrokes.
+Want to check a playback profile first? Choose **Test** in the Player Dock to preview playback without sending keystrokes. The same dry-run action remains available from **Playback profile**.
 
 ### Bring Your Own Sheets
 
