@@ -21,6 +21,14 @@ for (const viewport of [
     await autoPlay.hover();
     await expect(page.getByRole('tooltip')).toContainText('Auto Play on');
     await page.mouse.move(0, 0);
+    await autoPlay.focus();
+    await expect(page.getByRole('tooltip')).toContainText('Auto Play on');
+    await autoPlay.click();
+    await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
+    await page.mouse.move(0, 0);
+    await autoPlay.hover();
+    await expect(page.getByRole('tooltip')).toContainText('Auto Play off');
+    await page.mouse.move(0, 0);
     await expect(dock.locator('.player-test-button')).toHaveCount(0);
     await expect(dock.locator('.player-auto-play-label')).toHaveCount(0);
     await expect(dock.locator('.profile-summary-button')).not.toContainText('FPS');
