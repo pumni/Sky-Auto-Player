@@ -37,9 +37,9 @@ use sky_dispatch_core::time::QpcTicks;
 use sky_dispatch_win32::input::PacketRetryReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 pub(super) fn qpc_span_us(
     qpc_clock: QpcClock,
@@ -209,7 +209,6 @@ pub(crate) fn publisher_down_send_outcome(
         observer.push(
             DispatchObservation::Down(observation),
             &mut local_metrics.observer_dropped_samples,
-            &mut local_metrics.observer_queue_high_watermark,
         );
         super::observer_wake::publish_pending_wait_observation(
             runtime,
@@ -232,7 +231,6 @@ pub(crate) fn dispatch_stale_packet(
     coordinator: &mut RuntimeDispatchCoordinator,
     observer: Option<&PendingObservationQueue>,
     dropped_samples: &mut u64,
-    queue_high_watermark: &mut u64,
 ) -> DispatchStep {
     if let Err(error) = coordinator.commit_stale_packet(prepared) {
         return DispatchStep::Terminate(format!(
@@ -247,7 +245,6 @@ pub(crate) fn dispatch_stale_packet(
                 suppressed_intent_count: prepared.suppressed_intent_count,
             }),
             dropped_samples,
-            queue_high_watermark,
         );
     }
     DispatchStep::Dispatched
@@ -296,17 +293,11 @@ impl PendingObservationQueue {
             pool: Arc::clone(&self.up_slot_pool),
         })
     }
-    pub fn push(
-        &self,
-        observation: DispatchObservation,
-        dropped_samples: &mut u64,
-        high_watermark: &mut u64,
-    ) -> bool {
+    pub fn push(&self, observation: DispatchObservation, dropped_samples: &mut u64) -> bool {
         if self.queue.push(observation).is_err() {
             *dropped_samples = dropped_samples.saturating_add(1);
             false
         } else {
-            self.observe_occupancy(high_watermark);
             true
         }
     }
@@ -314,7 +305,6 @@ impl PendingObservationQueue {
         &self,
         observation: WaitObservation,
         dropped_samples: &mut u64,
-        high_watermark: &mut u64,
         spin_dropped_samples: &mut u64,
     ) {
         if self
@@ -324,20 +314,21 @@ impl PendingObservationQueue {
         {
             *dropped_samples = dropped_samples.saturating_add(1);
             *spin_dropped_samples = spin_dropped_samples.saturating_add(1);
-        } else {
-            self.observe_occupancy(high_watermark);
         }
-    }
-
-    fn observe_occupancy(&self, high_watermark: &mut u64) {
-        let observed = u64::try_from(self.queue.len()).unwrap_or(u64::MAX);
-        *high_watermark = (*high_watermark).max(observed);
     }
 
     pub fn pop_front(&self) -> Option<DispatchObservation> {
         self.queue.pop()
     }
-    #[cfg(any(test, feature = "test-support"))]
+    fn drain_up_slot_record_count(&self) -> u64 {
+        let mut count = 0u64;
+        while let Some(observation) = self.pop_front() {
+            if let DispatchObservation::Down(down) = observation {
+                count = count.saturating_add(u64::from(down.up_slot_count));
+            }
+        }
+        count
+    }
     pub fn len(&self) -> usize {
         self.queue.len()
     }
@@ -351,11 +342,14 @@ impl PendingObservationQueue {
 pub(crate) struct ObserverRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<ObserverOutput>>,
+    pending: PendingObservationQueue,
+    telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
 }
 
 pub(crate) struct ObserverOutput {
     pub(crate) metrics: WorkerMetricsLocal,
     pub(crate) terminal_error: Option<String>,
+    pub(crate) up_slot_accounting_complete: bool,
 }
 
 impl ObserverRuntime {
@@ -370,6 +364,8 @@ impl ObserverRuntime {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let consumer_queue = pending.clone();
+        let runtime_pending = pending.clone();
+        let runtime_telemetry = Arc::clone(&telemetry);
         let handle = std::thread::Builder::new()
             .name("sky-dispatch-observer".to_string())
             .spawn(move || {
@@ -378,6 +374,8 @@ impl ObserverRuntime {
                 let mut timing = timing;
                 let mut terminal_error = None;
                 let mut consumer_queue = consumer_queue;
+                #[cfg(any(test, feature = "test-support"))]
+                let mut completed_drains = 0usize;
                 loop {
                     if consumer_queue.is_empty() {
                         if stop_thread.load(Ordering::Acquire) {
@@ -385,6 +383,14 @@ impl ObserverRuntime {
                         }
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
+                    }
+                    local_metrics.observer_queue_high_watermark = local_metrics
+                        .observer_queue_high_watermark
+                        .max(u64::try_from(consumer_queue.len()).unwrap_or(u64::MAX));
+                    #[cfg(any(test, feature = "test-support"))]
+                    if OBSERVER_ABORT_AFTER_DRAINS.load(Ordering::Relaxed) == completed_drains {
+                        terminal_error = Some("injected observer consumer failure".to_string());
+                        break;
                     }
                     let now_qpc_ticks = match qpc_clock.now() {
                         Ok(ticks) => ticks,
@@ -407,6 +413,10 @@ impl ObserverRuntime {
                         Ok(Some(drain_us)) => {
                             local_metrics.observer_duration_max_us =
                                 local_metrics.observer_duration_max_us.max(drain_us);
+                            #[cfg(any(test, feature = "test-support"))]
+                            {
+                                completed_drains = completed_drains.saturating_add(1);
+                            }
                         }
                         Ok(None) => {}
                         Err(DispatchStep::Terminate(error)) => {
@@ -425,24 +435,35 @@ impl ObserverRuntime {
                 ObserverOutput {
                     metrics: local_metrics,
                     terminal_error,
+                    up_slot_accounting_complete: true,
                 }
             })?;
         Ok(Self {
             stop,
             handle: Some(handle),
+            pending: runtime_pending,
+            telemetry: runtime_telemetry,
         })
     }
 
     pub(crate) fn stop(mut self) -> ObserverOutput {
         self.stop.store(true, Ordering::Release);
-        self.handle
+        let output = self
+            .handle
             .take()
             .expect("observer handle available")
             .join()
             .unwrap_or_else(|_| ObserverOutput {
                 metrics: WorkerMetricsLocal::default(),
                 terminal_error: Some("observer consumer panicked".to_string()),
-            })
+                up_slot_accounting_complete: false,
+            });
+        let stranded_up_slots = self.pending.drain_up_slot_record_count();
+        self.telemetry.lock().output.account_up_slot_loss(
+            crate::engine::telemetry::UpSlotLossReason::ObserverAbort,
+            stranded_up_slots,
+        );
+        output
     }
 }
 
@@ -456,6 +477,8 @@ impl Drop for ObserverRuntime {
 }
 #[cfg(any(test, feature = "test-support"))]
 static OBSERVER_ARTIFICIAL_COST_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(test, feature = "test-support"))]
+static OBSERVER_ABORT_AFTER_DRAINS: AtomicUsize = AtomicUsize::new(usize::MAX);
 #[cfg(any(test, feature = "test-support"))]
 static OBSERVER_TEST_HOOK_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 #[cfg(any(test, feature = "test-support"))]
@@ -481,6 +504,11 @@ pub fn set_observer_artificial_cost_us(us: u64) {
 #[cfg(any(test, feature = "test-support"))]
 pub fn reset_observer_test_hooks() {
     OBSERVER_ARTIFICIAL_COST_US.store(0, Ordering::SeqCst);
+    OBSERVER_ABORT_AFTER_DRAINS.store(usize::MAX, Ordering::SeqCst);
+}
+#[cfg(test)]
+fn set_observer_abort_after_drains(count: usize) {
+    OBSERVER_ABORT_AFTER_DRAINS.store(count, Ordering::SeqCst);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -706,106 +734,136 @@ pub(crate) fn drain_one_observer(
     let Some(observation) = pending.pop_front() else {
         return Ok(None);
     };
-    let now_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(now_qpc_ticks.as_u64()))
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("observer now conversion failure: {error:?}"))
-        })?;
-    let drain_start = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "observer start QPC failure: {error:?}"
-            )));
-        }
+    let up_slot_count = match &observation {
+        DispatchObservation::Down(down) => u64::from(down.up_slot_count),
+        _ => 0,
     };
-    match &observation {
-        DispatchObservation::Down(down) => drain_down_send_outcome(
-            down,
-            health,
-            local_metrics,
-            metrics,
-            telemetry,
-            qpc_clock,
-            now_us,
-            now_qpc_ticks,
-            timing,
-        )?,
-        #[cfg(any(test, feature = "test-support"))]
-        DispatchObservation::DownMiss(miss) => {
-            super::observer_trace::drain_down_miss(miss, telemetry)?;
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        DispatchObservation::Up(up) => super::observer_trace::drain_up_send_outcome(
-            up,
-            super::observer_trace::UpObservationDrainContext {
+    let accounted_before = telemetry
+        .output
+        .accounted_up_slot_records()
+        .unwrap_or_default();
+    let result = (|| {
+        let now_us = qpc_clock
+            .duration_to_us(DurationTicks::from_raw(now_qpc_ticks.as_u64()))
+            .map_err(|error| {
+                DispatchStep::Terminate(format!("observer now conversion failure: {error:?}"))
+            })?;
+        let drain_start = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "observer start QPC failure: {error:?}"
+                )));
+            }
+        };
+        match &observation {
+            DispatchObservation::Down(down) => drain_down_send_outcome(
+                down,
                 health,
                 local_metrics,
                 metrics,
                 telemetry,
                 qpc_clock,
                 now_us,
-            },
-        )?,
-        DispatchObservation::Wait(wait) => {
-            super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
-        }
-        DispatchObservation::StaleMetadata(stale) => {
-            super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
+                now_qpc_ticks,
+                timing,
+            )?,
+            #[cfg(any(test, feature = "test-support"))]
+            DispatchObservation::DownMiss(miss) => {
+                super::observer_trace::drain_down_miss(miss, telemetry)?;
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            DispatchObservation::Up(up) => super::observer_trace::drain_up_send_outcome(
+                up,
+                super::observer_trace::UpObservationDrainContext {
+                    health,
+                    local_metrics,
+                    metrics,
+                    telemetry,
+                    qpc_clock,
+                    now_us,
+                },
+            )?,
+            DispatchObservation::Wait(wait) => {
+                super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
+            }
+            DispatchObservation::StaleMetadata(stale) => {
+                super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            DispatchObservation::BlockedUnfocused(blocked) => {
+                super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
+            }
         }
         #[cfg(any(test, feature = "test-support"))]
-        DispatchObservation::BlockedUnfocused(blocked) => {
-            super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
+        {
+            let cost_us = OBSERVER_ARTIFICIAL_COST_US.load(Ordering::Relaxed);
+            if cost_us > 0 {
+                std::thread::sleep(std::time::Duration::from_micros(cost_us));
+            }
         }
-    }
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        let cost_us = OBSERVER_ARTIFICIAL_COST_US.load(Ordering::Relaxed);
-        if cost_us > 0 {
-            std::thread::sleep(std::time::Duration::from_micros(cost_us));
+        let drain_end = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return Err(DispatchStep::Terminate(format!(
+                    "observer end QPC failure: {error:?}"
+                )));
+            }
+        };
+        let drain_us = match drain_end.checked_duration_since(drain_start) {
+            Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
+            Err(_) => 0,
+        };
+        if let Ok(wall_now_us) =
+            qpc_clock.duration_to_us(DurationTicks::from_raw(drain_end.as_u64()))
+        {
+            super::super::update_deferred_worker_metrics(local_metrics, timing, wall_now_us);
         }
-    }
-    let drain_end = match qpc_clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(DispatchStep::Terminate(format!(
-                "observer end QPC failure: {error:?}"
-            )));
+        super::super::health::observe_observer_health(
+            drain_us,
+            health.options.observer_warn_us,
+            now_us,
+            health.options.window_policy(),
+            &mut health.observer_window,
+            local_metrics,
+        );
+        #[cfg(not(any(test, feature = "test-support")))]
+        let is_immediate_publish = matches!(
+            observation,
+            DispatchObservation::Wait(_) | DispatchObservation::StaleMetadata(_)
+        );
+        #[cfg(any(test, feature = "test-support"))]
+        let is_immediate_publish = matches!(
+            observation,
+            DispatchObservation::Wait(_)
+                | DispatchObservation::StaleMetadata(_)
+                | DispatchObservation::DownMiss(_)
+                | DispatchObservation::BlockedUnfocused(_)
+        );
+        if is_immediate_publish {
+            try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
         }
-    };
-    let drain_us = match drain_end.checked_duration_since(drain_start) {
-        Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
-        Err(_) => 0,
-    };
-    if let Ok(wall_now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(drain_end.as_u64())) {
-        super::super::update_deferred_worker_metrics(local_metrics, timing, wall_now_us);
+        Ok(Some(drain_us))
+    })();
+    if result.is_err() && up_slot_count > 0 {
+        let accounted_after = telemetry
+            .output
+            .accounted_up_slot_records()
+            .unwrap_or(accounted_before);
+        let accounted_during_drain = accounted_after
+            .saturating_sub(accounted_before)
+            .min(up_slot_count);
+        telemetry.output.account_up_slot_loss(
+            crate::engine::telemetry::UpSlotLossReason::ObserverAbort,
+            up_slot_count.saturating_sub(accounted_during_drain),
+        );
     }
-    super::super::health::observe_observer_health(
-        drain_us,
-        health.options.observer_warn_us,
-        now_us,
-        health.options.window_policy(),
-        &mut health.observer_window,
-        local_metrics,
-    );
-    #[cfg(not(any(test, feature = "test-support")))]
-    let is_immediate_publish = matches!(
-        observation,
-        DispatchObservation::Wait(_) | DispatchObservation::StaleMetadata(_)
-    );
-    #[cfg(any(test, feature = "test-support"))]
-    let is_immediate_publish = matches!(
-        observation,
-        DispatchObservation::Wait(_)
-            | DispatchObservation::StaleMetadata(_)
-            | DispatchObservation::DownMiss(_)
-            | DispatchObservation::BlockedUnfocused(_)
-    );
-    if is_immediate_publish {
-        try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
-    }
-    Ok(Some(drain_us))
+    result
 }
+
+#[cfg(test)]
+#[path = "observer_accounting_tests.rs"]
+mod observer_accounting_tests;
 
 #[cfg(test)]
 #[path = "hold_forensics_tests.rs"]

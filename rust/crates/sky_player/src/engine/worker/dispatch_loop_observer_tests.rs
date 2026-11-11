@@ -670,7 +670,6 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
         harness.dispatch_staged_candidate_for_test(first, false),
         super::StagedDispatchOutcome::Dispatched
     ));
-    let mut high_watermark = 0;
     for index in 0..crate::engine::worker::dispatch::observation::OBSERVATION_QUEUE_CAPACITY {
         harness.observer.push(
             crate::engine::worker::dispatch::observation::DispatchObservation::StaleMetadata(
@@ -681,7 +680,6 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
                 },
             ),
             &mut harness.local_metrics.observer_dropped_samples,
-            &mut high_watermark,
         );
     }
 
@@ -803,7 +801,6 @@ fn missing_pool_storage_is_counted_once_when_observer_queue_is_also_full() {
 
     let observer = PendingObservationQueue::default();
     let mut metrics = WorkerMetricsLocal::default();
-    let mut high_watermark = 0;
     for index in 0..OBSERVATION_QUEUE_CAPACITY {
         observer.push(
             DispatchObservation::StaleMetadata(
@@ -814,7 +811,6 @@ fn missing_pool_storage_is_counted_once_when_observer_queue_is_also_full() {
                 },
             ),
             &mut metrics.observer_dropped_samples,
-            &mut high_watermark,
         );
     }
     let mut observation = DownObservation::test_fixture(0);

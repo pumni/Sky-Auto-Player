@@ -35,11 +35,7 @@ fn publish_down_observation(
         }
         _ => up_slot_count == 0,
     };
-    if !observer.push(
-        observation,
-        &mut local_metrics.observer_dropped_samples,
-        &mut local_metrics.observer_queue_high_watermark,
-    ) {
+    if !observer.push(observation, &mut local_metrics.observer_dropped_samples) {
         if up_slot_storage_present {
             local_metrics.observer_dropped_up_slot_records = local_metrics
                 .observer_dropped_up_slot_records
@@ -804,6 +800,10 @@ pub(crate) fn dispatch_staged_candidate(
             send_result
                 .evidence
                 .started_ticks
+                .map(|ticks| ticks.as_u64()),
+            candidate.timing_window.authored_target_qpc.as_u64(),
+            runtime
+                .last_dispatch_deadline_wake_qpc
                 .map(|ticks| ticks.as_u64()),
         );
     }
@@ -1573,12 +1573,13 @@ pub(super) fn dispatch(
                         &mut resources.coordinator,
                         core.observer.pending.as_ref(),
                         &mut core.metrics.observer_dropped_samples,
-                        &mut core.metrics.observer_queue_high_watermark,
                     ) {
                         super::DispatchStep::Dispatched => {
                             #[cfg(any(test, feature = "test-support"))]
                             if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                                hook.mark_stale_packet_committed();
+                                hook.mark_stale_packet_committed(
+                                    core.runtime.last_dispatch_deadline_wake_qpc.is_some(),
+                                );
                             }
                             continue;
                         }
@@ -1837,14 +1838,17 @@ pub(super) fn dispatch(
                                                 &mut resources.coordinator,
                                                 core.observer.pending.as_ref(),
                                                 &mut core.metrics.observer_dropped_samples,
-                                                &mut core.metrics.observer_queue_high_watermark,
                                             ) {
                                                 super::DispatchStep::Dispatched => {
                                                     #[cfg(any(test, feature = "test-support"))]
                                                     if let Some(hook) =
                                                         core.runtime.startup_ordering_hook.as_ref()
                                                     {
-                                                        hook.mark_stale_packet_committed();
+                                                        hook.mark_stale_packet_committed(
+                                                            core.runtime
+                                                                .last_dispatch_deadline_wake_qpc
+                                                                .is_some(),
+                                                        );
                                                         if stale_scanned
                                                             == sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP
                                                         {

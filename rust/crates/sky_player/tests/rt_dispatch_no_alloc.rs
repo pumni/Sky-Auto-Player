@@ -223,11 +223,10 @@ fn push_single_down_observation_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
-    let mut high = 0u64;
     let obs = down_observation(1);
 
     enable_counting();
-    queue.push(obs, &mut dropped, &mut high);
+    queue.push(obs, &mut dropped);
     let allocs = disable_counting();
 
     assert_eq!(
@@ -243,14 +242,13 @@ fn push_pop_cycle_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
-    let mut high = 0u64;
 
     // Warm up outside the window.
-    queue.push(down_observation(1), &mut dropped, &mut high);
+    queue.push(down_observation(1), &mut dropped);
     let _ = queue.pop_front();
 
     enable_counting();
-    queue.push(down_observation(2), &mut dropped, &mut high);
+    queue.push(down_observation(2), &mut dropped);
     let popped = queue.pop_front();
     let allocs = disable_counting();
 
@@ -267,11 +265,10 @@ fn push_up_observation_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
-    let mut high = 0u64;
     let obs = up_observation(42);
 
     enable_counting();
-    queue.push(obs, &mut dropped, &mut high);
+    queue.push(obs, &mut dropped);
     let allocs = disable_counting();
 
     assert_eq!(
@@ -287,18 +284,17 @@ fn push_at_capacity_drop_new_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
-    let mut high = 0u64;
 
     // Fill to capacity outside the measurement window.
     for i in 0..OBSERVATION_QUEUE_CAPACITY {
-        queue.push(down_observation(i as u64), &mut dropped, &mut high);
+        queue.push(down_observation(i as u64), &mut dropped);
     }
     assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
     assert_eq!(dropped, 0);
 
     // One more push is dropped without allocating or waiting for the consumer.
     enable_counting();
-    queue.push(down_observation(999), &mut dropped, &mut high);
+    queue.push(down_observation(999), &mut dropped);
     let allocs = disable_counting();
 
     assert_eq!(
@@ -327,12 +323,11 @@ fn overflow_drops_newest_for_down_and_up() {
     ] {
         let queue = PendingObservationQueue::default();
         let mut dropped = 0_u64;
-        let mut high = 0_u64;
         for index in 0..OBSERVATION_QUEUE_CAPACITY {
-            queue.push(down_observation(index as u64), &mut dropped, &mut high);
+            queue.push(down_observation(index as u64), &mut dropped);
         }
 
-        queue.push(newest, &mut dropped, &mut high);
+        queue.push(newest, &mut dropped);
 
         assert_eq!(dropped, 1, "one newest observation must be dropped");
         assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
@@ -379,7 +374,6 @@ fn burst_push_and_drain_no_alloc() {
     const BURST: usize = 16;
     let queue = PendingObservationQueue::default();
     let mut dropped = 0u64;
-    let mut high = 0u64;
 
     enable_counting();
     for i in 0..BURST {
@@ -388,7 +382,7 @@ fn burst_push_and_drain_no_alloc() {
         } else {
             down_observation(i as u64)
         };
-        queue.push(observation, &mut dropped, &mut high);
+        queue.push(observation, &mut dropped);
     }
     let mut drained = 0usize;
     while queue.pop_front().is_some() {
@@ -402,9 +396,8 @@ fn burst_push_and_drain_no_alloc() {
     );
     assert_eq!(drained, BURST);
     assert_eq!(dropped, 0);
-    // Queue occupancy is sampled after successful producer enqueues without
-    // allocating or blocking the dispatch path.
-    assert_eq!(high, BURST as u64);
+    // The producer never samples queue occupancy; the observer consumer owns
+    // the high-watermark diagnostic.
 }
 
 /// pop_front on an empty queue does not allocate.

@@ -248,6 +248,7 @@ pub struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
     pub(crate) stale_packet_commit_count: AtomicU64,
+    pub(crate) stale_packet_committed_after_wake_count: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
     release_floor_control_enabled: AtomicBool,
@@ -259,6 +260,8 @@ pub struct StartupOrderingHook {
     down_authored_target_qpc_ticks: AtomicU64,
     down_not_before_qpc_ticks: AtomicU64,
     down_sender_start_qpc_ticks: AtomicU64,
+    down_sender_target_qpc_ticks: AtomicU64,
+    down_sender_wake_qpc_ticks: AtomicU64,
     down_sender_attempt_count: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
@@ -461,11 +464,15 @@ impl StartupOrderingHook {
         self.sequence.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    pub(crate) fn mark_stale_packet_committed(&self) {
+    pub(crate) fn mark_stale_packet_committed(&self, attributed_wake_available: bool) {
         self.stale_packet_committed
             .store(self.next_sequence(), Ordering::SeqCst);
         self.stale_packet_commit_count
             .fetch_add(1, Ordering::SeqCst);
+        if attributed_wake_available {
+            self.stale_packet_committed_after_wake_count
+                .fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     pub(crate) fn mark_first_physical_send_started(&self) {
@@ -522,6 +529,18 @@ impl StartupOrderingHook {
         self.down_sender_start_qpc_ticks.load(Ordering::Acquire)
     }
 
+    #[cfg(test)]
+    pub(crate) fn last_down_sender_qpc_evidence(&self) -> (Option<u64>, Option<u64>, Option<u64>) {
+        let pre_call = self.down_sender_start_qpc_ticks.load(Ordering::Acquire);
+        let deadline = self.down_sender_target_qpc_ticks.load(Ordering::Acquire);
+        let wake = self.down_sender_wake_qpc_ticks.load(Ordering::Acquire);
+        (
+            (pre_call != 0).then_some(pre_call),
+            (deadline != 0).then_some(deadline),
+            (wake != 0).then_some(wake),
+        )
+    }
+
     pub fn down_sender_attempt_count(&self) -> u64 {
         self.down_sender_attempt_count.load(Ordering::Acquire)
     }
@@ -566,11 +585,20 @@ impl StartupOrderingHook {
             .store(not_before, Ordering::Release);
     }
 
-    pub(crate) fn record_down_sender_attempt(&self, started_qpc_ticks: Option<u64>) {
+    pub(crate) fn record_down_sender_attempt(
+        &self,
+        started_qpc_ticks: Option<u64>,
+        deadline_qpc_ticks: u64,
+        wake_qpc_ticks: Option<u64>,
+    ) {
         self.down_sender_attempt_count
             .fetch_add(1, Ordering::AcqRel);
         self.down_sender_start_qpc_ticks
             .store(started_qpc_ticks.unwrap_or(0), Ordering::Release);
+        self.down_sender_target_qpc_ticks
+            .store(deadline_qpc_ticks, Ordering::Release);
+        self.down_sender_wake_qpc_ticks
+            .store(wake_qpc_ticks.unwrap_or(0), Ordering::Release);
     }
 
     pub(crate) fn wait_after_successful_up(&self) {

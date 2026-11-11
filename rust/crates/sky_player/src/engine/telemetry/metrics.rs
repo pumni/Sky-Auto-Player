@@ -314,7 +314,8 @@ pub struct WorkerMetricsLocal {
     pub up_slot_records_expected: u64,
     /// Per-key Up evidence omitted because diagnostics were disabled.
     pub up_slot_records_not_captured_by_mode: u64,
-    /// Largest queue occupancy observed immediately after a successful enqueue.
+    /// Largest queue depth sampled from the observer consumer thread. The
+    /// realtime producer does not query queue length for diagnostics.
     pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,
 }

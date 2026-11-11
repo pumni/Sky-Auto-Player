@@ -1,5 +1,12 @@
 # Evidence — Issue #646, package A (leader review #2 follow-up)
 
+## FINAL-RT-R5
+
+The bounded L23 implementation and local-verification evidence is recorded in
+[`final-rt-r5.md`](./final-rt-r5.md), with raw command identities in
+[`local-checks.json`](./local-checks.json). Historical A2 measurements and
+manifests below remain revision-bound and unchanged.
+
 This directory contains the readable report, manifests, and checksums for the Windows runs below. The path-redacted raw JSONL, logs, runner inputs, ReceiveOnly sink events, invocation summaries, and original verdicts are in the [GitHub Actions evidence artifact](https://github.com/pumni/Sky-Auto-Player/actions/runs/42617626785), uploaded from commit `ac4d42832d1ce1d1319fdf290aab52ee4ce0311a`. Artifact ID `13672948052` expires `2027-02-07T12:30:45Z`. [`ACTIONS-ARTIFACT-SHA256SUMS.txt`](./ACTIONS-ARTIFACT-SHA256SUMS.txt) lists each nested ZIP hash and the artifact digest; `ORIGINAL-SHA256SUMS.txt` preserves original local ZIP hashes.
 
 ## Source and executable identity

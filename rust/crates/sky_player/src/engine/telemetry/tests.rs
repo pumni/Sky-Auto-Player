@@ -164,7 +164,7 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
-    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 24);
+    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 25);
 }
 
 #[test]

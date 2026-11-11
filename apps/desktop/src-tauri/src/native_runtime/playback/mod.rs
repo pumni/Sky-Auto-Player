@@ -59,6 +59,8 @@ pub(super) struct NativePlaybackService {
     pub(super) prepare_publication: Mutex<PreparePublicationState>,
     pub(super) activity: ActivityCoordinator,
     pub(super) startup_cancellation: Arc<AtomicBool>,
+    /// Serializes shutdown acceptance with the final pre-arm handoff.
+    pub(super) startup_arm_gate: Mutex<()>,
     #[cfg(test)]
     pub(super) startup_failure: Option<String>,
     #[cfg(test)]
@@ -81,6 +83,8 @@ pub(super) struct NativePlaybackService {
     pub(super) test_player: Option<Arc<NativeDispatchSession>>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) before_arm_test_hook: Option<PlaybackBeforeArmTestHook>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) post_compile_prepublication_test_hook: Option<PlaybackPostCompileTestHook>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) monitor_retired_test_hook: Option<PlaybackRetiredTestHook>,
 }

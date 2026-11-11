@@ -333,7 +333,6 @@ fn admit_authored_down(
                     },
                 ),
                 &mut local_metrics.observer_dropped_samples,
-                &mut local_metrics.observer_queue_high_watermark,
             );
         }
         return Ok(AdmissionOutcome::BlockedUnfocused);

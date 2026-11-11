@@ -301,9 +301,11 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "observer_shutdown");
+    let mut observer_up_slot_accounting_complete = true;
     if let Some(observer_runtime) = observer.take() {
         let observer_output = observer_runtime.stop();
         local_metrics.merge_observer(&observer_output.metrics);
+        observer_up_slot_accounting_complete = observer_output.up_slot_accounting_complete;
         if let Some(error) = observer_output.terminal_error {
             record_termination_error(
                 &mut terminal_error,
@@ -438,6 +440,9 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         crate::engine::telemetry::UpSlotLossReason::CaptureModeOff,
         local_metrics.up_slot_records_not_captured_by_mode,
     );
+    telemetry
+        .output
+        .finalize_up_slot_accounting(observer_up_slot_accounting_complete);
     if telemetry.output.observer_queue_dropped > 0 {
         telemetry.output.truncated = true;
     }

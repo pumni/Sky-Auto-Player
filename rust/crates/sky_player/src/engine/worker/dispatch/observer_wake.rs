@@ -146,7 +146,6 @@ pub(crate) fn publish_pending_wait_observation(
     observer.push_wait(
         observation,
         &mut local_metrics.observer_dropped_samples,
-        &mut local_metrics.observer_queue_high_watermark,
         &mut local_metrics.spin_observation_dropped_samples,
     );
 }
@@ -178,10 +177,9 @@ mod tests {
     }
 
     #[test]
-    fn queue_pressure_counts_drops_and_tracks_successful_occupancy() {
+    fn queue_pressure_counts_drops_without_producer_occupancy_sampling() {
         let queue = PendingObservationQueue::default();
         let mut dropped = 0;
-        let mut high_watermark = 0;
 
         for index in 0..OBSERVATION_QUEUE_CAPACITY {
             queue.push(
@@ -191,18 +189,13 @@ mod tests {
                     suppressed_intent_count: 1,
                 }),
                 &mut dropped,
-                &mut high_watermark,
             );
         }
 
         assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
-        assert_eq!(high_watermark, OBSERVATION_QUEUE_CAPACITY as u64);
         assert_eq!(dropped, 0);
 
-        let mut wait_metrics = WorkerMetricsLocal {
-            observer_queue_high_watermark: high_watermark,
-            ..WorkerMetricsLocal::default()
-        };
+        let mut wait_metrics = WorkerMetricsLocal::default();
         let observation = record_wait_attempt(
             Some(&queue),
             Some(WaitResult::interrupted()),
@@ -227,10 +220,7 @@ mod tests {
         assert_eq!(wait_metrics.spin_observation_dropped_samples, 1);
         assert_eq!(wait_metrics.spin_observation_missing_samples, 0);
         assert_eq!(wait_metrics.spin_observation_pending_samples, 0);
-        assert_eq!(
-            wait_metrics.observer_queue_high_watermark,
-            OBSERVATION_QUEUE_CAPACITY as u64
-        );
+        assert_eq!(wait_metrics.observer_queue_high_watermark, 0);
         assert_eq!(queue.len(), OBSERVATION_QUEUE_CAPACITY);
     }
 
@@ -265,7 +255,7 @@ mod tests {
             ..WorkerRuntime::default()
         };
         publish_pending_wait_observation(&mut runtime, Some(&queue), &mut metrics);
-        assert_eq!(metrics.observer_queue_high_watermark, 1);
+        assert_eq!(metrics.observer_queue_high_watermark, 0);
         match queue.pop_front() {
             Some(DispatchObservation::Wait(observed)) => {
                 assert!(matches!(observed.outcome, WaitOutcome::Interrupted));
@@ -510,7 +500,7 @@ mod tests {
         runtime.pending_wait_observation = Some(restored);
         publish_pending_wait_observation(&mut runtime, Some(&queue), &mut metrics);
 
-        assert_eq!(metrics.observer_queue_high_watermark, 2);
+        assert_eq!(metrics.observer_queue_high_watermark, 0);
         match queue.pop_front() {
             Some(DispatchObservation::Wait(observed)) => {
                 assert!(matches!(observed.outcome, WaitOutcome::Interrupted));

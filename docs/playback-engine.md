@@ -136,17 +136,30 @@ before a replan. Packet traces carry the associated wait sequence and spin ticks
 missing observers and bounded-queue drops are counted separately. A missing QPC
 sample remains unavailable rather than being reconstructed from another timestamp.
 
-Schema 23 keeps one packet trace per physical send. Per-slot Up evidence is stored
+Schema 25 keeps one packet trace per physical send. Per-slot Up evidence is stored
 in a separate bounded sidecar, linked by `trace_record_index`; it retains each
 source action, slot, scan code, authored offset, release floor and residual. Its
-4,096-entry capacity has a separate dropped-record count. Residual is measured from
-the later of the authored target, slot release floor and packet not-before floor to
-the sampled pre-call QPC; it is unavailable when that sample is missing.
+4,096-entry capacity has separate loss counts for observer-queue, observer-abort,
+pool-storage, telemetry-ring and sidecar-capacity loss. Capture-off records are
+counted separately as not captured by mode. Final accounting checks
+`expected = captured + dropped + not captured`; overflow, mismatch or incomplete
+observer accounting is exported as invalid. Residual is measured from the later
+of the authored target, slot release floor and packet not-before floor to the
+sampled pre-call QPC; it is unavailable when that sample is missing. Packet-level
+summaries do not provide per-key p95/p99.
 
-`MAX_EXECUTOR_BYTES` limits the estimated `DownChordTicks` backing array to
-512 MiB. It does not limit the combined schedule, coordinator, input, telemetry
-or process peak. Allocation failures are not universally recoverable: in
-particular, constructing shared reason strings still uses infallible allocation.
+The bounded observation producer does not sample queue occupancy; the observer
+consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
+accounting remain off the real-time producer suffix.
+
+`MAX_EXECUTOR_BYTES` caps the estimated `DownChordTicks` backing array, while
+`MAX_RETAINED_DISPATCH_BYTES` enforces the unchanged 512 MiB (536,870,912-byte)
+combined schedule, coordinator and executor admission bound using calculated
+capacities and startup overlap. It is not a process-RSS or full-application peak
+limit. The one-million-action single-key case is rejected at its combined
+741,502,832-byte estimate; see the [FINAL-RT-R5 evidence](../evidence/dispatch-core-646/final-rt-r5.md).
+Allocation failures are not universally recoverable: in particular, constructing
+shared reason strings still uses infallible allocation.
 
 ## Implementation Map
 

@@ -160,7 +160,7 @@ fn dispatch_cost_qualification() {
             costs
                 .pending_wait_capture_and_queue
                 .push(started.elapsed().as_nanos() as f64 / operations);
-            assert_eq!(wait_metrics.observer_queue_high_watermark, 1);
+            assert_eq!(wait_metrics.observer_queue_high_watermark, 0);
 
             let mut telemetry = TelemetryCollector::new(TelemetryMode::Ring, samples.len());
             let observations = samples

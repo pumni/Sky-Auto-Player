@@ -429,7 +429,13 @@ pub(super) fn record_down_send_result(
         && result.evidence.attempts != 0
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
-        hook.record_down_sender_attempt(result.evidence.started_ticks.map(|ticks| ticks.as_u64()));
+        hook.record_down_sender_attempt(
+            result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
+            physical_timing_window.authored_target_qpc.as_u64(),
+            runtime
+                .last_dispatch_deadline_wake_qpc
+                .map(|ticks| ticks.as_u64()),
+        );
     }
     if result.evidence.attempts != 0 {
         local_metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {

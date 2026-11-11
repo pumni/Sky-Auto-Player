@@ -98,6 +98,7 @@ impl NativePlaybackService {
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity,
             startup_cancellation: Arc::new(AtomicBool::new(false)),
+            startup_arm_gate: Mutex::new(()),
             #[cfg(test)]
             startup_failure: None,
             #[cfg(test)]
@@ -120,6 +121,8 @@ impl NativePlaybackService {
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            post_compile_prepublication_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_retired_test_hook: None,
         }
@@ -1267,6 +1270,17 @@ impl NativePlaybackService {
         if let Some(hook) = &self.before_arm_test_hook {
             hook();
         }
+        let _arm_gate = self
+            .startup_arm_gate
+            .lock()
+            .map_err(|_| "native playback startup-arm lock poisoned".to_string())?;
+        if startup_cancellation.load(Ordering::Acquire)
+            && let Some(player) = &active.player
+        {
+            // A shutdown accepted before this gate won the pre-arm race.
+            // Latch Quit before arm so the B worker cannot admit a Down.
+            let _ = player.quit();
+        }
         if let Some(player) = &active.player
             && let Err(error) = player.arm(0)
         {
@@ -1326,10 +1340,6 @@ impl NativePlaybackService {
         if let Some(error) = &self.startup_failure {
             return Err(error.clone());
         }
-        #[cfg(all(test, feature = "tauri-test"))]
-        if let Some(player) = &self.test_player {
-            return Ok((Arc::clone(player), 0));
-        }
         if startup_context
             .event_delivery_failure
             .load(Ordering::Acquire)
@@ -1368,6 +1378,17 @@ impl NativePlaybackService {
                 )?
             }
         };
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(hook) = &self.post_compile_prepublication_test_hook {
+            hook();
+        }
+        if startup_context.startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(player) = &self.test_player {
+            return Ok((Arc::clone(player), 0));
+        }
         if startup_context
             .event_delivery_failure
             .load(Ordering::Acquire)
@@ -2095,8 +2116,17 @@ impl NativePlaybackService {
     }
 
     pub(in crate::native_runtime) fn shutdown(&self, _events: Arc<Mutex<NativeEventHub>>) -> bool {
+        let arm_gate = self
+            .startup_arm_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.startup_cancellation.store(true, Ordering::Release);
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
+        if let Some(player) = active.as_ref().and_then(|active| active.player.as_ref()) {
+            // The worker's own pre-arm Quit latch is the physical-send gate.
+            let _ = player.quit();
+        }
+        drop(arm_gate);
         if let Some(active) = active {
             let current = active.state.lock().ok().map(|state| *state);
             if matches!(
@@ -2174,6 +2204,7 @@ impl NativePlaybackServiceHandle {
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity: self.activity.clone(),
             startup_cancellation: Arc::new(AtomicBool::new(false)),
+            startup_arm_gate: Mutex::new(()),
             #[cfg(test)]
             startup_failure: None,
             #[cfg(test)]
@@ -2198,6 +2229,8 @@ impl NativePlaybackServiceHandle {
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            post_compile_prepublication_test_hook: None,
         };
         service.monitor(active, events, activation);
     }
@@ -3067,6 +3100,15 @@ mod preparation_cancellation_tests {
             sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES,
         );
         assert!(error.contains("exceeds dispatch budget"), "{error}");
+        assert!(
+            error.contains("536870912 bytes"),
+            "the fixed 512 MiB admission limit must remain visible: {error}"
+        );
+        assert!(
+            !error.to_ascii_lowercase().contains("out of memory")
+                && error.contains("exceeds dispatch budget of 536870912 bytes"),
+            "budget rejection must not be mislabeled as OOM: {error}"
+        );
     }
 
     fn input(generation: u64, settings_fingerprint: &str) -> NativePreparedInput {
@@ -3238,6 +3280,96 @@ mod preparation_cancellation_tests {
             .reserve_playback("post-startup-cancellation")
             .expect("startup cancellation releases its physical activity lease");
         drop(lease);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn shutdown_after_compilation_before_publication_retires_start_without_dispatch() {
+        let activity = ActivityCoordinator::default();
+        let mut service = NativePlaybackService::new(activity.clone());
+        let (compiled_tx, compiled_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        service.post_compile_prepublication_test_hook = Some(Arc::new(move || {
+            compiled_tx
+                .send(())
+                .expect("test waits for the post-compile barrier");
+            release_rx
+                .lock()
+                .expect("post-compile release lock")
+                .recv()
+                .expect("test releases the post-compile barrier");
+        }));
+        let service = Arc::new(service);
+        let settings = ApplicationSettings::default();
+        let fingerprint =
+            super::super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let prepared = service
+            .prepare(input(1, &fingerprint))
+            .expect("prepare physical plan");
+        let prepared_id = prepared.prepared_id.expect("prepared identity");
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let start_service = Arc::clone(&service);
+        let start_events = Arc::clone(&events);
+        let start_settings = settings.clone();
+        let start_prepared_id = prepared_id.clone();
+        let start_thread = thread::spawn(move || {
+            start_service.start(
+                super::super::NativePlaybackStartRequest {
+                    prepared_id: start_prepared_id,
+                    decisions: Vec::new(),
+                }
+                .into_public(),
+                &start_settings,
+                start_events,
+            )
+        });
+
+        compiled_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("compile reaches post-compile/pre-publication barrier");
+        let shutdown_service = Arc::clone(&service);
+        let shutdown_events = Arc::clone(&events);
+        let shutdown_thread = thread::spawn(move || shutdown_service.shutdown(shutdown_events));
+        let cancellation_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.startup_cancellation.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < cancellation_deadline,
+                "shutdown did not accept cancellation at the pre-publication boundary"
+            );
+            thread::yield_now();
+        }
+        release_tx.send(()).expect("release the completed compiler");
+
+        let error = start_thread
+            .join()
+            .expect("startup thread")
+            .expect_err("shutdown wins before active publication");
+        assert!(error.contains("native playback startup was cancelled during shutdown"));
+        assert!(shutdown_thread.join().expect("shutdown thread"));
+        assert!(!service.activity.physical_release_is_quarantined());
+        assert!(service.active.lock().expect("active slot").is_none());
+        let lease = activity
+            .reserve_playback("after-cancelled-start")
+            .expect("cancelled startup releases activity ownership");
+        drop(lease);
+
+        let restart_prepared = service
+            .prepare(input(2, &fingerprint))
+            .expect("shutdown does not silently clear the prepared plan");
+        let restart_error = service
+            .start(
+                super::super::NativePlaybackStartRequest {
+                    prepared_id: restart_prepared.prepared_id.expect("prepared identity"),
+                    decisions: Vec::new(),
+                }
+                .into_public(),
+                &settings,
+                events,
+            )
+            .expect_err("sticky shutdown disables restart");
+        assert!(restart_error.contains("startup was cancelled during shutdown"));
     }
 
     #[test]

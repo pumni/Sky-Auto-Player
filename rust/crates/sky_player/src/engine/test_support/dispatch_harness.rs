@@ -2043,6 +2043,15 @@ impl ProductionDispatchTestHarness {
         self.local_metrics.prepared_normal_backlog_boundaries
     }
 
+    pub fn observer_loss_counts_for_test(&self) -> (u64, u64, u64, u64) {
+        (
+            self.local_metrics.observer_dropped_samples,
+            self.local_metrics.spin_observation_expected_samples,
+            self.local_metrics.spin_observation_dropped_samples,
+            self.local_metrics.spin_observation_missing_samples,
+        )
+    }
+
     pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
         publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
         (

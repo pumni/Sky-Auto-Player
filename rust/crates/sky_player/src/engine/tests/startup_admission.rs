@@ -49,8 +49,10 @@ fn stale_metadata_race_schedule(
 }
 
 #[cfg(all(feature = "test-support", windows))]
-fn post_wake_32_stale_metadata_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
-    let mut actions = Vec::with_capacity(38);
+fn post_wake_stale_metadata_schedule(
+    stale_packet_count: usize,
+) -> sky_dispatch_core::model::RuntimeSchedule {
+    let mut actions = Vec::with_capacity(stale_packet_count + 6);
     actions.push(KeyActionInput {
         source_action_index: 0,
         kind: ActionKind::Down,
@@ -67,26 +69,19 @@ fn post_wake_32_stale_metadata_schedule() -> sky_dispatch_core::model::RuntimeSc
     });
     actions.push(KeyActionInput {
         source_action_index: 2,
-        kind: ActionKind::Up,
-        scheduled_us: 12_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "post-wake-stale-up".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: 3,
         kind: ActionKind::Down,
         scheduled_us: 14_000,
         scan_codes: smallvec::smallvec![0x16],
         reason: "post-wake-intermediate-down".into(),
     });
     actions.push(KeyActionInput {
-        source_action_index: 4,
+        source_action_index: 3,
         kind: ActionKind::Up,
         scheduled_us: 14_500,
         scan_codes: smallvec::smallvec![0x16],
         reason: "post-wake-intermediate-up".into(),
     });
-    for index in 1..32usize {
+    for index in 0..stale_packet_count {
         actions.push(KeyActionInput {
             source_action_index: u32::try_from(index + 4).expect("stale source index"),
             kind: ActionKind::Up,
@@ -95,15 +90,16 @@ fn post_wake_32_stale_metadata_schedule() -> sky_dispatch_core::model::RuntimeSc
             reason: "post-wake-stale-up".into(),
         });
     }
+    let final_down_index = u32::try_from(stale_packet_count + 4).expect("final Down index");
     actions.push(KeyActionInput {
-        source_action_index: 36,
+        source_action_index: final_down_index,
         kind: ActionKind::Down,
         scheduled_us: 200_000,
         scan_codes: smallvec::smallvec![0x15],
         reason: "post-wake-final-down".into(),
     });
     actions.push(KeyActionInput {
-        source_action_index: 37,
+        source_action_index: final_down_index + 1,
         kind: ActionKind::Up,
         scheduled_us: 210_000,
         scan_codes: smallvec::smallvec![0x15],
@@ -250,102 +246,139 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
-fn actual_b_worker_reports_repeated_post_wake_distribution_after_32_stale_metadata() {
-    const REPEATS: usize = 100;
-    let schedule = post_wake_32_stale_metadata_schedule();
-    let mut samples_us = Vec::with_capacity(REPEATS);
-    let mut qpc_frequency_hz = None;
+fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
+    use serde_json::{Value, json};
 
-    for _ in 0..REPEATS {
-        let mut options = test_session_options(
-            schedule.clone(),
-            1,
-            BackendConfig::Mock {
-                latency_base_us: 0,
-                latency_per_key_us: 0,
-                fault_script: FaultInjectionScript::none(),
-            },
-        );
-        options.wait.test_spin_threshold_us = None;
-        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
-        let session = NativeDispatchSession::new(options).expect("actual B worker session");
-        session.arm(0).expect("worker arm");
-        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
-        assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
-
-        let telemetry: serde_json::Value =
-            serde_json::from_str(&session.take_telemetry_json().expect("worker telemetry"))
-                .expect("telemetry JSON");
-        let frequency = telemetry["qpc_frequency_hz"]
-            .as_u64()
-            .expect("QPC frequency");
-        if let Some(previous) = qpc_frequency_hz {
-            assert_eq!(
-                frequency, previous,
-                "one process must keep a stable QPC frequency"
-            );
-        } else {
-            qpc_frequency_hz = Some(frequency);
-        }
-        let records = telemetry["records"].as_array().expect("trace records");
-        let stale_count = records
-            .iter()
-            .filter(|record| record["outcome"].as_u64() == Some(4))
-            .count();
-        assert_eq!(
-            stale_count, 32,
-            "all stale Up metadata must precede final Down"
-        );
-        let down = records
-            .iter()
-            .find(|record| {
-                record["source_action_index"].as_u64() == Some(36)
-                    && record["down_mask"].as_u64().unwrap_or_default() != 0
-            })
-            .expect("final Down after 32 stale metadata records");
-        assert!(
-            down["wake_qpc_available"].as_bool().unwrap_or(false),
-            "final Down lacks wake QPC: {down}"
-        );
-        assert!(
-            down["pre_call_qpc_available"].as_bool().unwrap_or(false),
-            "final Down lacks sender-start QPC: {down}"
-        );
-        let wake_qpc = down["wake_qpc_ticks"].as_u64().expect("wake QPC");
-        let send_qpc = down["pre_call_qpc_ticks"]
-            .as_u64()
-            .expect("sender start QPC");
-        let post_wake_ticks = send_qpc
-            .checked_sub(wake_qpc)
-            .expect("sender start follows waiter wake");
-        let frequency = std::num::NonZeroU64::new(frequency).expect("nonzero QPC frequency");
-        samples_us.push(
-            QpcClock::from_frequency_hz(frequency)
-                .duration_to_us(DurationTicks::from_raw(post_wake_ticks))
-                .expect("post-wake duration conversion"),
-        );
+    fn delta_us(later: u64, earlier: u64, frequency_hz: u64) -> (i64, i64) {
+        let ticks =
+            i64::try_from(i128::from(later) - i128::from(earlier)).expect("QPC delta fits i64");
+        let micros = i64::try_from((i128::from(ticks) * 1_000_000) / i128::from(frequency_hz))
+            .expect("QPC microsecond delta fits i64");
+        (ticks, micros)
     }
 
-    let distribution = |percentile: usize| {
-        let mut ordered = samples_us.clone();
+    fn nearest_rank(values: &[i64], percentile: usize) -> Option<i64> {
+        if values.is_empty() {
+            return None;
+        }
+        let mut ordered = values.to_vec();
         ordered.sort_unstable();
         let rank = (percentile * ordered.len()).div_ceil(100).max(1);
-        ordered[rank - 1]
-    };
-    let p50 = distribution(50);
-    let p95 = distribution(95);
-    let p99 = distribution(99);
-    let max = *samples_us.iter().max().expect("timing samples");
+        Some(ordered[rank - 1])
+    }
+
+    let mut matrix = Vec::new();
+    let mut qpc_frequency_hz = None;
+    for stale_count in [0usize, 1, 32, 33, 10_000] {
+        let repetitions = if stale_count == 10_000 { 20 } else { 100 };
+        let mut samples = Vec::with_capacity(repetitions);
+        let mut wake_to_pre_call_us = Vec::with_capacity(repetitions);
+        let mut deadline_to_pre_call_us = Vec::with_capacity(repetitions);
+
+        for repetition in 0..repetitions {
+            let hook = Arc::new(StartupOrderingHook::default());
+            let mut options = test_session_options(
+                post_wake_stale_metadata_schedule(stale_count),
+                1,
+                BackendConfig::Mock {
+                    latency_base_us: 0,
+                    latency_per_key_us: 0,
+                    fault_script: FaultInjectionScript::none(),
+                },
+            );
+            options.wait.test_spin_threshold_us = None;
+            options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+            options.startup_ordering_hook = Some(Arc::clone(&hook));
+            let session = NativeDispatchSession::new(options).expect("actual B worker session");
+            session.arm(0).expect("worker arm");
+            assert!(session.join(Duration::from_secs(10)).expect("worker join"));
+            assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+
+            let stale_committed = hook.stale_packet_commit_count.load(Ordering::Acquire);
+            let stale_after_wake = hook
+                .stale_packet_committed_after_wake_count
+                .load(Ordering::Acquire);
+            assert_eq!(stale_committed, stale_count as u64);
+            assert!(stale_after_wake <= stale_committed);
+
+            let telemetry: Value =
+                serde_json::from_str(&session.take_telemetry_json().expect("worker telemetry"))
+                    .expect("telemetry JSON");
+            let frequency = telemetry["qpc_frequency_hz"]
+                .as_u64()
+                .expect("QPC frequency");
+            if let Some(previous) = qpc_frequency_hz {
+                assert_eq!(frequency, previous, "QPC frequency must be stable");
+            } else {
+                qpc_frequency_hz = Some(frequency);
+            }
+            assert_eq!(hook.down_sender_attempt_count(), 3);
+            let (pre_call, deadline, wake) = hook.last_down_sender_qpc_evidence();
+            let pre_call = pre_call.expect("final Down sender-boundary pre-call QPC");
+            let deadline = deadline.or_else(|| {
+                let (deadline, _) = hook.last_down_window();
+                (deadline != 0).then_some(deadline)
+            });
+            let wake_delta = wake.map(|wake| delta_us(pre_call, wake, frequency));
+            let deadline_delta = deadline.map(|deadline| delta_us(pre_call, deadline, frequency));
+            if let Some((_, micros)) = wake_delta {
+                wake_to_pre_call_us.push(micros);
+            }
+            if let Some((_, micros)) = deadline_delta {
+                deadline_to_pre_call_us.push(micros);
+            }
+            samples.push(json!({
+                "repetition": repetition,
+                "stale_committed_before_final_send": stale_committed,
+                "stale_committed_after_attributed_wake": stale_after_wake,
+                "stale_committed_without_attributed_wake": stale_committed - stale_after_wake,
+                "wake_available": wake.is_some(),
+                "wake_qpc_ticks": wake,
+                "physical_deadline_qpc_ticks": deadline,
+                "pre_call_qpc_ticks": pre_call,
+                "wake_to_pre_call_ticks": wake_delta.map(|delta| delta.0),
+                "wake_to_pre_call_us": wake_delta.map(|delta| delta.1),
+                "deadline_to_pre_call_ticks": deadline_delta.map(|delta| delta.0),
+                "deadline_to_pre_call_us": deadline_delta.map(|delta| delta.1),
+            }));
+        }
+
+        matrix.push(json!({
+            "stale_metadata_count": stale_count,
+            "repetitions": repetitions,
+            "total_stale_scanned_per_final_send": stale_count,
+            "qpc_frequency_hz": qpc_frequency_hz.expect("QPC frequency"),
+            "wake_to_pre_call": {
+                "measured_count": wake_to_pre_call_us.len(),
+                "missing_wake_count": repetitions - wake_to_pre_call_us.len(),
+                "p50_us": nearest_rank(&wake_to_pre_call_us, 50),
+                "p95_us": nearest_rank(&wake_to_pre_call_us, 95),
+                "p99_us": nearest_rank(&wake_to_pre_call_us, 99),
+                "max_us": wake_to_pre_call_us.iter().max(),
+                "estimator": "nearest_rank"
+            },
+            "deadline_to_pre_call": {
+                "measured_count": deadline_to_pre_call_us.len(),
+                "missing_deadline_count": repetitions - deadline_to_pre_call_us.len(),
+                "p50_us": nearest_rank(&deadline_to_pre_call_us, 50),
+                "p95_us": nearest_rank(&deadline_to_pre_call_us, 95),
+                "p99_us": nearest_rank(&deadline_to_pre_call_us, 99),
+                "max_us": deadline_to_pre_call_us.iter().max(),
+                "estimator": "nearest_rank"
+            },
+            "samples": samples,
+        }));
+    }
     eprintln!(
-        "b_worker_post_wake_distribution scenario=32_stale_metadata_total_31_after_final_deadline_wake samples={} qpc_frequency_hz={} p50_us={} p95_us={} p99_us={} max_us={} estimator=nearest_rank evidence_scope=actual_b_worker_test_support_mock_sender qualification=false samples_us={samples_us:?}",
-        samples_us.len(),
-        qpc_frequency_hz.expect("QPC frequency"),
-        p50,
-        p95,
-        p99,
-        max,
+        "stale_dispatch_timing_matrix_json={}",
+        serde_json::to_string(&json!({
+            "evidence_scope": "actual_b_worker_test_support_mock_sender_production_calibrated_frozen_wait",
+            "qualification": false,
+            "scan_attribution": "test-support hook counts stale commits while a deadline wake attribution is present; missing wake samples remain missing",
+            "scenarios": matrix,
+        }))
+        .expect("stale matrix JSON")
     );
-    assert_eq!(samples_us.len(), REPEATS);
 }
 
 #[test]
