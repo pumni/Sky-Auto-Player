@@ -29,6 +29,38 @@ enum DiffMode {
     Push,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PullRequestRefs {
+    number: u64,
+    base_ref: String,
+}
+
+impl PullRequestRefs {
+    fn parse(number: &str, base_ref: String) -> Result<Self> {
+        let number = number
+            .parse::<u64>()
+            .ok()
+            .filter(|number| *number > 0)
+            .ok_or("pull request number must be a positive integer")?;
+        if base_ref.is_empty() {
+            return Err("pull request base ref is required".into());
+        }
+        Ok(Self { number, base_ref })
+    }
+
+    fn fetch_refspecs(&self, root: &Path) -> Result<(String, String)> {
+        let base = format!("refs/heads/{}", self.base_ref);
+        let valid = git_output(root, &["check-ref-format", base.as_str()])?;
+        if !valid.status.success() {
+            return Err("pull request base ref is not a valid branch name".into());
+        }
+        Ok((
+            format!("+{base}:refs/sky-ci/base"),
+            format!("+refs/pull/{}/head:refs/sky-ci/pr-head", self.number),
+        ))
+    }
+}
+
 impl DiffMode {
     fn parse(value: &str) -> Result<Self> {
         match value {
@@ -318,6 +350,15 @@ fn classify_path(
         ]);
         return;
     }
+    if is_windows_integration_frontend_path(path) {
+        classification.add_many(&[
+            "desktop_required",
+            "desktop_native_required",
+            "desktop_e2e_required",
+            "package_required",
+        ]);
+        return;
+    }
     if ["apps/desktop/package.json", "apps/desktop/bun.lock"].contains(&path) {
         classification.add_many(&[
             "desktop_required",
@@ -519,6 +560,18 @@ fn classify_path(
     unknown.push(path.to_owned());
 }
 
+fn is_windows_integration_frontend_path(path: &str) -> bool {
+    [
+        "apps/desktop/src/bridge/tauriBridge.ts",
+        "apps/desktop/src/platform/runtime.ts",
+        "apps/desktop/src/platform/windowControls.ts",
+        "apps/desktop/src/app/BootstrapGate.tsx",
+        "apps/desktop/src/app/usePackagedSmokeTest.ts",
+    ]
+    .contains(&path)
+        || path.starts_with("apps/desktop/src/bridge/generated/")
+}
+
 fn is_crate_manifest(path: &str) -> bool {
     let remainder = path.strip_prefix("rust/crates/").unwrap_or_default();
     !remainder.contains('/') || remainder.ends_with("/Cargo.toml")
@@ -713,7 +766,12 @@ fn source_head_matches(root: &Path, expected_head: &str) -> Result<()> {
     Ok(())
 }
 
-fn merge_base(root: &Path, base: &str, head: &str) -> Result<String> {
+fn merge_base(
+    root: &Path,
+    base: &str,
+    head: &str,
+    pull_request_refs: Option<&PullRequestRefs>,
+) -> Result<String> {
     let output = git_output(root, &["merge-base", base, head])?;
     if output.status.success() {
         let value = String::from_utf8(output.stdout)
@@ -729,6 +787,10 @@ fn merge_base(root: &Path, base: &str, head: &str) -> Result<String> {
     if String::from_utf8_lossy(&shallow.stdout).trim() != "true" {
         return Err("git merge-base could not find a common ancestor".into());
     }
+
+    let refs = pull_request_refs
+        .ok_or("bounded shallow PR fetch requires the base branch and pull request number")?;
+    let (base_refspec, pr_head_refspec) = refs.fetch_refspecs(root)?;
 
     for deepen in SHALLOW_DEEPEN_STEPS {
         let depth = format!("--deepen={deepen}");
@@ -746,12 +808,28 @@ fn merge_base(root: &Path, base: &str, head: &str) -> Result<String> {
                 "--no-recurse-submodules",
                 depth.as_str(),
                 "origin",
-                base,
-                head,
+                base_refspec.as_str(),
+                pr_head_refspec.as_str(),
             ],
         )?;
         if !fetch.status.success() {
             continue;
+        }
+        let fetched_head = git_output(
+            root,
+            &["rev-parse", "--verify", "refs/sky-ci/pr-head^{commit}"],
+        )?;
+        if !fetched_head.status.success() {
+            continue;
+        }
+        let fetched_head = String::from_utf8(fetched_head.stdout)
+            .map_err(|_| "fetched pull request head is not valid UTF-8")?;
+        if fetched_head.trim() != head {
+            return Err(format!(
+                "fetched pull request head {} does not match event head {head}",
+                fetched_head.trim()
+            )
+            .into());
         }
         let output = git_output(root, &["merge-base", base, head])?;
         if output.status.success() {
@@ -772,15 +850,17 @@ fn changed_paths_from_git(
     mode: DiffMode,
     base: &str,
     head: &str,
+    pull_request_refs: Option<&PullRequestRefs>,
 ) -> Result<Vec<String>> {
     let base = ci_artifacts::validate_commit_sha(base, "base or head SHA")?;
     let head = ci_artifacts::validate_commit_sha(head, "base or head SHA")?;
     source_head_matches(root, &head)?;
-    ensure_commit_available(root, &base)?;
-    ensure_commit_available(root, &head)?;
     let range_start = match mode {
-        DiffMode::PullRequest => merge_base(root, &base, &head)?,
-        DiffMode::Push => base,
+        DiffMode::PullRequest => merge_base(root, &base, &head, pull_request_refs)?,
+        DiffMode::Push => {
+            ensure_commit_available(root, &base)?;
+            base
+        }
     };
     let output = git_output(
         root,
@@ -799,8 +879,14 @@ fn changed_paths_from_git(
     decode_git_paths(&output.stdout)
 }
 
-fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Classification {
-    match changed_paths_from_git(root, mode, base, head) {
+fn classify_git_range_with_refs(
+    root: &Path,
+    mode: DiffMode,
+    base: &str,
+    head: &str,
+    pull_request_refs: Option<&PullRequestRefs>,
+) -> Classification {
+    match changed_paths_from_git(root, mode, base, head, pull_request_refs) {
         Ok(paths) if paths.is_empty() => {
             Classification::full("empty changed-path diff requires full validation (fail-closed)")
         }
@@ -809,11 +895,17 @@ fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Cl
     }
 }
 
+fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Classification {
+    classify_git_range_with_refs(root, mode, base, head, None)
+}
+
 fn parse_arguments(args: &[String]) -> Result<Classification> {
     let mut full = false;
     let mut base = None;
     let mut head = None;
     let mut diff_mode = None;
+    let mut pr_number = None;
+    let mut base_ref = None;
     let mut paths_file = None;
     let mut index = 0;
     while index < args.len() {
@@ -842,6 +934,22 @@ fn parse_arguments(args: &[String]) -> Result<Classification> {
                     args.get(index).ok_or("missing value for --diff-mode")?,
                 )?);
             }
+            "--pr-number" => {
+                index += 1;
+                pr_number = Some(
+                    args.get(index)
+                        .ok_or("missing value for --pr-number")?
+                        .clone(),
+                );
+            }
+            "--base-ref" => {
+                index += 1;
+                base_ref = Some(
+                    args.get(index)
+                        .ok_or("missing value for --base-ref")?
+                        .clone(),
+                );
+            }
             "--paths-file" => {
                 index += 1;
                 paths_file = Some(
@@ -862,8 +970,16 @@ fn parse_arguments(args: &[String]) -> Result<Classification> {
     if full {
         return Ok(Classification::full("full validation requested"));
     }
-    if paths_file.is_some() && (base.is_some() || head.is_some() || diff_mode.is_some()) {
-        return Err("paths file cannot be combined with diff-mode or base/head SHAs".into());
+    if paths_file.is_some()
+        && (base.is_some()
+            || head.is_some()
+            || diff_mode.is_some()
+            || pr_number.is_some()
+            || base_ref.is_some())
+    {
+        return Err(
+            "paths file cannot be combined with diff-mode, PR refs, or base/head SHAs".into(),
+        );
     }
     if let Some(path) = paths_file {
         let source = fs::read_to_string(path).map_err(|_| "paths file does not exist")?;
@@ -877,7 +993,32 @@ fn parse_arguments(args: &[String]) -> Result<Classification> {
     } else {
         match (base, head) {
             (Some(base), Some(head)) => match diff_mode {
-                Some(mode) => Ok(classify_git_range(&crate::repo::root(), mode, &base, &head)),
+                Some(DiffMode::PullRequest) => {
+                    let (Some(number), Some(base_ref)) = (pr_number, base_ref) else {
+                        return Err(
+                            "--pr-number and --base-ref are required in PR diff mode".into()
+                        );
+                    };
+                    let refs = PullRequestRefs::parse(&number, base_ref)?;
+                    Ok(classify_git_range_with_refs(
+                        &crate::repo::root(),
+                        DiffMode::PullRequest,
+                        &base,
+                        &head,
+                        Some(&refs),
+                    ))
+                }
+                Some(DiffMode::Push) => {
+                    if pr_number.is_some() || base_ref.is_some() {
+                        return Err("PR refs cannot be combined with push diff mode".into());
+                    }
+                    Ok(classify_git_range(
+                        &crate::repo::root(),
+                        DiffMode::Push,
+                        &base,
+                        &head,
+                    ))
+                }
                 None => Err("--diff-mode pr|push is required with base/head SHAs".into()),
             },
             (None, None) => Err("base and head SHAs are required".into()),
@@ -1338,6 +1479,41 @@ mod tests {
     }
 
     #[test]
+    fn windows_ipc_and_bootstrap_frontend_paths_select_package_qualification() {
+        for path in [
+            "apps/desktop/src/bridge/tauriBridge.ts",
+            "apps/desktop/src/bridge/generated/commands.ts",
+            "apps/desktop/src/bridge/generated/nested/Example.ts",
+            "apps/desktop/src/platform/runtime.ts",
+            "apps/desktop/src/platform/windowControls.ts",
+            "apps/desktop/src/app/BootstrapGate.tsx",
+            "apps/desktop/src/app/usePackagedSmokeTest.ts",
+        ] {
+            assert_lanes(
+                &classify_paths([path.to_owned()]),
+                &[
+                    "desktop_required",
+                    "desktop_native_required",
+                    "desktop_e2e_required",
+                    "package_required",
+                ],
+            );
+        }
+
+        for path in [
+            "apps/desktop/src/components/PlaybackControls.tsx",
+            "apps/desktop/src/styles/app.css",
+            "apps/desktop/src/app/App.tsx",
+            "apps/desktop/src/bridge/generatedish/Example.ts",
+        ] {
+            assert_lanes(
+                &classify_paths([path.to_owned()]),
+                &["desktop_required", "desktop_e2e_required"],
+            );
+        }
+    }
+
+    #[test]
     fn preserves_legacy_reason_and_mixed_path_regressions() {
         assert!(
             classify_paths(["docs/releases/v4.0.2.md".to_owned()])
@@ -1587,6 +1763,10 @@ mod tests {
             &source,
             &["push", "--quiet", "origin", "HEAD:refs/heads/feature"],
         );
+        git(
+            &source,
+            &["push", "--quiet", "origin", "HEAD:refs/pull/17/head"],
+        );
 
         let clone = Command::new("git")
             .args([
@@ -1621,7 +1801,18 @@ mod tests {
                 .success()
         );
 
-        let paths = changed_paths_from_git(&shallow, DiffMode::PullRequest, &base, &head).unwrap();
+        let pr_refs = PullRequestRefs {
+            number: 17,
+            base_ref: "main".to_owned(),
+        };
+        let paths = changed_paths_from_git(
+            &shallow,
+            DiffMode::PullRequest,
+            &base,
+            &head,
+            Some(&pr_refs),
+        )
+        .unwrap();
         assert_eq!(
             paths,
             [
@@ -1632,7 +1823,13 @@ mod tests {
         );
         assert!(!paths.iter().any(|path| path == "apps/website/package.json"));
         assert_lanes(
-            &classify_git_range(&shallow, DiffMode::PullRequest, &base, &head),
+            &classify_git_range_with_refs(
+                &shallow,
+                DiffMode::PullRequest,
+                &base,
+                &head,
+                Some(&pr_refs),
+            ),
             &["desktop_required", "desktop_e2e_required"],
         );
         assert_lanes(
@@ -1674,6 +1871,148 @@ mod tests {
             unavailable
                 .classification_reason
                 .contains("could not be fetched")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fork_head_uses_bounded_pull_request_ref_and_keeps_frontend_pr_narrow() {
+        let root = temp_dir("sky-xtask-classifier-fork-pr-ref");
+        let source = root.join("source");
+        let origin = root.join("origin.git");
+        let fork = root.join("fork.git");
+        let checkout = root.join("checkout");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&origin).unwrap();
+        fs::create_dir(&fork).unwrap();
+        git(&origin, &["init", "--bare", "--quiet"]);
+        git(&fork, &["init", "--bare", "--quiet"]);
+        git(&source, &["init", "--quiet", "--initial-branch=main"]);
+        git(&source, &["config", "user.name", "Classifier Test"]);
+        git(
+            &source,
+            &["config", "user.email", "classifier@example.invalid"],
+        );
+        git(
+            &source,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        git(&source, &["remote", "add", "fork", fork.to_str().unwrap()]);
+        fs::write(source.join("README.md"), "fork point\n").unwrap();
+        git(&source, &["add", "--all"]);
+        git(&source, &["commit", "--quiet", "-m", "fork point"]);
+        let fork_point = git_sha(&source);
+        git(
+            &source,
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        );
+        git(
+            &source,
+            &["push", "--quiet", "fork", "HEAD:refs/heads/main"],
+        );
+
+        git(&source, &["checkout", "--quiet", "-b", "feature"]);
+        fs::create_dir_all(source.join("apps/desktop/src")).unwrap();
+        fs::write(
+            source.join("apps/desktop/src/App.tsx"),
+            "export const App = 2;\n",
+        )
+        .unwrap();
+        git(&source, &["add", "--all"]);
+        git(&source, &["commit", "--quiet", "-m", "fork UI change"]);
+        let head = git_sha(&source);
+        git(
+            &source,
+            &["push", "--quiet", "fork", "HEAD:refs/heads/feature"],
+        );
+        git(
+            &source,
+            &["push", "--quiet", "origin", "HEAD:refs/pull/29/head"],
+        );
+
+        git(&source, &["checkout", "--quiet", "main"]);
+        fs::write(source.join("README.md"), "main advanced\n").unwrap();
+        fs::create_dir_all(source.join("apps/website")).unwrap();
+        fs::write(source.join("apps/website/package.json"), "{}\n").unwrap();
+        git(&source, &["add", "--all"]);
+        git(
+            &source,
+            &["commit", "--quiet", "-m", "advance upstream after fork"],
+        );
+        let base = git_sha(&source);
+        git(
+            &source,
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        );
+
+        let clone = Command::new("git")
+            .args([
+                "clone",
+                "--quiet",
+                "--depth=1",
+                "--branch",
+                "main",
+                file_url(&origin).as_str(),
+                checkout.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            clone.status.success(),
+            "shallow clone failed: {}",
+            String::from_utf8_lossy(&clone.stderr)
+        );
+        git(
+            &checkout,
+            &["remote", "add", "fork", fork.to_str().unwrap()],
+        );
+        git(
+            &checkout,
+            &[
+                "fetch",
+                "--quiet",
+                "--depth=1",
+                "fork",
+                "refs/heads/feature:refs/remotes/fork/feature",
+            ],
+        );
+        git(
+            &checkout,
+            &["checkout", "--quiet", "--detach", head.as_str()],
+        );
+
+        let advertised = git(&checkout, &["ls-remote", "--heads", "origin"]);
+        assert!(!String::from_utf8_lossy(&advertised.stdout).contains(&head));
+        assert!(!String::from_utf8_lossy(&advertised.stdout).contains("feature"));
+        let pr_refs = PullRequestRefs {
+            number: 29,
+            base_ref: "main".to_owned(),
+        };
+        let (base_refspec, pr_head_refspec) = pr_refs.fetch_refspecs(&checkout).unwrap();
+        assert_eq!(base_refspec, "+refs/heads/main:refs/sky-ci/base");
+        assert_eq!(pr_head_refspec, "+refs/pull/29/head:refs/sky-ci/pr-head");
+        assert!(!base_refspec.contains(&head));
+        assert!(!pr_head_refspec.contains(&head));
+
+        let paths = changed_paths_from_git(
+            &checkout,
+            DiffMode::PullRequest,
+            &base,
+            &head,
+            Some(&pr_refs),
+        )
+        .unwrap();
+        assert_eq!(paths, ["apps/desktop/src/App.tsx"]);
+        assert_ne!(fork_point, base);
+        assert_lanes(
+            &classify_git_range_with_refs(
+                &checkout,
+                DiffMode::PullRequest,
+                &base,
+                &head,
+                Some(&pr_refs),
+            ),
+            &["desktop_required", "desktop_e2e_required"],
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1729,6 +2068,10 @@ mod tests {
             &other_repo,
             &["push", "--quiet", "origin", "HEAD:refs/heads/independent"],
         );
+        git(
+            &other_repo,
+            &["push", "--quiet", "origin", "HEAD:refs/pull/17/head"],
+        );
 
         let clone = Command::new("git")
             .args([
@@ -1755,7 +2098,17 @@ mod tests {
             &shallow,
             &["checkout", "--quiet", "--detach", head.as_str()],
         );
-        let classification = classify_git_range(&shallow, DiffMode::PullRequest, &base, &head);
+        let pr_refs = PullRequestRefs {
+            number: 17,
+            base_ref: "main".to_owned(),
+        };
+        let classification = classify_git_range_with_refs(
+            &shallow,
+            DiffMode::PullRequest,
+            &base,
+            &head,
+            Some(&pr_refs),
+        );
         assert_lanes(&classification, &LANES);
         assert!(
             classification

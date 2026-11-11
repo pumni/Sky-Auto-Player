@@ -840,9 +840,14 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "source_head_matches",
         "preserves_exact_lane_output_shape_and_reason_golden",
         "matches_positive_and_union_classifier_matrix",
+        "windows_ipc_and_bootstrap_frontend_paths_select_package_qualification",
         "unknown_or_malformed_paths_fail_closed_and_workflow_dispatch_is_full",
         "pr_uses_merge_base_when_base_advances_and_diff_keeps_both_rename_paths",
+        "fork_head_uses_bounded_pull_request_ref_and_keeps_frontend_pr_narrow",
         "shallow_history_without_a_merge_base_fails_closed_after_bounded_fetches",
+        "refs/pull/",
+        "--pr-number",
+        "--base-ref",
         "empty changed-path diff requires full validation",
     ] {
         if !classifier.contains(marker) {
@@ -990,6 +995,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "cargo test --locked --manifest-path rust/xtask/Cargo.toml",
         "github.event.pull_request.base.sha",
         "github.event.pull_request.head.sha",
+        "github.event.pull_request.number",
+        "github.event.pull_request.base.ref",
         "github.event.before",
         "classifier_args+=(--full)",
         "classifier_args+=(--diff-mode pr --base-sha",

@@ -71,11 +71,14 @@ jobs:
 
       - name: Classify changed paths
         id: classify
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           classifier_args=()
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            classifier_args+=(--diff-mode pr --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}")
+            classifier_args+=(--diff-mode pr --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}" --pr-number "$PR_NUMBER" --base-ref "$PR_BASE_REF")
           elif [[ "${{ github.event_name }}" == "push" ]]; then
             classifier_args+=(--diff-mode push --base-sha "${{ github.event.before }}" --head-sha "${{ github.sha }}")
           else

@@ -51,9 +51,12 @@ use `--diff-mode pr`: the classifier verifies that the checked-out `HEAD` is
 the event head, computes `git merge-base` for event base/head, and diffs from
 that merge base to the head. This avoids treating commits added to `main` after
 the feature branch split as PR changes. Pushes explicitly use
-`--diff-mode push` and diff `before..head`. Shallow history is deepened with a
-bounded sequence of fetches; missing commits, source SHA mismatches, absent
-merge bases, malformed paths, failed diffs, and empty diffs request full
+`--diff-mode push` and diff `before..head`. For a shallow PR checkout,
+bounded retries fetch the event base branch and the repository's
+`refs/pull/<number>/head` ref; the classifier verifies that ref still names the
+event head. It does not ask the base repository to fetch a fork head by its raw
+object ID. Missing, mismatched, or inaccessible refs, source SHA mismatches,
+absent merge bases, malformed paths, failed diffs, and empty diffs request full
 validation with an explanation. `workflow_dispatch` and the weekly schedule
 request full validation. Edits to the Rust classifier, its CLI dispatcher, or
 CI control plane also select full validation.
@@ -89,7 +92,8 @@ unselected proof job to report `skipped`.
 | `docs/releases/**` | Static validation only; no release contract |
 | `apps/website/**`, `.github/actions/site-validate/**`, `pages.yml` | Site validation and exact Pages artifact packaging, including website dependency changes |
 | `.bun-version`, Rust setup action, shared toolchain resolver | Full validation across all lanes |
-| `apps/desktop/src/**`, React styles/tests on a PR | Desktop web/browser and E2E; no Windows jobs by default |
+| `apps/desktop/src/**`, React styles/tests on a PR | Desktop web/browser and E2E; no Windows jobs by default, except the Windows integration paths below |
+| `apps/desktop/src/bridge/tauriBridge.ts`, `apps/desktop/src/bridge/generated/**`, `apps/desktop/src/platform/runtime.ts`, `apps/desktop/src/platform/windowControls.ts`, `apps/desktop/src/app/BootstrapGate.tsx`, `apps/desktop/src/app/usePackagedSmokeTest.ts` | Desktop web/browser and E2E plus Windows native and NSIS package qualification |
 | Any `apps/desktop/**` change on a `main` push | Desktop web/browser and E2E plus Windows candidate/package qualification |
 | `apps/desktop/package.json`, `bun.lock` | Desktop web/browser, Windows candidate/package, updater and dependency checks |
 | `apps/desktop/src-tauri/**` production source/config/hooks/resources | Windows native and package qualification; updater lane for updater identity/behavior changes |
