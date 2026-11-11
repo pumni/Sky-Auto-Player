@@ -1591,8 +1591,10 @@ body.is-resizing * {
     outline-color: Highlight;
   }
 
-  .resizable-separator:focus-visible span {
-    border-left-color: Highlight;
+  .resizable-separator:is(:focus-visible, .is-dragging) span,
+  .resizable-separator:hover:not(.is-disabled) span {
+    forced-color-adjust: none;
+    background: Highlight;
   }
 
   .library-nav-item.is-active,

@@ -43,6 +43,12 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 - Inspect Light mode, forced colors, focus rings, reduced-motion behavior, and scrollbars.
 - Validate sender-metadata export with and without a real session. Export remains backend-owned because frontend session identity alone does not establish trace availability.
 
+## Workbench resize lane
+
+- Pane borders, rounded corners and the **4px visual gutter** remain unchanged. The separator occupies all 4px of the existing gutter, while the transparent pointer-acquisition zone extends slightly beyond it; hover/focus/drag highlights the full 4px lane.
+- Drag the Navigator and docked Inspector dividers at 1366×768 and 800×560; verify there are no dead pixels in the gutter, no surprising pane jump, unchanged keyboard arrows / Home / End / Enter reset, and that one final persisted width survives reload.
+- The layout policy still updates live widths on animation frames without persisting each pointer movement; review performance on native WebView2 rather than treating simulated event counts as measured FPS.
+
 ## Full UI audit
 
 The prioritized review and remaining tasks are recorded in [Desktop UI/UX audit — real Windows captures](desktop-ui-audit-2026-11.md). The screenshots only show Library, Player Dock and Inspector; Settings, Update, Calibration, Import, Runtime recovery and other dialogs still require a separate native visual pass.
