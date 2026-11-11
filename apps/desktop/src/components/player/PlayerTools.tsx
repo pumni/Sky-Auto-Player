@@ -1,10 +1,5 @@
 import { FlaskConical, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
-import {
-  Button as AriaButton,
-  Dialog,
-  DialogTrigger,
-  Popover,
-} from 'react-aria-components';
+import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
 import {
