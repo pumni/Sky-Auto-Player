@@ -1,8 +1,6 @@
-#[cfg(any(test, feature = "test-support"))]
-use super::super::super::TimelineTicks;
 use super::super::super::{
     DurationTicks, QpcClock, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
-    try_publish_observer_metrics,
+    TimelineTicks, try_publish_observer_metrics,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::super::WorkerRuntime;
@@ -54,6 +52,60 @@ pub(super) fn qpc_span_us(
     })?;
     qpc_clock.duration_to_us(ticks).map_err(|error| {
         DispatchStep::Terminate(format!("{context} duration conversion failure: {error:?}"))
+    })
+}
+
+struct DownPreCallEvidence {
+    duration_us: Option<u64>,
+    effective_ticks: Option<TimelineTicks>,
+    policy_to_pre_call_us: Option<u64>,
+    wake_to_pre_call_us: Option<u64>,
+}
+
+fn down_pre_call_evidence(
+    observation: &DownObservation,
+    qpc_clock: QpcClock,
+) -> Result<DownPreCallEvidence, DispatchStep> {
+    let duration_us = observation
+        .pre_call_qpc
+        .map(|pre_call| {
+            let duration = observation
+                .sendinput_completion_qpc
+                .checked_duration_since(pre_call)
+                .map_err(|error| {
+                    DispatchStep::Terminate(format!("note-on QPC ordering failure: {error}"))
+                })?;
+            qpc_clock.duration_to_us(duration).map_err(|error| {
+                DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
+            })
+        })
+        .transpose()?;
+    let effective_ticks = observation
+        .pre_call_qpc
+        .map(|pre_call| down_effective_ticks(observation, pre_call))
+        .transpose()?;
+    let policy_to_pre_call_us = observation
+        .final_policy_qpc
+        .zip(observation.pre_call_qpc)
+        .map(|(final_policy, pre_call)| {
+            qpc_span_us(
+                qpc_clock,
+                final_policy,
+                pre_call,
+                "note-on final-policy-to-pre-call",
+            )
+        })
+        .transpose()?;
+    let wake_to_pre_call_us = observation
+        .wake_qpc
+        .zip(observation.pre_call_qpc)
+        .map(|(wake, pre_call)| qpc_span_us(qpc_clock, wake, pre_call, "note-on wake-to-pre-call"))
+        .transpose()?;
+    Ok(DownPreCallEvidence {
+        duration_us,
+        effective_ticks,
+        policy_to_pre_call_us,
+        wake_to_pre_call_us,
     })
 }
 #[cfg(any(test, feature = "test-support"))]
@@ -131,7 +183,7 @@ pub(crate) fn publisher_down_send_outcome(
             physical_target_qpc,
             physical_timing_window,
             final_policy_qpc,
-            pre_call_qpc,
+            pre_call_qpc: Some(pre_call_qpc),
             sendinput_completion_qpc,
             previous_sendinput_completion_qpc: timing_proof.previous_sendinput_completion_qpc,
             previous_sender_completion_known: timing_proof.previous_sender_completion_known,
@@ -249,11 +301,13 @@ impl PendingObservationQueue {
         observation: DispatchObservation,
         dropped_samples: &mut u64,
         high_watermark: &mut u64,
-    ) {
+    ) -> bool {
         if self.queue.push(observation).is_err() {
             *dropped_samples = dropped_samples.saturating_add(1);
+            false
         } else {
             self.observe_occupancy(high_watermark);
+            true
         }
     }
     pub fn push_wait(
@@ -447,17 +501,8 @@ pub(crate) fn drain_down_send_outcome(
     let core_post_send_warn_us = health_budget.core_post_send_warn_us;
     let (_requested_count, _confirmed_count, _skipped_count, _observation_evidence) =
         down_observer_evidence(observation);
-    let pre_call_to_completion_ticks = observation
-        .sendinput_completion_qpc
-        .checked_duration_since(observation.pre_call_qpc)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-on QPC ordering failure: {error}"))
-        })?;
-    let pre_call_to_completion_us = qpc_clock
-        .duration_to_us(pre_call_to_completion_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-on duration conversion failure: {error:?}"))
-        })?;
+    let pre_call_evidence = down_pre_call_evidence(observation, qpc_clock)?;
+    let pre_call_to_completion_us = pre_call_evidence.duration_us;
     let completion_residual_us = qpc_clock
         .duration_to_us(
             observation
@@ -474,7 +519,7 @@ pub(crate) fn drain_down_send_outcome(
                 "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
-    let pre_call_effective_ticks = down_effective_ticks(observation, observation.pre_call_qpc)?;
+    let pre_call_effective_ticks = pre_call_evidence.effective_ticks;
     let completed_effective_ticks =
         down_effective_ticks(observation, observation.sendinput_completion_qpc)?;
     let wake_ticks = observation
@@ -525,28 +570,8 @@ pub(crate) fn drain_down_send_outcome(
         )?),
         _ => None,
     };
-    let final_policy_to_pre_call_us = observation
-        .final_policy_qpc
-        .map(|final_policy| {
-            qpc_span_us(
-                qpc_clock,
-                final_policy,
-                observation.pre_call_qpc,
-                "note-on final-policy-to-pre-call",
-            )
-        })
-        .transpose()?;
-    let wake_to_send_start_us = observation
-        .wake_qpc
-        .map(|wake| {
-            qpc_span_us(
-                qpc_clock,
-                wake,
-                observation.pre_call_qpc,
-                "note-on wake-to-pre-call",
-            )
-        })
-        .transpose()?;
+    let final_policy_to_pre_call_us = pre_call_evidence.policy_to_pre_call_us;
+    let wake_to_send_start_us = pre_call_evidence.wake_to_pre_call_us;
     local_metrics.sendinput_warn_threshold_us = send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
@@ -614,7 +639,7 @@ pub(crate) fn drain_down_send_outcome(
         observation.dispatch_ready_qpc.is_some(),
         completion_error_ticks,
         authored_completion_error_ticks,
-        Some(pre_call_effective_ticks),
+        pre_call_effective_ticks,
         Some(completed_effective_ticks),
         wake_ticks,
         now_qpc_ticks,
@@ -626,9 +651,11 @@ pub(crate) fn drain_down_send_outcome(
     if let Some(wake_to_send_us) = wake_to_send_start_us {
         local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
     }
-    local_metrics.sendinput_duration_max_us = local_metrics
-        .sendinput_duration_max_us
-        .max(pre_call_to_completion_us);
+    if let Some(send_duration_us) = pre_call_to_completion_us {
+        local_metrics.sendinput_duration_max_us = local_metrics
+            .sendinput_duration_max_us
+            .max(send_duration_us);
+    }
     if let Some(final_policy_to_pre_call_us) = final_policy_to_pre_call_us {
         local_metrics.final_policy_to_pre_call_max_us = local_metrics
             .final_policy_to_pre_call_max_us
@@ -645,21 +672,23 @@ pub(crate) fn drain_down_send_outcome(
         false,
         local_metrics,
     );
-    observe_dispatch_health(
-        DispatchHealthObservation {
-            send_duration_us: pre_call_to_completion_us,
-            post_send_duration_us: core_post_send_us,
-            post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
-            path,
-            send_warn_us,
-            core_post_send_warn_us,
-            elapsed_us: completed_effective_us,
-        },
-        health.options.window_policy(),
-        &mut health.sendinput_window,
-        &mut health.core_post_send_window,
-        local_metrics,
-    );
+    if let Some(send_duration_us) = pre_call_to_completion_us {
+        observe_dispatch_health(
+            DispatchHealthObservation {
+                send_duration_us,
+                post_send_duration_us: core_post_send_us,
+                post_send_metrics_available: observation.dispatch_ready_qpc.is_some(),
+                path,
+                send_warn_us,
+                core_post_send_warn_us,
+                elapsed_us: completed_effective_us,
+            },
+            health.options.window_policy(),
+            &mut health.sendinput_window,
+            &mut health.core_post_send_window,
+            local_metrics,
+        );
+    }
     try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
     Ok(())
 }

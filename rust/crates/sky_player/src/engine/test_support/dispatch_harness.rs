@@ -2460,7 +2460,7 @@ impl ProductionDispatchTestHarness {
 
     pub fn pop_send_observation_for_test(
         &mut self,
-    ) -> Option<(PhysicalPacket, QpcTicks, QpcTicks, u8)> {
+    ) -> Option<(PhysicalPacket, Option<QpcTicks>, QpcTicks, u8)> {
         match self.observer.pop_front()? {
             DispatchObservation::Down(observation) => Some((
                 observation.requested_packet,
@@ -2470,7 +2470,7 @@ impl ProductionDispatchTestHarness {
             )),
             DispatchObservation::Up(observation) => Some((
                 PhysicalPacket::new(observation.requested_mask, 0),
-                observation.pre_call_qpc,
+                Some(observation.pre_call_qpc),
                 observation.sendinput_completion_qpc,
                 observation.trace.send_attempts,
             )),

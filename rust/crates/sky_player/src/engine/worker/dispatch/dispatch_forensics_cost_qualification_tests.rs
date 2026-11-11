@@ -178,11 +178,15 @@ fn dispatch_cost_qualification() {
                     true,
                     0,
                     0,
-                    Some(TimelineTicks::from_raw(observation.pre_call_qpc.as_u64())),
+                    observation
+                        .pre_call_qpc
+                        .map(|ticks| TimelineTicks::from_raw(ticks.as_u64())),
                     Some(TimelineTicks::from_raw(
                         observation.sendinput_completion_qpc.as_u64(),
                     )),
-                    Some(TimelineTicks::from_raw(observation.pre_call_qpc.as_u64())),
+                    observation
+                        .pre_call_qpc
+                        .map(|ticks| TimelineTicks::from_raw(ticks.as_u64())),
                     QpcTicks::from_raw(observation.sendinput_completion_qpc.as_u64() + 2),
                     false,
                     false,
@@ -213,7 +217,7 @@ fn make_down_observation(sample: PacketSample, index: u32) -> DownObservation {
     observation.physical_target_qpc = QpcTicks::from_raw(sample.target_ticks);
     observation.physical_timing_window = sample.timing_window;
     observation.final_policy_qpc = Some(QpcTicks::from_raw(sample.pre_call_ticks));
-    observation.pre_call_qpc = QpcTicks::from_raw(sample.pre_call_ticks);
+    observation.pre_call_qpc = Some(QpcTicks::from_raw(sample.pre_call_ticks));
     observation.sendinput_completion_qpc = QpcTicks::from_raw(sample.completion_ticks);
     observation.dispatch_ready_qpc = Some(QpcTicks::from_raw(sample.completion_ticks + 2));
     observation.wake_qpc = Some(QpcTicks::from_raw(sample.pre_call_ticks));

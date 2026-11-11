@@ -26,6 +26,13 @@ fn compilation_cancellation_is_checked_before_and_during_work() {
 }
 
 #[test]
+fn compiler_memory_budget_denies_before_allocation() {
+    let error = check_memory_budget(2_048, 2_047).expect_err("budget denial");
+    assert!(error.to_string().contains("exceeds budget"));
+    check_memory_budget(2_047, 2_047).expect("exact budget is admitted");
+}
+
+#[test]
 fn test_compile_basic_pairing() {
     let allowed = vec![1, 2, 3];
     let actions = vec![

@@ -109,6 +109,98 @@ fn completion_qpc_missing_and_clock_success_dispatches() {
 }
 
 #[test]
+fn successful_send_keeps_missing_pre_call_unavailable_with_real_completion_qpc() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+    let qpc_clock = harness.resources.clock;
+    let completion_qpc = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let completion_capture = std::sync::Arc::clone(&completion_qpc);
+    harness
+        .resources
+        .backend
+        .disable_pre_call_qpc_sample_for_test();
+    harness
+        .resources
+        .backend
+        .set_packet_emitter(move |packet| {
+            let completion_qpc = qpc_clock.now().expect("real sender completion QPC");
+            completion_capture.store(completion_qpc.as_u64(), Ordering::Release);
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask: packet.up_mask | packet.down_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: None,
+                    completed_ticks: Some(completion_qpc),
+                    timing_error: None,
+                },
+            }
+        });
+
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, true),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+    let completion_qpc = sky_dispatch_win32::clock::QpcTicks::from_raw(
+        completion_qpc.load(Ordering::Acquire),
+    );
+    let observation = match harness.observer.pop_front().expect("Down observation") {
+        crate::engine::worker::dispatch::observation::DispatchObservation::Down(observation) => {
+            observation
+        }
+        other => panic!("unexpected observation: {other:?}"),
+    };
+    assert_eq!(
+        observation.trace.result_status,
+        SendTransactionStatus::Complete
+    );
+    assert_eq!(observation.pre_call_qpc, None);
+    assert_eq!(observation.sendinput_completion_qpc, completion_qpc);
+
+    let mut telemetry = crate::engine::TelemetryCollector::new(
+        crate::engine::TelemetryMode::Ring,
+        1,
+    );
+    crate::engine::worker::dispatch::observation::record_down_send_telemetry(
+        &observation,
+        &mut telemetry,
+        0,
+        0,
+        false,
+        0,
+        0,
+        None,
+        Some(TimelineTicks::from_raw(completion_qpc.as_u64())),
+        None,
+        completion_qpc,
+        false,
+        false,
+    )
+    .expect("serialize successful sender evidence");
+    let record = telemetry.output.records.back().expect("trace record");
+    assert!(!record.pre_call_qpc_available);
+    assert_eq!(record.pre_call_qpc_ticks, 0);
+    assert_eq!(record.pre_call_qpc_provenance, crate::engine::TimestampProvenance::Unavailable);
+    assert!(record.sendinput_completion_qpc_available);
+    assert_eq!(record.sendinput_completion_qpc_ticks, completion_qpc.as_u64());
+    assert_eq!(record.sendinput_completion_qpc_provenance, crate::engine::TimestampProvenance::Measured);
+    assert!(!record.authored_lateness_available);
+    assert!(!record.sendinput_envelope_available);
+}
+
+#[test]
 fn wait_observation_is_published_promptly_on_dispatch() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_mock_packet_sender_for_test(&[0, 0]);
@@ -490,13 +582,27 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
         .expect("consume Up evidence");
     let slots = &collector.output.up_slot_records;
     assert_eq!(slots.len(), 2);
+    let one_millisecond_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(1_000)
+        .expect("one millisecond QPC duration")
+        .as_u64();
     assert_eq!(
-        (slots[0].source_action_index, slots[0].scan_code),
-        (1, 0x15)
+        (
+            slots[0].source_action_index,
+            slots[0].scan_code,
+            slots[0].authored_offset_ticks
+        ),
+        (1, 0x15, one_millisecond_ticks)
     );
     assert_eq!(
-        (slots[1].source_action_index, slots[1].scan_code),
-        (2, 0x16)
+        (
+            slots[1].source_action_index,
+            slots[1].scan_code,
+            slots[1].authored_offset_ticks
+        ),
+        (2, 0x16, one_millisecond_ticks * 2)
     );
     assert_ne!(
         slots[0].authored_offset_ticks,
@@ -505,6 +611,11 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
     assert_ne!(
         slots[0].floor_displacement_ticks,
         slots[1].floor_displacement_ticks
+    );
+    assert_eq!(
+        slots[0].floor_displacement_ticks - slots[1].floor_displacement_ticks,
+        one_millisecond_ticks,
+        "the coalesced Up sidecar retains the exact one millisecond authored separation"
     );
     for slot in slots {
         let target = packet.epoch_qpc.as_u64() + slot.authored_offset_ticks;
@@ -519,4 +630,69 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
                     .expect("residual range"))
         );
     }
+}
+
+#[test]
+fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15, 0x16].into(),
+            reason: "two-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000,
+            scan_codes: vec![0x15].into(),
+            reason: "first-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Up,
+            scheduled_us: 2_000,
+            scan_codes: vec![0x16].into(),
+            reason: "second-up".into(),
+        },
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let first = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage Down")
+        .expect("Down");
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+    let mut high_watermark = 0;
+    for index in 0..crate::engine::worker::dispatch::observation::OBSERVATION_QUEUE_CAPACITY {
+        harness.observer.push(
+            crate::engine::worker::dispatch::observation::DispatchObservation::StaleMetadata(
+                crate::engine::worker::dispatch::observation::StaleMetadataObservation {
+                    source_action_index: u32::try_from(index).unwrap_or(u32::MAX),
+                    effective_scheduled_ticks: TimelineTicks::from_raw(index as u64),
+                    suppressed_intent_count: 1,
+                },
+            ),
+            &mut harness.local_metrics.observer_dropped_samples,
+            &mut high_watermark,
+        );
+    }
+
+    let up = harness
+        .stage_candidate_for_test(3, None, TimelineTicks::from_raw(20_000))
+        .expect("stage coalesced Up")
+        .expect("Up");
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(up, true),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+    assert_eq!(harness.local_metrics.observer_dropped_samples, 1);
+    assert_eq!(harness.local_metrics.observer_dropped_up_slot_records, 2);
 }

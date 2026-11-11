@@ -305,6 +305,9 @@ pub struct WorkerMetricsLocal {
     /// How many `DispatchObservation` samples were dropped because the fixed
     /// diagnostic observer queue was full (drop-new policy).
     pub observer_dropped_samples: u64,
+    /// Per-key Up evidence lost when its parent packet observation could not
+    /// enter the fixed diagnostic observer queue.
+    pub observer_dropped_up_slot_records: u64,
     /// Largest queue occupancy observed immediately after a successful enqueue.
     pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,

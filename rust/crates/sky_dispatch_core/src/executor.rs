@@ -251,15 +251,23 @@ impl DispatchExecutor {
 
     /// Return measured memory metrics for this executor instance.
     pub fn memory_metrics(&self) -> ExecutorMemoryMetrics {
-        let chord_heap_bytes = self.down_chords.capacity() * std::mem::size_of::<DownChordTicks>();
+        self.try_memory_metrics()
+            .expect("allocated executor memory must fit its checked storage budget")
+    }
+
+    pub fn try_memory_metrics(&self) -> Result<ExecutorMemoryMetrics, String> {
+        let chord_heap_bytes = checked_executor_storage_bytes(self.down_chords.capacity())?;
         let struct_bytes = std::mem::size_of::<Self>();
-        ExecutorMemoryMetrics {
+        let total_bytes = chord_heap_bytes
+            .checked_add(struct_bytes)
+            .ok_or_else(|| "executor total memory size overflow".to_string())?;
+        Ok(ExecutorMemoryMetrics {
             chord_count: self.down_chords.len(),
             chord_capacity: self.down_chords.capacity(),
             chord_heap_bytes,
             struct_bytes,
-            total_bytes: chord_heap_bytes + struct_bytes,
-        }
+            total_bytes,
+        })
     }
 
     /// Extract per-slot authored Up metadata for the keys active in `up_mask`.

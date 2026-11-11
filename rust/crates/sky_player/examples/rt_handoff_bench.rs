@@ -464,6 +464,7 @@ struct Samples {
     failure_reasons: BTreeMap<String, usize>,
     observation_count: usize,
     observation_gaps: usize,
+    pre_call_unavailable_count: usize,
     planned_wait_gap_us: Vec<u64>,
     wait_wake_lateness_us: Vec<i64>,
     target_minus_wait_entry_us: Vec<i64>,
@@ -542,6 +543,9 @@ impl Samples {
             .observation_count
             .saturating_add(other.observation_count);
         self.observation_gaps = self.observation_gaps.saturating_add(other.observation_gaps);
+        self.pre_call_unavailable_count = self
+            .pre_call_unavailable_count
+            .saturating_add(other.pre_call_unavailable_count);
         self.hot_wait_count = self.hot_wait_count.saturating_add(other.hot_wait_count);
         self.cold_wait_count = self.cold_wait_count.saturating_add(other.cold_wait_count);
         self.missed_down_unobserved_backlog = self
@@ -835,26 +839,23 @@ fn baseline_observation_timing(
                         .and_then(|handoff| handoff.admission_wake_qpc)
                 })
                 .map(|ticks| ticks.as_u64());
-            let pre_call_qpc = Some(value.pre_call_qpc.as_u64());
+            let pre_call_qpc = value.pre_call_qpc.map(|ticks| ticks.as_u64());
             let completion_qpc = Some(value.sendinput_completion_qpc.as_u64());
-            let completion_duration = qpc_clock
-                .duration_to_us(
-                    value
-                        .sendinput_completion_qpc
-                        .checked_duration_since(value.pre_call_qpc)
-                        .expect("baseline completion ordering"),
-                )
-                .ok();
+            let completion_duration = value.pre_call_qpc.and_then(|pre_call| {
+                value
+                    .sendinput_completion_qpc
+                    .checked_duration_since(pre_call)
+                    .ok()
+                    .and_then(|ticks| qpc_clock.duration_to_us(ticks).ok())
+            });
             (
                 crossing_qpc,
                 wake_qpc,
                 pre_call_qpc,
                 completion_qpc,
-                Some(signed_qpc_us(
-                    qpc_clock,
-                    value.pre_call_qpc,
-                    value.physical_target_qpc,
-                )),
+                value
+                    .pre_call_qpc
+                    .map(|pre_call| signed_qpc_us(qpc_clock, pre_call, value.physical_target_qpc)),
                 completion_duration,
             )
         }
@@ -1406,7 +1407,7 @@ fn record_precision_handoff(
     samples: &mut Samples,
     handoff: Option<PrecisionHandoffEvidence>,
     physical_target_qpc: QpcTicks,
-    pre_call_qpc: QpcTicks,
+    pre_call_qpc: Option<QpcTicks>,
     sendinput_completion_qpc: QpcTicks,
     dispatch_ready_qpc: Option<QpcTicks>,
     qpc_clock: QpcClock,
@@ -1429,7 +1430,9 @@ fn record_precision_handoff(
             target_crossing_qpc,
             physical_target_qpc,
         ));
-        if let Some(final_policy_qpc) = handoff.final_policy_qpc {
+        if let (Some(final_policy_qpc), Some(pre_call_qpc)) =
+            (handoff.final_policy_qpc, pre_call_qpc)
+        {
             samples
                 .target_crossing_to_final_policy_us
                 .push(signed_qpc_us(
@@ -1475,10 +1478,12 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                     wake_qpc,
                 ));
             }
-            if let Some(final_policy_qpc) = value.final_policy_qpc {
+            if let (Some(final_policy_qpc), Some(pre_call_qpc)) =
+                (value.final_policy_qpc, value.pre_call_qpc)
+            {
                 samples.final_policy_to_pre_call_us.push(signed_qpc_us(
                     qpc_clock,
-                    value.pre_call_qpc,
+                    pre_call_qpc,
                     final_policy_qpc,
                 ));
             }
@@ -1487,24 +1492,26 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 value.sendinput_completion_qpc,
                 value.physical_target_qpc,
             ));
-            if value.pre_call_qpc < value.physical_target_qpc {
-                samples.early_dispatch_count += 1;
+            if let Some(pre_call_qpc) = value.pre_call_qpc {
+                if pre_call_qpc < value.physical_target_qpc {
+                    samples.early_dispatch_count += 1;
+                }
+                samples.dispatch_start_error_us.push(signed_qpc_us(
+                    qpc_clock,
+                    pre_call_qpc,
+                    value.physical_target_qpc,
+                ));
+                if let Ok(duration) = value
+                    .sendinput_completion_qpc
+                    .checked_duration_since(pre_call_qpc)
+                    && let Ok(duration_us) = qpc_clock.duration_to_us(duration)
+                {
+                    samples.pre_call_to_completion_us.push(duration_us);
+                }
+            } else {
+                samples.pre_call_unavailable_count =
+                    samples.pre_call_unavailable_count.saturating_add(1);
             }
-            samples.dispatch_start_error_us.push(signed_qpc_us(
-                qpc_clock,
-                value.pre_call_qpc,
-                value.physical_target_qpc,
-            ));
-            samples.pre_call_to_completion_us.push(
-                qpc_clock
-                    .duration_to_us(
-                        value
-                            .sendinput_completion_qpc
-                            .checked_duration_since(value.pre_call_qpc)
-                            .expect("QPC ordering"),
-                    )
-                    .expect("duration"),
-            );
             let completed_effective_ticks = value
                 .sendinput_completion_qpc
                 .checked_duration_since(value.epoch_qpc)
@@ -1535,7 +1542,7 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 samples,
                 value.precision_handoff,
                 value.physical_target_qpc,
-                value.pre_call_qpc,
+                Some(value.pre_call_qpc),
                 value.sendinput_completion_qpc,
                 value.dispatch_ready_qpc,
                 qpc_clock,
@@ -3285,7 +3292,13 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
     if samples.observation_gaps != 0 {
         acceptance_failure_reasons.push("observation_gaps");
     }
-    if samples.dispatch_start_error_us.len() != samples.observation_count {
+    if samples.pre_call_unavailable_count != 0 {
+        acceptance_failure_reasons.push("pre_call_unavailable");
+    }
+    let expected_pre_call_samples = samples
+        .observation_count
+        .saturating_sub(samples.pre_call_unavailable_count);
+    if samples.dispatch_start_error_us.len() != expected_pre_call_samples {
         acceptance_failure_reasons.push("missing_start_error_samples");
     }
     let acceptance_clean = acceptance_failure_reasons.is_empty();
@@ -3297,10 +3310,14 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
     let target_minus_wait_entry = signed_summary(samples.target_minus_wait_entry_us);
     let alignment_to_wait_entry = signed_summary(samples.alignment_to_wait_entry_us);
     let prepared_stream_build = unsigned_summary(samples.prepared_stream_build_us);
-    json!({
+    let mut summary = serde_json::Map::new();
+    summary.extend(json!({
         "acceptance_clean": acceptance_clean,
         "acceptance_failure_reasons": acceptance_failure_reasons,
         "statistics_eligible": statistics_eligible,
+        "summary_scope": "dispatch_and_packet_samples",
+        "up_slot_sidecar_consumed_by_summary": false,
+        "per_key_up_p95_p99_supported": false,
         "qualification_dimensions": {
             "waiter_timing_clean": acceptance_clean,
             "dispatch_path_clean": acceptance_clean,
@@ -3343,7 +3360,14 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "final_policy_to_pre_call_us": signed_summary(samples.final_policy_to_pre_call_us),
         "final_policy_to_true_pre_call_us": signed_summary(samples.final_policy_to_true_pre_call_us),
         "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
+    })
+    .as_object()
+    .expect("summary prefix is an object")
+    .clone());
+    summary.extend(json!({
         "completion_error_us_diagnostic": {
+            "statistical_unit": "dispatch_packet",
+            "per_key_p95_p99_supported": false,
             "p01": quantile(&mut samples.completion_error_us, 1, 100),
             "p50": quantile(&mut samples.completion_error_us, 50, 100),
             "p95": quantile(&mut samples.completion_error_us, 95, 100),
@@ -3363,6 +3387,7 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "failure_reasons": samples.failure_reasons,
         "observation_count": samples.observation_count,
         "observation_gaps": samples.observation_gaps,
+        "pre_call_unavailable_count": samples.pre_call_unavailable_count,
         "observation_queue": "bounded_nonblocking_on",
         "wait_evidence": {
             "planned_gap_us": unsigned_summary(samples.planned_wait_gap_us),
@@ -3393,6 +3418,10 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "total_wall_time_us": total_wall_time_us,
         "spin_duty_cycle_ppm": spin_duty,
     })
+    .as_object()
+    .expect("summary continuation is an object")
+    .clone());
+    serde_json::Value::Object(summary)
 }
 
 fn all_scenarios_clean(mode_reports: &serde_json::Map<String, serde_json::Value>) -> bool {
@@ -3703,6 +3732,9 @@ fn main() {
     );
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
+        "summary_scope": "dispatch_and_packet_samples",
+        "up_slot_sidecar_consumed_by_summary": false,
+        "per_key_up_p95_p99_supported": false,
         "acceptance_clean": acceptance_clean,
         "statistics_eligible": statistics_eligible,
         "qualification_dimensions": {

@@ -183,8 +183,14 @@ function Get-TimingMetrics {
     $lastDownCompletion = [System.Collections.Generic.Dictionary[int, double]]::new()
     $lastUpCompletion = [System.Collections.Generic.Dictionary[int, double]]::new()
     $identityRecords = [System.Collections.Generic.List[object]]::new()
+    $upSlotRecords = @(Get-OptionalProperty $telemetry 'up_slot_records' | Where-Object { $null -ne $_ })
+    $upSlotRecordsDropped = [long](Get-OptionalProperty $telemetry 'up_slot_records_dropped')
+    $upSlotAttributionMissingPackets = @($telemetry.records | Where-Object { [bool]$_.up_slot_attribution_missing }).Count
     $counts = [ordered]@{
         trace_records = @($telemetry.records).Count
+        up_slot_sidecar_records = $upSlotRecords.Count
+        up_slot_sidecar_records_dropped = $upSlotRecordsDropped
+        up_slot_attribution_missing_packets = $upSlotAttributionMissingPackets
         down_only_chords = 0
         up_only_events = 0
         mixed_events = 0
@@ -385,6 +391,9 @@ function Get-TimingMetrics {
     $allMetrics = [ordered]@{}
     foreach ($name in $metricNames) { $allMetrics[$name] = Get-Percentiles $values[$name].ToArray() }
     [ordered]@{
+        summary_scope = 'packet_trace_records'
+        up_slot_sidecar_consumed_by_summary = $false
+        per_key_authored_up_p95_p99_supported = $false
         metrics = $allMetrics
         per_kind = $perKind
         down_chord_widths = $widthMetrics
@@ -826,6 +835,8 @@ try {
             timer_arm_target = 'only records with derived_from_timer_arm provenance are compared; target is QPC arm sample plus the relative microsecond timeout passed to SetWaitableTimer'
             timer_arm_to_return = 'timer return QPC minus matching arm QPC; timer wake residual is return QPC minus requested timer target QPC'
             realized_H_G = 'per-key successful Down completion to authored Up pre-call (H), and successful Up completion to next Down pre-call (G)'
+            per_key_authored_up = 'Up sidecar records are retained and counted, but this summary does not consume their per-slot authored offsets or floors; per-key authored Up p95/p99 are unsupported'
+            packet_aggregates = 'p95/p99 for authored lateness, floor displacement, residual, waiter handoff, and sender envelope are packet trace record or per-syscall aggregates'
             hot_cold = 'authored Down-chord schedule gap; hot < 20000 us, cold >= 20000 us'
             paired_screen = 'candidate worse than max(5 us, 10% control) at p95 or max(20 us, 10% control) at p99 in at least 4 of 6 pairs prompts leader review'
         }

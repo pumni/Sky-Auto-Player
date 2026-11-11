@@ -8,6 +8,30 @@ use crate::model::*;
 
 pub const MAX_ACTIONS: usize = 1_000_000;
 pub const MAX_REASON_BYTES: usize = 128;
+const MAX_REASON_TABLE_ENTRIES: usize = u16::MAX as usize + 1;
+
+fn checked_capacity_bytes(count: usize, element_size: usize) -> Result<usize, CompileError> {
+    count
+        .checked_mul(element_size)
+        .ok_or_else(|| CompileError::MemoryBudgetExceeded("capacity size overflow".into()))
+}
+
+fn check_memory_budget(required: usize, budget: usize) -> Result<(), CompileError> {
+    if required > budget {
+        return Err(CompileError::MemoryBudgetExceeded(format!(
+            "calculated dispatch storage ({required} bytes) exceeds budget of {budget} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn checked_sum(values: impl IntoIterator<Item = usize>) -> Result<usize, CompileError> {
+    values.into_iter().try_fold(0usize, |total, value| {
+        total.checked_add(value).ok_or_else(|| {
+            CompileError::MemoryBudgetExceeded("combined compiler storage size overflow".into())
+        })
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CompileError {
@@ -124,6 +148,8 @@ pub fn compile_runtime_intents_with_cancellation(
     let mut reason_map: HashMap<String, ReasonId> = HashMap::new();
     let mut intent_capacity = 0usize;
     let mut down_action_count = 0usize;
+    let mut reason_input_bytes = 0usize;
+    let mut scan_code_input_bytes = 0usize;
     for (index, action) in actions.iter().enumerate() {
         if index.is_multiple_of(256) && cancelled() {
             return Err(CompileError::Cancelled);
@@ -131,23 +157,67 @@ pub fn compile_runtime_intents_with_cancellation(
         intent_capacity = intent_capacity
             .checked_add(action.scan_codes.len())
             .ok_or(CompileError::TooManyActions)?;
-        down_action_count += usize::from(action.kind == ActionKind::Down);
+        down_action_count = down_action_count
+            .checked_add(usize::from(action.kind == ActionKind::Down))
+            .ok_or(CompileError::TooManyActions)?;
+        reason_input_bytes = reason_input_bytes
+            .checked_add(action.reason.len())
+            .ok_or(CompileError::TooManyActions)?;
+        if action.scan_codes.spilled() {
+            scan_code_input_bytes = scan_code_input_bytes
+                .checked_add(checked_capacity_bytes(
+                    action.scan_codes.capacity(),
+                    std::mem::size_of::<u16>(),
+                )?)
+                .ok_or_else(|| {
+                    CompileError::MemoryBudgetExceeded(
+                        "compiler scan-code storage size overflow".into(),
+                    )
+                })?;
+        }
     }
+    let max_reason_entries = actions.len().min(MAX_REASON_TABLE_ENTRIES);
+    // Reserve a conservative bound for the temporary reason map and its
+    // duplicated string keys. The map is dropped before worker startup.
+    let reason_map_entry_bytes = std::mem::size_of::<(String, ReasonId)>()
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(MAX_REASON_BYTES.saturating_mul(2)))
+        .ok_or_else(|| {
+            CompileError::MemoryBudgetExceeded("reason map capacity size overflow".into())
+        })?;
+    let reason_map_bound = checked_capacity_bytes(max_reason_entries, reason_map_entry_bytes)?;
+    let compiler_input_bytes = checked_sum([
+        checked_capacity_bytes(actions.len(), std::mem::size_of::<KeyActionInput>())?,
+        reason_input_bytes,
+        scan_code_input_bytes,
+    ])?;
+    let compile_preflight_bytes = checked_sum([
+        compiler_input_bytes,
+        checked_capacity_bytes(actions.len(), std::mem::size_of::<CompiledBatch>())?,
+        checked_capacity_bytes(actions.len(), std::mem::size_of::<CompiledPacket>())?,
+        checked_capacity_bytes(intent_capacity, std::mem::size_of::<CompactIntent>())?,
+        checked_capacity_bytes(down_action_count, std::mem::size_of::<CompiledDownChord>())?,
+        checked_capacity_bytes(max_reason_entries, std::mem::size_of::<String>())?,
+        reason_map_bound,
+        std::mem::size_of::<RuntimeSchedule>(),
+    ])?;
+    check_memory_budget(compile_preflight_bytes, MAX_RETAINED_DISPATCH_BYTES)?;
+
     let mut batches = Vec::new();
     batches
-        .try_reserve(actions.len())
+        .try_reserve_exact(actions.len())
         .map_err(|e| CompileError::MemoryBudgetExceeded(format!("batches reservation: {e}")))?;
     let mut intents = Vec::new();
     intents
-        .try_reserve(intent_capacity)
+        .try_reserve_exact(intent_capacity)
         .map_err(|e| CompileError::MemoryBudgetExceeded(format!("intents reservation: {e}")))?;
     let mut packets = Vec::new();
     packets
-        .try_reserve(actions.len())
+        .try_reserve_exact(actions.len())
         .map_err(|e| CompileError::MemoryBudgetExceeded(format!("packets reservation: {e}")))?;
     let mut down_chords: Vec<CompiledDownChord> = Vec::new();
     down_chords
-        .try_reserve(down_action_count)
+        .try_reserve_exact(down_action_count)
         .map_err(|e| CompileError::MemoryBudgetExceeded(format!("down_chords reservation: {e}")))?;
 
     let mut get_or_insert_reason = |reason: &str| -> Result<ReasonId, CompileError> {
@@ -462,7 +532,7 @@ pub fn compile_runtime_intents_with_cancellation(
         .max()
         .unwrap_or(0);
 
-    Ok(RuntimeSchedule {
+    let schedule = RuntimeSchedule {
         packets,
         batches,
         intents,
@@ -471,7 +541,30 @@ pub fn compile_runtime_intents_with_cancellation(
         reason_table,
         down_chords,
         schedule_end_offset_us,
-    })
+    };
+    let schedule_metrics = schedule.memory_metrics().map_err(|error| {
+        CompileError::MemoryBudgetExceeded(format!("schedule memory accounting: {error}"))
+    })?;
+    let reason_map_bytes = checked_sum([
+        checked_capacity_bytes(
+            reason_map.capacity(),
+            std::mem::size_of::<(String, ReasonId)>(),
+        )?,
+        reason_map.iter().try_fold(0usize, |total, (key, _)| {
+            let key_bytes = key.capacity();
+            total.checked_add(key_bytes).ok_or_else(|| {
+                CompileError::MemoryBudgetExceeded("reason map key capacity overflow".into())
+            })
+        })?,
+    ])?;
+    let compile_peak_bytes = checked_sum([
+        compiler_input_bytes,
+        schedule_metrics.heap_payload_bytes,
+        schedule_metrics.struct_bytes,
+        reason_map_bytes,
+    ])?;
+    check_memory_budget(compile_peak_bytes, MAX_RETAINED_DISPATCH_BYTES)?;
+    Ok(schedule)
 }
 
 #[cfg(test)]

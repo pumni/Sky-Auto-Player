@@ -8,6 +8,10 @@ use thiserror::Error;
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
 
+mod memory;
+pub use memory::DispatchMemoryMetrics;
+use memory::{check_retained_budget, checked_storage_bytes, checked_storage_sum};
+
 static NEXT_COORDINATOR_ID: AtomicU64 = AtomicU64::new(1);
 
 type SplitIntentResult = (
@@ -522,6 +526,7 @@ pub struct RuntimeDispatchCoordinator {
     pending_release_by_slot: [Option<PendingRelease>; MAX_KEYS],
     pending_release_mask: u16,
     pub executor: Option<crate::executor::DispatchExecutor>,
+    startup_peak_extra_bytes: usize,
     #[cfg(any(test, feature = "test-support"))]
     operation_evidence: std::cell::Cell<CoordinatorOperationEvidence>,
 }
@@ -549,6 +554,7 @@ impl Clone for RuntimeDispatchCoordinator {
             pending_release_by_slot: self.pending_release_by_slot,
             pending_release_mask: self.pending_release_mask,
             executor: self.executor.clone(),
+            startup_peak_extra_bytes: self.startup_peak_extra_bytes,
             #[cfg(any(test, feature = "test-support"))]
             operation_evidence: std::cell::Cell::new(self.operation_evidence.get()),
         }
@@ -569,16 +575,6 @@ pub struct CoordinatorOperationEvidence {
 mod tests;
 
 impl RuntimeDispatchCoordinator {
-    /// Approximate the coordinator-owned heap payload for test-support
-    /// characterization. This excludes allocator metadata and the schedule's
-    /// own backing vectors; it is not a process RSS measurement.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn heap_payload_bytes_for_test_support(&self) -> usize {
-        self.batch_scheduled_ticks.len() * std::mem::size_of::<TimelineTicks>()
-            + self.generation_states.len() * std::mem::size_of::<GenerationStatus>()
-            + self.up_intent_locations.len() * std::mem::size_of::<Option<(usize, usize)>>()
-    }
-
     #[cfg(test)]
     pub fn new<F>(
         schedule: RuntimeSchedule,
@@ -635,6 +631,28 @@ impl RuntimeDispatchCoordinator {
         let generation_count = schedule.generation_count;
         let generation_count_usize = usize::try_from(generation_count)
             .map_err(|_| CoordinatorError::GenerationCountOverflow)?;
+        let schedule_heap_bytes = schedule
+            .memory_metrics()
+            .map_err(CoordinatorError::Allocation)?
+            .heap_payload_bytes;
+        let projected_coordinator = checked_storage_sum([
+            schedule_heap_bytes,
+            std::mem::size_of::<Self>(),
+            checked_storage_bytes(
+                generation_count_usize,
+                std::mem::size_of::<GenerationStatus>(),
+            )?,
+            checked_storage_bytes(schedule.batches.len(), std::mem::size_of::<TimelineTicks>())?,
+            checked_storage_bytes(
+                generation_count_usize,
+                std::mem::size_of::<Option<(usize, usize)>>(),
+            )?,
+            checked_storage_bytes(
+                schedule.down_chords.len(),
+                std::mem::size_of::<crate::executor::DownChordTicks>(),
+            )?,
+        ])?;
+        check_retained_budget(projected_coordinator)?;
         let mut generation_states = Vec::new();
         generation_states
             .try_reserve_exact(generation_count_usize)
@@ -717,6 +735,31 @@ impl RuntimeDispatchCoordinator {
             }
         }
 
+        let coordinator_vector_peak_bytes = checked_storage_sum([
+            checked_storage_bytes(
+                batch_scheduled_ticks.capacity(),
+                std::mem::size_of::<TimelineTicks>(),
+            )?,
+            checked_storage_bytes(
+                generation_states.capacity(),
+                std::mem::size_of::<GenerationStatus>(),
+            )?,
+            checked_storage_bytes(
+                up_intent_locations.capacity(),
+                std::mem::size_of::<Option<(usize, usize)>>(),
+            )?,
+        ])?;
+        let startup_peak_preflight = checked_storage_sum([
+            schedule_heap_bytes,
+            std::mem::size_of::<Self>(),
+            coordinator_vector_peak_bytes,
+            checked_storage_bytes(
+                schedule.down_chords.len(),
+                std::mem::size_of::<crate::executor::DownChordTicks>(),
+            )?,
+        ])?;
+        check_retained_budget(startup_peak_preflight)?;
+
         let coordinator_id = next_coordinator_id()?;
         Ok(Self {
             coordinator_id,
@@ -738,6 +781,7 @@ impl RuntimeDispatchCoordinator {
             pending_release_by_slot: [None; MAX_KEYS],
             pending_release_mask: 0,
             executor: None,
+            startup_peak_extra_bytes: coordinator_vector_peak_bytes,
             #[cfg(any(test, feature = "test-support"))]
             operation_evidence: std::cell::Cell::new(CoordinatorOperationEvidence::default()),
         })
@@ -796,6 +840,13 @@ impl RuntimeDispatchCoordinator {
         E: std::fmt::Display,
         C: FnMut() -> Result<(), String>,
     {
+        let projected_executor_bytes = self
+            .schedule
+            .down_chords
+            .len()
+            .checked_mul(std::mem::size_of::<crate::executor::DownChordTicks>())
+            .ok_or_else(|| "executor storage size overflow".to_string())?;
+        self.check_retained_with_executor_bytes(projected_executor_bytes)?;
         let executor = crate::executor::DispatchExecutor::new_with_cancellation(
             &self.schedule,
             min_hold_ticks,
@@ -803,6 +854,7 @@ impl RuntimeDispatchCoordinator {
             to_ticks,
             checkpoint,
         )?;
+        self.check_retained_with_executor_bytes(executor.try_memory_metrics()?.chord_heap_bytes)?;
         self.executor = Some(executor);
         Ok(())
     }

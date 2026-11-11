@@ -15,6 +15,13 @@ pub(in crate::engine::worker) fn attach_up_slot_traces(
 ) -> Result<(), DispatchStep> {
     let trace_record_index = u32::try_from(telemetry.output.accepted - 1)
         .map_err(|error| DispatchStep::Terminate(format!("Up trace index overflow: {error}")))?;
+    if observation.up_slot_count != 0 && observation.up_slots.is_none() {
+        telemetry.output.up_slot_records_dropped = telemetry
+            .output
+            .up_slot_records_dropped
+            .saturating_add(u64::from(observation.up_slot_count));
+        return Ok(());
+    }
     for timing in observation
         .up_slots
         .iter()
@@ -32,9 +39,11 @@ pub(in crate::engine::worker) fn attach_up_slot_traces(
         let slot = UpSlotObservation {
             timing: *timing,
             epoch_qpc: observation.epoch_qpc,
-            pre_call_qpc: observation
-                .up_pre_call_available
-                .then_some(observation.pre_call_qpc),
+            pre_call_qpc: if observation.up_pre_call_available {
+                observation.pre_call_qpc
+            } else {
+                None
+            },
             packet_not_before_qpc: observation.physical_timing_window.packet_not_before_qpc,
             completion_qpc: observation.sendinput_completion_qpc,
             confirmed: observation.confirmed_mask & (1 << timing.slot) != 0,
@@ -636,6 +645,18 @@ mod tests {
             TelemetryCollector::MAX_UP_SLOT_RECORDS
         );
         assert_eq!(collector.output.up_slot_records_dropped, 1);
+    }
+
+    #[test]
+    fn unavailable_up_slot_sidecar_counts_each_lost_slot() {
+        let mut observation = super::super::observation::DownObservation::test_fixture(0);
+        observation.up_slot_count = 3;
+        observation.up_slots = None;
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 1);
+        collector.output.accepted = 1;
+        attach_up_slot_traces(&mut collector, &observation).expect("count missing sidecar");
+        assert_eq!(collector.output.up_slot_records_dropped, 3);
+        assert!(collector.output.up_slot_records.is_empty());
     }
 
     #[test]

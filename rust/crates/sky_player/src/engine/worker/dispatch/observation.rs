@@ -196,7 +196,7 @@ pub struct DownObservation {
     pub physical_target_qpc: QpcTicks,
     pub(crate) physical_timing_window: PhysicalTimingWindow,
     pub final_policy_qpc: Option<QpcTicks>,
-    pub pre_call_qpc: QpcTicks,
+    pub pre_call_qpc: Option<QpcTicks>,
     pub sendinput_completion_qpc: QpcTicks,
     pub previous_sendinput_completion_qpc: Option<QpcTicks>,
     pub previous_sender_completion_known: bool,
@@ -239,7 +239,7 @@ impl DownObservation {
                 release_floor_mask: 0,
             },
             final_policy_qpc: None,
-            pre_call_qpc: QpcTicks::ZERO,
+            pre_call_qpc: Some(QpcTicks::ZERO),
             sendinput_completion_qpc: QpcTicks::ZERO,
             previous_sendinput_completion_qpc: None,
             previous_sender_completion_known: false,
@@ -431,7 +431,7 @@ pub struct UpObservation {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn record_down_send_telemetry(
+pub(crate) fn record_down_send_telemetry(
     observation: &DownObservation,
     telemetry: &mut TelemetryCollector,
     core_post_send_us: u64,
@@ -575,7 +575,7 @@ pub(super) fn record_down_send_telemetry(
                 hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
                 release_floor_mask: observation.physical_timing_window.release_floor_mask,
                 final_policy_qpc_ticks: observation.final_policy_qpc.map(|ticks| ticks.as_u64()),
-                pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
+                pre_call_qpc_ticks: observation.pre_call_qpc.map(|ticks| ticks.as_u64()),
                 sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
                 post_send_qpc_ticks: observation.dispatch_ready_qpc.map(|ticks| ticks.as_u64()),
                 observation_qpc_ticks: Some(observer_qpc_ticks.as_u64()),

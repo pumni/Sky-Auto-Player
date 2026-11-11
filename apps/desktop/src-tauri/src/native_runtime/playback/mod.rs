@@ -44,6 +44,9 @@ pub(super) use session::{
     target_integrity_startup_failure,
 };
 
+#[cfg(test)]
+pub(super) type StartupCompileTestHook = Arc<dyn Fn(usize) + Send + Sync>;
+
 /// Application-side playback control plane.  The realtime worker remains in
 /// `sky_player`; this service owns prepared-plan admission, the single active
 /// session rule, and the bounded supervisor loop around that worker.
@@ -55,8 +58,11 @@ pub(super) struct NativePlaybackService {
     pub(super) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     pub(super) prepare_publication: Mutex<PreparePublicationState>,
     pub(super) activity: ActivityCoordinator,
+    pub(super) startup_cancellation: Arc<AtomicBool>,
     #[cfg(test)]
     pub(super) startup_failure: Option<String>,
+    #[cfg(test)]
+    pub(super) startup_compile_test_hook: Mutex<Option<StartupCompileTestHook>>,
     #[cfg(test)]
     pub(super) settings_invalidation_count: AtomicU64,
     #[cfg(test)]

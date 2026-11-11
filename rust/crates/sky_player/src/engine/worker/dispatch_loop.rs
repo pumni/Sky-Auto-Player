@@ -20,6 +20,23 @@ use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+fn publish_down_observation(
+    observer: &crate::engine::worker::dispatch::observer::PendingObservationQueue,
+    observation: crate::engine::worker::dispatch::observation::DispatchObservation,
+    up_slot_count: usize,
+    local_metrics: &mut super::WorkerMetricsLocal,
+) {
+    if !observer.push(
+        observation,
+        &mut local_metrics.observer_dropped_samples,
+        &mut local_metrics.observer_queue_high_watermark,
+    ) {
+        local_metrics.observer_dropped_up_slot_records = local_metrics
+            .observer_dropped_up_slot_records
+            .saturating_add(up_slot_count as u64);
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 fn physical_target_qpc_for_work(
     target: Option<sky_dispatch_win32::clock::QpcTicks>,
@@ -881,7 +898,7 @@ pub(crate) fn dispatch_staged_candidate(
         return StagedDispatchOutcome::Exit;
     }
 
-    let pre_call_qpc = send_result.evidence.started_ticks.unwrap_or(completion_qpc);
+    let pre_call_qpc = send_result.evidence.started_ticks;
 
     runtime.production_forensics.observe_packet_result(
         candidate.packet_masks,
@@ -954,10 +971,11 @@ pub(crate) fn dispatch_staged_candidate(
                 effective_deadline_ticks: candidate.authored_target_ticks,
             },
         };
-        observer.push(
+        publish_down_observation(
+            observer,
             crate::engine::worker::dispatch::observation::DispatchObservation::Down(observation),
-            &mut local_metrics.observer_dropped_samples,
-            &mut local_metrics.observer_queue_high_watermark,
+            candidate.up_slot_timings.len(),
+            local_metrics,
         );
     }
     super::dispatch::publish_pending_wait_observation(runtime, observer, local_metrics);
@@ -1798,6 +1816,13 @@ pub(super) fn dispatch(
                                                         core.runtime.startup_ordering_hook.as_ref()
                                                     {
                                                         hook.mark_stale_packet_committed();
+                                                        if stale_scanned
+                                                            == sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP
+                                                        {
+                                                            hook.visit_startup_checkpoint(
+                                                                super::super::config::StartupCheckpoint::StaleMetadataChunk,
+                                                            );
+                                                        }
                                                     }
                                                 }
                                                 super::DispatchStep::Terminate(err) => {

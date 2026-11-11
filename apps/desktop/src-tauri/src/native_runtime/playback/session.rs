@@ -91,8 +91,11 @@ impl NativePlaybackService {
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity,
+            startup_cancellation: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             startup_failure: None,
+            #[cfg(test)]
+            startup_compile_test_hook: Mutex::new(None),
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(test)]
@@ -726,12 +729,19 @@ impl NativePlaybackService {
         settings: &ApplicationSettings,
         events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<PlaybackSessionDto, String> {
+        let startup_cancellation = Arc::clone(&self.startup_cancellation);
+        if startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
         let mut active_slot = self
             .active
             .lock()
             .map_err(|_| "native active-playback lock poisoned".to_string())?;
         if active_slot.is_some() {
             return Err("another playback session is active".into());
+        }
+        if startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
         }
         let mut prepared = self
             .prepared
@@ -783,6 +793,9 @@ impl NativePlaybackService {
         if event_delivery_failure.load(Ordering::Acquire) {
             return Err("native playback lifecycle delivery is unavailable".into());
         }
+        if startup_cancellation.load(Ordering::Acquire) {
+            return Err("native playback startup was cancelled during shutdown".into());
+        }
         let activity_lease = if variant.config.dry_run {
             None
         } else {
@@ -810,6 +823,7 @@ impl NativePlaybackService {
                 &variant.config,
                 &variant.timing_policy,
                 settings,
+                &startup_cancellation,
                 &event_delivery_failure,
             )
             .and_then(|(player, target)| {
@@ -1275,7 +1289,8 @@ impl NativePlaybackService {
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
         settings: &ApplicationSettings,
-        cancelled: &AtomicBool,
+        startup_cancelled: &AtomicBool,
+        event_delivery_failure: &AtomicBool,
     ) -> Result<(Arc<NativeDispatchSession>, isize), String> {
         #[cfg(test)]
         if let Some(error) = &self.startup_failure {
@@ -1285,7 +1300,35 @@ impl NativePlaybackService {
         if let Some(player) = &self.test_player {
             return Ok((Arc::clone(player), 0));
         }
-        let runtime_schedule = compile_dispatch_schedule(schedule, cancelled)?;
+        if event_delivery_failure.load(Ordering::Acquire) {
+            return Err("native playback lifecycle delivery is unavailable".into());
+        }
+        let runtime_schedule = {
+            #[cfg(test)]
+            {
+                let hook = self
+                    .startup_compile_test_hook
+                    .lock()
+                    .ok()
+                    .and_then(|hook| hook.clone());
+                if let Some(hook) = hook {
+                    compile_dispatch_schedule_with_checkpoint(
+                        schedule,
+                        startup_cancelled,
+                        |index| hook(index),
+                    )?
+                } else {
+                    compile_dispatch_schedule(schedule, startup_cancelled)?
+                }
+            }
+            #[cfg(not(test))]
+            {
+                compile_dispatch_schedule(schedule, startup_cancelled)?
+            }
+        };
+        if event_delivery_failure.load(Ordering::Acquire) {
+            return Err("native playback lifecycle delivery is unavailable".into());
+        }
         let target = sky_dispatch_win32::focus::find_sky_window(
             &settings.sky_process_names,
             settings.allow_title_fallback,
@@ -2007,6 +2050,7 @@ impl NativePlaybackService {
     }
 
     pub(in crate::native_runtime) fn shutdown(&self, _events: Arc<Mutex<NativeEventHub>>) -> bool {
+        self.startup_cancellation.store(true, Ordering::Release);
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
         if let Some(active) = active {
             let current = active.state.lock().ok().map(|state| *state);
@@ -2084,8 +2128,11 @@ impl NativePlaybackServiceHandle {
             diagnostics_gate: self.diagnostics_gate.clone(),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity: self.activity.clone(),
+            startup_cancellation: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             startup_failure: None,
+            #[cfg(test)]
+            startup_compile_test_hook: Mutex::new(None),
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(test)]
@@ -2123,8 +2170,30 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
     active: &NativeActivePlayback,
     telemetry: &Value,
 ) -> Result<String, serde_json::Error> {
+    let records = telemetry
+        .get("records")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let up_slot_records = telemetry
+        .get("up_slot_records")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let up_slot_records_dropped = telemetry
+        .get("up_slot_records_dropped")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let up_slot_attribution_missing_records = records
+        .iter()
+        .filter(|record| {
+            record
+                .get("up_slot_attribution_missing")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
     serde_json::to_string(&serde_json::json!({
-        "export_schema_version": 2,
+        "export_schema_version": 3,
         "raw_packet_trace_status": "not_captured",
         "session_id": active.session_id,
         "song_id": active.song_id,
@@ -2138,6 +2207,14 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
             "timing_margin_us": active.timing_policy.timing_margin_us,
             "target_hold_us": active.timing_policy.min_hold_us,
             "release_gap_us": active.timing_policy.min_release_gap_us,
+        },
+        "analytics": {
+            "aggregate_scope": "packet_trace_records",
+            "per_key_p95_p99_supported": false,
+            "up_slot_sidecar_consumed_by_summary": false,
+            "up_slot_sidecar_record_count": up_slot_records,
+            "up_slot_sidecar_dropped_count": up_slot_records_dropped,
+            "up_slot_attribution_missing_packet_count": up_slot_attribution_missing_records,
         },
         "telemetry": telemetry,
     }))
@@ -2484,6 +2561,14 @@ pub(super) fn compile_dispatch_schedule(
     schedule: &ScheduleMetadata,
     cancelled: &AtomicBool,
 ) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+    compile_dispatch_schedule_with_checkpoint(schedule, cancelled, |_| {})
+}
+
+fn compile_dispatch_schedule_with_checkpoint(
+    schedule: &ScheduleMetadata,
+    cancelled: &AtomicBool,
+    mut checkpoint: impl FnMut(usize),
+) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("native schedule compilation cancelled".into());
     }
@@ -2524,6 +2609,9 @@ pub(super) fn compile_dispatch_schedule(
             scan_codes,
             reason: Arc::<str>::from(action.reason.as_str()),
         });
+        if (index + 1).is_multiple_of(256) {
+            checkpoint(index + 1);
+        }
     }
     sky_player::adapter_support::compile_runtime_intents_with_cancellation(
         &actions,
@@ -2541,11 +2629,15 @@ mod preparation_cancellation_tests {
     use super::NativePlaybackService;
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
+    use crate::native_runtime::NativeEventHub;
+    use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::parse_song_json;
     use sky_app_core::timing::MaterializedTimingPolicy;
     use std::path::PathBuf;
-    use std::sync::{Arc, Barrier, mpsc};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
+    use std::time::Duration;
 
     fn input(generation: u64, settings_fingerprint: &str) -> NativePreparedInput {
         let song = parse_song_json(
@@ -2606,6 +2698,116 @@ mod preparation_cancellation_tests {
         assert!(error.contains("cancelled"));
         cancelled.store(false, std::sync::atomic::Ordering::Release);
         assert!(super::compile_dispatch_schedule(&prepared.schedule, &cancelled).is_ok());
+    }
+
+    #[test]
+    fn shutdown_cancels_an_in_flight_startup_compiler_and_releases_activity() {
+        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let settings = ApplicationSettings::default();
+        let fingerprint =
+            super::super::settings_fingerprint(&settings).expect("default settings fingerprint");
+        let mut prepared = input(1, &fingerprint);
+        let actions = (0..150u64)
+            .flat_map(|index| {
+                let base = index * 100_000;
+                [
+                    KeyAction {
+                        at_us: base,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Down,
+                        reason: "startup-cancel-down".into(),
+                    },
+                    KeyAction {
+                        at_us: base + 50_000,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Up,
+                        reason: "startup-cancel-up".into(),
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        prepared.schedule.duration_us = actions.last().expect("last action").at_us;
+        prepared.schedule.playback_duration_us = prepared.schedule.duration_us;
+        prepared.schedule.source_duration_us = prepared.schedule.duration_us;
+        prepared.schedule.actions = actions;
+        let prepared = service
+            .prepare(prepared)
+            .expect("prepare physical schedule");
+        let prepared_id = prepared.prepared_id.expect("prepared identity");
+
+        let (compiler_entered_tx, compiler_entered_rx) = mpsc::channel();
+        let (compiler_release_tx, compiler_release_rx) = mpsc::channel();
+        let compiler_release_rx = Mutex::new(compiler_release_rx);
+        *service
+            .startup_compile_test_hook
+            .lock()
+            .expect("startup compiler hook") = Some(Arc::new(move |action_count| {
+            if action_count == 256 {
+                compiler_entered_tx
+                    .send(action_count)
+                    .expect("startup test is waiting at the compiler checkpoint");
+                compiler_release_rx
+                    .lock()
+                    .expect("startup compiler release lock")
+                    .recv()
+                    .expect("startup test releases the compiler checkpoint");
+            }
+        }));
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let start_service = Arc::clone(&service);
+        let start_events = Arc::clone(&events);
+        let start_thread = thread::spawn(move || {
+            start_service.start(
+                super::super::NativePlaybackStartRequest {
+                    prepared_id,
+                    decisions: Vec::new(),
+                }
+                .into_public(),
+                &settings,
+                start_events,
+            )
+        });
+
+        match compiler_entered_rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(256) => {}
+            Ok(action_count) => panic!("unexpected compiler checkpoint {action_count}"),
+            Err(error) => {
+                let startup_result = start_thread.join().expect("startup thread");
+                panic!(
+                    "startup compiler did not reach the in-flight checkpoint: {error}; result={startup_result:?}"
+                );
+            }
+        }
+        let shutdown_service = Arc::clone(&service);
+        let shutdown_events = Arc::clone(&events);
+        let shutdown_thread = thread::spawn(move || shutdown_service.shutdown(shutdown_events));
+        let cancellation_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.startup_cancellation.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < cancellation_deadline,
+                "shutdown did not publish startup cancellation"
+            );
+            thread::yield_now();
+        }
+        compiler_release_tx
+            .send(())
+            .expect("compiler is paused at its in-flight checkpoint");
+
+        let error = start_thread
+            .join()
+            .expect("startup thread")
+            .expect_err("shutdown cancels startup compilation");
+        assert!(error.contains("native schedule compilation cancelled"));
+        assert!(shutdown_thread.join().expect("shutdown thread"));
+        assert!(!service.activity.physical_release_is_quarantined());
+        let lease = service
+            .activity
+            .reserve_playback("post-startup-cancellation")
+            .expect("startup cancellation releases its physical activity lease");
+        drop(lease);
     }
 
     #[test]

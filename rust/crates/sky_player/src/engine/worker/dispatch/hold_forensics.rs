@@ -77,12 +77,12 @@ impl ProductionHoldForensics {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn observe_packet_result(
+    pub(crate) fn observe_packet_result<P: Into<Option<QpcTicks>>>(
         &mut self,
         packet: PhysicalPacket,
         source_action_index: u32,
         target_qpc: QpcTicks,
-        pre_call_qpc: QpcTicks,
+        pre_call_qpc: P,
         completion_qpc: QpcTicks,
         status: sky_dispatch_win32::input::SendTransactionStatus,
         metrics: &mut WorkerMetricsLocal,
@@ -91,7 +91,7 @@ impl ProductionHoldForensics {
             packet,
             source_action_index,
             target_qpc,
-            pre_call_qpc,
+            pre_call_qpc.into(),
             completion_qpc,
             matches!(
                 status,
@@ -102,12 +102,12 @@ impl ProductionHoldForensics {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn observe_packet(
+    pub(crate) fn observe_packet<P: Into<Option<QpcTicks>>>(
         &mut self,
         packet: PhysicalPacket,
         source_action_index: u32,
         target_qpc: QpcTicks,
-        pre_call_qpc: QpcTicks,
+        pre_call_qpc: P,
         completion_qpc: QpcTicks,
         full_transport_success: bool,
         metrics: &mut WorkerMetricsLocal,
@@ -116,24 +116,47 @@ impl ProductionHoldForensics {
             return;
         }
         let target = target_qpc.as_u64();
-        let pre_call = pre_call_qpc.as_u64();
         let completion = completion_qpc.as_u64();
-        self.observe_ups(
-            packet.up_mask,
-            packet.down_mask,
-            source_action_index,
-            target,
-            pre_call,
-            completion,
-        );
-        self.observe_downs(
-            packet.down_mask,
-            source_action_index,
-            target,
-            pre_call,
-            completion,
-        );
+        if let Some(pre_call) = pre_call_qpc.into() {
+            let pre_call = pre_call.as_u64();
+            self.observe_ups(
+                packet.up_mask,
+                packet.down_mask,
+                source_action_index,
+                target,
+                pre_call,
+                completion,
+            );
+            self.observe_downs(
+                packet.down_mask,
+                source_action_index,
+                target,
+                pre_call,
+                completion,
+            );
+        } else {
+            self.observe_completion_anchors(packet, completion);
+        }
         self.publish_metrics(metrics);
+    }
+
+    fn observe_completion_anchors(&mut self, packet: PhysicalPacket, completion: u64) {
+        let mut up_mask = packet.up_mask;
+        while up_mask != 0 {
+            let slot = up_mask.trailing_zeros() as usize;
+            up_mask &= up_mask - 1;
+            self.anchors[slot].valid = false;
+            self.last_up_completion_ticks[slot] = Some(completion);
+        }
+        let mut down_mask = packet.down_mask;
+        while down_mask != 0 {
+            let slot = down_mask.trailing_zeros() as usize;
+            down_mask &= down_mask - 1;
+            self.anchors[slot] = ProductionHoldAnchor {
+                valid: true,
+                completion_ticks: completion,
+            };
+        }
     }
 
     /// Record a fully confirmed musical Up-prefix recovery using the sender's

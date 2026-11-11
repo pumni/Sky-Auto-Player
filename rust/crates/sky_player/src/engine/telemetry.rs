@@ -355,10 +355,8 @@ impl RtTraceRecord {
             ),
             _ => None,
         };
-        let authored_lateness_ticks = checked_signed_delta(
-            timing.pre_call_qpc_ticks.or(timing.observation_qpc_ticks),
-            timing.physical_target_qpc_ticks,
-        )?;
+        let authored_lateness_ticks =
+            checked_signed_delta(timing.pre_call_qpc_ticks, timing.physical_target_qpc_ticks)?;
         let wake_offset_ticks = timing.wake_qpc_ticks.and(timing.wake_ticks);
         let send_started_ticks = timing.pre_call_qpc_ticks.and(timing.pre_call_ticks);
         let send_completed_ticks = timing

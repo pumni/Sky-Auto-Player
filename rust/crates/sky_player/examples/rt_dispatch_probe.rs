@@ -2039,6 +2039,7 @@ fn precision_report(
     let mut cancelled = 0u64;
     let mut final_release_obligation_mask = 0u16;
     let mut failed_samples = 0usize;
+    let mut pre_call_unavailable_samples = 0usize;
     let mut sample_progress_publications = 0usize;
     let mut setup_progress_publications = 0usize;
     let mut first_sample_progress_qpc = None;
@@ -2122,6 +2123,11 @@ fn precision_report(
             failed_samples += 1;
             continue;
         }
+        let Some(pre_call) = pre_call else {
+            pre_call_unavailable_samples += 1;
+            failed_samples += 1;
+            continue;
+        };
         let start = sample_start;
         let admission = pre_call
             .checked_duration_since(start)
@@ -2174,6 +2180,7 @@ fn precision_report(
         "measured_count":measured_count,
         "sample_count":admission_ticks.len(),
         "failed_sample_count":failed_samples,
+        "pre_call_unavailable_sample_count":pre_call_unavailable_samples,
         "packet_shape":workload_shape(workload.kind),
         "dispatch_timing_config": {
             "frame_gap_g_us":config.frame_us,
@@ -2274,6 +2281,8 @@ fn distribution(ticks: &[u64], micros: &[u64]) -> Value {
     sorted_us.sort_unstable();
     json!({
         "sample_count":ticks.len(),
+        "statistical_unit":"packet_send",
+        "per_key_p95_p99_supported":false,
         "ticks":{
             "p50":nearest_rank(&sorted_ticks,50,100),
             "p95":nearest_rank(&sorted_ticks,95,100),

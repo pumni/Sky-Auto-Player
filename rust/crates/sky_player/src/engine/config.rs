@@ -247,6 +247,7 @@ pub(crate) struct AdmittedNativeSessionOptions {
 pub struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
+    pub(crate) stale_packet_commit_count: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
     release_floor_control_enabled: AtomicBool,
@@ -301,6 +302,8 @@ pub enum StartupCheckpoint {
     WakeCalibration = 12,
     #[cfg(any(test, feature = "test-support"))]
     WorkerCompletionPublished = 13,
+    #[cfg(any(test, feature = "test-support"))]
+    StaleMetadataChunk = 14,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -461,6 +464,8 @@ impl StartupOrderingHook {
     pub(crate) fn mark_stale_packet_committed(&self) {
         self.stale_packet_committed
             .store(self.next_sequence(), Ordering::SeqCst);
+        self.stale_packet_commit_count
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     pub(crate) fn mark_first_physical_send_started(&self) {
