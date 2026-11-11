@@ -156,6 +156,11 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
           title="Waiting for session diagnostics"
           detail="Native playback is active; its matching diagnostics snapshot has not arrived yet."
         />
+      ) : dryRun ? (
+        <DiagnosticsEmptyState
+          title="Dry run · sender timing not measured"
+          detail="This session sends no physical keyboard input. Start normal playback to collect physical sender measurements."
+        />
       ) : (
         <>
           <section className="diagnostics-sender-summary" aria-label="Sender-side status">

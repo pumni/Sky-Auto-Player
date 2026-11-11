@@ -314,7 +314,7 @@ describe('PlayerTrackInfo', () => {
     expect(screen.getByText('TEST · No keys')).toBeInTheDocument();
     expect(status).toHaveAttribute(
       'aria-label',
-      expect.stringContaining('No physical input is sent.'),
+      expect.stringContaining('no physical input is sent.'),
     );
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
   });

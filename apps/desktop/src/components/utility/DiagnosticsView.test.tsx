@@ -190,17 +190,10 @@ describe('DiagnosticsView', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(`Last confirmed session song: ${row.title}`)).toBeInTheDocument();
     expect(screen.getByText('Mode: Dry run · no physical input sent')).toBeInTheDocument();
-    expect(screen.getByText('Sender-side status: Not measured')).toBeInTheDocument();
-    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('Not measured');
-    expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Not measured');
-    expect(screen.getByText('Completion p50').parentElement).toHaveTextContent('Not measured');
-    expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent(
-      'Not measured',
-    );
-    expect(screen.getByText('Missed Down boundaries').parentElement).toHaveTextContent(
-      'Not measured',
-    );
-    expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
+    expect(screen.getByText('Dry run · sender timing not measured')).toBeInTheDocument();
+    expect(screen.queryByText('Sender samples')).toBeNull();
+    expect(screen.queryByText('Completion p50')).toBeNull();
+    expect(screen.queryByText('Missed Down boundaries')).toBeNull();
     expect(screen.queryByText('320 μs')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
@@ -596,7 +589,7 @@ describe('DiagnosticsView', () => {
     const store = createDesktopStore(createMockBridge());
     render(<DiagnosticsView useStore={store} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Export last sender trace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export sender metadata' }));
 
     expect(
       await screen.findByText(
@@ -609,7 +602,7 @@ describe('DiagnosticsView', () => {
       });
     });
     expect(
-      screen.getByText('Available after a completed physical playback session.'),
+      screen.getByText('Exports the last available session, when present; no raw packet trace is recorded.'),
     ).toBeInTheDocument();
   });
 
