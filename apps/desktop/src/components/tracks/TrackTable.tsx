@@ -145,7 +145,7 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
         parentRef.current?.focus({ preventScroll: true });
       },
     }),
-    [isBuiltin, locateSelectedRef, pageOffset, useStore, virtualizer],
+    [isBuiltin, pageOffset, useStore, virtualizer],
   );
 
   useLayoutEffect(() => {
