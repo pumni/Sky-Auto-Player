@@ -35,7 +35,7 @@ describe('PlaybackAdmission recovery actions', () => {
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
     expect(
-      screen.getByText(/informational and does not change authored timing/),
+      screen.getByText(/informational; they do not change the authored song/),
     ).toBeInTheDocument();
     expect(screen.getAllByLabelText('Offline whole-stream timing advisory')).toHaveLength(3);
     expect(screen.getAllByText('Modeled timing pressure').length).toBeGreaterThanOrEqual(2);
