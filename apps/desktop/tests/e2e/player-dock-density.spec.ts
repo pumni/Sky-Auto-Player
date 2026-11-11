@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 for (const viewport of [
   { width: 1649, height: 927 },
   { width: 1005, height: 615 },
+  { width: 987, height: 691 },
   { width: 800, height: 560 },
 ]) {
   test(`player dock and compact pager fit ${viewport.width}x${viewport.height}`, async ({

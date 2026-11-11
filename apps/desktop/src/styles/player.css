@@ -416,7 +416,7 @@
   box-shadow: 0 8px 22px var(--shadow-dialog);
   font-size: 12px;
   line-height: 1.35;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 
