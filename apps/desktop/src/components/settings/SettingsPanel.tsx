@@ -56,6 +56,7 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
               type="button"
               onClick={() => setOpen(false)}
               aria-label="Close settings"
+              title="Close settings"
             >
               <X size={16} aria-hidden="true" />
             </button>

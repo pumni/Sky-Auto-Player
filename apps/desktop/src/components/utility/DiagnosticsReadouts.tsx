@@ -33,10 +33,11 @@ export function DiagnosticsMetricGroup({
 }
 
 export function DiagnosticsMetric({ label, value }: { label: string; value: string }) {
+  const isNumber = /^[-+]?(?:\d|\.\d)/.test(value);
   return (
     <div className="diagnostics-metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong className={isNumber ? 'is-number' : 'is-status'}>{value}</strong>
     </div>
   );
 }

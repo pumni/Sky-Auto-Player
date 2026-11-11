@@ -67,15 +67,16 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
         <button
           className="diagnostics-export-button"
           type="button"
+          title="Export the last available session envelope. Raw packet traces are not captured in production."
           disabled={traceExporting}
           onClick={() => void handleExportSenderTrace()}
         >
-          {traceExporting ? 'Preparing sender trace…' : 'Export last sender trace'}
+          {traceExporting ? 'Preparing sender metadata…' : 'Export sender metadata'}
         </button>
         <span role="status">
           {visibleTraceExportIdentity
             ? 'Session metadata exported; raw packet trace was not captured in production.'
-            : 'Available after a completed physical playback session.'}
+            : 'Exports the last available session, when present; no raw packet trace is recorded.'}
         </span>
       </div>
       {traceExportError && (

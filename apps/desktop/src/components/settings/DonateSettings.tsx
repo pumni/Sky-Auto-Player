@@ -1,15 +1,13 @@
-import { Check, Coffee, Copy, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
+import { Coffee, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { openExternalUrl } from '../../platform/externalLinks';
 import { isTauriRuntime } from '../../platform/runtime';
 import { DONATION_CONFIG } from './donationConfig';
 
 type Notice = { kind: 'success' | 'error'; text: string };
-type CopyField = 'account' | 'memo';
 
 export function DonateSettings() {
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [copiedField, setCopiedField] = useState<CopyField | null>(null);
 
   function openSupportLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
     if (!isTauriRuntime()) return;
@@ -25,21 +23,6 @@ export function DonateSettings() {
         });
       }
     })();
-  }
-
-  async function copyToClipboard(field: CopyField, value: string) {
-    setNotice(null);
-    setCopiedField(null);
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedField(field);
-      setNotice({
-        kind: 'success',
-        text: `${field === 'account' ? 'Account number' : 'Transfer note'} copied.`,
-      });
-    } catch {
-      setNotice({ kind: 'error', text: 'Could not copy. Select and copy the text manually.' });
-    }
   }
 
   return (
@@ -98,26 +81,22 @@ export function DonateSettings() {
       <div className="donate-bank-card">
         <div className="donate-provider-heading">
           <Landmark size={17} aria-hidden="true" />
-          <h4>MBBank · VietQR</h4>
+          <h4>Bank transfer · VietQR</h4>
         </div>
-        <p className="settings-note">
-          Scan with a banking app or transfer manually. Verify the recipient before confirming.
-        </p>
-
         <div className="donate-bank-content">
-          <figure className="donate-qr-card">
-            <div className="donate-qr-frame">
-              <img
-                src={DONATION_CONFIG.vietQrImagePath}
-                alt="MBBank VietQR for Nguyen Duc Hoa, account 0857288363"
-                width={200}
-                height={200}
-              />
-            </div>
-            <figcaption>No fixed amount · VND</figcaption>
-          </figure>
+          <div className="donate-qr-frame">
+            <img
+              src={DONATION_CONFIG.vietQrImagePath}
+              alt="VietQR bank transfer code"
+              width={200}
+              height={200}
+            />
+          </div>
 
           <div className="donate-bank-information">
+            <p className="donate-bank-guidance">
+              Scan with your phone’s banking app. Verify the recipient before confirming.
+            </p>
             <dl className="donate-bank-details">
               <div>
                 <dt>Bank</dt>
@@ -127,41 +106,15 @@ export function DonateSettings() {
                 <dt>Account holder</dt>
                 <dd>{DONATION_CONFIG.accountHolder}</dd>
               </div>
-              <div>
+              <div className="donate-bank-reference-row">
                 <dt>Account number</dt>
                 <dd className="donate-bank-account">{DONATION_CONFIG.accountNumber}</dd>
               </div>
-              <div>
+              <div className="donate-bank-reference-row">
                 <dt>Transfer note</dt>
                 <dd>{DONATION_CONFIG.transferMemo}</dd>
               </div>
             </dl>
-            <div className="donate-copy-actions">
-              <button
-                className="button donate-copy-button"
-                type="button"
-                onClick={() => void copyToClipboard('account', DONATION_CONFIG.accountNumber)}
-              >
-                {copiedField === 'account' ? (
-                  <Check size={14} aria-hidden="true" />
-                ) : (
-                  <Copy size={14} aria-hidden="true" />
-                )}
-                Copy account
-              </button>
-              <button
-                className="button donate-copy-button"
-                type="button"
-                onClick={() => void copyToClipboard('memo', DONATION_CONFIG.transferMemo)}
-              >
-                {copiedField === 'memo' ? (
-                  <Check size={14} aria-hidden="true" />
-                ) : (
-                  <Copy size={14} aria-hidden="true" />
-                )}
-                Copy note
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -182,7 +135,8 @@ export function DonateSettings() {
           rel="noopener noreferrer"
           onClick={(event) => openSupportLink(event, DONATION_CONFIG.githubUrl)}
         >
-          star on GitHub <ExternalLink size={12} aria-hidden="true" />
+          <span>star on GitHub</span>
+          <ExternalLink size={12} aria-hidden="true" />
         </a>
         .
       </p>

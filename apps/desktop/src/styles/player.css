@@ -62,10 +62,48 @@
   font-size: var(--type-metadata);
 }
 
-.player-track-subtitle,
+.player-track-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .player-track-status {
   display: block;
   min-width: 0;
+  flex: 0 1 auto;
+}
+
+.player-track-copy .player-mode-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border: 1px dashed var(--control-border);
+  border-radius: 999px;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.player-track-copy .player-mode-badge.is-live {
+  border-style: solid;
+  border-color: var(--warning-border);
+  color: var(--warning-fg);
+  background: var(--warning-bg);
+}
+
+@media (max-width: 1100px) {
+  .player-track-copy .player-mode-badge {
+    max-width: 48px;
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: clip;
+  }
 }
 
 .player-track-copy .player-track-status {
@@ -125,9 +163,9 @@
   width: 100%;
   min-width: 0;
   min-height: 70px;
-  grid-template-rows: 44px 18px;
+  grid-template-rows: 44px 20px;
   align-content: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .player-controls-row {
@@ -291,9 +329,9 @@
 
 .player-timeline {
   display: grid;
-  grid-template-rows: 11px 4px;
+  grid-template-rows: 11px 6px;
   min-width: 0;
-  min-height: 18px;
+  min-height: 20px;
   gap: 3px;
 }
 
@@ -303,7 +341,7 @@
   line-height: 11px;
   justify-content: space-between;
   color: var(--text-tertiary);
-  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-family: inherit;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -315,7 +353,7 @@
 .player-timeline progress {
   display: block;
   width: 100%;
-  height: 4px;
+  height: 6px;
   appearance: none;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
@@ -367,6 +405,57 @@
   color: var(--danger-fg);
 }
 
+.player-tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.player-tool-tooltip {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 22px var(--shadow-dialog);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 120ms ease,
+    visibility 120ms ease;
+}
+
+.player-tooltip-anchor:hover .player-tool-tooltip,
+.player-tooltip-anchor:focus-within .player-tool-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-tool-tooltip {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .player-tool-tooltip {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+}
+
 .player-profile {
   position: relative;
   width: 32px;
@@ -386,14 +475,14 @@
   align-items: center;
   gap: 4px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .profile-fields select {
   min-width: 46px;
-  min-height: 27px;
-  padding: 0 4px;
+  min-height: 32px;
+  padding: 0 8px;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
@@ -414,10 +503,6 @@
   background: transparent;
 }
 
-.profile-summary-button > span {
-  display: none;
-}
-
 .profile-popover {
   position: absolute;
   right: auto;
@@ -425,8 +510,10 @@
   z-index: 7;
   display: grid;
   gap: 10px;
-  width: min(320px, calc(100vw - 24px));
-  min-width: min(260px, calc(100vw - 24px));
+  width: min(350px, calc(100vw - 24px));
+  min-width: min(280px, calc(100vw - 24px));
+  max-height: calc(100vh - 130px);
+  overflow-y: auto;
   max-width: calc(100vw - 24px);
   box-sizing: border-box;
   padding: 12px;
@@ -441,10 +528,31 @@
   outline-offset: 2px;
 }
 
+.profile-popover [role='dialog'] {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.profile-popover-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.profile-popover-header p {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .profile-popover .profile-fields {
   display: grid;
-  justify-content: stretch;
-  gap: 9px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 10px;
+  min-width: 0;
 }
 
 .auto-play-switch {
@@ -521,36 +629,133 @@
   font-weight: 600;
 }
 
-.profile-popover .profile-fields label {
-  justify-content: space-between;
+.profile-popover .profile-fields > label {
+  display: grid;
+  align-content: start;
+  justify-content: stretch;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.profile-popover .profile-fields > label select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding-inline: 9px;
+  border-color: var(--control-border);
+  color: var(--text-primary);
+  font-size: 13px;
 }
 
 .profile-popover .timing-margin-control {
+  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px 8px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--workbench-divider);
 }
 
 .profile-popover .timing-margin-heading {
-  column-gap: 4px;
+  display: grid;
+  justify-items: start;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profile-popover .timing-margin-recommendation {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.profile-popover .timing-margin-stepper {
+  display: grid;
+  grid-template-columns: 30px minmax(52px, auto) 30px;
+  align-items: center;
+  gap: 4px;
+}
+
+.profile-popover .timing-margin-stepper output {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.profile-popover .timing-margin-step {
+  min-width: 30px;
+  min-height: 30px;
+  width: 30px;
+  padding: 0;
+  font-size: 16px;
 }
 
 .profile-popover .profile-timing-summary {
-  grid-column: 1 / -1;
   gap: 3px 10px;
-  margin-top: 2px;
+  margin-top: 8px;
+}
+
+.profile-advanced {
+  grid-column: 1 / -1;
+  padding-inline: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.profile-advanced summary {
+  padding-block: 3px;
+  cursor: pointer;
+}
+
+.profile-advanced summary:hover {
+  color: var(--text-primary);
+}
+
+.profile-preview {
+  display: grid;
+  gap: 11px;
+  padding-top: 13px;
+  border-top: 1px solid var(--workbench-divider);
+}
+
+.profile-preview-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.profile-preview-copy strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .profile-test-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  margin-top: 2px;
+  min-height: 34px;
+  gap: 7px;
   font-size: var(--type-metadata);
 }
 
 .profile-test-explanation {
   margin: 0;
   color: var(--text-secondary);
-  font-size: var(--type-metadata);
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.profile-test-action:disabled {
+  opacity: 1;
+  border-color: var(--border-subtle);
+  color: var(--text-tertiary);
+  background: var(--surface-raised);
 }
 
 .player-tools {
@@ -599,12 +804,22 @@
   border-left-color: var(--danger-border);
 }
 
-.player-admission-confirmation {
+.player-bar .player-admission-confirmation {
+  right: auto;
+  left: 50%;
   display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 1.8fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  max-height: min(72vh, 600px);
+  width: min(600px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(68dvh, 520px);
+  box-sizing: border-box;
+  gap: 12px;
+  padding: 15px 16px 12px;
   overflow: auto;
+  overscroll-behavior: contain;
+  transform: translateX(-50%);
+  border-radius: var(--radius-panel);
 }
 
 .player-admission-timing {
@@ -646,6 +861,38 @@
 }
 
 .admission-copy .muted {
+  color: var(--text-tertiary);
+}
+
+.player-admission-confirmation .admission-copy {
+  gap: 5px;
+}
+
+.player-admission-confirmation .admission-copy strong {
+  font-size: 14px;
+}
+
+.player-admission-confirmation .admission-copy .admission-risk {
+  overflow: visible;
+  color: var(--warning-fg);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.player-admission-confirmation .admission-copy p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.player-admission-confirmation .admission-risk-reason {
+  color: var(--text-primary);
+}
+
+.player-admission-confirmation .admission-estimate-note {
   color: var(--text-tertiary);
 }
 
@@ -765,23 +1012,58 @@
 
 .admission-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   min-width: 0;
-  gap: 7px;
+  gap: 10px;
+}
+
+.admission-decisions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  align-items: start;
+  min-width: 0;
+  gap: 10px;
 }
 
 .admission-option {
   display: grid;
   align-content: start;
   min-width: 0;
-  gap: 6px;
+  gap: 5px;
 }
 
 .admission-option > .button {
-  min-height: 30px;
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
   padding-inline: 9px;
   font-size: var(--type-metadata);
   white-space: normal;
+}
+
+.admission-option-estimate {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.admission-option-estimate > summary {
+  padding-block: 4px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.admission-option-estimate > summary:hover {
+  color: var(--text-primary);
+}
+
+.admission-option-estimate > .timing-advisory {
+  margin-top: 4px;
+}
+
+.admission-cancel {
+  justify-self: end;
+  min-width: 100px;
+  min-height: 32px;
 }
 
 .timing-advisory {
@@ -855,10 +1137,6 @@
 }
 
 @media (max-width: 700px) {
-  .player-admission-confirmation {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .player-admission-timing {
     grid-template-columns: minmax(0, 1fr);
   }

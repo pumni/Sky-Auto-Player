@@ -30,7 +30,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
 
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
   await selectedRow.click();
@@ -215,7 +215,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   await startDryRunWithSelection(page);
   const details = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
-  await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'Inspector' })).toBeVisible();
   const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   const collapseButton = page.getByRole('button', { name: 'Collapse library navigator' });
   await page.mouse.move(0, 0);
@@ -303,7 +303,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       compactSearch.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')),
     )
     .toBe(true);
-  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Playing');
   await expect(compactInspector).toBeVisible();
   const compactInspectorBox = await compactInspector.boundingBox();
   expect(compactInspectorBox).not.toBeNull();
@@ -332,10 +332,11 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   await expect(
     runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
   ).toBeVisible();
-  await expect(runtime.getByText('Sender availability', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender samples', { exact: true })).toBeVisible();
-  await expect(runtime.getByText('Sender backend', { exact: true })).toBeVisible();
-  await expect(runtime.locator('.diagnostics-sender-summary')).toContainText('Not measured');
+  await expect(
+    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+  ).toBeVisible();
+  await expect(runtime.getByText('Sender availability', { exact: true })).toHaveCount(0);
+  await expect(runtime.locator('.diagnostics-sender-summary')).toHaveCount(0);
   appearances.push(await computedAppearance(page, 'runtime-dry-run'));
   {
     const populated = appearances[0] as {
@@ -469,9 +470,9 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     expect(populated.elements.selectedRow?.height).toBe('46px');
     expect(populated.elements.selectedTitle).toMatchObject({ fontSize: '13px', fontWeight: '600' });
     expect(populated.elements.playingTitle).toMatchObject({
-      color: 'rgb(166, 166, 166)',
+      color: 'rgb(178, 165, 233)',
       fontSize: '13px',
-      fontWeight: '500',
+      fontWeight: '650',
     });
     expect(populated.elements.inspectorHeading).toMatchObject({
       fontSize: '14px',
@@ -479,7 +480,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     });
     expect(populated.elements.inspectorTab).toMatchObject({ fontSize: '12px', fontWeight: '500' });
     expect(populated.elements.selectedSongHeading).toMatchObject({
-      fontSize: '14px',
+      fontSize: '18px',
       fontWeight: '600',
     });
     expect(populated.elements.playerTrack).toMatchObject({ fontSize: '14px', fontWeight: '600' });
@@ -525,14 +526,9 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       fontSize: '13px',
       fontWeight: '600',
     });
-    expect(runtimeAppearance.elements.senderStatus).toMatchObject({
-      fontSize: '12px',
-      fontWeight: '600',
-    });
-    expect(runtimeAppearance.elements.runtimeMetricLabel?.fontSize).toBe('12px');
-    expect(runtimeAppearance.elements.runtimeMetricValue).toMatchObject({
-      fontSize: '12px',
-      fontWeight: '600',
-    });
+    // Dry-run sends no physical input; absent sender measurements must not appear as real metrics.
+    expect(runtimeAppearance.elements.senderStatus).toBeNull();
+    expect(runtimeAppearance.elements.runtimeMetricLabel).toBeNull();
+    expect(runtimeAppearance.elements.runtimeMetricValue).toBeNull();
   }
 });

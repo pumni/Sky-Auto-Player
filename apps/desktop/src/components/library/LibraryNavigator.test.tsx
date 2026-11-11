@@ -26,6 +26,7 @@ describe('LibraryNavigator built-in source', () => {
     const library = within(navigator);
     const builtin = library.getByRole('button', { name: /Built-in Songs/ });
     expect(builtin).toBeEnabled();
+    expect(builtin.querySelector('svg')).toHaveClass('lucide-book-open');
     expect(builtin).toHaveTextContent('96');
     expect(library.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
     expect(library.getByText('Playlists')).toBeInTheDocument();

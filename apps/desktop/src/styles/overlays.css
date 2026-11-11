@@ -552,8 +552,7 @@
   line-height: 1.35;
 }
 
-.donate-external-link,
-.donate-copy-button {
+.donate-external-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -580,16 +579,8 @@
 .donate-bank-content {
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
-}
-
-.donate-qr-card {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  width: 200px;
-  margin: 0;
+  align-items: start;
+  gap: 18px;
 }
 
 .donate-qr-frame {
@@ -610,22 +601,24 @@
   image-rendering: pixelated;
 }
 
-.donate-qr-card figcaption {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  text-align: center;
-}
-
 .donate-bank-information {
   display: grid;
-  gap: 13px;
+  align-content: start;
+  gap: 9px;
   min-width: 0;
+}
+
+.donate-bank-guidance {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .donate-bank-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 9px 14px;
   margin: 0;
 }
 
@@ -650,31 +643,43 @@
   user-select: text;
 }
 
+.donate-bank-details > div:nth-child(2) dd {
+  font-weight: 600;
+}
+
 .donate-bank-account {
   font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 13px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
 
-.donate-copy-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.donate-bank-details .donate-bank-reference-row {
+  grid-column: 1 / -1;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.donate-copy-button {
-  min-height: 30px;
-  padding-inline: 10px;
+.donate-disclaimer a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .donate-disclaimer a {
   display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
   color: var(--accent-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.donate-disclaimer a svg {
+  display: block;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 760px) {

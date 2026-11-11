@@ -7,12 +7,11 @@ interface UtilityHeaderProps {
   onClose: () => void;
 }
 
-export function UtilityHeader({ activeView, onClose }: UtilityHeaderProps) {
-  const title = activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details';
+export function UtilityHeader({ onClose }: UtilityHeaderProps) {
   return (
     <header className="utility-header">
       <div className="utility-header-title">
-        <h2>{title}</h2>
+        <h2>Inspector</h2>
       </div>
       <button
         className="icon-button utility-close-button"

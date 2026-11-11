@@ -28,7 +28,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
     'aria-selected',
@@ -82,7 +82,10 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await expect(
     runtimeInspector.getByText('Mode: Dry run · no physical input sent', { exact: true }),
   ).toBeVisible();
-  await expect(runtimeInspector.getByText('Sender samples', { exact: true })).toBeVisible();
+  await expect(
+    runtimeInspector.getByText('Dry run · sender timing not measured', { exact: true }),
+  ).toBeVisible();
+  await expect(runtimeInspector.getByText('Sender samples', { exact: true })).toHaveCount(0);
   await expect(runtimeInspector.getByRole('tab', { name: 'Runtime' })).toBeVisible();
 
   await openApp(page, viewports[1], '/?mockLibraryState=empty');

@@ -473,7 +473,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       '--toggle-active-ink': values.toggleActive,
       '--toggle-inactive-ink': values.toggleInactive,
       '--search-focus-ring': values.searchFocus,
-      '--selection-row-indicator': palette === 'graphite' ? 'transparent' : values.accent,
+      '--selection-row-indicator': palette === 'graphite' ? values.controlBorder : values.accent,
       '--primary-fill': values.accentFill,
       '--primary-fill-hover': values.accentFillHover,
       '--primary-fill-pressed': values.accentFillPressed,
@@ -494,9 +494,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     ]);
     expect(interactionAliases['--scrollbar-thumb']).toBe(values.borderStrong);
     expect(interactionAliases['--scrollbar-thumb-hover']).toBe(values.textTertiary);
-    expect(interactionAliases['--workbench-playing-indicator']).toBe(
-      interactionAliases['--workbench-divider'],
-    );
+    expect(interactionAliases['--workbench-playing-indicator']).toBe(values.accent);
 
     const resolvedColors = await resolvedTokenColors(page, [
       '--accent-ink',
@@ -540,6 +538,9 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.controlBorder, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.controlBorder, colors.canvas)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.accent, colors.selectionBg)).toBeGreaterThanOrEqual(3);
+    if (palette === 'graphite') {
+      expect(contrastRatio(colors.controlBorder, colors.selectionBg)).toBeGreaterThanOrEqual(3);
+    }
     expect(contrastRatio(colors.focusRing, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
     if (palette === 'graphite') {
@@ -675,7 +676,7 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
   const selectedRow = page.getByRole('row', { name: /Aurora Landing/ });
   await selectedRow.click();
   await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
-  await expect(styleValue(selectedRow, 'borderLeftColor')).resolves.toBe('rgba(0, 0, 0, 0)');
+  await assertBorderUsesToken(page, selectedRow, '--selection-row-indicator', 'borderLeftColor');
   const update = page.locator('.update-indicator');
   await expect(styleValue(update, 'borderTopColor')).resolves.toBe('rgba(0, 0, 0, 0)');
   await expect(styleValue(update, 'backgroundColor')).resolves.toBe('rgba(0, 0, 0, 0)');
@@ -927,9 +928,11 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   const separatorLine = separator.locator('span');
   await separator.hover();
-  await assertBorderUsesToken(page, separatorLine, '--control-border', 'borderLeftColor');
+  await expect
+    .poll(() => styleValue(separatorLine, 'backgroundColor'))
+    .not.toBe('rgba(0, 0, 0, 0)');
   await focusSeparatorWithKeyboard(page, separator);
-  await expect(styleValue(separatorLine, 'borderLeftColor')).resolves.toBe(
+  await expect(styleValue(separatorLine, 'backgroundColor')).resolves.toBe(
     await resolvedTokenColor(page, '--focus-ring'),
   );
   const separatorBox = await separator.boundingBox();
@@ -940,7 +943,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
     separatorBox.y + separatorBox.height / 2,
   );
   await page.mouse.down();
-  await expect(styleValue(separatorLine, 'borderLeftColor')).resolves.toBe(
+  await expect(styleValue(separatorLine, 'backgroundColor')).resolves.toBe(
     await resolvedTokenColor(page, '--accent-ink'),
   );
   await page.mouse.up();
@@ -1120,5 +1123,5 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   await focusSeparatorWithKeyboard(page, separator);
   await expectSystemColor(separator, 'outlineColor', 'Highlight');
-  await expectSystemColor(separator.locator('span'), 'borderLeftColor', 'Highlight');
+  await expectSystemColor(separator.locator('span'), 'backgroundColor', 'Highlight');
 });

@@ -25,12 +25,18 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const state = useStore((store) => store.playback.state);
   const sessionStatusConcern = useStore((store) => playbackSessionStatusConcern(store.playback));
   const active = ['starting', 'playing', 'paused', 'stopping'].includes(state);
-  const dryRun = useStore(
-    (store) =>
-      (store.playback.context?.dryRun === true ||
-        store.playback.preparedContext?.dryRun === true) &&
-      (active || sessionStatusConcern !== null),
-  );
+  const playbackMode = useStore((store) => {
+    const playback = store.playback;
+    const ownsSession =
+      ['starting', 'playing', 'paused', 'stopping'].includes(playback.state) ||
+      playbackSessionStatusConcern(playback) !== null;
+    if (ownsSession) {
+      if (playback.context) return playback.context.dryRun ? 'test' : 'live';
+      if (playback.preparedContext) return playback.preparedContext.dryRun ? 'test' : 'live';
+    }
+    if (playback.prepared) return playback.prepared.config.dry_run ? 'test' : 'live';
+    return null;
+  });
   const setSongLiked = useStore((store) => store.setSongLiked);
   const nowPlayingIndex = useStore((store) => selectNowPlayingIndex(store));
   const showNowPlaying = useStore((store) => store.showNowPlaying);
@@ -61,7 +67,17 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           : hasCurrentSong
             ? 'Last played'
             : 'Ready to play');
-  const status = dryRun ? `Dry run · ${baseStatus}` : baseStatus;
+  const statusAccessibilityLabel =
+    `${title}: ${baseStatus}` +
+    (playbackMode === 'test'
+      ? '. Dry run; no physical input is sent.'
+      : playbackMode === 'live'
+        ? '. Normal playback may send physical input.'
+        : '');
+  const modeDescription =
+    playbackMode === 'test'
+      ? 'Dry run: no physical keyboard input is sent.'
+      : 'Normal playback: physical keyboard input may be sent only when the session and target permit it.';
 
   return (
     <div className="player-track-info" role="group" aria-label={`Playback for ${title}`}>
@@ -73,13 +89,22 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         <div className="player-track-subtitle">
           <span
             className={`muted player-track-status${active ? ' is-active' : ''}${sessionStatusConcern !== null ? ' is-attention' : ''}`}
-            aria-label={`${title}: ${status}${dryRun ? '. No physical input is sent.' : ''}`}
+            aria-label={statusAccessibilityLabel}
             aria-live="polite"
             aria-atomic="true"
-            title={status}
+            title={baseStatus}
           >
-            {status}
+            {baseStatus}
           </span>
+          {playbackMode && (
+            <span
+              className={`player-mode-badge is-${playbackMode}`}
+              aria-label={modeDescription}
+              title={modeDescription}
+            >
+              {playbackMode === 'test' ? 'TEST · No keys' : 'LIVE · Physical mode'}
+            </span>
+          )}
         </div>
       </div>
       {likeSongId && (hasCurrentSong || fallbackIdentity) && (

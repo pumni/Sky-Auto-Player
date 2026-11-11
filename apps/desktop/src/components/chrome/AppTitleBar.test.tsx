@@ -42,6 +42,9 @@ describe('AppTitleBar', () => {
       'true',
     );
     expect(screen.getByPlaceholderText('Search Built-in Songs…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reload library' }).querySelector('svg')).toHaveClass(
+      'lucide-refresh-cw',
+    );
     expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Maximize window' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close window' })).toBeInTheDocument();

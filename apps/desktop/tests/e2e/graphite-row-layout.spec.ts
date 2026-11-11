@@ -50,7 +50,7 @@ async function startDryRunWithSelection(page: Page) {
     'aria-current',
     'true',
   );
-  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
   return player;
 }
 
@@ -437,7 +437,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   await everydayHovered.hover();
   await expect.poll(() => everydayHovered.evaluate((row) => row.matches(':hover'))).toBe(true);
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  await expect(everydayPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(everydayPlayer.locator('.player-track-status')).toHaveText('Playing');
   evidence.push(await readGeometry(page, 'collapsed-800x560'));
 
   await openApp(page, { width: 640, height: 448 }, 'expanded');
@@ -447,7 +447,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   await compactHovered.hover({ position: { x: 24, y: 23 } });
   await expect.poll(() => compactHovered.evaluate((row) => row.matches(':hover'))).toBe(true);
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
-  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Playing');
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   const savedPreference = await page.evaluate(
     (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
@@ -488,7 +488,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
     dockTitle: 'Candle Run',
     detailsTitle: 'Blue Bird',
     detailsContext: null,
-    dockStatus: 'Dry run · Playing',
+    dockStatus: 'Playing',
   });
 
   expect(collapsed.panes.navigator?.width).toBeCloseTo(48, 0);
@@ -501,12 +501,12 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
       Math.abs(tile.rect.x + tile.rect.width / 2 - (pane.x + pane.width / 2)),
     ).toBeLessThanOrEqual(1);
   }
-  expect(collapsed.identities.dockStatus).toBe('Dry run · Playing');
+  expect(collapsed.identities.dockStatus).toBe('Playing');
   expect(collapsed.panes.inspector).toBeNull();
 
   expect(compact.panes.navigator?.width).toBeCloseTo(48, 0);
   expect(compact.panes.inspector).not.toBeNull();
-  expect(compact.identities.dockStatus).toBe('Dry run · Playing');
+  expect(compact.identities.dockStatus).toBe('Playing');
   expect(compact.savedNavigatorPreference).toBe('expanded');
 
   const pane = page.locator('.track-browser-workbench-pane');

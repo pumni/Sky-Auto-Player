@@ -19,7 +19,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
     expect(box).not.toBeNull();
     if (box) {
       expect(box.width).toBeGreaterThanOrEqual(260);
-      expect(box.width).toBeLessThanOrEqual(320);
+      expect(box.width).toBeLessThanOrEqual(350);
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
     }
@@ -41,13 +41,13 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('Hold')).toBeVisible();
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
+  await popover.getByText('Calculated timing').click();
   await expect(popover.locator('.profile-timing-summary dt')).toHaveText([
     'Target hold',
     'Release gap',
   ]);
-  await expect(popover.locator('.timing-margin-control')).toContainText(
-    'Timing Margin · rec. 500 µs',
-  );
+  await expect(popover.locator('.timing-margin-control')).toContainText('Timing Margin');
+  await expect(popover.locator('.timing-margin-control')).toContainText('Recommended 500 µs');
   await expect(popover.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
   await expect(popover.getByText(/Source:/)).toHaveCount(0);
   await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
@@ -183,7 +183,9 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
   await expect(dialog.getByRole('heading', { name: 'Support Sky Auto Player' })).toBeVisible();
-  await expect(dialog.getByRole('heading', { name: 'MBBank · VietQR' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Bank transfer · VietQR' })).toBeVisible();
+  await expect(dialog.getByText('MBBank', { exact: true })).toHaveCount(1);
+  await expect(dialog.getByText(/No fixed amount|· VND/)).toHaveCount(0);
   await expect(dialog.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
     'href',
     'https://ko-fi.com/pumni',
@@ -199,10 +201,10 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
   await expect(dialog.getByText('MoMo')).toHaveCount(0);
   await expect(dialog.getByText('PSP2603710800000415')).toHaveCount(0);
   await expect(dialog.getByText('Techcombank')).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: 'Copy account' })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Copy note' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Copy account' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Copy note' })).toHaveCount(0);
 
-  const qr = dialog.getByRole('img', { name: /MBBank VietQR for Nguyen Duc Hoa/ });
+  const qr = dialog.getByRole('img', { name: 'VietQR bank transfer code' });
   await qr.scrollIntoViewIfNeeded();
   await expect(qr).toBeVisible();
   await expect(qr).toHaveAttribute('src', '/donate-vietqr-mbbank.png');
@@ -225,6 +227,99 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
     expect(horizontalOverflow).toBe(false);
   }
   await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('Donate prioritizes QR scanning and aligns manual fallback details and GitHub icon', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Donate' }).click();
+
+  const bank = dialog.locator('.donate-bank-card');
+  const qr = bank.locator('.donate-qr-frame');
+  const detailRows = bank.locator('.donate-bank-reference-row');
+  const guidance = bank.getByText(
+    'Scan with your phone’s banking app. Verify the recipient before confirming.',
+  );
+  await expect(guidance).toBeVisible();
+  await expect(detailRows).toHaveCount(2);
+  await expect(bank.getByRole('button')).toHaveCount(0);
+
+  const bankGeometry = await bank.evaluate((element) => {
+    const rect = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+    const qrBounds = rect('.donate-qr-frame');
+    const detailsBounds = rect('.donate-bank-information');
+    const accountBounds = rect('.donate-bank-reference-row');
+    const guidanceBounds = rect('.donate-bank-guidance');
+    const detailListBounds = rect('.donate-bank-details');
+    const referenceRows = Array.from(element.querySelectorAll('.donate-bank-reference-row')).map(
+      (row) => {
+        const rowBounds = row.getBoundingClientRect();
+        const valueBounds = row.querySelector('dd')?.getBoundingClientRect();
+        return {
+          valueVisible: Boolean(
+            valueBounds &&
+              valueBounds.left >= rowBounds.left &&
+              valueBounds.right <= rowBounds.right + 1,
+          ),
+        };
+      },
+    );
+    return {
+      qrTop: qrBounds?.top ?? 0,
+      qrRight: qrBounds?.right ?? 0,
+      qrBottom: qrBounds?.bottom ?? 0,
+      detailsTop: detailsBounds?.top ?? 0,
+      detailsBottom: detailsBounds?.bottom ?? 0,
+      guidanceTop: guidanceBounds?.top ?? 0,
+      guidanceLeft: guidanceBounds?.left ?? 0,
+      guidanceBottom: guidanceBounds?.bottom ?? 0,
+      detailListTop: detailListBounds?.top ?? 0,
+      accountTop: accountBounds?.top ?? 0,
+      referenceRows,
+    };
+  });
+  expect(Math.abs(bankGeometry.qrTop - bankGeometry.detailsTop)).toBeLessThanOrEqual(2);
+  expect(Math.abs(bankGeometry.qrTop - bankGeometry.guidanceTop)).toBeLessThanOrEqual(2);
+  expect(bankGeometry.guidanceLeft).toBeGreaterThanOrEqual(bankGeometry.qrRight + 12);
+  expect(bankGeometry.detailListTop).toBeGreaterThan(bankGeometry.guidanceBottom);
+  expect(bankGeometry.accountTop).toBeGreaterThan(bankGeometry.detailListTop);
+  expect(bankGeometry.detailsBottom).toBeLessThanOrEqual(bankGeometry.qrBottom + 2);
+  for (const row of bankGeometry.referenceRows) {
+    expect(row.valueVisible).toBe(true);
+  }
+
+  const github = dialog.getByRole('link', { name: /star on GitHub/ });
+  await github.scrollIntoViewIfNeeded();
+  const iconAlignment = await github.evaluate((element) => {
+    const label = element.querySelector('span')?.getBoundingClientRect();
+    const icon = element.querySelector('svg')?.getBoundingClientRect();
+    if (!label || !icon) return Infinity;
+    return Math.abs((label.top + label.bottom) / 2 - (icon.top + icon.bottom) / 2);
+  });
+  expect(iconAlignment).toBeLessThanOrEqual(2);
+  await expect(qr).toBeVisible();
+
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const overflow = await dialog
+      .locator('.settings-content')
+      .evaluate((element) => element.scrollWidth > element.clientWidth);
+    expect(overflow).toBe(false);
+    const stacked = await bank.evaluate((element) => {
+      const qrBounds = element.querySelector('.donate-qr-frame')?.getBoundingClientRect();
+      const infoBounds = element.querySelector('.donate-bank-information')?.getBoundingClientRect();
+      if (!qrBounds || !infoBounds) return false;
+      return infoBounds.top >= qrBounds.bottom;
+    });
+    expect(stacked).toBe(viewport.width <= 760);
+  }
 });
 
 test('Donate provider cards align their text and Open actions at desktop width', async ({

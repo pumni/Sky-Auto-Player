@@ -14,7 +14,7 @@
   --selection-control-hover: #3b3646;
   --selection-control-pressed: #474151;
   --selection-indicator: var(--accent-ink);
-  --selection-row-indicator: transparent;
+  --selection-row-indicator: var(--control-border);
   --border-subtle: #2a2b2c;
   --border-strong: #393b3e;
   --control-border: #72777d;
@@ -77,7 +77,7 @@
   --workbench-selected-control-hover: var(--selection-control-hover);
   --workbench-selected-control-pressed: var(--selection-control-pressed);
   --workbench-divider: #2a2b2c;
-  --workbench-playing-indicator: var(--workbench-divider);
+  --workbench-playing-indicator: var(--accent-ink);
   --workbench-pane-edge: #313336;
   --workbench-overlay-edge: #72777d;
   --workbench-critical-edge: #393b3e;
