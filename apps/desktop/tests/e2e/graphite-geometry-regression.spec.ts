@@ -470,9 +470,9 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     expect(populated.elements.selectedRow?.height).toBe('46px');
     expect(populated.elements.selectedTitle).toMatchObject({ fontSize: '13px', fontWeight: '600' });
     expect(populated.elements.playingTitle).toMatchObject({
-      color: 'rgb(166, 166, 166)',
+      color: 'rgb(178, 165, 233)',
       fontSize: '13px',
-      fontWeight: '500',
+      fontWeight: '650',
     });
     expect(populated.elements.inspectorHeading).toMatchObject({
       fontSize: '14px',
@@ -480,7 +480,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     });
     expect(populated.elements.inspectorTab).toMatchObject({ fontSize: '12px', fontWeight: '500' });
     expect(populated.elements.selectedSongHeading).toMatchObject({
-      fontSize: '14px',
+      fontSize: '18px',
       fontWeight: '600',
     });
     expect(populated.elements.playerTrack).toMatchObject({ fontSize: '14px', fontWeight: '600' });
