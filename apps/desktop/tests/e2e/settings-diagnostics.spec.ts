@@ -46,9 +46,8 @@ test('Playback Profile works through the narrow popover with focus restore', asy
     'Target hold',
     'Release gap',
   ]);
-  await expect(popover.locator('.timing-margin-control')).toContainText(
-    'Timing Margin · rec. 500 µs',
-  );
+  await expect(popover.locator('.timing-margin-control')).toContainText('Timing Margin');
+  await expect(popover.locator('.timing-margin-control')).toContainText('Recommended 500 µs');
   await expect(popover.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
   await expect(popover.getByText(/Source:/)).toHaveCount(0);
   await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();

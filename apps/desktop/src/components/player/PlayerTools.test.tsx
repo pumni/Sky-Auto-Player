@@ -66,7 +66,7 @@ describe('PlayerTools playback modes and profile', () => {
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(
       within(dialog).getByText(
-        'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
+        'Try these settings without sending any physical keyboard input.',
       ),
     ).toBeInTheDocument();
     await act(async () =>
@@ -97,6 +97,12 @@ describe('PlayerTools playback modes and profile', () => {
     );
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(within(dialog).getByText('Calculated timing')).toBeVisible();
+    expect(within(dialog).getByText('Safe preview')).toBeVisible();
+    expect(
+      within(dialog).getByText(
+        'Select a song to enable a dry-run preview. No keyboard input will be sent.',
+      ),
+    ).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
   });
 });

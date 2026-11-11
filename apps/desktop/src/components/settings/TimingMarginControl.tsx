@@ -59,8 +59,12 @@ export function TimingMarginControl({
         <span className="timing-margin-label">Timing Margin</span>
         <span className="timing-margin-recommendation">
           {recommendedMargin === null
-            ? ' · no recommendation'
-            : ` · rec. ${recommendedMargin} µs${recommendationWithinRange ? '' : ' · out of range'}`}
+            ? density === 'compact'
+              ? 'No recommendation'
+              : ' · no recommendation'
+            : density === 'compact'
+              ? `Recommended ${recommendedMargin} µs${recommendationWithinRange ? '' : ' · out of range'}`
+              : ` · rec. ${recommendedMargin} µs${recommendationWithinRange ? '' : ' · out of range'}`}
         </span>
       </div>
       <div className="timing-margin-stepper">

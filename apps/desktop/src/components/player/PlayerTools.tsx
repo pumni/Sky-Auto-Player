@@ -38,14 +38,20 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const [autoPlayPending, setAutoPlayPending] = useState(false);
   const autoPlayMutationPending = useRef(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
+  const hasTestSong = Boolean(playback.currentSong || selectedSongId);
   const canPreparePlayback =
-    Boolean(playback.currentSong || selectedSongId) &&
+    hasTestSong &&
     playback.sessionId === null &&
     playback.transportOperation === null &&
     playback.startRequestId === null &&
     !playback.statusRetryPending &&
     sessionStatusConcern === null &&
     !hasPreparedPlayback;
+  const previewDescription = !hasTestSong
+    ? 'Select a song to enable a dry-run preview. No keyboard input will be sent.'
+    : !canPreparePlayback
+      ? 'Finish the current playback or pending preparation before starting another test.'
+      : 'Try these settings without sending any physical keyboard input.';
 
   const prepareAndMaybeStart = async () => {
     await prepare({ dry_run: true });
@@ -97,7 +103,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             <Dialog aria-label="Playback profile">
               <header className="profile-popover-header">
                 <h3>Playback profile</h3>
-                <p>Adjust note timing for your next playback session.</p>
+                <p>Fine-tune how each song is played.</p>
               </header>
               <div className="profile-fields">
                 <ProfileFields
@@ -108,10 +114,10 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                 />
               </div>
               <div className="profile-preview">
-                <p className="profile-test-explanation">
-                  Tests the current profile with dry-run playback; no physical keyboard input is
-                  sent.
-                </p>
+                <div className="profile-preview-copy">
+                  <strong>Safe preview</strong>
+                  <p className="profile-test-explanation">{previewDescription}</p>
+                </div>
                 <button
                   className="button profile-test-action"
                   type="button"

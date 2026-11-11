@@ -57,7 +57,7 @@ describe('TimingMarginControl', () => {
     );
 
     expect(screen.getByRole('group', { name: 'Timing Margin' })).toContainElement(
-      screen.getByText('· rec. 1300 µs'),
+      screen.getByText('Recommended 1300 µs'),
     );
     expect(screen.queryByText(/Source:/)).not.toBeInTheDocument();
     expect(screen.queryByText('Applies to Hold and Release Gap')).not.toBeInTheDocument();
@@ -156,7 +156,7 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    expect(screen.getByText('· rec. 5300 µs · out of range')).toBeInTheDocument();
+    expect(screen.getByText('Recommended 5300 µs · out of range')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
     expect(changes).toEqual([900]);
