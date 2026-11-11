@@ -2,8 +2,11 @@ import { ListMusic, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { playbackSessionStatusConcern } from '../../state/store';
+import {
+  playbackSessionStatusConcern,
+  type DesktopStore,
+  type DesktopStoreHook,
+} from '../../state/store';
 
 interface PlayerToolsProps {
   useStore: DesktopStoreHook;
@@ -81,7 +84,9 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         onClick={() => void toggleAutoPlay()}
       >
         <ListMusic size={16} aria-hidden="true" />
-        <span className="player-auto-play-label" aria-hidden="true">Auto</span>
+        <span className="player-auto-play-label" aria-hidden="true">
+          Auto
+        </span>
       </button>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>

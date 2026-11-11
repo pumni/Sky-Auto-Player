@@ -162,10 +162,10 @@
   display: grid;
   width: 100%;
   min-width: 0;
-  min-height: 72px;
+  min-height: 70px;
   grid-template-rows: 44px 20px;
   align-content: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .player-controls-row {
@@ -456,7 +456,7 @@
   display: none;
 }
 
-.player-test-button {
+.player-tools .player-test-button {
   flex: 0 0 auto;
   min-height: 30px;
   padding-inline: 10px;

@@ -67,6 +67,13 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           : hasCurrentSong
             ? 'Last played'
             : 'Ready to play');
+  const statusAccessibilityLabel =
+    `${title}: ${baseStatus}` +
+    (playbackMode === 'test'
+      ? '. Dry run; no physical input is sent.'
+      : playbackMode === 'live'
+        ? '. Normal playback may send physical input.'
+        : '');
   const modeDescription =
     playbackMode === 'test'
       ? 'Dry run: no physical keyboard input is sent.'
@@ -82,7 +89,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         <div className="player-track-subtitle">
           <span
             className={`muted player-track-status${active ? ' is-active' : ''}${sessionStatusConcern !== null ? ' is-attention' : ''}`}
-            aria-label={`${title}: ${baseStatus}${playbackMode === 'test' ? '. Dry run; no physical input is sent.' : playbackMode === 'live' ? '. Normal playback may send physical input.' : ''}`}
+            aria-label={statusAccessibilityLabel}
             aria-live="polite"
             aria-atomic="true"
             title={baseStatus}

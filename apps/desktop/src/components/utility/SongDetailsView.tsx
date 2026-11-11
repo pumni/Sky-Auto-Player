@@ -167,7 +167,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                 <details className="sheet-technical-details">
                   <summary>Technical conversion counts</summary>
                   <dl className="sheet-diagnostics-grid">
-                  <div>
+                    <div>
                     <dt>Source notes</dt>
                     <dd>{sheet.source_note_count ?? '—'}</dd>
                   </div>
@@ -265,7 +265,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
 
       {showRiskGuidance ? (
         <>
-        <section className="utility-section" aria-live={isPending ? 'polite' : undefined}>
+          <section className="utility-section" aria-live={isPending ? 'polite' : undefined}>
           <h4>Why this rating</h4>
           <ul>
             {song?.risk.reasons.length ? (
@@ -295,7 +295,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
               </dd>
             </div>
           </dl>
-        </section>
+          </section>
         </>
       ) : (
         <details className="utility-section utility-risk-more">
@@ -317,7 +317,6 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
           </dl>
         </details>
       )}
-
     </section>
   );
 }

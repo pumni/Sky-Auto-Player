@@ -473,7 +473,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       '--toggle-active-ink': values.toggleActive,
       '--toggle-inactive-ink': values.toggleInactive,
       '--search-focus-ring': values.searchFocus,
-      '--selection-row-indicator': palette === 'graphite' ? 'transparent' : values.accent,
+      '--selection-row-indicator': palette === 'graphite' ? values.controlBorder : values.accent,
       '--primary-fill': values.accentFill,
       '--primary-fill-hover': values.accentFillHover,
       '--primary-fill-pressed': values.accentFillPressed,
@@ -494,9 +494,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     ]);
     expect(interactionAliases['--scrollbar-thumb']).toBe(values.borderStrong);
     expect(interactionAliases['--scrollbar-thumb-hover']).toBe(values.textTertiary);
-    expect(interactionAliases['--workbench-playing-indicator']).toBe(
-      interactionAliases['--workbench-divider'],
-    );
+    expect(interactionAliases['--workbench-playing-indicator']).toBe(values.accent);
 
     const resolvedColors = await resolvedTokenColors(page, [
       '--accent-ink',
@@ -540,6 +538,9 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.controlBorder, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.controlBorder, colors.canvas)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.accent, colors.selectionBg)).toBeGreaterThanOrEqual(3);
+    if (palette === 'graphite') {
+      expect(contrastRatio(colors.controlBorder, colors.selectionBg)).toBeGreaterThanOrEqual(3);
+    }
     expect(contrastRatio(colors.focusRing, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
     if (palette === 'graphite') {
@@ -675,7 +676,7 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
   const selectedRow = page.getByRole('row', { name: /Aurora Landing/ });
   await selectedRow.click();
   await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
-  await expect(styleValue(selectedRow, 'borderLeftColor')).resolves.toBe('rgba(0, 0, 0, 0)');
+  await assertBorderUsesToken(page, selectedRow, '--selection-row-indicator', 'borderLeftColor');
   const update = page.locator('.update-indicator');
   await expect(styleValue(update, 'borderTopColor')).resolves.toBe('rgba(0, 0, 0, 0)');
   await expect(styleValue(update, 'backgroundColor')).resolves.toBe('rgba(0, 0, 0, 0)');
