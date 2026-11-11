@@ -100,10 +100,6 @@ export function DonateSettings() {
           <Landmark size={17} aria-hidden="true" />
           <h4>Bank transfer · VietQR</h4>
         </div>
-        <p className="settings-note">
-          Scan the QR or copy the details. Check the recipient before sending.
-        </p>
-
         <div className="donate-bank-content">
           <div className="donate-qr-frame">
             <img
@@ -115,6 +111,9 @@ export function DonateSettings() {
           </div>
 
           <div className="donate-bank-information">
+            <p className="donate-bank-guidance">
+              Scan the QR or copy the details. Check the recipient before sending.
+            </p>
             <dl className="donate-bank-details">
               <div>
                 <dt>Bank</dt>

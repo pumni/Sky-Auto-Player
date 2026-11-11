@@ -243,7 +243,10 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
   const copyNote = bank.getByRole('button', { name: 'Copy note' });
   const qr = bank.locator('.donate-qr-frame');
   const detailRows = bank.locator('.donate-bank-copy-row');
-  await expect(bank.getByText('Scan the QR or copy the details. Check the recipient before sending.')).toBeVisible();
+  const guidance = bank.getByText(
+    'Scan the QR or copy the details. Check the recipient before sending.',
+  );
+  await expect(guidance).toBeVisible();
   await expect(detailRows).toHaveCount(2);
   await expect(copyAccount).toBeVisible();
   await expect(copyNote).toBeVisible();
@@ -253,6 +256,8 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
     const qrBounds = rect('.donate-qr-frame');
     const detailsBounds = rect('.donate-bank-information');
     const accountBounds = rect('.donate-bank-copy-row');
+    const guidanceBounds = rect('.donate-bank-guidance');
+    const detailListBounds = rect('.donate-bank-details');
     const buttons = Array.from(element.querySelectorAll('.donate-bank-copy-row')).map((row) => {
       const button = row.querySelector('button')?.getBoundingClientRect();
       const value = row.querySelector('dd')?.getBoundingClientRect();
@@ -260,13 +265,24 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
     });
     return {
       qrTop: qrBounds?.top ?? 0,
+      qrRight: qrBounds?.right ?? 0,
+      qrBottom: qrBounds?.bottom ?? 0,
       detailsTop: detailsBounds?.top ?? 0,
+      detailsBottom: detailsBounds?.bottom ?? 0,
+      guidanceTop: guidanceBounds?.top ?? 0,
+      guidanceLeft: guidanceBounds?.left ?? 0,
+      guidanceBottom: guidanceBounds?.bottom ?? 0,
+      detailListTop: detailListBounds?.top ?? 0,
       accountTop: accountBounds?.top ?? 0,
       buttons,
     };
   });
-  expect(Math.abs(bankGeometry.qrTop - bankGeometry.detailsTop)).toBeLessThanOrEqual(5);
-  expect(bankGeometry.accountTop).toBeGreaterThan(bankGeometry.detailsTop);
+  expect(Math.abs(bankGeometry.qrTop - bankGeometry.detailsTop)).toBeLessThanOrEqual(2);
+  expect(Math.abs(bankGeometry.qrTop - bankGeometry.guidanceTop)).toBeLessThanOrEqual(2);
+  expect(bankGeometry.guidanceLeft).toBeGreaterThanOrEqual(bankGeometry.qrRight + 12);
+  expect(bankGeometry.detailListTop).toBeGreaterThan(bankGeometry.guidanceBottom);
+  expect(bankGeometry.accountTop).toBeGreaterThan(bankGeometry.detailListTop);
+  expect(bankGeometry.detailsBottom).toBeLessThanOrEqual(bankGeometry.qrBottom + 2);
   for (const row of bankGeometry.buttons) {
     expect(row.buttonLeft).toBeGreaterThanOrEqual(row.valueRight);
   }

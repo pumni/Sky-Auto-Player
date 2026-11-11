@@ -40,6 +40,12 @@ describe('DonateSettings', () => {
     expect(screen.getByText(DONATION_CONFIG.transferMemo)).toBeInTheDocument();
     expect(screen.queryByText(/No fixed amount|· VND/)).not.toBeInTheDocument();
     expect(document.querySelector('.donate-qr-card')).toBeNull();
+    const guidance = screen.getByText(
+      'Scan the QR or copy the details. Check the recipient before sending.',
+    );
+    expect(guidance).toHaveClass('donate-bank-guidance');
+    expect(guidance.parentElement).toHaveClass('donate-bank-information');
+    expect(document.querySelector('.donate-bank-card > .settings-note')).toBeNull();
     expect(screen.getByRole('img', { name: 'VietQR bank transfer code' })).toHaveAttribute(
       'src',
       DONATION_CONFIG.vietQrImagePath,

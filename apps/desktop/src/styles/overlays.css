@@ -603,14 +603,23 @@
 }
 
 .donate-bank-information {
+  display: grid;
+  align-content: start;
+  gap: 9px;
   min-width: 0;
-  padding-top: 2px;
+}
+
+.donate-bank-guidance {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .donate-bank-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 14px;
+  gap: 9px 14px;
   margin: 0;
 }
 
@@ -653,7 +662,7 @@
   grid-template-rows: auto auto;
   align-items: center;
   gap: 3px 10px;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
 }
 
