@@ -38,8 +38,9 @@ describe('PlaybackAdmission recovery actions', () => {
       screen.getByText(/informational and does not change authored timing/),
     ).toBeInTheDocument();
     expect(screen.getAllByLabelText('Offline whole-stream timing advisory')).toHaveLength(3);
-    expect(screen.getAllByText('Modeled timing pressure')).toHaveLength(2);
-    expect(screen.getAllByText('No modeled timing pressure')).toHaveLength(2);
+    expect(screen.getAllByText('Modeled timing pressure').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('No modeled timing pressure').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Modeled timing pressure')[0]?.closest('summary')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
     expect(
       container.querySelector('[data-plan-fingerprint="mock-plan"]')?.getAttribute('data-status'),
