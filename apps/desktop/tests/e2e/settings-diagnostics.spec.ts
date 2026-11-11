@@ -297,7 +297,7 @@ test('Donate groups transfer details and aligns its GitHub external-link icon', 
       if (!qrBounds || !infoBounds) return false;
       return infoBounds.top >= qrBounds.bottom;
     });
-    expect(stacked).toBe(true);
+    expect(stacked).toBe(viewport.width <= 760);
   }
 });
 
