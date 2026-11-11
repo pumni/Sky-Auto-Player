@@ -424,14 +424,14 @@
   align-items: center;
   gap: 4px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .profile-fields select {
   min-width: 46px;
-  min-height: 27px;
-  padding: 0 4px;
+  min-height: 32px;
+  padding: 0 8px;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
@@ -456,71 +456,6 @@
   display: none;
 }
 
-.player-tools .player-test-button {
-  flex: 0 0 auto;
-  min-height: 30px;
-  padding-inline: 10px;
-  border: 1px dashed var(--control-border);
-  border-radius: 999px;
-  color: var(--text-primary);
-  background: var(--surface-raised);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.player-test-button:hover:not(:disabled) {
-  color: var(--accent-ink);
-  border-color: var(--accent-ink);
-  background: var(--control-hover);
-}
-
-.player-auto-play-label {
-  display: none;
-}
-
-@media (min-width: 1200px) {
-  .profile-summary-button {
-    display: inline-flex;
-    align-items: center;
-    width: auto;
-    gap: 7px;
-    padding: 0 6px;
-  }
-
-  .profile-summary-button > span {
-    display: grid;
-    min-width: 0;
-    text-align: left;
-    line-height: 1.2;
-  }
-
-  .profile-summary-button strong {
-    color: var(--text-secondary);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .profile-summary-button small {
-    color: var(--text-tertiary);
-    font-size: 10px;
-    white-space: nowrap;
-  }
-
-  .player-tools .player-auto-play-button {
-    display: inline-flex;
-    align-items: center;
-    width: auto;
-    gap: 4px;
-    padding-inline: 5px;
-  }
-
-  .player-auto-play-label {
-    display: inline;
-    font-size: 11px;
-    font-weight: 600;
-  }
-}
-
 .profile-popover {
   position: absolute;
   right: auto;
@@ -528,8 +463,10 @@
   z-index: 7;
   display: grid;
   gap: 10px;
-  width: min(320px, calc(100vw - 24px));
-  min-width: min(260px, calc(100vw - 24px));
+  width: min(350px, calc(100vw - 24px));
+  min-width: min(280px, calc(100vw - 24px));
+  max-height: calc(100vh - 130px);
+  overflow-y: auto;
   max-width: calc(100vw - 24px);
   box-sizing: border-box;
   padding: 12px;
@@ -542,6 +479,20 @@
 .profile-popover:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.profile-popover-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.profile-popover-header p {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .profile-popover .profile-fields {
@@ -638,14 +589,34 @@
 }
 
 .profile-popover .profile-timing-summary {
-  grid-column: 1 / -1;
   gap: 3px 10px;
-  margin-top: 2px;
+  margin-top: 8px;
+}
+
+.profile-advanced {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.profile-advanced summary {
+  cursor: pointer;
+}
+
+.profile-preview {
+  display: grid;
+  gap: 9px;
+  padding-top: 12px;
+  border-top: 1px solid var(--workbench-divider);
 }
 
 .profile-test-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  margin-top: 2px;
+  min-height: 34px;
+  gap: 7px;
   font-size: var(--type-metadata);
 }
 

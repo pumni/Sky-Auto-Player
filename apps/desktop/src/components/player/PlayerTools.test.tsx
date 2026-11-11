@@ -7,20 +7,16 @@ import { PlayerTools } from './PlayerTools';
 describe('PlayerTools playback modes and profile', () => {
   afterEach(cleanup);
 
-  it('places the persisted Auto Play button before Profile and Utility and removes it from the profile', async () => {
+  it('keeps Auto Play, Profile and Utility as compact controls with an accessible profile menu', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     render(<PlayerTools useStore={store} />);
 
-    const testPlayback = screen.getByRole('button', { name: 'Test without keyboard input' });
-    expect(testPlayback).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Test without keyboard input' })).toBeNull();
     const autoPlay = screen.getByRole('button', { name: 'Auto Play' });
     const profile = screen.getByRole('button', { name: 'Configure playback profile' });
     const utility = screen.getByRole('button', { name: 'Open utility panel' });
     expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-    expect(
-      testPlayback.compareDocumentPosition(autoPlay) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
     expect(autoPlay).toHaveAttribute('title', 'Auto Play on');
     expect(autoPlay.querySelector('svg')).toHaveClass('lucide-list-music');
     expect(autoPlay.querySelector('svg')).not.toHaveClass('lucide-list-end');
@@ -52,6 +48,7 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => profile.click());
 
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
+    expect(within(dialog).getByRole('heading', { name: 'Playback profile' })).toBeVisible();
     expect(within(dialog).getByLabelText('Base Hold')).toBeInTheDocument();
     expect(within(dialog).queryByRole('switch', { name: 'Auto Play' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Auto Play' })).not.toBeInTheDocument();
@@ -66,7 +63,6 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => store.getState().selectSong(row.song_id));
     render(<PlayerTools useStore={store} />);
 
-    expect(screen.getByRole('button', { name: 'Test without keyboard input' })).toBeEnabled();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
@@ -82,24 +78,20 @@ describe('PlayerTools playback modes and profile', () => {
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
-    expect(screen.getByRole('button', { name: 'Test without keyboard input' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Test without keyboard input' })).toBeNull();
   });
 
-  it('offers a direct dry-run action without opening the profile menu', async () => {
-    const store = createDesktopStore(
-      createMockBridge({ playbackDurationMs: 120_000, startDelayMs: 1 }),
-    );
+  it('does not expose raw profile parameters or a Test button in the player dock', async () => {
+    const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
-    const row = store.getState().library.pages.get(0)?.[1];
-    if (!row) throw new Error('mock Library is too small');
-    await act(async () => store.getState().selectSong(row.song_id));
-    render(<PlayerTools useStore={store} />);
+    const { container } = render(<PlayerTools useStore={store} />);
 
-    await act(async () =>
-      screen.getByRole('button', { name: 'Test without keyboard input' }).click(),
-    );
-    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
-    expect(store.getState().playback.context?.dryRun).toBe(true);
-    expect(screen.queryByRole('dialog', { name: 'Playback profile' })).toBeNull();
+    expect(container.querySelector('.player-test-button')).toBeNull();
+    expect(container.querySelector('.profile-summary-button')).toHaveTextContent('');
+    expect(container.querySelector('.player-auto-play-label')).toBeNull();
+    await act(async () => screen.getByRole('button', { name: 'Configure playback profile' }).click());
+    const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
+    expect(within(dialog).getByText('Calculated timing')).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
   });
 });

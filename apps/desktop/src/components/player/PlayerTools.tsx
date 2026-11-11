@@ -1,4 +1,4 @@
-import { ListMusic, PanelRight, SlidersHorizontal } from 'lucide-react';
+import { FlaskConical, ListMusic, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
@@ -39,9 +39,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
     !playback.statusRetryPending &&
     sessionStatusConcern === null &&
     !hasPreparedPlayback;
-  const profileSummary = defaults
-    ? `${defaults.hold_frames}f + ${(defaults.timing_margin_us / 1_000).toFixed(1)}ms · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
-    : 'Unavailable';
 
   const prepareAndMaybeStart = async () => {
     await prepare({ dry_run: true });
@@ -65,16 +62,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   return (
     <div className="player-tools">
       <button
-        className="button player-test-button"
-        type="button"
-        aria-label="Test without keyboard input"
-        title="Preview with no physical keyboard input"
-        disabled={!canPreparePlayback}
-        onClick={() => void prepareAndMaybeStart()}
-      >
-        Test
-      </button>
-      <button
         className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
         type="button"
         aria-label="Auto Play"
@@ -83,10 +70,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         disabled={!settings || autoPlayPending}
         onClick={() => void toggleAutoPlay()}
       >
-        <ListMusic size={16} aria-hidden="true" />
-        <span className="player-auto-play-label" aria-hidden="true">
-          Auto
-        </span>
+        <ListMusic size={18} aria-hidden="true" />
       </button>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
@@ -95,15 +79,16 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             className="player-tool-button profile-summary-button"
             type="button"
             aria-label="Configure playback profile"
+            title="Configure playback profile"
           >
-            <SlidersHorizontal size={15} aria-hidden="true" />
-            <span>
-              <strong>Playback profile</strong>
-              <small>{profileSummary}</small>
-            </span>
+            <SlidersHorizontal size={18} aria-hidden="true" />
           </AriaButton>
           <Popover className="profile-popover" placement="top end" offset={8}>
             <Dialog aria-label="Playback profile">
+              <header className="profile-popover-header">
+                <h3>Playback profile</h3>
+                <p>Adjust note timing for your next playback session.</p>
+              </header>
               <div className="profile-fields">
                 <ProfileFields
                   defaults={defaults}
@@ -112,20 +97,23 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                   patchSettings={patchSettings}
                 />
               </div>
-              <p className="profile-test-explanation">
-                Tests the current profile with dry-run playback; no physical keyboard input is sent.
-              </p>
-              <button
-                className="button profile-test-action"
-                type="button"
-                disabled={!canPreparePlayback}
-                onClick={() => {
-                  setProfileOpen(false);
-                  void prepareAndMaybeStart();
-                }}
-              >
-                Test playback (no input)
-              </button>
+              <div className="profile-preview">
+                <p className="profile-test-explanation">
+                  Tests the current profile with dry-run playback; no physical keyboard input is sent.
+                </p>
+                <button
+                  className="button profile-test-action"
+                  type="button"
+                  disabled={!canPreparePlayback}
+                  onClick={() => {
+                    setProfileOpen(false);
+                    void prepareAndMaybeStart();
+                  }}
+                >
+                  <FlaskConical size={15} aria-hidden="true" />
+                  Test playback (no input)
+                </button>
+              </div>
             </Dialog>
           </Popover>
         </DialogTrigger>
@@ -219,16 +207,19 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
           )
         }
       />
-      <dl className="profile-timing-summary">
-        <div>
-          <dt>Target hold</dt>
-          <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-        </div>
-        <div>
-          <dt>Release gap</dt>
-          <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
-        </div>
-      </dl>
+      <details className="profile-advanced">
+        <summary>Calculated timing</summary>
+        <dl className="profile-timing-summary">
+          <div>
+            <dt>Target hold</dt>
+            <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+          </div>
+          <div>
+            <dt>Release gap</dt>
+            <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
+          </div>
+        </dl>
+      </details>
     </>
   );
 }
