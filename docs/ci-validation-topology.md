@@ -93,7 +93,7 @@ unselected proof job to report `skipped`.
 | `apps/website/**`, `.github/actions/site-validate/**`, `pages.yml` | Site validation and exact Pages artifact packaging, including website dependency changes |
 | `.bun-version`, Rust setup action, shared toolchain resolver | Full validation across all lanes |
 | `apps/desktop/src/**`, React styles/tests on a PR | Desktop web/browser and E2E; no Windows jobs by default, except the Windows integration paths below |
-| `apps/desktop/src/bridge/tauriBridge.ts`, `apps/desktop/src/bridge/generated/**`, `apps/desktop/src/platform/runtime.ts`, `apps/desktop/src/platform/windowControls.ts`, `apps/desktop/src/app/BootstrapGate.tsx`, `apps/desktop/src/app/usePackagedSmokeTest.ts` | Desktop web/browser and E2E plus Windows native and NSIS package qualification |
+| Windows integration paths:<br>`apps/desktop/src/bridge/tauriBridge.ts`<br>`apps/desktop/src/bridge/startupTelemetry.ts`<br>`apps/desktop/src/bridge/generated/**`<br>`apps/desktop/src/platform/runtime.ts`<br>`apps/desktop/src/platform/windowControls.ts`<br>`apps/desktop/src/platform/startupWindowReveal.ts`<br>`apps/desktop/src/platform/systemAppearance.ts`<br>`apps/desktop/src/platform/externalLinks.ts`<br>`apps/desktop/src/app/BootstrapGate.tsx`<br>`apps/desktop/src/app/usePackagedSmokeTest.ts`<br>`apps/desktop/src/main.tsx` | Desktop web/browser and E2E plus Windows native and NSIS package qualification |
 | Any `apps/desktop/**` change on a `main` push | Desktop web/browser and E2E plus Windows candidate/package qualification |
 | `apps/desktop/package.json`, `bun.lock` | Desktop web/browser, Windows candidate/package, updater and dependency checks |
 | `apps/desktop/src-tauri/**` production source/config/hooks/resources | Windows native and package qualification; updater lane for updater identity/behavior changes |
@@ -108,6 +108,15 @@ unselected proof job to report `skipped`.
 
 Multi-path changes use the union of their lane requirements. A release note
 does not suppress a lane required by another changed path.
+
+The classifier keeps these Tauri entrypoint and adapter paths in an explicit
+Windows integration owner set. A Rust regression test also scans production
+`.ts`/`.tsx` files for direct runtime imports from `@tauri-apps/api/*` and
+`@tauri-apps/plugin-*`, excluding test/spec files, declaration files, and
+type-only imports, and asserts that each importer selects Windows native and
+package qualification.
+This scan is test-only; path classification does not inspect frontend source at
+runtime. New Tauri runtime adapters must be added to the explicit owner set.
 
 ## Build-once boundaries
 

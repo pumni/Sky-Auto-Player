@@ -563,10 +563,15 @@ fn classify_path(
 fn is_windows_integration_frontend_path(path: &str) -> bool {
     [
         "apps/desktop/src/bridge/tauriBridge.ts",
+        "apps/desktop/src/bridge/startupTelemetry.ts",
         "apps/desktop/src/platform/runtime.ts",
         "apps/desktop/src/platform/windowControls.ts",
+        "apps/desktop/src/platform/startupWindowReveal.ts",
+        "apps/desktop/src/platform/systemAppearance.ts",
+        "apps/desktop/src/platform/externalLinks.ts",
         "apps/desktop/src/app/BootstrapGate.tsx",
         "apps/desktop/src/app/usePackagedSmokeTest.ts",
+        "apps/desktop/src/main.tsx",
     ]
     .contains(&path)
         || path.starts_with("apps/desktop/src/bridge/generated/")
@@ -1087,6 +1092,74 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn is_tauri_module_specifier(statement: &str) -> bool {
+        statement.contains("@tauri-apps/api/") || statement.contains("@tauri-apps/plugin-")
+    }
+
+    fn is_type_only_import_statement(statement: &str) -> bool {
+        let statement = statement.trim_start();
+        if statement.starts_with("import type ") || statement.starts_with("export type ") {
+            return true;
+        }
+
+        let Some(open) = statement.find('{') else {
+            return false;
+        };
+        if statement.starts_with("import ") && !statement["import ".len()..open].trim().is_empty() {
+            return false;
+        }
+        let Some(close) = statement[open + 1..].find('}') else {
+            return false;
+        };
+        let specifiers = &statement[open + 1..open + 1 + close];
+        let specifiers = specifiers
+            .split(',')
+            .map(str::trim)
+            .filter(|specifier| !specifier.is_empty())
+            .collect::<Vec<_>>();
+        !specifiers.is_empty()
+            && specifiers
+                .iter()
+                .all(|specifier| specifier.starts_with("type "))
+    }
+
+    fn contains_tauri_runtime_import(source: &str) -> bool {
+        let mut declaration = None::<String>;
+        let mut type_only = false;
+        for raw_line in source.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with("//") {
+                continue;
+            }
+
+            if let Some(statement) = declaration.as_mut() {
+                statement.push(' ');
+                statement.push_str(line);
+                type_only = is_type_only_import_statement(statement);
+            } else if line.starts_with("import ") || line.starts_with("export ") {
+                type_only = is_type_only_import_statement(line);
+                declaration = Some(line.to_owned());
+            } else {
+                let is_dynamic_import = line.contains("import(") || line.contains("import (");
+                let is_type_query = line.starts_with("type ") || line.starts_with("export type ");
+                if is_dynamic_import && !is_type_query && is_tauri_module_specifier(line) {
+                    return true;
+                }
+                continue;
+            }
+
+            let statement = declaration.as_deref().unwrap_or_default();
+            if !type_only && is_tauri_module_specifier(statement) {
+                return true;
+            }
+            if statement.contains(';') || statement.contains(" from ") {
+                declaration = None;
+                type_only = false;
+            }
+        }
+        false
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let path = ci_artifacts::unique_sibling(&std::env::temp_dir().join(name), "test");
         fs::create_dir(&path).unwrap();
@@ -1479,15 +1552,20 @@ mod tests {
     }
 
     #[test]
-    fn windows_ipc_and_bootstrap_frontend_paths_select_package_qualification() {
+    fn windows_tauri_integration_frontend_paths_select_package_qualification() {
         for path in [
             "apps/desktop/src/bridge/tauriBridge.ts",
+            "apps/desktop/src/bridge/startupTelemetry.ts",
             "apps/desktop/src/bridge/generated/commands.ts",
             "apps/desktop/src/bridge/generated/nested/Example.ts",
             "apps/desktop/src/platform/runtime.ts",
             "apps/desktop/src/platform/windowControls.ts",
+            "apps/desktop/src/platform/startupWindowReveal.ts",
+            "apps/desktop/src/platform/systemAppearance.ts",
+            "apps/desktop/src/platform/externalLinks.ts",
             "apps/desktop/src/app/BootstrapGate.tsx",
             "apps/desktop/src/app/usePackagedSmokeTest.ts",
+            "apps/desktop/src/main.tsx",
         ] {
             assert_lanes(
                 &classify_paths([path.to_owned()]),
@@ -1509,6 +1587,93 @@ mod tests {
             assert_lanes(
                 &classify_paths([path.to_owned()]),
                 &["desktop_required", "desktop_e2e_required"],
+            );
+        }
+    }
+
+    #[test]
+    fn production_tauri_runtime_imports_are_windows_package_qualified() {
+        assert!(contains_tauri_runtime_import(
+            "import { invoke } from '@tauri-apps/api/core';"
+        ));
+        assert!(contains_tauri_runtime_import(
+            r"import {
+  openUrl,
+} from '@tauri-apps/plugin-opener';"
+        ));
+        assert!(contains_tauri_runtime_import(
+            "const api = await import('@tauri-apps/api/window');"
+        ));
+        assert!(!contains_tauri_runtime_import(
+            "import type { Window } from '@tauri-apps/api/window';"
+        ));
+        assert!(!contains_tauri_runtime_import(
+            "import { type Window } from '@tauri-apps/api/window';"
+        ));
+        assert!(contains_tauri_runtime_import(
+            "import WindowApi, { type Window } from '@tauri-apps/api/window';"
+        ));
+        assert!(!contains_tauri_runtime_import(
+            "type WindowApi = import('@tauri-apps/api/window').Window;"
+        ));
+
+        let repository_root = crate::repo::root();
+        let source_root = repository_root.join("apps/desktop/src");
+        let mut observed = Vec::new();
+        for entry in walkdir::WalkDir::new(&source_root).follow_links(false) {
+            let entry = entry.unwrap();
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let extension = path.extension().and_then(|extension| extension.to_str());
+            if !matches!(extension, Some("ts" | "tsx")) {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .unwrap_or_default();
+            if file_name.ends_with(".d.ts")
+                || file_name.contains(".test.")
+                || file_name.contains(".spec.")
+            {
+                continue;
+            }
+
+            let source = fs::read_to_string(path).unwrap();
+            if !contains_tauri_runtime_import(&source) {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&repository_root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let classification = classify_paths([relative.clone()]);
+            assert!(
+                classification.lane("package_required"),
+                "direct Tauri runtime import lacks Windows package qualification: {relative}"
+            );
+            assert!(
+                classification.lane("desktop_native_required"),
+                "direct Tauri runtime import lacks Windows native validation: {relative}"
+            );
+            observed.push(relative);
+        }
+
+        for expected in [
+            "apps/desktop/src/bridge/startupTelemetry.ts",
+            "apps/desktop/src/bridge/tauriBridge.ts",
+            "apps/desktop/src/platform/externalLinks.ts",
+            "apps/desktop/src/platform/runtime.ts",
+            "apps/desktop/src/platform/startupWindowReveal.ts",
+            "apps/desktop/src/platform/systemAppearance.ts",
+            "apps/desktop/src/platform/windowControls.ts",
+        ] {
+            assert!(
+                observed.iter().any(|path| path == expected),
+                "expected production Tauri runtime import was not scanned: {expected}"
             );
         }
     }
