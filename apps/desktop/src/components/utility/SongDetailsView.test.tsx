@@ -7,6 +7,16 @@ import { SongDetailsView } from './SongDetailsView';
 describe('SongDetailsView', () => {
   afterEach(() => cleanup());
 
+  it('shows a centered song-selection cue when Inspector has no selected song', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const { container } = render(<SongDetailsView useStore={store} />);
+    expect(screen.getByText('No song selected')).toBeInTheDocument();
+    expect(screen.getByText('Select a song to view details.')).toBeInTheDocument();
+    expect(container.querySelector('.utility-empty-icon')).toHaveClass('lucide-mouse-pointer-2');
+    expect(screen.getByLabelText('Song details')).toHaveClass('utility-empty');
+  });
+
   async function selectFixture(index: number) {
     const songId = index.toString(16).padStart(32, '0');
     const bridge = createMockBridge({ builtinSongIds: [songId] });

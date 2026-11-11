@@ -452,10 +452,6 @@
   background: transparent;
 }
 
-.profile-summary-button > span {
-  display: none;
-}
-
 .profile-popover {
   position: absolute;
   right: auto;

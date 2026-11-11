@@ -78,7 +78,11 @@ describe('PlayerTools playback modes and profile', () => {
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
-    expect(screen.queryByRole('button', { name: 'Test without keyboard input' })).toBeNull();
+    await act(async () =>
+      screen.getByRole('button', { name: 'Configure playback profile' }).click(),
+    );
+    const runningDialog = screen.getByRole('dialog', { name: 'Playback profile' });
+    expect(within(runningDialog).getByRole('button', { name: 'Test playback (no input)' })).toBeDisabled();
   });
 
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {
@@ -87,9 +91,11 @@ describe('PlayerTools playback modes and profile', () => {
     const { container } = render(<PlayerTools useStore={store} />);
 
     expect(container.querySelector('.player-test-button')).toBeNull();
-    expect(container.querySelector('.profile-summary-button')).toHaveTextContent('');
+    expect(container.querySelector('.profile-summary-button')?.textContent).toBe('');
     expect(container.querySelector('.player-auto-play-label')).toBeNull();
-    await act(async () => screen.getByRole('button', { name: 'Configure playback profile' }).click());
+    await act(async () =>
+      screen.getByRole('button', { name: 'Configure playback profile' }).click(),
+    );
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(within(dialog).getByText('Calculated timing')).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();

@@ -88,6 +88,7 @@ describe('Track Browser primitives', () => {
       'aria-hidden',
       'true',
     );
+    expect(renderedRow.querySelector('.track-cell-index svg')).toHaveClass('lucide-music-2');
   });
 
   it('formats song counts with singular grammar', () => {
