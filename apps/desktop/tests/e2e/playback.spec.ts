@@ -569,9 +569,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
 
   const profile = page.getByRole('dialog', { name: 'Playback profile' });
   await expect(
-    profile.getByText(
-      'Try these settings without sending any physical keyboard input.',
-    ),
+    profile.getByText('Try these settings without sending any physical keyboard input.'),
   ).toBeVisible();
   await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
 
