@@ -291,10 +291,7 @@ describe('PlayerTrackInfo', () => {
     );
     const modeBadge = container.querySelector<HTMLElement>('.player-mode-badge');
     expect(modeBadge).toHaveTextContent('TEST · NO KEYS');
-    expect(modeBadge).toHaveAttribute(
-      'aria-label',
-      'Dry run: no physical keyboard input is sent.',
-    );
+    expect(modeBadge).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
   });
 
