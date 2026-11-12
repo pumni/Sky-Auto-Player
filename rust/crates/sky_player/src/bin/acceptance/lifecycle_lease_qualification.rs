@@ -627,7 +627,7 @@ pub(super) fn expected_delayed_watchdog_expiry(
 ) -> bool {
     scenario == Scenario::LeaseAgeWatchdogDelayed
         && terminal_trigger_reason == Some("supervisor_lease_expired")
-        && terminal_error == Some("supervisor_lease_expired")
+        && super::terminal_error_matches_reason(terminal_error, "supervisor_lease_expired")
         && final_gate_lease_expirations > 0
 }
 
@@ -680,7 +680,7 @@ pub(super) fn finish_delayed_watchdog_case(
         || oracle.final_gate_lease_expirations == 0
         || oracle.terminal_trigger_reason != Some("supervisor_lease_expired")
         || oracle.terminal_outcome != Some("error")
-        || oracle.terminal_error != Some("supervisor_lease_expired")
+        || !super::terminal_error_matches_reason(oracle.terminal_error, "supervisor_lease_expired")
         || oracle.final_release_obligation_mask != 0
         || !oracle.sink_events_empty
         || oracle.helper_liveness_ticks == 0
@@ -772,6 +772,22 @@ mod release_floor_tests {
         assert_eq!(partial["down_sender_attempt_count"], 2);
         assert_eq!(partial["down_sender_start_qpc_ticks"], serde_json::Value::Null);
         assert_eq!(partial["floor_passed"], false);
+    }
+}
+
+#[cfg(test)]
+mod delayed_watchdog_tests {
+    use super::expected_delayed_watchdog_expiry;
+    use crate::acceptance::Scenario;
+
+    #[test]
+    fn detailed_terminal_error_preserves_supervisor_expiry_classification() {
+        assert!(expected_delayed_watchdog_expiry(
+            Scenario::LeaseAgeWatchdogDelayed,
+            Some("supervisor_lease_expired"),
+            Some("dispatch gate rejected before SendInput: source_action=0 source_chord=0 up_mask=0x0000 down_mask=0x0001 requested=1 inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: supervisor_lease_expired"),
+            1,
+        ));
     }
 }
 
