@@ -8,6 +8,9 @@ param(
     [string]$ReadyFile,
     [ValidateNotNullOrEmpty()]
     [string]$EventLog,
+    [ValidateSet('LegacyInline', 'SchedulerQueuedV1')]
+    [string]$ObserverMode = 'LegacyInline',
+    [string]$ObserverSummaryFile,
     [string]$ActivateRequestFile,
     [double]$DurationSeconds = 0
 )
@@ -15,14 +18,30 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+$nativeAcceptanceReferenceDirectory = Join-Path $PSHOME 'ref'
 $nativeAcceptanceReferences = @(
     [System.Windows.Forms.Form].Assembly.Location,
     [System.Windows.Forms.Message].Assembly.Location,
     [System.Drawing.Font].Assembly.Location,
-    [System.ComponentModel.Component].Assembly.Location
+    [System.ComponentModel.Component].Assembly.Location,
+    [System.Text.Json.JsonSerializer].Assembly.Location,
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Collections.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Runtime.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.IO.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Text.Encoding.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Text.Encoding.Extensions.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Threading.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Threading.Thread.dll'),
+    (Join-Path $nativeAcceptanceReferenceDirectory 'System.Diagnostics.TraceSource.dll')
 ) | Select-Object -Unique
 Add-Type -ReferencedAssemblies $nativeAcceptanceReferences -TypeDefinition @"
 using System;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
 using System.Windows.Forms;
 
 public sealed class NativeKeyMessageData : EventArgs {
@@ -61,18 +80,517 @@ public sealed class NativeKeyMessageData : EventArgs {
 public sealed class NativeAcceptanceSinkForm : Form {
     public event EventHandler<NativeKeyMessageData> NativeKeyMessage;
     public bool PreventActivationOnShow { get; set; }
+    public NativeAcceptanceEventQueue SchedulerObserver { get; set; }
 
     protected override bool ShowWithoutActivation {
         get { return PreventActivationOnShow; }
     }
 
     protected override void WndProc(ref Message message) {
-        NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
-            message.Msg, message.WParam, message.LParam);
-        if (decoded != null && NativeKeyMessage != null) {
-            NativeKeyMessage(this, decoded);
+        NativeAcceptanceEventQueue observer = SchedulerObserver;
+        long handlerStart = observer == null ? 0L : Stopwatch.GetTimestamp();
+        bool observed = false;
+        try {
+            if (observer != null) {
+                observed = observer.ObserveKeyMessage(message.Msg, message.LParam.ToInt64(),
+                    message.HWnd.ToInt64(), handlerStart);
+            } else {
+                NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
+                    message.Msg, message.WParam, message.LParam);
+                if (decoded != null && NativeKeyMessage != null) {
+                    NativeKeyMessage(this, decoded);
+                }
+            }
+            base.WndProc(ref message);
+        } finally {
+            if (observed) {
+                observer.RecordHandlerLatency(handlerStart, Stopwatch.GetTimestamp());
+            }
         }
-        base.WndProc(ref message);
+    }
+}
+
+public struct NativeAcceptanceQueuedKey {
+    public long Sequence;
+    public long QpcTicks;
+    public long TargetHwnd;
+    public int TargetPid;
+    public long ForegroundHwnd;
+    public int ForegroundPid;
+    public int ScanCode;
+    public bool Extended;
+    public byte Direction;
+}
+
+public sealed class NativeAcceptanceRingSnapshot {
+    public long EventsSeen;
+    public long EventsEnqueued;
+    public long EventsWritten;
+    public long Dropped;
+    public long QueueHighWater;
+    public int QueueCapacity;
+    public bool Overflowed;
+    public long HandlerLatencyCount;
+    public long HandlerLatencySampleCount;
+    public long HandlerLatencySampleDropped;
+    public long HandlerLatencyP50Us;
+    public long HandlerLatencyP95Us;
+    public long HandlerLatencyP99Us;
+    public long HandlerLatencyMaxUs;
+    public long WriterFailures;
+    public long InternalFailures;
+    public int QueueDepth;
+    public bool AddingCompleted;
+}
+
+public sealed class NativeAcceptanceEventRing {
+    private readonly object _gate = new object();
+    private readonly NativeAcceptanceQueuedKey[] _items;
+    private readonly long[] _handlerLatencyUs = new long[65536];
+    private readonly AutoResetEvent _changed = new AutoResetEvent(false);
+    private int _head;
+    private int _tail;
+    private int _count;
+    private bool _completed;
+    private bool _overflowed;
+    private long _eventsSeen;
+    private long _eventsEnqueued;
+    private long _eventsWritten;
+    private long _dropped;
+    private long _queueHighWater;
+    private long _handlerLatencyCount;
+    private int _handlerLatencyStored;
+    private long _handlerLatencySampleDropped;
+    private long _handlerLatencyMaxUs;
+    private long _writerFailures;
+    private long _internalFailures;
+
+    public NativeAcceptanceEventRing(int capacity) {
+        if (capacity < 1 || capacity > 1048576) {
+            throw new ArgumentOutOfRangeException("capacity");
+        }
+        _items = new NativeAcceptanceQueuedKey[capacity];
+    }
+
+    public bool TryEnqueue(byte direction, int scanCode, bool extended, long qpcTicks,
+        long targetHwnd, int targetPid, long foregroundHwnd, int foregroundPid) {
+        lock (_gate) {
+            if (_completed) {
+                _internalFailures++;
+                return false;
+            }
+            if (_eventsSeen == Int64.MaxValue) {
+                _overflowed = true;
+                _dropped++;
+                _changed.Set();
+                return false;
+            }
+            long sequence = ++_eventsSeen;
+            if (_overflowed || _count == _items.Length) {
+                _overflowed = true;
+                _dropped++;
+                _changed.Set();
+                return false;
+            }
+            _items[_tail] = new NativeAcceptanceQueuedKey {
+                Sequence = sequence,
+                QpcTicks = qpcTicks,
+                TargetHwnd = targetHwnd,
+                TargetPid = targetPid,
+                ForegroundHwnd = foregroundHwnd,
+                ForegroundPid = foregroundPid,
+                ScanCode = scanCode,
+                Extended = extended,
+                Direction = direction
+            };
+            _tail = (_tail + 1) % _items.Length;
+            _count++;
+            _eventsEnqueued++;
+            if (_count > _queueHighWater) _queueHighWater = _count;
+        }
+        _changed.Set();
+        return true;
+    }
+
+    public bool TryDequeue(out NativeAcceptanceQueuedKey item, int waitMilliseconds) {
+        while (true) {
+            lock (_gate) {
+                if (_count > 0) {
+                    item = _items[_head];
+                    _head = (_head + 1) % _items.Length;
+                    _count--;
+                    return true;
+                }
+                if (_completed) {
+                    item = default(NativeAcceptanceQueuedKey);
+                    return false;
+                }
+            }
+            if (waitMilliseconds <= 0 || !_changed.WaitOne(waitMilliseconds)) {
+                item = default(NativeAcceptanceQueuedKey);
+                return false;
+            }
+        }
+    }
+
+    public void CompleteAdding() {
+        lock (_gate) _completed = true;
+        _changed.Set();
+    }
+
+    public bool IsCompletedAndEmpty {
+        get { lock (_gate) return _completed && _count == 0; }
+    }
+
+    public void MarkWritten() {
+        lock (_gate) _eventsWritten++;
+    }
+
+    public void MarkWriterFailure() {
+        lock (_gate) _writerFailures++;
+    }
+
+    public void MarkInternalFailure() {
+        lock (_gate) _internalFailures++;
+    }
+
+    public void RecordHandlerLatency(long startQpc, long endQpc, long qpcFrequency) {
+        if (endQpc < startQpc || qpcFrequency <= 0) {
+            MarkInternalFailure();
+            return;
+        }
+        long elapsedUs = (long)(((decimal)(endQpc - startQpc) * 1000000m) / qpcFrequency);
+        lock (_gate) {
+            _handlerLatencyCount++;
+            if (elapsedUs > _handlerLatencyMaxUs) _handlerLatencyMaxUs = elapsedUs;
+            if (_handlerLatencyStored == _handlerLatencyUs.Length) {
+                _handlerLatencySampleDropped++;
+            } else {
+                _handlerLatencyUs[_handlerLatencyStored++] = elapsedUs;
+            }
+        }
+    }
+
+    public NativeAcceptanceRingSnapshot Snapshot() {
+        lock (_gate) {
+            Array.Sort(_handlerLatencyUs, 0, _handlerLatencyStored);
+            return new NativeAcceptanceRingSnapshot {
+                EventsSeen = _eventsSeen,
+                EventsEnqueued = _eventsEnqueued,
+                EventsWritten = _eventsWritten,
+                Dropped = _dropped,
+                QueueHighWater = _queueHighWater,
+                QueueCapacity = _items.Length,
+                Overflowed = _overflowed,
+                HandlerLatencyCount = _handlerLatencyCount,
+                HandlerLatencySampleCount = _handlerLatencyStored,
+                HandlerLatencySampleDropped = _handlerLatencySampleDropped,
+                HandlerLatencyP50Us = Percentile(0.50),
+                HandlerLatencyP95Us = Percentile(0.95),
+                HandlerLatencyP99Us = Percentile(0.99),
+                HandlerLatencyMaxUs = _handlerLatencyMaxUs,
+                WriterFailures = _writerFailures,
+                InternalFailures = _internalFailures,
+                QueueDepth = _count,
+                AddingCompleted = _completed
+            };
+        }
+    }
+
+    private long Percentile(double percentile) {
+        if (_handlerLatencyStored == 0) return -1;
+        int index = (int)Math.Ceiling(percentile * _handlerLatencyStored) - 1;
+        return _handlerLatencyUs[Math.Max(0, index)];
+    }
+
+    public static bool RunContractSelfTest() {
+        var ordered = new NativeAcceptanceEventRing(2);
+        if (!ordered.TryEnqueue(1, 0x15, false, 100, 11, 7, 11, 7) ||
+            !ordered.TryEnqueue(2, 0x15, false, 101, 11, 7, 11, 7)) return false;
+        NativeAcceptanceQueuedKey first;
+        NativeAcceptanceQueuedKey second;
+        if (!ordered.TryDequeue(out first, 0) || !ordered.TryDequeue(out second, 0) ||
+            first.Sequence != 1 || second.Sequence != 2 || first.Direction != 1 ||
+            second.Direction != 2 || first.ScanCode != 0x15 || second.ScanCode != 0x15 ||
+            first.QpcTicks > second.QpcTicks) return false;
+
+        var bounded = new NativeAcceptanceEventRing(1);
+        if (!bounded.TryEnqueue(1, 0x1D, true, 200, 22, 8, 22, 8) ||
+            bounded.TryEnqueue(2, 0x1D, true, 201, 22, 8, 22, 8) ||
+            bounded.TryEnqueue(2, 0x1D, true, 202, 22, 8, 22, 8)) return false;
+        NativeAcceptanceRingSnapshot snapshot = bounded.Snapshot();
+        NativeAcceptanceQueuedKey retained;
+        return snapshot.Overflowed && snapshot.QueueCapacity == 1 &&
+            snapshot.QueueHighWater == 1 && snapshot.EventsSeen == 3 &&
+            snapshot.EventsEnqueued == 1 && snapshot.Dropped == 2 &&
+            bounded.TryDequeue(out retained, 0) && retained.Sequence == 1 &&
+            retained.Direction == 1 && retained.ScanCode == 0x1D && retained.Extended &&
+            !bounded.TryDequeue(out retained, 0);
+    }
+}
+
+public sealed class NativeAcceptanceEventQueue {
+    public const string ObserverVersion = "scheduler-receiveonly-queue-v1";
+    public static long QpcFrequency { get { return Stopwatch.Frequency; } }
+    private readonly NativeAcceptanceEventRing _ring;
+    private readonly string _eventLog;
+    private readonly string _summaryFile;
+    private readonly string _runId;
+    private readonly string _role;
+    private readonly string _eventLogId;
+    private readonly long _targetHwnd;
+    private readonly int _targetPid;
+    private readonly Label _label;
+    private readonly string _displayTemplate;
+    private readonly long _qpcOrigin;
+    private readonly long _utcOriginTicks;
+    private readonly AutoResetEvent _ready = new AutoResetEvent(false);
+    private readonly Thread _consumer;
+    private volatile bool _headerFlushed;
+    private volatile bool _summaryWritten;
+    private volatile bool _consumerStopped;
+    private volatile int _startupFailures;
+    private int _completionStarted;
+    private bool _writerFailed;
+    private volatile bool _eventsFlushed;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    public NativeAcceptanceEventQueue(string eventLog, string summaryFile, string runId,
+        string role, string eventLogId, long targetHwnd, int targetPid, int capacity,
+        Label label, string displayTemplate) {
+        if (String.IsNullOrWhiteSpace(eventLog) || String.IsNullOrWhiteSpace(summaryFile) ||
+            String.IsNullOrWhiteSpace(runId) || String.IsNullOrWhiteSpace(role) ||
+            String.IsNullOrWhiteSpace(eventLogId) || targetHwnd <= 0 || targetPid <= 0) {
+            throw new ArgumentException("Scheduler observer identity and output paths are required");
+        }
+        _eventLog = eventLog;
+        _summaryFile = summaryFile;
+        _runId = runId;
+        _role = role;
+        _eventLogId = eventLogId;
+        _targetHwnd = targetHwnd;
+        _targetPid = targetPid;
+        _ring = new NativeAcceptanceEventRing(capacity);
+        _label = label;
+        _displayTemplate = displayTemplate;
+        _qpcOrigin = Stopwatch.GetTimestamp();
+        _utcOriginTicks = DateTime.UtcNow.Ticks;
+        _consumer = new Thread(Consume) { IsBackground = true, Name = "ReceiveOnly observer consumer" };
+        _consumer.Start();
+    }
+
+    public bool WaitForReady(int timeoutMilliseconds) {
+        return _ready.WaitOne(timeoutMilliseconds) && _headerFlushed && _startupFailures == 0;
+    }
+
+    public bool ObserveKeyMessage(int message, long lParam, long messageHwnd, long qpcTicks) {
+        byte direction;
+        switch (message) {
+            case 0x0100:
+            case 0x0104: direction = 1; break;
+            case 0x0101:
+            case 0x0105: direction = 2; break;
+            default: return false;
+        }
+        int scanCode = (int)((lParam >> 16) & 0xffL);
+        bool extended = ((lParam >> 24) & 0x1L) != 0;
+        int targetPid = 0;
+        int foregroundPid = 0;
+        long foregroundHwnd = 0;
+        try {
+            uint rawTargetPid;
+            GetWindowThreadProcessId(new IntPtr(messageHwnd), out rawTargetPid);
+            targetPid = (int)rawTargetPid;
+            IntPtr foreground = GetForegroundWindow();
+            uint rawForegroundPid;
+            GetWindowThreadProcessId(foreground, out rawForegroundPid);
+            foregroundHwnd = foreground.ToInt64();
+            foregroundPid = (int)rawForegroundPid;
+            if (targetPid <= 0 || foregroundHwnd <= 0 || foregroundPid <= 0) {
+                _ring.MarkInternalFailure();
+            }
+        } catch {
+            _ring.MarkInternalFailure();
+        }
+        try {
+            _ring.TryEnqueue(direction, scanCode, extended, qpcTicks, messageHwnd,
+                targetPid, foregroundHwnd, foregroundPid);
+        } catch {
+            _ring.MarkInternalFailure();
+        }
+        return true;
+    }
+
+    public void RecordHandlerLatency(long startQpc, long endQpc) {
+        try { _ring.RecordHandlerLatency(startQpc, endQpc, Stopwatch.Frequency); }
+        catch { _ring.MarkInternalFailure(); }
+    }
+
+    public bool Complete() {
+        if (Interlocked.Exchange(ref _completionStarted, 1) == 0) _ring.CompleteAdding();
+        bool joined = _consumer.Join(30000);
+        return joined && _consumerStopped && _summaryWritten && IsClean();
+    }
+
+    public bool IsClean() {
+        NativeAcceptanceRingSnapshot snapshot = _ring.Snapshot();
+        return !_writerFailed && _startupFailures == 0 && snapshot.Dropped == 0 &&
+            !snapshot.Overflowed && snapshot.WriterFailures == 0 && snapshot.InternalFailures == 0;
+    }
+
+    private void Consume() {
+        long downCount = 0;
+        long upCount = 0;
+        int unflushed = 0;
+        try {
+            using (var writer = new StreamWriter(_eventLog, true, new UTF8Encoding(false), 65536)) {
+                writer.WriteLine(HeaderJson());
+                writer.Flush();
+                _headerFlushed = true;
+                _ready.Set();
+                while (true) {
+                    NativeAcceptanceQueuedKey item;
+                    if (!_ring.TryDequeue(out item, 100)) {
+                        if (_ring.IsCompletedAndEmpty) break;
+                        if (unflushed > 0) {
+                            writer.Flush();
+                            unflushed = 0;
+                            UpdateUi(downCount, upCount);
+                        }
+                        continue;
+                    }
+                    if (!_writerFailed) {
+                        try {
+                            writer.WriteLine(EventJson(item));
+                            _ring.MarkWritten();
+                            unflushed++;
+                            if (unflushed >= 64) {
+                                writer.Flush();
+                                unflushed = 0;
+                                UpdateUi(downCount, upCount);
+                            }
+                        } catch {
+                            _writerFailed = true;
+                            _ring.MarkWriterFailure();
+                        }
+                    } else {
+                        _ring.MarkWriterFailure();
+                    }
+                    if (item.Direction == 1) downCount++; else upCount++;
+                }
+                writer.Flush();
+                _eventsFlushed = true;
+                UpdateUi(downCount, upCount);
+            }
+        } catch {
+            _startupFailures++;
+            _ring.MarkWriterFailure();
+            _ready.Set();
+        }
+        _consumerStopped = true;
+        try {
+            NativeAcceptanceRingSnapshot snapshot = _ring.Snapshot();
+            var summary = new {
+                schema_version = 1,
+                observer_version = ObserverVersion,
+                run_id = _runId,
+                role = _role,
+                event_log_id = _eventLogId,
+                target_hwnd = _targetHwnd,
+                target_pid = _targetPid,
+                qpc_frequency_hz = Stopwatch.Frequency,
+                queue_capacity = snapshot.QueueCapacity,
+                events_seen = snapshot.EventsSeen,
+                events_enqueued = snapshot.EventsEnqueued,
+                events_written = snapshot.EventsWritten,
+                queue_dropped = snapshot.Dropped,
+                queue_high_water = snapshot.QueueHighWater,
+                queue_overflow = snapshot.Overflowed,
+                queue_drained = snapshot.QueueDepth == 0 && snapshot.AddingCompleted,
+                handler_latency_count = snapshot.HandlerLatencyCount,
+                handler_latency_sample_count = snapshot.HandlerLatencySampleCount,
+                handler_latency_sample_dropped = snapshot.HandlerLatencySampleDropped,
+                handler_latency_p50_us = snapshot.HandlerLatencyP50Us < 0 ? (long?)null : snapshot.HandlerLatencyP50Us,
+                handler_latency_p95_us = snapshot.HandlerLatencyP95Us < 0 ? (long?)null : snapshot.HandlerLatencyP95Us,
+                handler_latency_p99_us = snapshot.HandlerLatencyP99Us < 0 ? (long?)null : snapshot.HandlerLatencyP99Us,
+                handler_latency_max_us = snapshot.HandlerLatencyCount == 0 ? (long?)null : snapshot.HandlerLatencyMaxUs,
+                writer_failures = snapshot.WriterFailures,
+                observer_internal_failures = snapshot.InternalFailures,
+                stream_header_flushed = _headerFlushed,
+                events_flushed = _eventsFlushed,
+                observer_startup_failures = _startupFailures,
+                consumer_stopped = true
+            };
+            File.WriteAllText(_summaryFile,
+                JsonSerializer.Serialize(summary) + Environment.NewLine, new UTF8Encoding(false));
+            _summaryWritten = true;
+        } catch {
+            _startupFailures++;
+        }
+    }
+
+    private string HeaderJson() {
+        var header = new {
+            schema_version = 3,
+            run_id = _runId,
+            role = _role,
+            event_log_id = _eventLogId,
+            observer_version = ObserverVersion,
+            sequence = 0L,
+            kind = "stream_start",
+            scan_code = 0,
+            extended = false,
+            virtual_key = 0,
+            message = 0,
+            observed_utc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            observed_qpc_ticks = _qpcOrigin,
+            target_hwnd = _targetHwnd,
+            target_pid = _targetPid,
+            foreground_hwnd = _targetHwnd,
+            foreground_pid = _targetPid
+        };
+        return JsonSerializer.Serialize(header);
+    }
+
+    private string EventJson(NativeAcceptanceQueuedKey item) {
+        long utcTicks = _utcOriginTicks + (long)(((decimal)(item.QpcTicks - _qpcOrigin) * TimeSpan.TicksPerSecond) / Stopwatch.Frequency);
+        var record = new {
+            schema_version = 3,
+            run_id = _runId,
+            role = _role,
+            event_log_id = _eventLogId,
+            observer_version = ObserverVersion,
+            sequence = item.Sequence,
+            kind = item.Direction == 1 ? "key_press" : "key_release",
+            scan_code = item.ScanCode,
+            extended = item.Extended,
+            virtual_key = 0,
+            message = 0,
+            observed_utc = new DateTime(utcTicks, DateTimeKind.Utc).ToString("O", CultureInfo.InvariantCulture),
+            observed_qpc_ticks = item.QpcTicks,
+            target_hwnd = item.TargetHwnd,
+            target_pid = item.TargetPid,
+            foreground_hwnd = item.ForegroundHwnd,
+            foreground_pid = item.ForegroundPid
+        };
+        return JsonSerializer.Serialize(record);
+    }
+
+    private void UpdateUi(long downCount, long upCount) {
+        if (_label == null || _label.IsDisposed || !_label.IsHandleCreated) return;
+        try {
+            _label.BeginInvoke((MethodInvoker)delegate {
+                if (!_label.IsDisposed) {
+                    _label.Text = String.Format(CultureInfo.InvariantCulture,
+                        _displayTemplate, downCount, upCount);
+                }
+            });
+        } catch { }
     }
 }
 "@
@@ -111,8 +629,9 @@ if ($SelfTest) {
     Assert-NativeDecoder ($null -ne $extended) "extended message decoded"
     Assert-NativeDecoder ($extended.ScanCode -eq 0x1D) "extended scan"
     Assert-NativeDecoder $extended.Extended "extended flag"
+    Assert-NativeDecoder ([NativeAcceptanceEventRing]::RunContractSelfTest()) "bounded queue order, sequence, and overflow"
 
-    Write-Output "native acceptance sink decoder self-test: PASS"
+    Write-Output "native acceptance sink decoder and Scheduler observer self-test: PASS"
     exit 0
 }
 
@@ -124,6 +643,13 @@ if ([string]::IsNullOrWhiteSpace($Mode) -or
 }
 if ($RunId.Length -gt 128) {
     throw "RunId must contain 1..128 non-whitespace characters"
+}
+if ($ObserverMode -eq 'SchedulerQueuedV1' -and
+    ($Mode -ne 'ReceiveOnly' -or [string]::IsNullOrWhiteSpace($ObserverSummaryFile))) {
+    throw 'SchedulerQueuedV1 is opt-in for ReceiveOnly and requires ObserverSummaryFile'
+}
+if ($ObserverMode -eq 'LegacyInline' -and -not [string]::IsNullOrWhiteSpace($ObserverSummaryFile)) {
+    throw 'ObserverSummaryFile is only valid for SchedulerQueuedV1'
 }
 
 Add-Type @"
@@ -201,12 +727,13 @@ $eventParent = Split-Path -Parent $EventLog
 if ($eventParent) {
     New-Item -ItemType Directory -Force -Path $eventParent | Out-Null
 }
+$observerParent = if ($ObserverSummaryFile) { Split-Path -Parent $ObserverSummaryFile } else { $null }
+if ($observerParent) {
+    New-Item -ItemType Directory -Force -Path $observerParent | Out-Null
+}
 
-$eventWriter = [System.IO.StreamWriter]::new(
-    $EventLog,
-    $true,
-    [System.Text.UTF8Encoding]::new($false)
-)
+$eventWriter = $null
+$schedulerObserver = $null
 $state = @{
     key_press = 0
     key_release = 0
@@ -214,21 +741,31 @@ $state = @{
     event_log_id = [guid]::NewGuid().ToString("N")
 }
 
-$header = [ordered]@{
-    schema_version = 3
-    run_id = $RunId
-    role = $role
-    event_log_id = $state.event_log_id
-    sequence = 0L
-    kind = "stream_start"
-    scan_code = 0
-    extended = $false
-    virtual_key = 0
-    message = 0
-    observed_utc = [DateTime]::UtcNow.ToString("O")
-} | ConvertTo-Json -Compress
-$eventWriter.WriteLine($header)
-$eventWriter.Flush()
+$observerVersion = $null
+if ($ObserverMode -eq 'SchedulerQueuedV1') {
+    $observerVersion = [NativeAcceptanceEventQueue]::ObserverVersion
+} else {
+    $eventWriter = [System.IO.StreamWriter]::new(
+        $EventLog,
+        $true,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $header = [ordered]@{
+        schema_version = 3
+        run_id = $RunId
+        role = $role
+        event_log_id = $state.event_log_id
+        sequence = 0L
+        kind = "stream_start"
+        scan_code = 0
+        extended = $false
+        virtual_key = 0
+        message = 0
+        observed_utc = [DateTime]::UtcNow.ToString("O")
+    } | ConvertTo-Json -Compress
+    $eventWriter.WriteLine($header)
+    $eventWriter.Flush()
+}
 
 $record = {
     param([object]$Sender, [NativeKeyMessageData]$Event)
@@ -260,10 +797,11 @@ $record = {
     $eventWriter.Flush()
 }
 
-# Both roles observe native keyboard messages. InertFocusProbe is inert because
-# this script never emits input; the WndProc observer remains enabled so a
-# wrong-window delivery cannot disappear as an unobserved event.
-$form.Add_NativeKeyMessage({ param($Sender, $Event) & $record $Sender $Event })
+# Both roles observe native keyboard messages. InertFocusProbe remains on the
+# legacy observer. Scheduler ReceiveOnly uses only the bounded WndProc queue.
+if ($ObserverMode -eq 'LegacyInline') {
+    $form.Add_NativeKeyMessage({ param($Sender, $Event) & $record $Sender $Event })
+}
 $form.Add_Shown({
     if (-not $isProbe) {
         $form.Activate()
@@ -273,13 +811,39 @@ $form.Add_Shown({
     [NativeAcceptanceSinkFocus]::SuppressOverlayWindows([uint32]$PID)
 })
 $form.Add_FormClosed({
-    if ($null -ne $eventWriter) {
+    if ($null -ne $schedulerObserver) {
+        [void]$schedulerObserver.Complete()
+    } elseif ($null -ne $eventWriter) {
         $eventWriter.Dispose()
     }
 })
 
 $form.CreateControl()
 $hwnd = $form.Handle.ToInt64()
+$displayTemplate = if ($isProbe) {
+    "$title`r`n`r`nThis project-owned window observes accidental input only.`r`nIt never emits gameplay input.`r`n`r`nObserved key presses: {0} | releases: {1}"
+} else {
+    "$title`r`n`r`nThis project-owned window is the only permitted real-input sink.`r`nKeep it as the intended target during SendInput runs.`r`n`r`nObserved key presses: {0} | releases: {1}"
+}
+if ($ObserverMode -eq 'SchedulerQueuedV1') {
+    $schedulerObserver = [NativeAcceptanceEventQueue]::new(
+        $EventLog,
+        [System.IO.Path]::GetFullPath($ObserverSummaryFile),
+        $RunId,
+        $role,
+        $state.event_log_id,
+        [long]$hwnd,
+        [int]$PID,
+        32768,
+        $label,
+        $displayTemplate
+    )
+    $form.SchedulerObserver = $schedulerObserver
+    if (-not $schedulerObserver.WaitForReady(5000)) {
+        [void]$schedulerObserver.Complete()
+        throw 'Scheduler observer failed to flush its stream header before ready'
+    }
+}
 $processStartTimeFiletime = [long](Get-Process -Id $PID).StartTime.ToUniversalTime().ToFileTimeUtc()
 $ready = [ordered]@{
     schema_version = 3
@@ -295,6 +859,13 @@ $ready = [ordered]@{
     input_policy = $inputPolicy
     process_start_time_filetime = $processStartTimeFiletime
 } | ConvertTo-Json
+if ($ObserverMode -eq 'SchedulerQueuedV1') {
+    $readyObject = $ready | ConvertFrom-Json
+    $readyObject | Add-Member -NotePropertyName observer_version -NotePropertyValue $observerVersion
+    $readyObject | Add-Member -NotePropertyName observer_queue_capacity -NotePropertyValue 32768
+    $readyObject | Add-Member -NotePropertyName observer_qpc_frequency_hz -NotePropertyValue ([NativeAcceptanceEventQueue]::QpcFrequency)
+    $ready = $readyObject | ConvertTo-Json
+}
 Write-Output $ready
 Set-Content -Path $ReadyFile -Value $ready -Encoding UTF8
 
@@ -325,3 +896,6 @@ if (-not [string]::IsNullOrWhiteSpace($ActivateRequestFile)) {
 }
 
 [System.Windows.Forms.Application]::Run($form)
+if ($null -ne $schedulerObserver -and -not $schedulerObserver.Complete()) {
+    exit 70
+}

@@ -588,6 +588,8 @@ function Invoke-NativeCase {
         profile = $HarnessManifest.cargo_profile
         features = (@($HarnessManifest.cargo_features) -join ',')
         observer_mode = $HarnessManifest.observer_mode
+        receiveonly_observer_mode = Get-OptionalProperty $invocation 'receiveonly_observer_mode'
+        receiveonly_observer_version = Get-OptionalProperty $invocation 'receiveonly_observer_version'
         guard_mode = $HarnessManifest.guard_mode
         workload = $Workload
         scenario = $Scenario
@@ -734,6 +736,18 @@ if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -e
 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
 }
 
+function Assert-SchedulerObserverPairMode {
+    param($Control, $Candidate)
+    if ($QualificationProfile -ne 'Scheduler') { return }
+    $expectedVersion = 'scheduler-receiveonly-queue-v1'
+    foreach ($row in @($Control, $Candidate)) {
+        if ($row.receiveonly_observer_mode -ne 'SchedulerQueuedV1' -or
+            $row.receiveonly_observer_version -ne $expectedVersion) {
+            throw 'Scheduler baseline and candidate must use the same versioned ReceiveOnly observer'
+        }
+    }
+}
+
 function Get-PairedMetrics {
     $pairRows = [System.Collections.Generic.List[object]]::new()
     $metricPaths = @(
@@ -753,6 +767,7 @@ function Get-PairedMetrics {
         $baseline = @($group.Group | Where-Object role -eq 'control') | Select-Object -First 1
         $next = @($group.Group | Where-Object role -eq 'candidate') | Select-Object -First 1
         if ($null -eq $baseline -or $null -eq $next) { continue }
+        Assert-SchedulerObserverPairMode -Control $baseline -Candidate $next
         foreach ($metricPath in $metricPaths) {
             $controlMetric = if ($baseline.status -eq 'PASS') { Get-MetricPath $baseline.timing_metrics $metricPath } else { $null }
             $candidateMetric = if ($next.status -eq 'PASS') { Get-MetricPath $next.timing_metrics $metricPath } else { $null }
@@ -775,6 +790,7 @@ function Get-PairedMetrics {
                 cell_id = $baseline.cell_id
                 pair_id = $group.Name
                 order = $baseline.pair_order
+                receiveonly_observer_version = if ($QualificationProfile -eq 'Scheduler') { $baseline.receiveonly_observer_version } else { $null }
                 metric = $metricPath
                 control_status = $baseline.status
                 candidate_status = $next.status
@@ -952,10 +968,11 @@ try {
         run_id = $runId
         stage = $Stage
         comparison = $comparisonDescription
+        receiveonly_observer = [ordered]@{ mode = if ($QualificationProfile -eq 'Scheduler') { 'SchedulerQueuedV1' } else { 'LegacyInline' }; version = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-receiveonly-queue-v1' } else { $null } }
         source = $source
         candidate = [ordered]@{ manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         control = if ($control) { [ordered]@{ control_label = $controlLabel; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
-        parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { $Pairs }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID' }
+        parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { $Pairs }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID'; receiveonly_observer_mode = if ($QualificationProfile -eq 'Scheduler') { 'SchedulerQueuedV1' } else { 'LegacyInline' }; receiveonly_observer_version = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-receiveonly-queue-v1' } else { $null } }
         environment = [ordered]@{ rustc_version = $rustcVersion.Trim(); windows_caption = $os.Caption; windows_version = $os.Version; windows_build = $os.BuildNumber; processor_name = $cpu.Name; processor_cores = $cpu.NumberOfCores; processor_logical_processors = $cpu.NumberOfLogicalProcessors; power_scheme = (& powercfg /getactivescheme | Out-String).Trim() }
         run_count = $runRows.Count
         passed_count = $passed
@@ -983,7 +1000,7 @@ try {
         disposition = if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -eq 0) { 'collected; leader review required for performance gates' } else { 'one or more cases failed; leader review required' }
     }
     $summary | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
-    $runRows | Select-Object run_id,stage,cell_id,pair_id,pair_order,role,source_revision,source_tree_sha,control_kind,control_label,base_source_revision,base_source_tree_sha,base_source_archive_sha256,base_source_file_sha256,overlay_sha256,derived_source_file_sha256,source_changes_sha256,derived_source_inventory_sha256,harness_sha256,profile,features,observer_mode,guard_mode,workload,scenario,load,game_fps,timing_margin_us,sample_seconds,started_utc,ended_utc,case_exit_code,status,reason,evidence_directory,expected_sink_event_count,observed_sink_event_count,sink_window_match,active_count,possibly_active_count,final_release_obligation_mask,production_hold_floor_violation_count,production_release_floor_violation_count,production_forensics_anomaly_count,production_structural_anomaly_count,production_same_key_overlap_forensics_count,production_anchor_overwrite_count,production_unmatched_up_count,missed_down_boundaries,missed_down_keys,missed_physical_window_boundaries,keys_dropped,chord_split_events,sendinput_partial_events,sendinput_zero_progress_failures,generation_total,generation_activated,generation_released,generation_cancelled,generation_scheduled,expected_down_key_count,expected_up_key_count,precision_packet_attempts,authored_lateness_samples,residual_lateness_samples,sendinput_envelope_samples,qpc_read_count_available,qpc_read_count,native_timing_telemetry_available,native_timing_telemetry_unavailable_reason,telemetry_trace_records,observed_down_chords,attempted_down_send_calls,completed_down_chords,failed_down_chords,actual_sendinput_calls,telemetry_generation_mismatch,telemetry_negative_order,telemetry_dropped,observer_queue_dropped,worker_cpu_time_us,process_cpu_time_us,spin_time_us,spin_time_available,spin_time_complete,spin_duty_cycle_ppm,spin_expected_samples,spin_dropped_samples,spin_missing_samples,timing_metrics_json | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    $runRows | Select-Object run_id,stage,cell_id,pair_id,pair_order,role,source_revision,source_tree_sha,control_kind,control_label,base_source_revision,base_source_tree_sha,base_source_archive_sha256,base_source_file_sha256,overlay_sha256,derived_source_file_sha256,source_changes_sha256,derived_source_inventory_sha256,harness_sha256,profile,features,observer_mode,receiveonly_observer_mode,receiveonly_observer_version,guard_mode,workload,scenario,load,game_fps,timing_margin_us,sample_seconds,started_utc,ended_utc,case_exit_code,status,reason,evidence_directory,expected_sink_event_count,observed_sink_event_count,sink_window_match,active_count,possibly_active_count,final_release_obligation_mask,production_hold_floor_violation_count,production_release_floor_violation_count,production_forensics_anomaly_count,production_structural_anomaly_count,production_same_key_overlap_forensics_count,production_anchor_overwrite_count,production_unmatched_up_count,missed_down_boundaries,missed_down_keys,missed_physical_window_boundaries,keys_dropped,chord_split_events,sendinput_partial_events,sendinput_zero_progress_failures,generation_total,generation_activated,generation_released,generation_cancelled,generation_scheduled,expected_down_key_count,expected_up_key_count,precision_packet_attempts,authored_lateness_samples,residual_lateness_samples,sendinput_envelope_samples,qpc_read_count_available,qpc_read_count,native_timing_telemetry_available,native_timing_telemetry_unavailable_reason,telemetry_trace_records,observed_down_chords,attempted_down_send_calls,completed_down_chords,failed_down_chords,actual_sendinput_calls,telemetry_generation_mismatch,telemetry_negative_order,telemetry_dropped,observer_queue_dropped,worker_cpu_time_us,process_cpu_time_us,spin_time_us,spin_time_available,spin_time_complete,spin_duty_cycle_ppm,spin_expected_samples,spin_dropped_samples,spin_missing_samples,timing_metrics_json | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
     $pairedMetrics.paired_sessions | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'paired-sessions.csv') -NoTypeInformation -Encoding UTF8
     $pairedMetrics.cell_summary | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'paired-cells.csv') -NoTypeInformation -Encoding UTF8
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8

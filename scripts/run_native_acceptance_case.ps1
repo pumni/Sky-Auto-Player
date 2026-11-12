@@ -29,6 +29,11 @@ $PSNativeCommandUseErrorActionPreference = $false
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
+$receiveOnlyObserverVersion = if ($QualificationProfile -eq 'Scheduler') {
+    'scheduler-receiveonly-queue-v1'
+} else {
+    $null
+}
 $pwshPath = (Get-Command pwsh.exe).Source
 $pwshExecutablePath = (Get-Process -Id $PID).Path
 $runId = 'native-case-' + (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -41,6 +46,7 @@ $runDir = Join-Path $evidenceRoot $runId
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $readyPath = Join-Path $runDir 'sink-ready.json'
 $eventsPath = Join-Path $runDir 'sink-events.jsonl'
+$sinkObserverSummaryPath = Join-Path $runDir 'sink-observer-summary.json'
 $stdoutPath = Join-Path $runDir 'harness-output.log'
 $reportPath = Join-Path $runDir 'rt-native-acceptance.jsonl'
 $runConfigPath = Join-Path $runDir 'run-config.json'
@@ -90,7 +96,7 @@ function Wait-ReadyRecord {
 }
 
 function Assert-SinkIdentity {
-    param($Record, [int]$SessionId)
+    param($Record, [int]$SessionId, [string]$ExpectedObserverVersion)
     if ($Record.schema_version -ne 3 -or $Record.event_schema_version -ne 3 -or $Record.run_id -ne $runId -or $Record.role -ne 'ReceiveOnly') {
         throw 'receive-only sink ready record schema, role, or run ID mismatch'
     }
@@ -99,6 +105,15 @@ function Assert-SinkIdentity {
     }
     if ($Record.pid -le 0 -or $Record.hwnd -le 0 -or $Record.event_log_id.Length -eq 0 -or $Record.process_start_time_filetime -le 0) {
         throw 'sink ready record omitted process, HWND, event-log, or start-time identity'
+    }
+    if ($ExpectedObserverVersion) {
+        if ($Record.observer_version -ne $ExpectedObserverVersion -or
+            $Record.observer_queue_capacity -ne 32768 -or
+            $Record.observer_qpc_frequency_hz -le 0) {
+            throw 'Scheduler ReceiveOnly observer version or queue provenance mismatch'
+        }
+    } elseif ($Record.PSObject.Properties['observer_version']) {
+        throw 'DispatchCore must retain the legacy ReceiveOnly observer protocol'
     }
     $owner = Get-Process -Id ([int]$Record.pid)
     $deadline = (Get-Date).AddSeconds(3)
@@ -120,6 +135,83 @@ function Assert-SinkIdentity {
         if ($event.schema_version -ne 3 -or $event.run_id -ne $runId -or $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Record.event_log_id -or $event.sequence -ne $index -or ($index -gt 0 -and $event.kind -eq 'stream_start')) {
             throw ('pre-arm sink stream identity or sequence mismatch at record ' + $index)
         }
+        if ($ExpectedObserverVersion -and $event.observer_version -ne $ExpectedObserverVersion) {
+            throw ('pre-arm Scheduler observer version mismatch at record ' + $index)
+        }
+    }
+}
+
+function Assert-SchedulerObserverEvidence {
+    param($Ready, $Summary, [object[]]$Records, [string]$ExpectedObserverVersion)
+    if ($ExpectedObserverVersion -ne 'scheduler-receiveonly-queue-v1' -or
+        $Ready.observer_version -ne $ExpectedObserverVersion -or
+        $Summary.observer_version -ne $ExpectedObserverVersion) {
+        throw 'ReceiveOnly observer version is not the authorized Scheduler queue protocol'
+    }
+    if ($Summary.schema_version -ne 1 -or $Summary.run_id -ne $runId -or
+        $Summary.role -ne 'ReceiveOnly' -or $Summary.event_log_id -ne $Ready.event_log_id -or
+        [long]$Summary.target_hwnd -ne [long]$Ready.hwnd -or
+        [int]$Summary.target_pid -ne [int]$Ready.pid -or
+        [long]$Summary.qpc_frequency_hz -ne [long]$Ready.observer_qpc_frequency_hz -or
+        [int]$Summary.queue_capacity -ne 32768 -or
+        -not [bool]$Summary.stream_header_flushed -or
+        -not [bool]$Summary.events_flushed -or
+        [long]$Summary.observer_startup_failures -ne 0 -or
+        -not [bool]$Summary.consumer_stopped -or -not [bool]$Summary.queue_drained) {
+        throw 'Scheduler observer summary identity, version, or drain evidence is invalid'
+    }
+    if ([bool]$Summary.queue_overflow -or [long]$Summary.queue_dropped -ne 0 -or
+        [long]$Summary.writer_failures -ne 0 -or
+        [long]$Summary.observer_internal_failures -ne 0 -or
+        [long]$Summary.handler_latency_sample_dropped -ne 0 -or
+        [long]$Summary.events_seen -ne [long]$Summary.events_enqueued -or
+        [long]$Summary.events_enqueued -ne [long]$Summary.events_written -or
+        [long]$Summary.queue_high_water -gt [long]$Summary.queue_capacity -or
+        [long]$Summary.queue_high_water -lt 0) {
+        throw 'Scheduler observer overflow, loss, or incomplete counters fail closed'
+    }
+    $events = @($Records | Where-Object { $_.kind -ne 'stream_start' })
+    if ([long]$Summary.events_seen -ne $events.Count -or
+        [long]$Summary.handler_latency_count -ne $events.Count -or
+        [long]$Summary.handler_latency_sample_count -ne $events.Count) {
+        throw 'Scheduler observer event and handler-latency counts do not reconcile'
+    }
+    if ($Records.Count -lt 1 -or $Records[0].kind -ne 'stream_start') {
+        throw 'Scheduler observer stream header is missing'
+    }
+    $previousQpc = -1L
+    foreach ($index in 0..($Records.Count - 1)) {
+        $event = $Records[$index]
+        if ($event.schema_version -ne 3 -or $event.run_id -ne $Ready.run_id -or
+            $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Ready.event_log_id -or
+            $event.observer_version -ne $ExpectedObserverVersion -or
+            [long]$event.sequence -ne $index) {
+            throw ('Scheduler observer identity or sequence mismatch at record ' + $index)
+        }
+        if ($index -eq 0) {
+            if ($event.kind -ne 'stream_start') { throw 'Scheduler observer header is missing' }
+            continue
+        }
+        if ($event.kind -notin @('key_press', 'key_release') -or
+            [long]$event.target_hwnd -ne [long]$Ready.hwnd -or
+            [int]$event.target_pid -ne [int]$Ready.pid -or
+            [long]$event.foreground_hwnd -ne [long]$Ready.hwnd -or
+            [int]$event.foreground_pid -ne [int]$Ready.pid) {
+            throw ('Scheduler event arrived at a wrong target or foreground at record ' + $index)
+        }
+        $qpc = [long]$event.observed_qpc_ticks
+        if ($qpc -lt $previousQpc) { throw ('Scheduler observer event order moved backward at record ' + $index) }
+        $previousQpc = $qpc
+    }
+    if ($events.Count -gt 0 -and
+        ($null -eq $Summary.handler_latency_p50_us -or
+            $null -eq $Summary.handler_latency_p95_us -or
+            $null -eq $Summary.handler_latency_p99_us -or
+            $null -eq $Summary.handler_latency_max_us -or
+            [long]$Summary.handler_latency_p50_us -gt [long]$Summary.handler_latency_p95_us -or
+            [long]$Summary.handler_latency_p95_us -gt [long]$Summary.handler_latency_p99_us -or
+            [long]$Summary.handler_latency_p99_us -gt [long]$Summary.handler_latency_max_us)) {
+        throw 'Scheduler observer handler-latency distribution is missing or unordered'
     }
 }
 
@@ -254,9 +346,12 @@ try {
     }
     $sessionId = (Get-Process -Id $PID).SessionId
     $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
+    if ($receiveOnlyObserverVersion) {
+        $sinkArgv += @('-ObserverMode', 'SchedulerQueuedV1', '-ObserverSummaryFile', $sinkObserverSummaryPath)
+    }
     $sinkProcess = Start-Process -FilePath $pwshPath -ArgumentList $sinkArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'sink.stdout.log') -RedirectStandardError (Join-Path $runDir 'sink.stderr.log')
     $sink = Wait-ReadyRecord $readyPath $sinkProcess
-    Assert-SinkIdentity $sink $sessionId
+    Assert-SinkIdentity $sink $sessionId $receiveOnlyObserverVersion
     $foregroundPermissionGranted = [NativeAcceptanceForegroundPermission]::AllowSetForegroundWindow([uint32]$sink.pid)
 
     if ($Scenario -eq 'focus-loss') {
@@ -338,6 +433,9 @@ try {
         power_scheme = (& powercfg /getactivescheme | Out-String).Trim()
         sink_ready_path = 'sink-ready.json'
         sink_event_path = 'sink-events.jsonl'
+        sink_observer_summary_path = if ($receiveOnlyObserverVersion) { 'sink-observer-summary.json' } else { $null }
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV1' } else { 'LegacyInline' }
+        receiveonly_observer_version = $receiveOnlyObserverVersion
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
         sink_event_log_id = $sink.event_log_id
@@ -381,6 +479,23 @@ try {
     $capturedText = ($captured | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
     Set-Content -LiteralPath $stdoutPath -Value $capturedText -Encoding UTF8
 
+    if ($receiveOnlyObserverVersion -and $Scenario -ne 'owner-process-termination') {
+        $sinkProcess.Refresh()
+        if (-not $sinkProcess.HasExited) {
+            [void]$sinkProcess.CloseMainWindow()
+            if (-not $sinkProcess.WaitForExit(30000)) {
+                throw 'Scheduler ReceiveOnly observer did not stop and flush within 30 seconds after native report completion'
+            }
+        }
+        $sinkProcess.Refresh()
+        if ($sinkProcess.HasExited -and $sinkProcess.ExitCode -ne 0) {
+            throw ('Scheduler ReceiveOnly observer exited fail-closed with code ' + $sinkProcess.ExitCode)
+        }
+        if (-not (Test-Path -LiteralPath $sinkObserverSummaryPath -PathType Leaf)) {
+            throw 'Scheduler ReceiveOnly observer summary was not written after consumer shutdown'
+        }
+    }
+
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
@@ -408,6 +523,11 @@ try {
     }
 
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $observerSummary = $null
+    if ($receiveOnlyObserverVersion) {
+        $observerSummary = Get-Content -LiteralPath $sinkObserverSummaryPath -Raw | ConvertFrom-Json
+        Assert-SchedulerObserverEvidence -Ready $sink -Summary $observerSummary -Records $sinkRecords -ExpectedObserverVersion $receiveOnlyObserverVersion
+    }
     for ($index = 0; $index -lt $sinkRecords.Count; $index++) {
         $record = $sinkRecords[$index]
         if ($record.run_id -ne $runId -or $record.event_log_id -ne $sink.event_log_id -or $record.sequence -ne $index) {
@@ -444,6 +564,24 @@ try {
         harness_observed_event_count = [long]$details.observed_sink_event_count
         sequence_contiguous = $true
         report_window_match = $windowIntegrity
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV1' } else { 'LegacyInline' }
+        receiveonly_observer_version = $receiveOnlyObserverVersion
+        observer_events_seen = if ($observerSummary) { [long]$observerSummary.events_seen } else { $null }
+        observer_events_enqueued = if ($observerSummary) { [long]$observerSummary.events_enqueued } else { $null }
+        observer_events_written = if ($observerSummary) { [long]$observerSummary.events_written } else { $null }
+        observer_queue_capacity = if ($observerSummary) { [long]$observerSummary.queue_capacity } else { $null }
+        observer_queue_high_water = if ($observerSummary) { [long]$observerSummary.queue_high_water } else { $null }
+        observer_queue_dropped = if ($observerSummary) { [long]$observerSummary.queue_dropped } else { $null }
+        observer_queue_overflow = if ($observerSummary) { [bool]$observerSummary.queue_overflow } else { $null }
+        observer_handler_latency_count = if ($observerSummary) { [long]$observerSummary.handler_latency_count } else { $null }
+        observer_handler_latency_sample_count = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_count } else { $null }
+        observer_handler_latency_sample_dropped = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_dropped } else { $null }
+        observer_handler_latency_p50_us = if ($observerSummary) { $observerSummary.handler_latency_p50_us } else { $null }
+        observer_handler_latency_p95_us = if ($observerSummary) { $observerSummary.handler_latency_p95_us } else { $null }
+        observer_handler_latency_p99_us = if ($observerSummary) { $observerSummary.handler_latency_p99_us } else { $null }
+        observer_handler_latency_max_us = if ($observerSummary) { $observerSummary.handler_latency_max_us } else { $null }
+        observer_writer_failures = if ($observerSummary) { [long]$observerSummary.writer_failures } else { $null }
+        observer_internal_failures = if ($observerSummary) { [long]$observerSummary.observer_internal_failures } else { $null }
         raw_events = $observedWindow
     }
     $window | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $windowPath -Encoding UTF8
@@ -488,6 +626,24 @@ try {
         expected_event_count = [long]$details.expected_sink_event_count
         observed_event_count = $observedWindow.Count
         report_window_match = $windowIntegrity
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV1' } else { 'LegacyInline' }
+        receiveonly_observer_version = $receiveOnlyObserverVersion
+        observer_events_seen = if ($observerSummary) { [long]$observerSummary.events_seen } else { $null }
+        observer_events_enqueued = if ($observerSummary) { [long]$observerSummary.events_enqueued } else { $null }
+        observer_events_written = if ($observerSummary) { [long]$observerSummary.events_written } else { $null }
+        observer_queue_capacity = if ($observerSummary) { [long]$observerSummary.queue_capacity } else { $null }
+        observer_queue_high_water = if ($observerSummary) { [long]$observerSummary.queue_high_water } else { $null }
+        observer_queue_dropped = if ($observerSummary) { [long]$observerSummary.queue_dropped } else { $null }
+        observer_queue_overflow = if ($observerSummary) { [bool]$observerSummary.queue_overflow } else { $null }
+        observer_handler_latency_count = if ($observerSummary) { [long]$observerSummary.handler_latency_count } else { $null }
+        observer_handler_latency_sample_count = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_count } else { $null }
+        observer_handler_latency_sample_dropped = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_dropped } else { $null }
+        observer_handler_latency_p50_us = if ($observerSummary) { $observerSummary.handler_latency_p50_us } else { $null }
+        observer_handler_latency_p95_us = if ($observerSummary) { $observerSummary.handler_latency_p95_us } else { $null }
+        observer_handler_latency_p99_us = if ($observerSummary) { $observerSummary.handler_latency_p99_us } else { $null }
+        observer_handler_latency_max_us = if ($observerSummary) { $observerSummary.handler_latency_max_us } else { $null }
+        observer_writer_failures = if ($observerSummary) { [long]$observerSummary.writer_failures } else { $null }
+        observer_internal_failures = if ($observerSummary) { [long]$observerSummary.observer_internal_failures } else { $null }
         owner_process_termination_verified = $ownerProcessTerminationVerified
         report_path = 'rt-native-acceptance.jsonl'
     }

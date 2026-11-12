@@ -12,7 +12,7 @@ if ($parseErrors.Count -ne 0) {
     throw ('qualify_dispatch_core.ps1 parser errors: ' + (($parseErrors | ForEach-Object Message) -join '; '))
 }
 
-foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1')) {
+foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1')) {
     $path = Join-Path $PSScriptRoot $scriptName
     $scriptTokens = $null
     $scriptErrors = $null
@@ -26,6 +26,11 @@ foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_accepta
     }
 }
 
+$observerSelfTest = @(& (Get-Command pwsh.exe).Source -NoProfile -File (Join-Path $PSScriptRoot 'native_acceptance_sink.ps1') -SelfTest 2>&1)
+if ($LASTEXITCODE -ne 0 -or ($observerSelfTest -join "`n") -notmatch 'Scheduler observer self-test: PASS') {
+    throw ('native_acceptance_sink.ps1 observer self-test failed: ' + ($observerSelfTest -join ' '))
+}
+
 $requiredFunctions = @(
     'Get-OptionalProperty',
     'Get-Percentiles',
@@ -35,7 +40,8 @@ $requiredFunctions = @(
     'Get-DeadlineCrossingToPreCallSample',
     'Get-TimingMetrics',
     'Invoke-NativeCaseFailStopSequence',
-    'Assert-SchedulerManifestIdentity'
+    'Assert-SchedulerManifestIdentity',
+    'Assert-SchedulerObserverPairMode'
 )
 foreach ($name in $requiredFunctions) {
     $functionAst = $ast.Find({
@@ -45,6 +51,81 @@ foreach ($name in $requiredFunctions) {
     if ($null -eq $functionAst) { throw "missing runner function: $name" }
     Invoke-Expression $functionAst.Extent.Text
 }
+$caseRunnerPath = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
+$caseRunnerTokens = $null
+$caseRunnerErrors = $null
+$caseRunnerAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $caseRunnerPath,
+    [ref]$caseRunnerTokens,
+    [ref]$caseRunnerErrors
+)
+if ($caseRunnerErrors.Count -ne 0) { throw 'run_native_acceptance_case.ps1 parser errors' }
+$observerFunctionAst = $caseRunnerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-SchedulerObserverEvidence'
+}, $true)
+if ($null -eq $observerFunctionAst) { throw 'missing case-runner contract function: Assert-SchedulerObserverEvidence' }
+Invoke-Expression $observerFunctionAst.Extent.Text
+$runId = 'observer-contract-run'
+$observerVersion = 'scheduler-receiveonly-queue-v1'
+$observerReady = [pscustomobject]@{
+    schema_version = 3; event_schema_version = 3; run_id = $runId; role = 'ReceiveOnly'
+    event_log_id = 'observer-contract-log'; hwnd = 42; pid = 17
+    observer_version = $observerVersion; observer_queue_capacity = 32768
+    observer_qpc_frequency_hz = 10000000
+}
+$observerHeader = [pscustomobject]@{
+    schema_version = 3; run_id = $runId; role = 'ReceiveOnly'; event_log_id = $observerReady.event_log_id
+    observer_version = $observerVersion; sequence = 0; kind = 'stream_start'; observed_qpc_ticks = 100
+    target_hwnd = 42; target_pid = 17; foreground_hwnd = 42; foreground_pid = 17
+}
+$observerDown = [pscustomobject]@{
+    schema_version = 3; run_id = $runId; role = 'ReceiveOnly'; event_log_id = $observerReady.event_log_id
+    observer_version = $observerVersion; sequence = 1; kind = 'key_press'; observed_qpc_ticks = 101
+    target_hwnd = 42; target_pid = 17; foreground_hwnd = 42; foreground_pid = 17
+}
+$observerUp = [pscustomobject]@{
+    schema_version = 3; run_id = $runId; role = 'ReceiveOnly'; event_log_id = $observerReady.event_log_id
+    observer_version = $observerVersion; sequence = 2; kind = 'key_release'; observed_qpc_ticks = 102
+    target_hwnd = 42; target_pid = 17; foreground_hwnd = 42; foreground_pid = 17
+}
+$observerRecords = @($observerHeader, $observerDown, $observerUp)
+$observerSummary = [pscustomobject]@{
+    schema_version = 1; observer_version = $observerVersion; run_id = $runId; role = 'ReceiveOnly'
+    event_log_id = $observerReady.event_log_id; target_hwnd = 42; target_pid = 17
+    qpc_frequency_hz = 10000000; queue_capacity = 32768; events_seen = 2; events_enqueued = 2
+    events_written = 2; queue_dropped = 0; queue_high_water = 2; queue_overflow = $false
+    handler_latency_count = 2; handler_latency_sample_count = 2; handler_latency_sample_dropped = 0
+    handler_latency_p50_us = 2; handler_latency_p95_us = 3; handler_latency_p99_us = 4
+    handler_latency_max_us = 5; writer_failures = 0; observer_internal_failures = 0
+    observer_startup_failures = 0; stream_header_flushed = $true; events_flushed = $true
+    consumer_stopped = $true; queue_drained = $true
+}
+Assert-SchedulerObserverEvidence -Ready $observerReady -Summary $observerSummary -Records $observerRecords -ExpectedObserverVersion $observerVersion
+$assertObserverRejected = {
+    param($Ready, $Summary, [object[]]$Records, [string]$ExpectedVersion, [string]$CaseName)
+    $rejected = $false
+    try { Assert-SchedulerObserverEvidence -Ready $Ready -Summary $Summary -Records $Records -ExpectedObserverVersion $ExpectedVersion } catch { $rejected = $true }
+    if (-not $rejected) { throw ('Scheduler observer accepted invalid ' + $CaseName + ' evidence') }
+}
+$gapRecords = @($observerHeader, $observerDown, ($observerUp | Select-Object *))
+$gapRecords[2].sequence = 3
+& $assertObserverRejected $observerReady $observerSummary $gapRecords $observerVersion 'sequence gap'
+$reversedRecords = @($observerHeader, $observerDown, ($observerUp | Select-Object *))
+$reversedRecords[2].observed_qpc_ticks = 99
+& $assertObserverRejected $observerReady $observerSummary $reversedRecords $observerVersion 'backward timestamp'
+$overflowSummary = $observerSummary | Select-Object *
+$overflowSummary.queue_overflow = $true; $overflowSummary.queue_dropped = 1
+& $assertObserverRejected $observerReady $overflowSummary $observerRecords $observerVersion 'overflow and dropped-event counters'
+$wrongTargetRecords = @($observerHeader, ($observerDown | Select-Object *), $observerUp)
+$wrongTargetRecords[1].target_hwnd = 43
+& $assertObserverRejected $observerReady $observerSummary $wrongTargetRecords $observerVersion 'wrong target HWND'
+$wrongForegroundRecords = @($observerHeader, ($observerDown | Select-Object *), $observerUp)
+$wrongForegroundRecords[1].foreground_pid = 18
+& $assertObserverRejected $observerReady $observerSummary $wrongForegroundRecords $observerVersion 'wrong foreground PID'
+$wrongVersionSummary = $observerSummary | Select-Object *
+$wrongVersionSummary.observer_version = 'unknown'
+& $assertObserverRejected $observerReady $wrongVersionSummary $observerRecords $observerVersion 'observer version'
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 
 $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
@@ -179,6 +260,7 @@ if ($metrics.metrics.deadline_crossing_to_pre_call_us.sample_count -ne 1 -or
 }
 
 $runRows = @()
+$QualificationProfile = 'Scheduler'
 $p95Deltas = @(10, 20, 30, 40, 50, 60)
 $p99Deltas = @(2, 4, 6, 8, 10, 12)
 for ($index = 0; $index -lt 6; $index++) {
@@ -192,7 +274,8 @@ for ($index = 0; $index -lt 6; $index++) {
     $runRows += [pscustomobject]@{
         cell_id = 'Dispatch/Quiet'; pair_id = ('Dispatch/Quiet/{0:D2}' -f ($index + 1))
         pair_order = if ($index % 2 -eq 0) { 'AB' } else { 'BA' }
-        role = 'control'; status = 'PASS'
+        role = 'control'; status = 'PASS'; receiveonly_observer_mode = 'SchedulerQueuedV1'
+        receiveonly_observer_version = 'scheduler-receiveonly-queue-v1'
         timing_metrics = [pscustomobject]@{
             metrics = [pscustomobject]@{ authored_lateness_per_chord_us = $controlMetric }
         }
@@ -200,13 +283,19 @@ for ($index = 0; $index -lt 6; $index++) {
     $runRows += [pscustomobject]@{
         cell_id = 'Dispatch/Quiet'; pair_id = ('Dispatch/Quiet/{0:D2}' -f ($index + 1))
         pair_order = if ($index % 2 -eq 0) { 'AB' } else { 'BA' }
-        role = 'candidate'; status = 'PASS'
+        role = 'candidate'; status = 'PASS'; receiveonly_observer_mode = 'SchedulerQueuedV1'
+        receiveonly_observer_version = 'scheduler-receiveonly-queue-v1'
         timing_metrics = [pscustomobject]@{
             metrics = [pscustomobject]@{ authored_lateness_per_chord_us = $candidateMetric }
         }
     }
 }
 $pairedMetrics = Get-PairedMetrics
+$pairRejected = $false
+try {
+    Assert-SchedulerObserverPairMode -Control ([pscustomobject]@{ receiveonly_observer_mode = 'SchedulerQueuedV1'; receiveonly_observer_version = 'scheduler-receiveonly-queue-v1' }) -Candidate ([pscustomobject]@{ receiveonly_observer_mode = 'LegacyInline'; receiveonly_observer_version = $null })
+} catch { $pairRejected = $true }
+if (-not $pairRejected) { throw 'Scheduler accepted baseline/candidate sessions with mismatched ReceiveOnly observer modes' }
 $pairedCell = @($pairedMetrics.cell_summary | Where-Object metric -eq 'metrics.authored_lateness_per_chord_us') | Select-Object -First 1
 if ($null -eq $pairedCell -or $pairedCell.attempted_pairs -ne 6 -or
     $pairedCell.p95_delta_sample_count -ne 6 -or $pairedCell.p95_delta_p50_us -ne 30 -or
