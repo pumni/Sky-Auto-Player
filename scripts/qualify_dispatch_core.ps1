@@ -81,7 +81,7 @@ function Get-OptionalProperty {
 }
 
 function Get-CurrentSourceIdentity {
-    $branch = (& git -C $root branch --show-current).Trim()
+    $branch = ((& git -C $root branch --show-current) -join '').Trim()
     if ($LASTEXITCODE -ne 0 -or $branch -ne $expectedBranch) { throw ('expected branch ' + $expectedBranch + ', got ' + $branch) }
     $script:head = (& git -C $root rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve current source revision' }
@@ -117,7 +117,7 @@ function Assert-SchedulerSourceRoot {
     if ($LASTEXITCODE -ne 0) { throw ($Role + ' Scheduler source root is not a Git checkout') }
     $tree = (& git -C $sourceRoot rev-parse 'HEAD^{tree}').Trim()
     if ($LASTEXITCODE -ne 0) { throw ($Role + ' Scheduler source tree could not be resolved') }
-    $branch = (& git -C $sourceRoot branch --show-current).Trim()
+    $branch = ((& git -C $sourceRoot branch --show-current) -join '').Trim()
     if ($LASTEXITCODE -ne 0) { throw ($Role + ' Scheduler source branch could not be resolved') }
     $changes = (& git -C $sourceRoot status --porcelain --untracked-files=all) -join ''
     if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($changes)) {

@@ -46,7 +46,7 @@ function Get-SourceIdentity {
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve source revision' }
     $tree = (& git -C $sourceRootPath rev-parse 'HEAD^{tree}').Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve source tree' }
-    $branch = (& git -C $sourceRootPath branch --show-current).Trim()
+    $branch = ((& git -C $sourceRootPath branch --show-current) -join '').Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve source branch' }
     $changes = (& git -C $sourceRootPath status --porcelain --untracked-files=all) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'could not verify source tree cleanliness' }

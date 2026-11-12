@@ -190,7 +190,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source root is not a Git checkout' }
             $manifestSourceTree = (& git -C $manifestSourceRoot rev-parse 'HEAD^{tree}').Trim()
             if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source tree could not be resolved' }
-            $manifestSourceBranch = (& git -C $manifestSourceRoot branch --show-current).Trim()
+            $manifestSourceBranch = ((& git -C $manifestSourceRoot branch --show-current) -join '').Trim()
             if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source branch could not be resolved' }
             $manifestSourceChanges = (& git -C $manifestSourceRoot status --porcelain --untracked-files=all) -join ''
             if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($manifestSourceChanges) -or
