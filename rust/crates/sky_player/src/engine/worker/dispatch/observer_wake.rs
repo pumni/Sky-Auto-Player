@@ -9,6 +9,7 @@ use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 
 impl WaitBoundary {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn wake_qpc(&self) -> Option<QpcTicks> {
         match self {
             Self::Due { wait_result, .. } => {
