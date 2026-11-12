@@ -710,7 +710,57 @@ pub(crate) fn dispatch_staged_candidate(
             local_metrics,
         ) {
             FinalDownAdmissionResult::Allowed => {}
-            FinalDownAdmissionResult::Replan => return StagedDispatchOutcome::Replan,
+            FinalDownAdmissionResult::Replan => {
+                match stage_up_only_for_stale_mixed_candidate(
+                    &candidate,
+                    target,
+                    config.focus.require_focus,
+                    focus_active,
+                    FinalControlSignals {
+                        quit_requested,
+                        skip_requested,
+                        panic_requested,
+                        desired_pause,
+                        supervisor_expired,
+                        system_power: Some(system_power),
+                    },
+                    resources,
+                    runtime,
+                ) {
+                    Ok(Some(up_only)) => {
+                        let fallback_ctx = StagedDispatchContext {
+                            target,
+                            config,
+                            control: StagedControlSignals {
+                                focus_active,
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                                supervisor_expired,
+                                system_power,
+                            },
+                            timing,
+                            qpc_clock,
+                            progress_clock,
+                            metrics,
+                        };
+                        return dispatch_staged_candidate(
+                            up_only,
+                            fallback_ctx,
+                            resources,
+                            runtime,
+                            local_metrics,
+                            observer,
+                        );
+                    }
+                    Ok(None) => return StagedDispatchOutcome::Replan,
+                    Err(error) => {
+                        runtime.terminal_error = Some(error);
+                        return StagedDispatchOutcome::Exit;
+                    }
+                }
+            }
             FinalDownAdmissionResult::Terminal(err) => {
                 runtime.terminal_error = Some(gate_rejection_record(&candidate, &err));
                 return StagedDispatchOutcome::Exit;
@@ -1462,10 +1512,24 @@ pub(super) fn dispatch(
                 SchedulerAction::Send { timing_window, .. } => timing_window.packet_not_before_qpc,
                 SchedulerAction::Finished | SchedulerAction::Wait { .. } => now_ticks,
             };
-            let candidate = match action_to_stage {
+            let mut candidate = match action_to_stage {
                 send_action @ SchedulerAction::Send { .. } => {
-                    match stage_scheduler_action(send_action, target, resources, &mut core.runtime)
-                    {
+                    match stage_scheduler_action_preserving_due_up(
+                        send_action,
+                        target,
+                        config.focus.require_focus,
+                        focus_active,
+                        FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        },
+                        resources,
+                        &mut core.runtime,
+                    ) {
                         Ok(Some(candidate)) => Some(candidate),
                         Ok(None) => {
                             match wait_after_unstable_target(
@@ -1501,7 +1565,7 @@ pub(super) fn dispatch(
                         scheduler_wait_target_qpc.max(candidate.timing_window.packet_not_before_qpc)
                     });
             if wait_target_qpc > now_ticks {
-                if let Some(candidate) = candidate.as_ref() {
+                if let Some(staged_candidate) = candidate.as_ref() {
                     let control_signals = FinalControlSignals {
                         quit_requested,
                         skip_requested,
@@ -1511,7 +1575,7 @@ pub(super) fn dispatch(
                         system_power: Some(system_power),
                     };
                     match pre_wait_candidate_admission(
-                        candidate,
+                        staged_candidate,
                         target,
                         config.focus.require_focus,
                         focus_active,
@@ -1519,7 +1583,75 @@ pub(super) fn dispatch(
                         &mut core.runtime,
                     ) {
                         StagedDispatchOutcome::Dispatched => {}
-                        StagedDispatchOutcome::Replan => continue,
+                        StagedDispatchOutcome::Replan => {
+                            let fallback = match stage_up_only_for_stale_mixed_candidate(
+                                staged_candidate,
+                                target,
+                                config.focus.require_focus,
+                                focus_active,
+                                FinalControlSignals {
+                                    quit_requested,
+                                    skip_requested,
+                                    panic_requested,
+                                    desired_pause,
+                                    supervisor_expired,
+                                    system_power: Some(system_power),
+                                },
+                                resources,
+                                &mut core.runtime,
+                            ) {
+                                Ok(fallback) => fallback,
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(error);
+                                    break;
+                                }
+                            };
+                            if let Some(fallback) = fallback {
+                                candidate = Some(fallback);
+                            } else {
+                                let target_stale = candidate
+                                    .as_ref()
+                                    .and_then(|candidate| candidate.preflight_target)
+                                    .is_some_and(|expected| {
+                                        !target_stamp_still_current(target, expected)
+                                    });
+                                let controls_allow_wait = matches!(
+                                    final_control_precheck(FinalControlSignals {
+                                        quit_requested,
+                                        skip_requested,
+                                        panic_requested,
+                                        desired_pause,
+                                        supervisor_expired,
+                                        system_power: Some(system_power),
+                                    }),
+                                    FinalControlAdmission::Allowed
+                                );
+                                if target_stale && controls_allow_wait {
+                                    match wait_after_unstable_target(
+                                        now_ticks,
+                                        candidate.as_ref().map_or(
+                                            packet_not_before_qpc,
+                                            |candidate| {
+                                                candidate.timing_window.packet_not_before_qpc
+                                            },
+                                        ),
+                                        qpc_clock,
+                                        &resources.waiter,
+                                        interrupt,
+                                        &mut core.metrics,
+                                        &mut core.runtime.terminal_error,
+                                    ) {
+                                        WaitBoundary::Due { .. } => continue,
+                                        WaitBoundary::Interrupted(_, _, _) => {
+                                            let _ = interrupt.try_take();
+                                            continue;
+                                        }
+                                        WaitBoundary::Exit => break,
+                                    }
+                                }
+                                continue;
+                            }
+                        }
                         StagedDispatchOutcome::Exit => break,
                     }
                 }
@@ -1640,6 +1772,8 @@ pub(super) fn dispatch(
                 progress_clock: &shared.publication.progress_clock,
                 metrics,
             };
+            let candidate_preflight_target = candidate.preflight_target;
+            let candidate_retry_deadline = candidate.timing_window.packet_not_before_qpc;
             match dispatch_staged_candidate(
                 candidate,
                 ctx,
@@ -1657,6 +1791,44 @@ pub(super) fn dispatch(
                         core.observer.pending.as_ref(),
                         &mut core.metrics,
                     );
+                    let target_stale = candidate_preflight_target
+                        .is_some_and(|expected| !target_stamp_still_current(target, expected));
+                    let controls_allow_wait = matches!(
+                        final_control_precheck(FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        }),
+                        FinalControlAdmission::Allowed
+                    );
+                    if target_stale && controls_allow_wait {
+                        let replan_now = match qpc_clock.now() {
+                            Ok(now) => now,
+                            Err(error) => {
+                                core.runtime.terminal_error =
+                                    Some(format!("target replan QPC unavailable: {error:?}"));
+                                break;
+                            }
+                        };
+                        match wait_after_unstable_target(
+                            replan_now,
+                            candidate_retry_deadline,
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            WaitBoundary::Due { .. } => {}
+                            WaitBoundary::Interrupted(_, _, _) => {
+                                let _ = interrupt.try_take();
+                            }
+                            WaitBoundary::Exit => break,
+                        }
+                    }
                     continue;
                 }
                 StagedDispatchOutcome::Exit => {
@@ -1681,7 +1853,9 @@ pub(super) fn dispatch(
 mod tests {
     use super::{
         SchedulerAction, evaluate_scheduler_action, physical_target_qpc_for_work,
-        physical_wait_target_for_plan, publish_live_metrics_after_dispatch, stage_scheduler_action,
+        physical_wait_target_for_plan, pre_wait_candidate_admission,
+        publish_live_metrics_after_dispatch, stage_scheduler_action,
+        stage_scheduler_action_preserving_due_up, stage_up_only_for_stale_mixed_candidate,
         wait_after_unstable_target,
     };
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
@@ -1698,6 +1872,58 @@ mod tests {
     };
     use std::num::NonZeroU64;
     use std::sync::atomic::Ordering;
+
+    type MockPacketCapture = std::sync::Arc<std::sync::Mutex<Vec<(PhysicalPacket, SendEvidence)>>>;
+
+    fn mixed_scheduler_after_accepted_a_down() -> (ProductionDispatchTestHarness, MockPacketCapture)
+    {
+        let mut harness = ProductionDispatchTestHarness::new_prepared_mixed_for_test(1, 1, 20_000)
+            .expect("production Mixed fixture");
+        let packets = harness.configure_mock_packet_sender_for_test(&[]);
+        let clock = harness.resources.clock;
+        let send_start = clock.now().expect("initial Down sender QPC");
+        let one_second = clock.duration_from_us(1_000_000).expect("epoch offset");
+        let epoch = QpcTicks::from_raw(
+            send_start
+                .as_u64()
+                .checked_sub(one_second.as_u64())
+                .expect("test epoch before current QPC"),
+        );
+        harness
+            .reanchor_playback_clock_for_test(epoch)
+            .expect("publish test playback epoch");
+        harness.set_mock_sender_start_qpc_for_test(send_start);
+
+        let action = evaluate_scheduler_action(&harness.resources.scheduler, send_start, epoch)
+            .expect("initial production scheduler action");
+        let candidate = super::stage_scheduler_action(
+            action,
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("stage initial production Down")
+        .expect("initial production Down candidate");
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            super::StagedDispatchOutcome::Dispatched
+        ));
+        assert_eq!(harness.resources.scheduler.accounting().activated, 1);
+        assert_eq!(harness.resources.scheduler.accounting().active, 1);
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        (harness, packets)
+    }
+
+    fn next_mixed_action(harness: &ProductionDispatchTestHarness) -> SchedulerAction {
+        let now = harness.resources.clock.now().expect("Mixed action QPC");
+        evaluate_scheduler_action(
+            &harness.resources.scheduler,
+            now,
+            harness.resources.playback.epoch,
+        )
+        .expect("Mixed production scheduler action")
+    }
 
     fn assert_no_work(step: DispatchStep) {
         assert!(matches!(step, DispatchStep::NoWork), "step={step:?}");

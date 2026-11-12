@@ -101,6 +101,7 @@ fn resolve_scheduler_down_chord(
     Ok(Some(chord.clone()))
 }
 
+#[cfg(test)]
 fn stage_scheduler_action(
     action: SchedulerAction,
     target: &SessionTarget,
@@ -117,6 +118,108 @@ fn stage_scheduler_action(
     };
     let down_chord = resolve_scheduler_down_chord(&resources.scheduler, down_chord_index)?;
     stage_candidate(up_mask, down_chord, timing_window, target, resources, runtime)
+}
+
+struct UpOnlyTargetReplanAdmission<'a> {
+    target_stale: bool,
+    require_focus: bool,
+    focus_active: &'a AtomicBool,
+    control_signals: FinalControlSignals<'a>,
+}
+
+fn stage_up_only_after_target_replan(
+    up_mask: u16,
+    timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    admission: UpOnlyTargetReplanAdmission<'_>,
+    target: &SessionTarget,
+    resources: &mut super::WorkerResources,
+    runtime: &mut super::WorkerRuntime,
+) -> Result<Option<StagedCandidate>, String> {
+    if up_mask == 0
+        || !admission.target_stale
+        || !focus_matches(admission.require_focus, admission.focus_active)
+        || !matches!(
+            final_control_precheck(admission.control_signals),
+            FinalControlAdmission::Allowed
+        )
+    {
+        return Ok(None);
+    }
+
+    stage_candidate(up_mask, None, timing_window, target, resources, runtime)
+}
+
+fn stage_scheduler_action_preserving_due_up(
+    action: SchedulerAction,
+    target: &SessionTarget,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    resources: &mut super::WorkerResources,
+    runtime: &mut super::WorkerRuntime,
+) -> Result<Option<StagedCandidate>, String> {
+    let SchedulerAction::Send {
+        up_mask,
+        down_chord_index,
+        timing_window,
+    } = action
+    else {
+        return Ok(None);
+    };
+    let down_chord = resolve_scheduler_down_chord(&resources.scheduler, down_chord_index)?;
+    let has_down = down_chord.is_some();
+    match stage_candidate(
+        up_mask,
+        down_chord,
+        timing_window,
+        target,
+        resources,
+        runtime,
+    )? {
+        Some(candidate) => Ok(Some(candidate)),
+        None if has_down && up_mask != 0 => stage_up_only_after_target_replan(
+            up_mask,
+            timing_window,
+            UpOnlyTargetReplanAdmission {
+                target_stale: true,
+                require_focus,
+                focus_active,
+                control_signals,
+            },
+            target,
+            resources,
+            runtime,
+        ),
+        None => Ok(None),
+    }
+}
+
+fn stage_up_only_for_stale_mixed_candidate(
+    candidate: &StagedCandidate,
+    target: &SessionTarget,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    resources: &mut super::WorkerResources,
+    runtime: &mut super::WorkerRuntime,
+) -> Result<Option<StagedCandidate>, String> {
+    let Some(expected) = candidate.preflight_target else {
+        return Ok(None);
+    };
+    stage_up_only_after_target_replan(
+        candidate.up_mask,
+        candidate.timing_window,
+        UpOnlyTargetReplanAdmission {
+            target_stale: candidate.packet_masks.down_mask != 0
+                && !target_stamp_still_current(target, expected),
+            require_focus,
+            focus_active,
+            control_signals,
+        },
+        target,
+        resources,
+        runtime,
+    )
 }
 
 fn pre_wait_candidate_admission(

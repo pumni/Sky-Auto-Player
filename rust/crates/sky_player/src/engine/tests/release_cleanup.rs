@@ -229,9 +229,13 @@ fn focus_restoration_is_resumable_while_system_suspend_is_terminal() {
 }
 
 #[test]
-fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pairing() {
+fn legacy_prepared_stream_release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_pairing()
+{
     use super::test_support::ProductionDispatchTestHarness;
 
+    // This matrix intentionally exercises the historical prepared-stream
+    // coordinator fixture. Production scheduler lifecycle accounting is
+    // covered separately by the live-scheduler matrix in test_support.
     for path in [
         "stop",
         "quit",

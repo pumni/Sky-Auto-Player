@@ -727,6 +727,13 @@ function Get-MetricPath {
     $current
 }
 
+function Get-ComparisonDescription {
+param([string]$Profile, $Control, $Candidate)
+if ($Profile -eq 'Scheduler') { return 'C0 Scheduler baseline vs Scheduler-Candidate' }
+if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -eq 'adaptive') { return 'Frozen vs Adaptive' }
+'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
+}
+
 function Get-PairedMetrics {
     $pairRows = [System.Collections.Generic.List[object]]::new()
     $metricPaths = @(
@@ -806,6 +813,8 @@ function Get-PairedMetrics {
         $triggered = @($availableRows | Where-Object regression_screen_triggered).Count
         $deltaP95 = @($availableRows | ForEach-Object { [double]$_.delta_p95_us })
         $deltaP99 = @($availableRows | ForEach-Object { [double]$_.delta_p99_us })
+        $p95DeltaSummary = Get-Percentiles $deltaP95
+        $p99DeltaSummary = Get-Percentiles $deltaP99
         $first = $rows | Select-Object -First 1
         $cellRows.Add([pscustomobject]@{
             cell_id = $first.cell_id
@@ -821,8 +830,16 @@ function Get-PairedMetrics {
             pairs_with_any_tail_regression = $triggered
             screen_complete = $rows.Count -eq 6 -and $availableRows.Count -eq 6
             leader_review_prompt = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs $rows.Count -AvailablePairs $availableRows.Count -P95RegressionPairs $p95Worse -P99RegressionPairs $p99Worse
-            p95_delta_us = Get-Percentiles $deltaP95
-            p99_delta_us = Get-Percentiles $deltaP99
+            p95_delta_sample_count = $deltaP95.Count
+            p95_delta_p50_us = Get-OptionalProperty $p95DeltaSummary 'p50'
+            p95_delta_p95_us = Get-OptionalProperty $p95DeltaSummary 'p95'
+            p95_delta_p99_us = Get-OptionalProperty $p95DeltaSummary 'p99'
+            p95_delta_max_us = Get-OptionalProperty $p95DeltaSummary 'max'
+            p99_delta_sample_count = $deltaP99.Count
+            p99_delta_p50_us = Get-OptionalProperty $p99DeltaSummary 'p50'
+            p99_delta_p95_us = Get-OptionalProperty $p99DeltaSummary 'p95'
+            p99_delta_p99_us = Get-OptionalProperty $p99DeltaSummary 'p99'
+            p99_delta_max_us = Get-OptionalProperty $p99DeltaSummary 'max'
             no_outlier_removed = $true
         })
     }
@@ -910,6 +927,15 @@ try {
     $os = Get-CimInstance Win32_OperatingSystem
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
     $pairedMetrics = Get-PairedMetrics
+    $comparisonDescription = if ($Stage -eq 'Compare') {
+        Get-ComparisonDescription -Profile $QualificationProfile -Control $control -Candidate $candidate
+    } else { $null }
+    $controlLabel = if ($QualificationProfile -eq 'Scheduler') {
+        'C0-Scheduler-Baseline'
+    } elseif ($control -and $control.c1_timed_verified) {
+        'C1-TIMED-R2'
+    } else { 'C0' }
+    $candidateLabel = if ($QualificationProfile -eq 'Scheduler') { 'Scheduler-Candidate' } else { 'Candidate-R2' }
     $passed = @($runRows | Where-Object status -eq 'PASS').Count
     $safetyRows = @($runRows | Where-Object { $_.workload -like '*safety*' -or $_.cell_id -eq 'boundary-safety' })
     $hardSafety = [ordered]@{
@@ -925,18 +951,10 @@ try {
         schema_version = 1
         run_id = $runId
         stage = $Stage
-        comparison = if ($Stage -eq 'Compare') {
-            if ($QualificationProfile -eq 'Scheduler') {
-                'Pinned base vs scheduler candidate'
-            } elseif ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
-                'Frozen vs Adaptive'
-            } else {
-                'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
-            }
-        } else { $null }
+        comparison = $comparisonDescription
         source = $source
         candidate = [ordered]@{ manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
-        control = if ($control) { [ordered]@{ control_label = if ($control.c1_timed_verified) { 'C1-TIMED' } else { 'C0' }; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
+        control = if ($control) { [ordered]@{ control_label = $controlLabel; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
         parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { $Pairs }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID' }
         environment = [ordered]@{ rustc_version = $rustcVersion.Trim(); windows_caption = $os.Caption; windows_version = $os.Version; windows_build = $os.BuildNumber; processor_name = $cpu.Name; processor_cores = $cpu.NumberOfCores; processor_logical_processors = $cpu.NumberOfLogicalProcessors; power_scheme = (& powercfg /getactivescheme | Out-String).Trim() }
         run_count = $runRows.Count
@@ -977,13 +995,7 @@ try {
         '# Dispatch Core qualification ' + $Stage,
         '',
         $(if ($Stage -eq 'Compare') {
-            if ($QualificationProfile -eq 'Scheduler') {
-                '**Comparison: pinned base vs Scheduler candidate.**'
-            } elseif ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
-                '**Comparison: Frozen vs Adaptive.**'
-            } else {
-                '**Comparison: C1-TIMED-R2 vs Candidate-R2. C0 is not timed-qualified.**'
-            }
+            '**Comparison: ' + $comparisonDescription + '.**'
         } else { $null }),
         '- Run: `' + $runId + '`',
         '- Source: `' + $head + '` tree `' + $tree + '` (clean)',
@@ -1025,26 +1037,20 @@ try {
     Copy-Item -LiteralPath $manifestValidator -Destination (Join-Path $evidenceRoot 'dispatch_harness_manifest.psm1')
     $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -QualificationProfile ' + $QualificationProfile + ' -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
-    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null } }
+    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = $comparisonDescription }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8
     [ordered]@{
         schema_version = 1
         run_id = $runId
         stage = $Stage
-        comparison = if ($Stage -eq 'Compare') {
-            if ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
-                'Frozen vs Adaptive'
-            } else {
-                'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
-            }
-        } else { $null }
+        comparison = $comparisonDescription
         created_utc = [DateTimeOffset]::UtcNow.ToString('O')
         source_branch = $source.branch
         source_revision = $source.revision
         source_tree_sha = $source.tree
         source_tree_clean = $source.clean
-        control_manifest = if ($control) { [ordered]@{ control_label = if ($control.c1_timed_verified) { 'C1-TIMED-R2' } else { 'C0' }; control_kind = Get-OptionalProperty $control 'control_kind'; sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
-        candidate_manifest = [ordered]@{ label = 'Candidate-R2'; sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
+        control_manifest = if ($control) { [ordered]@{ control_label = $controlLabel; control_kind = Get-OptionalProperty $control 'control_kind'; sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
+        candidate_manifest = [ordered]@{ label = $candidateLabel; sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { 6 }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { 15 }; timing_margin_us = $TimingMarginUs; workload_version = $candidate.workload_version; observer_mode = $candidate.observer_mode; guard_mode = $candidate.guard_mode; quiet_load = 'no extra qualification workers'; contention_load = 'two BelowNormal CPU workers'; pair_order = 'alternating AB/BA' }
         rustc_version = $rustcVersion.Trim()
         windows_caption = $os.Caption

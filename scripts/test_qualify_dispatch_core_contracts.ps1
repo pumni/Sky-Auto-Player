@@ -29,6 +29,9 @@ foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_accepta
 $requiredFunctions = @(
     'Get-OptionalProperty',
     'Get-Percentiles',
+    'Get-MetricPath',
+    'Get-ComparisonDescription',
+    'Get-PairedMetrics',
     'Get-DeadlineCrossingToPreCallSample',
     'Get-TimingMetrics',
     'Invoke-NativeCaseFailStopSequence',
@@ -42,6 +45,7 @@ foreach ($name in $requiredFunctions) {
     if ($null -eq $functionAst) { throw "missing runner function: $name" }
     Invoke-Expression $functionAst.Extent.Text
 }
+Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 
 $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
 if ([regex]::Matches($runnerSource, 'Invoke-NativeCaseFailStopSequence').Count -lt 3) {
@@ -174,4 +178,70 @@ if ($metrics.metrics.deadline_crossing_to_pre_call_us.sample_count -ne 1 -or
     throw 'measured deadline-crossing-to-pre-call diagnostic lost provenance or used an invalid endpoint'
 }
 
-Write-Output 'PASS: PowerShell parser, Smoke/Final fail-stop, and timestamp provenance contracts'
+$runRows = @()
+$p95Deltas = @(10, 20, 30, 40, 50, 60)
+$p99Deltas = @(2, 4, 6, 8, 10, 12)
+for ($index = 0; $index -lt 6; $index++) {
+    $controlMetric = [pscustomobject]@{
+        p50 = 40; p95 = 100; p99 = 200; max = 300; sample_count = 20
+    }
+    $candidateMetric = [pscustomobject]@{
+        p50 = 45; p95 = 100 + $p95Deltas[$index]
+        p99 = 200 + $p99Deltas[$index]; max = 310; sample_count = 20
+    }
+    $runRows += [pscustomobject]@{
+        cell_id = 'Dispatch/Quiet'; pair_id = ('Dispatch/Quiet/{0:D2}' -f ($index + 1))
+        pair_order = if ($index % 2 -eq 0) { 'AB' } else { 'BA' }
+        role = 'control'; status = 'PASS'
+        timing_metrics = [pscustomobject]@{
+            metrics = [pscustomobject]@{ authored_lateness_per_chord_us = $controlMetric }
+        }
+    }
+    $runRows += [pscustomobject]@{
+        cell_id = 'Dispatch/Quiet'; pair_id = ('Dispatch/Quiet/{0:D2}' -f ($index + 1))
+        pair_order = if ($index % 2 -eq 0) { 'AB' } else { 'BA' }
+        role = 'candidate'; status = 'PASS'
+        timing_metrics = [pscustomobject]@{
+            metrics = [pscustomobject]@{ authored_lateness_per_chord_us = $candidateMetric }
+        }
+    }
+}
+$pairedMetrics = Get-PairedMetrics
+$pairedCell = @($pairedMetrics.cell_summary | Where-Object metric -eq 'metrics.authored_lateness_per_chord_us') | Select-Object -First 1
+if ($null -eq $pairedCell -or $pairedCell.attempted_pairs -ne 6 -or
+    $pairedCell.p95_delta_sample_count -ne 6 -or $pairedCell.p95_delta_p50_us -ne 30 -or
+    $pairedCell.p95_delta_p95_us -ne 60 -or $pairedCell.p95_delta_p99_us -ne 60 -or
+    $pairedCell.p95_delta_max_us -ne 60 -or $pairedCell.p99_delta_p50_us -ne 6 -or
+    $pairedCell.p99_delta_p95_us -ne 12 -or $pairedCell.p99_delta_max_us -ne 12 -or
+    $pairedCell.PSObject.Properties['p95_delta_us'] -or
+    $pairedCell.p95_delta_p50_us -is [System.Collections.IDictionary]) {
+    throw 'paired cell tail deltas are not flat numeric summaries'
+}
+
+$comparisonControl = [pscustomobject]@{ guard_mode = 'frozen' }
+$comparisonCandidate = [pscustomobject]@{ guard_mode = 'adaptive' }
+if ((Get-ComparisonDescription -Profile 'Scheduler' -Control $comparisonControl -Candidate $comparisonCandidate) -ne
+    'C0 Scheduler baseline vs Scheduler-Candidate') {
+    throw 'Scheduler provenance still describes the pinned comparison as C1-TIMED'
+}
+if ((Get-ComparisonDescription -Profile 'DispatchCore' -Control ([pscustomobject]@{}) -Candidate ([pscustomobject]@{})) -ne
+    'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' -or
+    (Get-ComparisonDescription -Profile 'DispatchCore' -Control $comparisonControl -Candidate $comparisonCandidate) -ne 'Frozen vs Adaptive') {
+    throw 'DispatchCore comparison provenance changed outside the Scheduler profile'
+}
+
+$pairedCsv = Join-Path $env:TEMP ('paired-cells-contract-' + [guid]::NewGuid().ToString('N') + '.csv')
+try {
+    @($pairedCell) | Export-Csv -LiteralPath $pairedCsv -NoTypeInformation -Encoding UTF8
+    $csvCell = Import-Csv -LiteralPath $pairedCsv | Select-Object -First 1
+    if ([double]$csvCell.p95_delta_p50_us -ne 30 -or
+        [double]$csvCell.p95_delta_p95_us -ne 60 -or
+        [double]$csvCell.p99_delta_p50_us -ne 6 -or
+        $csvCell.p95_delta_p50_us -match 'OrderedDictionary|System.Collections') {
+        throw 'paired-cells CSV did not preserve scalar numeric delta percentiles'
+    }
+} finally {
+    Remove-Item -LiteralPath $pairedCsv -Force -ErrorAction SilentlyContinue
+}
+
+Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

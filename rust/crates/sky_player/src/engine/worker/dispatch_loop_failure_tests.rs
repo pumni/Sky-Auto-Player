@@ -169,7 +169,7 @@ fn unstable_target_replan_wait_bounds_overdue_dispatch_retries() {
             Some(1) => 2,
             _ => 1,
         };
-        assert!(target.publish_for_test(next_hwnd));
+        target.publish(next_hwnd);
         0
     });
     let clock = harness.resources.clock;
@@ -277,5 +277,274 @@ fn unstable_target_replan_wait_keeps_stop_pause_and_lease_interruptible() {
         }
         assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
         assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    }
+}
+
+#[test]
+fn mixed_preflight_target_churn_sends_due_up_only_and_leaves_down_uncommitted() {
+    let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
+    harness.runtime.verified_target = None;
+    let target = std::sync::Arc::clone(&harness.target);
+    harness.set_preflight_physical_mask_probe_for_test(move || {
+        target.publish(2);
+        0
+    });
+
+    let action = next_mixed_action(&harness);
+    assert!(matches!(
+        &action,
+        SchedulerAction::Send {
+            up_mask: 1,
+            down_chord_index: Some(1),
+            ..
+        }
+    ));
+    let controls = super::FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: None,
+    };
+    let fallback = stage_scheduler_action_preserving_due_up(
+        action,
+        &harness.target,
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        controls,
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("replan stale Mixed candidate")
+    .expect("due A Up fallback");
+    assert_eq!(fallback.packet_masks.up_mask, 1);
+    assert_eq!(fallback.packet_masks.down_mask, 0);
+
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(fallback, false),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+    let captured = packets.lock().expect("Mixed packets");
+    assert_eq!(
+        captured
+            .iter()
+            .map(|(packet, _)| *packet)
+            .collect::<Vec<_>>(),
+        vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
+    );
+    drop(captured);
+    let accounting = harness.resources.scheduler.accounting();
+    assert_eq!(accounting.activated, 1);
+    assert_eq!(accounting.released, 1);
+    assert_eq!(accounting.active, 0);
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.chord_index),
+        Some(1),
+        "the unrelated B Down remains current and uncommitted"
+    );
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+}
+
+#[test]
+fn mixed_prewait_target_churn_replans_as_up_only() {
+    let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
+    let candidate = stage_scheduler_action(
+        next_mixed_action(&harness),
+        &harness.target,
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("stage production Mixed candidate")
+    .expect("production Mixed candidate");
+    harness.target.publish(2);
+
+    assert_eq!(
+        pre_wait_candidate_admission(
+            &candidate,
+            &harness.target,
+            harness.config.focus.require_focus,
+            &harness.focus_active,
+            super::FinalControlSignals {
+                quit_requested: &harness.quit_requested,
+                skip_requested: &harness.skip_requested,
+                panic_requested: &harness.panic_requested,
+                desired_pause: &harness.desired_pause,
+                supervisor_expired: &harness.supervisor_expired,
+                system_power: None,
+            },
+            &mut harness.runtime,
+        ),
+        super::StagedDispatchOutcome::Replan
+    );
+    let fallback = stage_up_only_for_stale_mixed_candidate(
+        &candidate,
+        &harness.target,
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        super::FinalControlSignals {
+            quit_requested: &harness.quit_requested,
+            skip_requested: &harness.skip_requested,
+            panic_requested: &harness.panic_requested,
+            desired_pause: &harness.desired_pause,
+            supervisor_expired: &harness.supervisor_expired,
+            system_power: None,
+        },
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("pre-wait Mixed target fallback")
+    .expect("due A Up fallback");
+    assert_eq!(fallback.packet_masks, PhysicalPacket::new(1, 0));
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(fallback, false),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+    assert_eq!(
+        packets
+            .lock()
+            .expect("pre-wait packet capture")
+            .iter()
+            .map(|(packet, _)| *packet)
+            .collect::<Vec<_>>(),
+        vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
+    );
+    assert_eq!(harness.resources.scheduler.accounting().activated, 1);
+    assert_eq!(harness.resources.scheduler.accounting().released, 1);
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.chord_index),
+        Some(1)
+    );
+}
+
+#[test]
+fn mixed_final_gate_target_churn_replans_as_up_only() {
+    let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
+    let candidate = stage_scheduler_action(
+        next_mixed_action(&harness),
+        &harness.target,
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("stage production Mixed candidate")
+    .expect("production Mixed candidate");
+    harness.set_post_focus_revalidation_race_hook(|_, target, _, _, _, _, _| {
+        target.publish(2);
+    });
+
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+    assert_eq!(
+        packets
+            .lock()
+            .expect("final-gate packet capture")
+            .iter()
+            .map(|(packet, _)| *packet)
+            .collect::<Vec<_>>(),
+        vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
+    );
+    let accounting = harness.resources.scheduler.accounting();
+    assert_eq!(accounting.activated, 1);
+    assert_eq!(accounting.released, 1);
+    assert_eq!(accounting.active, 0);
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.chord_index),
+        Some(1)
+    );
+}
+
+#[test]
+fn mixed_target_churn_fallback_honors_pause_stop_and_lease_controls() {
+    for signal in ["pause", "stop", "lease"] {
+        let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
+        let candidate = stage_scheduler_action(
+            next_mixed_action(&harness),
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("stage production Mixed candidate")
+        .expect("production Mixed candidate");
+        harness.target.publish(2);
+        match signal {
+            "pause" => harness
+                .desired_pause
+                .store(true, std::sync::atomic::Ordering::Release),
+            "stop" => harness
+                .quit_requested
+                .store(true, std::sync::atomic::Ordering::Release),
+            "lease" => harness.supervisor_expired.latch_expired(),
+            _ => unreachable!(),
+        }
+
+        assert!(
+            stage_up_only_for_stale_mixed_candidate(
+                &candidate,
+                &harness.target,
+                harness.config.focus.require_focus,
+                &harness.focus_active,
+                super::FinalControlSignals {
+                    quit_requested: &harness.quit_requested,
+                    skip_requested: &harness.skip_requested,
+                    panic_requested: &harness.panic_requested,
+                    desired_pause: &harness.desired_pause,
+                    supervisor_expired: &harness.supervisor_expired,
+                    system_power: None,
+                },
+                &mut harness.resources,
+                &mut harness.runtime,
+            )
+            .expect("control-gated Mixed fallback")
+            .is_none(),
+            "{signal}: control state must block the Up-only dispatch"
+        );
+        assert_eq!(
+            packets.lock().expect("pre-cleanup packet capture").len(),
+            1,
+            "{signal}: no fallback packet before lifecycle cleanup"
+        );
+        assert_eq!(harness.resources.scheduler.accounting().active, 1);
+        assert_ne!(harness.release_obligation_mask_for_test(), 0);
+
+        let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+        if signal == "pause" {
+            harness
+                .apply_scheduler_resumable_lifecycle_transition_for_test()
+                .expect("pause cleanup uses production scheduler");
+        } else {
+            assert!(harness.process_command_control_for_test());
+            let mut observation = crate::engine::FinalizeTestObservation::default();
+            let outcome = harness.finalize_worker_for_test(false, &mut observation);
+            if signal == "stop" {
+                assert_eq!(outcome, crate::engine::OUTCOME_QUIT);
+            } else {
+                assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
+            }
+            assert_eq!(observation.release_obligation_mask, 0, "{signal}");
+            assert_eq!(observation.active_mask, 0, "{signal}");
+            assert_eq!(observation.possibly_active_mask, 0, "{signal}");
+            assert_eq!(observation.generation_accounting.active, 0, "{signal}");
+            assert_eq!(
+                cleanup.lock().expect("terminal safety Up capture").as_slice(),
+                &[(vec![0x15], true)],
+                "{signal}: terminal cleanup releases A"
+            );
+            continue;
+        }
+        assert_eq!(harness.release_obligation_mask_for_test(), 0, "{signal}");
+        assert_eq!(harness.resources.backend.active_mask, 0, "{signal}");
+        assert_eq!(
+            cleanup.lock().expect("safety Up capture").as_slice(),
+            &[(vec![0x15], true)],
+            "{signal}: accepted A Down is released by lifecycle cleanup"
+        );
     }
 }
