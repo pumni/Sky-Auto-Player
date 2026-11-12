@@ -1125,7 +1125,6 @@ mod tests {
 
     fn contains_tauri_runtime_import(source: &str) -> bool {
         let mut declaration = None::<String>;
-        let mut type_only = false;
         for raw_line in source.lines() {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with("//") {
@@ -1135,9 +1134,7 @@ mod tests {
             if let Some(statement) = declaration.as_mut() {
                 statement.push(' ');
                 statement.push_str(line);
-                type_only = is_type_only_import_statement(statement);
             } else if line.starts_with("import ") || line.starts_with("export ") {
-                type_only = is_type_only_import_statement(line);
                 declaration = Some(line.to_owned());
             } else {
                 let is_dynamic_import = line.contains("import(") || line.contains("import (");
@@ -1149,12 +1146,11 @@ mod tests {
             }
 
             let statement = declaration.as_deref().unwrap_or_default();
-            if !type_only && is_tauri_module_specifier(statement) {
+            if !is_type_only_import_statement(statement) && is_tauri_module_specifier(statement) {
                 return true;
             }
             if statement.contains(';') || statement.contains(" from ") {
                 declaration = None;
-                type_only = false;
             }
         }
         false

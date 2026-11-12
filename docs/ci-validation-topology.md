@@ -70,7 +70,8 @@ development-server E2E selector.
 
 The Linux `static` job installs Go 1.25.0 and actionlint v1.7.12 at pinned
 versions, then validates every `.github/workflows/*.yml` file before running
-the Rust static and security contracts. The Rust release-runner contract
+the Rust static and security contracts. It also runs deterministic offline
+fixtures for the read-only CI metrics tool. The Rust release-runner contract
 checks that these pins and the actionlint invocation remain in CI.
 
 Unknown paths, classifier failures, and explicit full validation set every

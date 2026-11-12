@@ -307,6 +307,9 @@ jobs:
       - name: Test canonical toolchain pin resolver
         run: node --test scripts/toolchain-pin.test.mjs
 
+      - name: Test read-only CI metrics and offline fixtures
+        run: node --test scripts/ci_metrics.test.mjs
+
       - name: Test fail-closed ClamAV bootstrap
         shell: bash
         run: bash scripts/test_ci_bootstrap_clamav.sh

@@ -35,6 +35,8 @@ invariants that must not be discarded because an implementation differs.
   [updater key custody](v4-updater-key-custody.md),
   [Authenticode](v4-authenticode-provider-seam.md).
 - **CI and development:** [CI topology](ci-validation-topology.md),
+  [CI performance baseline](ci-performance-baseline.md),
+  [future Windows smoke feasibility](ci-windows-smoke-feasibility.md),
   [Rust toolchain](rust-toolchain-policy.md),
   [contributing](../CONTRIBUTING.md).
 - **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),

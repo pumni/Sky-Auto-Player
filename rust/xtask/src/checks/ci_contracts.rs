@@ -994,6 +994,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     for marker in [
         "cargo xtask ci classify",
         "cargo test --locked --manifest-path rust/xtask/Cargo.toml",
+        "node --test scripts/ci_metrics.test.mjs",
+        "Test read-only CI metrics and offline fixtures",
         "github.event.pull_request.base.sha",
         "github.event.pull_request.head.sha",
         "github.event.pull_request.number",
