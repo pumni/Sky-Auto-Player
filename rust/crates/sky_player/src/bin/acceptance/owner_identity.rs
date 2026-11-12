@@ -161,23 +161,25 @@ pub(super) fn expected_failure_reason(scenario: Scenario) -> Option<&'static str
     }
 }
 
+fn terminal_error_matches_reason(terminal_error: Option<&str>, expected: &str) -> bool {
+    terminal_error.is_some_and(|error| {
+        error == expected
+            || error
+                .strip_suffix(expected)
+                .is_some_and(|prefix| prefix.ends_with(": "))
+    })
+}
+
 pub(super) fn failure_matches(
     scenario: Scenario,
     terminal_error: Option<&str>,
     process_termination_verified: bool,
 ) -> bool {
     expected_failure_reason(scenario)
-        .is_some_and(|expected| {
-            terminal_error.is_some_and(|error| {
-                error == expected
-                    || error
-                        .strip_suffix(expected)
-                        .is_some_and(|prefix| prefix.ends_with(": "))
-            })
-        })
+        .is_some_and(|expected| terminal_error_matches_reason(terminal_error, expected))
         || (scenario == Scenario::OwnerProcessTermination
             && process_termination_verified
-            && terminal_error == Some("focus_lost_during_preroll"))
+            && terminal_error_matches_reason(terminal_error, "focus_lost_during_preroll"))
 }
 
 pub(super) fn failure_qualified(
@@ -224,7 +226,7 @@ pub(super) fn failure_result(
         if qualified
             && scenario == Scenario::OwnerProcessTermination
             && process_termination_verified
-            && terminal_error == Some("focus_lost_during_preroll")
+            && terminal_error_matches_reason(terminal_error, "focus_lost_during_preroll")
         {
             "identity-verified ReceiveOnly owner process termination destroyed the foreground window; preroll failed closed before the sender"
         } else if qualified && scenario == Scenario::OwnerProcessTermination && process_termination_verified {
@@ -311,7 +313,7 @@ mod tests {
     fn verified_receive_only_termination_that_destroys_foreground_fails_closed() {
         let result = failure_result(
             Scenario::OwnerProcessTermination,
-            Some("focus_lost_during_preroll"),
+            Some("dispatch gate rejected before SendInput: source_action=0: focus_lost_during_preroll"),
             true,
             0,
             true,
