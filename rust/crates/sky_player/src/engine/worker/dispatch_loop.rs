@@ -1558,7 +1558,7 @@ pub(super) fn dispatch(
                 SchedulerAction::Finished => continue,
                 SchedulerAction::Wait { .. } => None,
             };
-            let wait_target_qpc =
+            let mut wait_target_qpc =
                 candidate
                     .as_ref()
                     .map_or(scheduler_wait_target_qpc, |candidate| {
@@ -1607,6 +1607,8 @@ pub(super) fn dispatch(
                                 }
                             };
                             if let Some(fallback) = fallback {
+                                wait_target_qpc = scheduler_wait_target_qpc
+                                    .max(fallback.timing_window.packet_not_before_qpc);
                                 candidate = Some(fallback);
                             } else {
                                 let target_stale = candidate
@@ -1655,100 +1657,102 @@ pub(super) fn dispatch(
                         StagedDispatchOutcome::Exit => break,
                     }
                 }
-                #[cfg(any(test, feature = "test-support"))]
-                if candidate
-                    .as_ref()
-                    .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
-                    && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                    && let Some(candidate) = candidate.as_ref()
-                {
-                    hook.record_down_window_before_physical_wait(
-                        candidate.timing_window.authored_target_qpc.as_u64(),
-                        candidate.timing_window.packet_not_before_qpc.as_u64(),
-                    );
-                }
-                let authored_target_ticks = candidate.as_ref().map_or_else(
-                    || {
-                        TimelineTicks::from_raw(
-                            wait_target_qpc
-                                .as_u64()
-                                .saturating_sub(resources.playback.epoch.as_u64()),
-                        )
-                    },
-                    |candidate| candidate.authored_target_ticks,
-                );
-                match wait_for_next_boundary(WaitBoundaryInput {
-                    deadline: WaitDeadline {
-                        physical_target_qpc: Some(wait_target_qpc),
-                        spin_threshold_ticks: if candidate.is_some() {
-                            timing.effective_spin_threshold_ticks
-                        } else {
-                            DurationTicks::ZERO
-                        },
-                        qpc_clock,
-                    },
-                    signals: WaitSignals {
-                        waiter: &resources.waiter,
-                        interrupt,
-                    },
-                    mutable: WaitMutable {
-                        local_metrics: &mut core.metrics,
-                        terminal_error: &mut core.runtime.terminal_error,
-                    },
-                }) {
-                    WaitBoundary::Due {
-                        wait_result,
-                        target_qpc,
-                        dispatch_qpc,
-                        planned_wait_ticks,
-                    } => {
-                        super::dispatch::publish_pending_wait_observation(
-                            &mut core.runtime,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics,
+                if wait_target_qpc > now_ticks {
+                    #[cfg(any(test, feature = "test-support"))]
+                    if candidate
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
+                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                        && let Some(candidate) = candidate.as_ref()
+                    {
+                        hook.record_down_window_before_physical_wait(
+                            candidate.timing_window.authored_target_qpc.as_u64(),
+                            candidate.timing_window.packet_not_before_qpc.as_u64(),
                         );
-                        core.runtime.pending_wait_observation =
-                            super::dispatch::record_wait_attempt(
+                    }
+                    let authored_target_ticks = candidate.as_ref().map_or_else(
+                        || {
+                            TimelineTicks::from_raw(
+                                wait_target_qpc
+                                    .as_u64()
+                                    .saturating_sub(resources.playback.epoch.as_u64()),
+                            )
+                        },
+                        |candidate| candidate.authored_target_ticks,
+                    );
+                    match wait_for_next_boundary(WaitBoundaryInput {
+                        deadline: WaitDeadline {
+                            physical_target_qpc: Some(wait_target_qpc),
+                            spin_threshold_ticks: if candidate.is_some() {
+                                timing.effective_spin_threshold_ticks
+                            } else {
+                                DurationTicks::ZERO
+                            },
+                            qpc_clock,
+                        },
+                        signals: WaitSignals {
+                            waiter: &resources.waiter,
+                            interrupt,
+                        },
+                        mutable: WaitMutable {
+                            local_metrics: &mut core.metrics,
+                            terminal_error: &mut core.runtime.terminal_error,
+                        },
+                    }) {
+                        WaitBoundary::Due {
+                            wait_result,
+                            target_qpc,
+                            dispatch_qpc,
+                            planned_wait_ticks,
+                        } => {
+                            super::dispatch::publish_pending_wait_observation(
+                                &mut core.runtime,
                                 core.observer.pending.as_ref(),
+                                &mut core.metrics,
+                            );
+                            core.runtime.pending_wait_observation =
+                                super::dispatch::record_wait_attempt(
+                                    core.observer.pending.as_ref(),
+                                    wait_result,
+                                    target_qpc,
+                                    planned_wait_ticks,
+                                    authored_target_ticks,
+                                    resources.playback.epoch,
+                                    None,
+                                    &mut core.metrics,
+                                );
+                            if let Some(wait_result) = wait_result {
+                                core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
+                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            } else {
+                                core.runtime.last_dispatch_deadline_wake_qpc = Some(dispatch_qpc);
+                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            }
+                        }
+                        WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks) => {
+                            core.runtime.last_dispatch_deadline_wake_qpc = None;
+                            core.runtime.last_dispatch_deadline_target_qpc = None;
+                            super::dispatch::publish_interrupted_physical_wait(
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
+                                &mut core.metrics,
                                 wait_result,
                                 target_qpc,
                                 planned_wait_ticks,
                                 authored_target_ticks,
                                 resources.playback.epoch,
-                                None,
+                            );
+                            let _ = interrupt.try_take();
+                            continue;
+                        }
+                        WaitBoundary::Exit => {
+                            super::dispatch::publish_pending_wait_observation(
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
                                 &mut core.metrics,
                             );
-                        if let Some(wait_result) = wait_result {
-                            core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
-                            core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                        } else {
-                            core.runtime.last_dispatch_deadline_wake_qpc = Some(dispatch_qpc);
-                            core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            break;
                         }
-                    }
-                    WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks) => {
-                        core.runtime.last_dispatch_deadline_wake_qpc = None;
-                        core.runtime.last_dispatch_deadline_target_qpc = None;
-                        super::dispatch::publish_interrupted_physical_wait(
-                            &mut core.runtime,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics,
-                            wait_result,
-                            target_qpc,
-                            planned_wait_ticks,
-                            authored_target_ticks,
-                            resources.playback.epoch,
-                        );
-                        let _ = interrupt.try_take();
-                        continue;
-                    }
-                    WaitBoundary::Exit => {
-                        super::dispatch::publish_pending_wait_observation(
-                            &mut core.runtime,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics,
-                        );
-                        break;
                     }
                 }
             }

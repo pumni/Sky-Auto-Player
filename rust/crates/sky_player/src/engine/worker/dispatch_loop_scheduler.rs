@@ -146,7 +146,68 @@ fn stage_up_only_after_target_replan(
         return Ok(None);
     }
 
-    stage_candidate(up_mask, None, timing_window, target, resources, runtime)
+    let Some(mut candidate) =
+        stage_candidate(up_mask, None, timing_window, target, resources, runtime)?
+    else {
+        return Ok(None);
+    };
+    candidate.timing_window = up_only_timing_window(
+        candidate.timing_window,
+        &candidate.up_slot_timings,
+        resources.playback.epoch,
+    )?;
+    candidate.authored_target_qpc = candidate.timing_window.authored_target_qpc;
+    candidate.authored_target_ticks = sky_dispatch_core::time::TimelineTicks::from_raw(
+        candidate
+            .authored_target_qpc
+            .checked_duration_since(resources.playback.epoch)
+            .map_err(|error| {
+                format!("Up-only authored target precedes playback epoch: {error}")
+            })?
+            .as_u64(),
+    );
+    Ok(Some(candidate))
+}
+
+fn up_only_timing_window(
+    mut timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    up_slot_timings: &[sky_dispatch_core::executor::UpSlotTiming],
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<sky_dispatch_core::executor::DispatchTimingWindow, String> {
+    let mut authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks> = None;
+    let mut musical_up_not_before_qpc: Option<sky_dispatch_win32::clock::QpcTicks> = None;
+    let mut hold_floor_mask = 0u16;
+    for slot in up_slot_timings {
+        let authored_up_qpc = epoch_qpc
+            .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+                slot.authored_up_offset_ticks.as_u64(),
+            ))
+            .map_err(|error| format!("Up-only authored target overflow: {error}"))?;
+        let release_not_before_qpc = authored_up_qpc.max(slot.release_not_before_qpc);
+        authored_target_qpc = Some(authored_target_qpc.map_or(authored_up_qpc, |current| {
+            current.min(authored_up_qpc)
+        }));
+        musical_up_not_before_qpc = Some(
+            musical_up_not_before_qpc.map_or(release_not_before_qpc, |current| {
+                current.max(release_not_before_qpc)
+            }),
+        );
+        if slot.release_not_before_qpc > authored_up_qpc {
+            hold_floor_mask |= 1 << slot.slot;
+        }
+    }
+
+    let authored_target_qpc = authored_target_qpc
+        .ok_or_else(|| "Up-only fallback has no active scheduler Up slots".to_string())?;
+    let musical_up_not_before_qpc = musical_up_not_before_qpc
+        .ok_or_else(|| "Up-only fallback has no physical Up deadline".to_string())?;
+    timing_window.authored_target_qpc = authored_target_qpc;
+    timing_window.musical_up_not_before_qpc = musical_up_not_before_qpc;
+    timing_window.down_not_before_qpc = authored_target_qpc;
+    timing_window.packet_not_before_qpc = musical_up_not_before_qpc;
+    timing_window.hold_floor_mask = hold_floor_mask;
+    timing_window.release_floor_mask = 0;
+    Ok(timing_window)
 }
 
 fn stage_scheduler_action_preserving_due_up(
