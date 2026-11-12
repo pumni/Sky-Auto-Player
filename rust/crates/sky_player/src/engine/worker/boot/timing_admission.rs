@@ -3,8 +3,6 @@ use crate::engine::worker::WorkerTimingState;
 use crate::engine::{DurationTicks, PAUSED_POLL_US, QpcClock};
 
 pub(super) struct ConvertedTiming {
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) effective_min_hold_us: u64,
     pub(super) min_hold_ticks: DurationTicks,
     pub(super) frame_ticks: DurationTicks,
     pub(super) worker_timing: WorkerTimingState,
@@ -74,8 +72,6 @@ pub(super) fn convert(
         .map_err(|error| format!("SendInput 10ms threshold conversion failed: {error:?}"))?;
 
     Ok(ConvertedTiming {
-        #[cfg(any(test, feature = "test-support"))]
-        effective_min_hold_us,
         min_hold_ticks,
         frame_ticks,
         worker_timing: WorkerTimingState {

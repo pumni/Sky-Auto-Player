@@ -57,6 +57,101 @@ fn lifecycle_fixture_admission_and_config_metadata_match_native_contract() {
 }
 
 #[test]
+fn test_support_cleanup_accounting_uses_the_live_scheduler() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let scheduler_before = harness.resources.scheduler.accounting();
+    harness.legacy_coordinator_fixture =
+        sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
+            sky_dispatch_core::model::RuntimeSchedule {
+                packets: Vec::new(),
+                batches: Vec::new(),
+                intents: Vec::new(),
+                generation_count: 0,
+                key_registry: sky_dispatch_core::model::KeyRegistry::new(&[]),
+                reason_table: Vec::new(),
+                down_chords: Vec::new(),
+                schedule_end_offset_us: 0,
+                compile_memory: Default::default(),
+            },
+            0,
+            sky_dispatch_core::time::DurationTicks::ZERO,
+            |us| Ok(TimelineTicks::from_raw(us)),
+        )
+        .expect("isolated empty legacy coordinator fixture");
+    assert_ne!(
+        harness.legacy_coordinator_fixture.generation_accounting(),
+        scheduler_before,
+        "empty legacy fixture must differ so it cannot mask the production owner"
+    );
+    assert_eq!(harness.generation_accounting_for_test(), scheduler_before);
+
+    harness.runtime.terminal_trigger = Some(super::super::super::worker::TerminalTrigger::Quit);
+    let mut observation = super::super::super::worker::FinalizeTestObservation::default();
+    let _ = harness.finalize_worker_for_test(false, &mut observation);
+
+    assert_eq!(
+        observation.pre_cancel_generation_accounting, scheduler_before,
+        "terminal pre-cancel audit must read the scheduler"
+    );
+    assert!(
+        observation.generation_accounting.cancelled > scheduler_before.cancelled,
+        "terminal cleanup must cancel the scheduler's remaining generations"
+    );
+}
+
+#[test]
+fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let clock = harness.resources.clock;
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage scheduler Down")
+        .expect("scheduler Down candidate");
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let completed = clock.now().expect("mock send completion");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(completed),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        crate::engine::worker::StagedDispatchOutcome::Dispatched
+    ));
+    assert_eq!(harness.resources.scheduler.accounting().active, 1);
+
+    harness
+        .apply_scheduler_resumable_lifecycle_transition_for_test()
+        .expect("verified scheduler suspension cleanup");
+
+    let accounting = harness.resources.scheduler.accounting();
+    assert_eq!(accounting.activated, 1);
+    assert_eq!(accounting.active, 0);
+    assert_eq!(accounting.cancelled, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    harness
+        .resources
+        .scheduler
+        .check_invariants()
+        .expect("scheduler cleanup invariants");
+}
+
+#[test]
 fn lifecycle_not_due_dispatch_preserves_sender_cursor_and_generation_until_floor() {
     let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
     let mut harness =

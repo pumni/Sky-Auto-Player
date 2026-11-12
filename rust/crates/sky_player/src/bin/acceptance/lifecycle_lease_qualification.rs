@@ -785,7 +785,7 @@ mod delayed_watchdog_tests {
         assert!(expected_delayed_watchdog_expiry(
             Scenario::LeaseAgeWatchdogDelayed,
             Some("supervisor_lease_expired"),
-            Some("dispatch gate rejected before SendInput: source_action=0 source_chord=0 up_mask=0x0000 down_mask=0x0001 requested=1 inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: supervisor_lease_expired"),
+            Some("dispatch gate rejected before SendInput: source_action=0 source_chord=0 up_mask=0x0000 down_mask=0x0001 requested=1 confirmed_count=unavailable first_inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: supervisor_lease_expired"),
             1,
         ));
     }

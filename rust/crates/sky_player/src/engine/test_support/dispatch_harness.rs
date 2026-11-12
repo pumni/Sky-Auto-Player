@@ -140,12 +140,13 @@ impl PreparedStartupBuilder {
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
     pub(crate) resources: WorkerResources,
+    pub(crate) legacy_coordinator_fixture: RuntimeDispatchCoordinator,
     pub(crate) health: WorkerHealthState,
     pub(crate) timing: WorkerTimingState,
     pub(crate) runtime: WorkerRuntime,
     pub(crate) local_metrics: WorkerMetricsLocal,
     pub(crate) focus_active: AtomicBool,
-    pub(crate) target: SessionTarget,
+    pub(crate) target: Arc<SessionTarget>,
     pub(crate) quit_requested: AtomicBool,
     pub(crate) skip_requested: AtomicBool,
     pub(crate) panic_requested: AtomicBool,
@@ -298,11 +299,10 @@ impl ProductionDispatchTestHarness {
         let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
         let confirmed_up_mask = send_result.evidence.confirmed_mask & up_mask;
         let confirmed_down_mask = send_result.evidence.confirmed_mask & down_mask;
-        if let Some(exec) = self.resources.coordinator.executor.as_mut() {
+        if let Some(exec) = self.legacy_coordinator_fixture.executor.as_mut() {
             exec.on_send_completed(confirmed_up_mask, confirmed_down_mask, completion_ticks)?;
         }
-        self.resources
-            .coordinator
+        self.legacy_coordinator_fixture
             .record_executor_completion(confirmed_up_mask, down_chord);
         Ok(())
     }
@@ -1141,8 +1141,7 @@ impl ProductionDispatchTestHarness {
             .clock
             .duration_from_us(due_us)
             .expect("pending release due conversion");
-        self.resources
-            .coordinator
+        self.legacy_coordinator_fixture
             .seed_pending_release_for_test(slot, TimelineTicks::from_raw(due_ticks.as_u64()))
             .expect("seed pending release");
     }
@@ -1610,7 +1609,6 @@ impl ProductionDispatchTestHarness {
             waiter,
             backend,
             scheduler,
-            coordinator,
             playback,
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling,
@@ -1657,12 +1655,13 @@ impl ProductionDispatchTestHarness {
         Self {
             config: WorkerConfig::default(),
             resources,
+            legacy_coordinator_fixture: coordinator,
             health,
             timing,
             runtime,
             local_metrics: WorkerMetricsLocal::default(),
             focus_active: AtomicBool::new(true),
-            target: SessionTarget::new(1, 0),
+            target: Arc::new(SessionTarget::new(1, 0)),
             quit_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             panic_requested: AtomicBool::new(false),
@@ -1859,12 +1858,13 @@ impl ProductionDispatchTestHarness {
     /// startup jitter without changing an already-frozen target.
     pub fn align_next_plan_to_future_for_test(&mut self, margin_us: u64) {
         let authored = self
-            .resources
-            .coordinator
+            .legacy_coordinator_fixture
             .prepare_current_authored_frame()
             .expect("authored frame")
             .map(|frame| frame.authored_ticks);
-        let pending = self.resources.coordinator.earliest_pending_release_ticks();
+        let pending = self
+            .legacy_coordinator_fixture
+            .earliest_pending_release_ticks();
         let Some(deadline) = (match (authored, pending) {
             (Some(authored), Some(pending)) => Some(authored.min(pending)),
             (Some(authored), None) => Some(authored),
@@ -1893,12 +1893,13 @@ impl ProductionDispatchTestHarness {
     /// semantics while avoiding the long startup margin used by unit tests.
     pub fn align_next_plan_to_benchmark_margin_for_test(&mut self, margin_us: u64) {
         let authored = self
-            .resources
-            .coordinator
+            .legacy_coordinator_fixture
             .prepare_current_authored_frame()
             .expect("authored frame")
             .map(|frame| frame.authored_ticks);
-        let pending = self.resources.coordinator.earliest_pending_release_ticks();
+        let pending = self
+            .legacy_coordinator_fixture
+            .earliest_pending_release_ticks();
         let Some(deadline) = (match (authored, pending) {
             (Some(authored), Some(pending)) => Some(authored.min(pending)),
             (Some(authored), None) => Some(authored),
@@ -1990,7 +1991,7 @@ impl ProductionDispatchTestHarness {
             0x16 => 1,
             _ => return false,
         };
-        (self.resources.coordinator.active_mask & (1 << slot)) != 0
+        (self.legacy_coordinator_fixture.active_mask & (1 << slot)) != 0
     }
 
     /// Query coordinator chord integrity lost count.
@@ -2114,7 +2115,7 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn generation_accounting_for_test(&self) -> GenerationAccounting {
-        self.resources.coordinator.generation_accounting()
+        self.resources.scheduler.accounting()
     }
 
     /// Exercise the production command-control owner used by the worker loop.
@@ -2130,32 +2131,59 @@ impl ProductionDispatchTestHarness {
         )
     }
 
-    /// Exercise the dispatch-loop's shared resumable lifecycle transition
-    /// owner used by manual pause, focus restoration, and target changes.
-    pub fn apply_resumable_lifecycle_transition_for_test(&mut self) -> Result<(), String> {
+    /// Exercise verified resumable cleanup against the worker's live scheduler.
+    pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
+        &mut self,
+    ) -> Result<(), String> {
         let qpc_clock = self.resources.clock;
-        self.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+        self.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
             qpc_clock
                 .now()
                 .map_err(|error| format!("test cleanup QPC: {error:?}"))
         })
     }
 
-    pub fn apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
+    pub fn apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
         &mut self,
         post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
     ) -> Result<(), String> {
-        let playback = self.resources.playback.clone();
-        super::super::worker::apply_resumable_lifecycle_transition_for_test(
+        super::super::worker::apply_scheduler_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
-            &mut self.resources.coordinator,
+            &mut self.resources.scheduler,
             &mut self.runtime,
-            Ok(self.effective_now_ticks),
             self.target.hwnd_for_safety_release(),
+            post_cleanup_qpc,
+        )
+    }
+
+    /// Exercise the historical coordinator fixture used by prepared-stream
+    /// tests. Production scheduler cleanup has a separate explicit wrapper.
+    pub fn apply_legacy_resumable_lifecycle_transition_for_test(&mut self) -> Result<(), String> {
+        let qpc_clock = self.resources.clock;
+        self.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            qpc_clock
+                .now()
+                .map_err(|error| format!("test cleanup QPC: {error:?}"))
+        })
+    }
+
+    pub fn apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
+        &mut self,
+        post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
+    ) -> Result<(), String> {
+        let effective_now_ticks = self.effective_now_ticks;
+        let target_hwnd = self.target.hwnd_for_safety_release();
+        let playback = self.resources.playback.clone();
+        super::super::worker::suspend_live_input(
+            &mut self.resources.backend,
+            &mut self.legacy_coordinator_fixture,
+            &mut self.runtime,
+            Ok(effective_now_ticks),
+            target_hwnd,
             post_cleanup_qpc,
             move |qpc| {
                 if qpc < playback.epoch {
-                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
+                    Ok(TimelineTicks::ZERO)
                 } else {
                     playback
                         .get_elapsed(qpc)
@@ -2163,6 +2191,7 @@ impl ProductionDispatchTestHarness {
                 }
             },
         )
+        .map(|_| ())
     }
 
     /// Exercise the same verified-release/cancel seam used by manual pause
@@ -2176,7 +2205,7 @@ impl ProductionDispatchTestHarness {
         let playback = self.resources.playback.clone();
         super::super::worker::suspend_live_input(
             &mut self.resources.backend,
-            &mut self.resources.coordinator,
+            &mut self.legacy_coordinator_fixture,
             &mut self.runtime,
             Ok(effective_now_ticks),
             target_hwnd,
@@ -2212,24 +2241,9 @@ impl ProductionDispatchTestHarness {
             .get_elapsed_allow_pre_epoch(pause_qpc, false)
             .map_err(|error| format!("manual pause probe clock: {error}"))?;
         self.effective_now_ticks = effective_now;
-        let playback = self.resources.playback.clone();
-        super::super::worker::apply_resumable_lifecycle_transition_for_test(
-            &mut self.resources.backend,
-            &mut self.resources.coordinator,
-            &mut self.runtime,
-            Ok(effective_now),
-            self.target.hwnd_for_safety_release(),
-            || Ok(pause_qpc),
-            move |qpc| {
-                if qpc < playback.epoch {
-                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
-                } else {
-                    playback
-                        .get_elapsed(qpc)
-                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
-                }
-            },
-        )?;
+        self.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            Ok(pause_qpc)
+        })?;
         self.resources
             .playback
             .enter_pause(PauseReason::Manual, pause_qpc)
@@ -2258,34 +2272,18 @@ impl ProductionDispatchTestHarness {
 
     pub fn restore_focus_for_test(&mut self, restore_qpc: QpcTicks) -> Result<(), String> {
         self.focus_active.store(true, Ordering::Release);
-        let qpc_clock = self.resources.clock;
         let effective_now = self
             .resources
             .playback
             .get_elapsed_allow_pre_epoch(restore_qpc, false)
             .map_err(|error| format!("focus restore probe clock: {error}"))?;
-        let playback = self.resources.playback.clone();
-        super::super::worker::apply_resumable_lifecycle_transition_for_test(
-            &mut self.resources.backend,
-            &mut self.resources.coordinator,
-            &mut self.runtime,
-            Ok(effective_now),
-            self.target.hwnd_for_safety_release(),
-            || {
-                qpc_clock
-                    .now()
-                    .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
-            },
-            move |qpc| {
-                if qpc < playback.epoch {
-                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
-                } else {
-                    playback
-                        .get_elapsed(qpc)
-                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
-                }
-            },
-        )?;
+        self.effective_now_ticks = effective_now;
+        let qpc_clock = self.resources.clock;
+        self.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            qpc_clock
+                .now()
+                .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
+        })?;
         self.resources
             .playback
             .exit_pause(PauseReason::Focus, restore_qpc)
@@ -2784,7 +2782,7 @@ impl ProductionDispatchTestHarness {
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
         self.align_epoch_to_selected_boundary_before_planning();
         let mut plan = plan_next_dispatch(
-            &self.resources.coordinator,
+            &self.legacy_coordinator_fixture,
             self.resources.playback.epoch,
             self.resources.clock,
             &self.config.timing,
@@ -2815,7 +2813,7 @@ impl ProductionDispatchTestHarness {
         self.align_epoch_to_selected_boundary_before_planning();
         plan_next_dispatch_projected(
             crate::engine::worker::PlanningInput {
-                coordinator: &self.resources.coordinator,
+                coordinator: &self.legacy_coordinator_fixture,
                 epoch_qpc: self.resources.playback.epoch,
                 preparation_probe: &self.runtime.preparation_probe,
                 instrument_key_profile: self.resources.backend.instrument_key_profile(),
@@ -2843,9 +2841,9 @@ impl ProductionDispatchTestHarness {
 
     pub(crate) fn build_prepared_stream_for_test(&self) -> PreparedDispatchStream {
         let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-            self.resources.coordinator.schedule.clone(),
-            self.resources.coordinator.min_hold_us,
-            self.resources.coordinator.min_hold_ticks,
+            self.legacy_coordinator_fixture.schedule.clone(),
+            self.legacy_coordinator_fixture.min_hold_us,
+            self.legacy_coordinator_fixture.min_hold_ticks,
             |microseconds| {
                 self.resources
                     .clock
@@ -2870,8 +2868,7 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn prepared_suspension_cancellation_count_for_test(&self) -> usize {
-        self.resources
-            .coordinator
+        self.legacy_coordinator_fixture
             .cancelled_up_token_count_for_test_support()
     }
 
@@ -2986,6 +2983,7 @@ impl ProductionDispatchTestHarness {
             None,
             &self.config,
             &mut self.resources,
+            &mut self.legacy_coordinator_fixture,
             &mut self.health,
             &self.timing,
             &mut self.runtime,
@@ -3173,6 +3171,7 @@ impl ProductionDispatchTestHarness {
             None,
             &self.config,
             &mut self.resources,
+            &mut self.legacy_coordinator_fixture,
             &mut self.health,
             &self.timing,
             &mut self.runtime,
@@ -3359,6 +3358,7 @@ impl ProductionDispatchTestHarness {
             None,
             &self.config,
             &mut self.resources,
+            &mut self.legacy_coordinator_fixture,
             &mut self.health,
             &self.timing,
             &mut self.runtime,
@@ -3469,6 +3469,7 @@ impl ProductionDispatchTestHarness {
             None,
             &self.config,
             &mut self.resources,
+            &mut self.legacy_coordinator_fixture,
             &mut self.health,
             &self.timing,
             &mut self.runtime,
@@ -3750,12 +3751,13 @@ impl ProductionDispatchTestHarness {
     }
     fn align_epoch_to_selected_boundary_before_planning(&mut self) {
         let authored = self
-            .resources
-            .coordinator
+            .legacy_coordinator_fixture
             .prepare_current_authored_frame()
             .expect("authored frame")
             .map(|frame| frame.authored_ticks);
-        let pending = self.resources.coordinator.earliest_pending_release_ticks();
+        let pending = self
+            .legacy_coordinator_fixture
+            .earliest_pending_release_ticks();
         let selected_deadline = match (authored, pending) {
             (Some(authored), Some(pending)) => Some(authored.min(pending)),
             (Some(authored), None) => Some(authored),
@@ -3813,6 +3815,7 @@ impl ProductionDispatchTestHarness {
             false,
             &self.config,
             &mut self.resources,
+            &mut self.legacy_coordinator_fixture,
             &mut self.health,
             &self.timing,
             &mut self.runtime,
@@ -4320,7 +4323,9 @@ impl ProductionDispatchTestHarness {
     }
     /// Query the current authored packet path without mutating state.
     pub fn current_authored_path(&self) -> Option<DispatchPath> {
-        let (up_mask, down_mask) = self.resources.coordinator.next_authored_packet_masks()?;
+        let (up_mask, down_mask) = self
+            .legacy_coordinator_fixture
+            .next_authored_packet_masks()?;
         let up_count = up_mask.count_ones() as usize;
         let down_count = down_mask.count_ones() as usize;
         match physical_packet_kind(up_mask, down_mask) {
@@ -4368,6 +4373,7 @@ impl ProductionDispatchTestHarness {
             ctx,
             &self.config,
             &mut self.resources,
+            &mut self.legacy_coordinator_fixture,
             &mut self.health,
             &self.timing,
             &mut self.runtime,

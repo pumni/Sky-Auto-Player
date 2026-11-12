@@ -6,8 +6,6 @@ use super::super::{
 use super::admission::{FinalControlAdmission, final_control_precheck};
 #[cfg(any(test, feature = "test-support"))]
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
-#[cfg(any(test, feature = "test-support"))]
-use super::suspend_live_input;
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, WaitBoundary, WaitBoundaryInput,
@@ -231,6 +229,7 @@ pub(crate) fn dispatch_due_from_plan(
     focus_loss_fault: bool,
     config: &super::WorkerConfig,
     resources: &mut super::WorkerResources,
+    coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
     health: &mut super::WorkerHealthState,
     timing: &super::WorkerTimingState,
     runtime: &mut super::WorkerRuntime,
@@ -256,8 +255,7 @@ pub(crate) fn dispatch_due_from_plan(
         if metadata.physical_target_qpc > now_ticks {
             return super::DispatchStep::NoWork;
         }
-        return resources
-            .coordinator
+        return coordinator
             .commit_prepared_authored_frame_metadata_frozen(&metadata.commit)
             .map(|()| super::DispatchStep::Dispatched)
             .unwrap_or_else(|error| {
@@ -325,9 +323,7 @@ pub(crate) fn dispatch_due_from_plan(
         super::dispatch::PhysicalCommit::PendingRelease { .. } => None,
     };
     if let Some(commit) = authored_commit
-        && let Err(error) = resources
-            .coordinator
-            .validate_frozen_authored_commit(commit)
+        && let Err(error) = coordinator.validate_frozen_authored_commit(commit)
     {
         return super::DispatchStep::Terminate(format!(
             "authored cancellation identity validation failed before SendInput: {error}"
@@ -458,6 +454,7 @@ pub(crate) fn dispatch_due_from_plan(
         },
         config,
         resources,
+        coordinator,
         health,
         timing,
         runtime,
@@ -506,28 +503,14 @@ fn suspend_live_input_for_dispatch(
 
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_resumable_lifecycle_transition_for_test(
+pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
-    coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
+    scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
     runtime: &mut super::WorkerRuntime,
-    effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
-    post_cleanup_timeline_ticks: impl FnOnce(
-        sky_dispatch_win32::clock::QpcTicks,
-    )
-        -> Result<sky_dispatch_core::time::TimelineTicks, String>,
 ) -> Result<(), String> {
-    suspend_live_input(
-        backend,
-        coordinator,
-        runtime,
-        effective_now_ticks,
-        target_hwnd,
-        post_cleanup_qpc,
-        post_cleanup_timeline_ticks,
-    )
-    .map(|_| ())
+    suspend_live_input_for_dispatch(backend, scheduler, target_hwnd, runtime, post_cleanup_qpc)
 }
 
 #[derive(Debug)]
@@ -1475,12 +1458,33 @@ pub(super) fn dispatch(
                 }
                 action => action,
             };
+            let packet_not_before_qpc = match &action_to_stage {
+                SchedulerAction::Send { timing_window, .. } => timing_window.packet_not_before_qpc,
+                SchedulerAction::Finished | SchedulerAction::Wait { .. } => now_ticks,
+            };
             let candidate = match action_to_stage {
                 send_action @ SchedulerAction::Send { .. } => {
                     match stage_scheduler_action(send_action, target, resources, &mut core.runtime)
                     {
                         Ok(Some(candidate)) => Some(candidate),
-                        Ok(None) => continue,
+                        Ok(None) => {
+                            match wait_after_unstable_target(
+                                now_ticks,
+                                packet_not_before_qpc,
+                                qpc_clock,
+                                &resources.waiter,
+                                interrupt,
+                                &mut core.metrics,
+                                &mut core.runtime.terminal_error,
+                            ) {
+                                WaitBoundary::Due { .. } => continue,
+                                WaitBoundary::Interrupted(_, _, _) => {
+                                    let _ = interrupt.try_take();
+                                    continue;
+                                }
+                                WaitBoundary::Exit => break,
+                            }
+                        }
                         Err(error) => {
                             core.runtime.terminal_error = Some(error);
                             break;
@@ -1676,8 +1680,9 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        physical_target_qpc_for_work, physical_wait_target_for_plan,
-        publish_live_metrics_after_dispatch,
+        SchedulerAction, evaluate_scheduler_action, physical_target_qpc_for_work,
+        physical_wait_target_for_plan, publish_live_metrics_after_dispatch, stage_scheduler_action,
+        wait_after_unstable_target,
     };
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
@@ -3017,7 +3022,7 @@ mod tests {
 
         assert!(harness.wait_and_dispatch_current_plan(&plan).is_err());
         assert_eq!(harness.local_metrics.wait_interrupted_count, 1);
-        assert_eq!(harness.resources.coordinator.cursor, 0);
+        assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
         assert!(packets.lock().expect("packet capture").is_empty());
         assert!(matches!(
             harness.runtime.down_boundary_state,

@@ -10,9 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 mod dispatch_schedule;
 pub use dispatch_schedule::analyze_dispatch_schedule_cancellable;
 
+#[cfg(test)]
 pub const INSTRUMENT_SLOT_COUNT: usize = 15;
+#[cfg(not(test))]
+const INSTRUMENT_SLOT_COUNT: usize = 15;
 const INSTRUMENT_MASK: u16 = (1 << INSTRUMENT_SLOT_COUNT) - 1;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPacketKind {
@@ -20,6 +24,7 @@ pub enum ModelPacketKind {
     Metadata,
 }
 
+#[cfg(test)]
 /// One immutable, ordered schedule boundary. Times are relative authored QPC
 /// ticks; masks use the canonical fifteen instrument slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -30,7 +35,7 @@ pub struct ModelPacket {
     pub kind: ModelPacketKind,
 }
 
-/// Explicit assumptions used only by [`analyze_whole_stream`]. Durations are
+/// Explicit assumptions used by offline dispatch schedule estimates. Durations are
 /// estimates in microseconds and are rounded up into QPC ticks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct WholeStreamModelConfig {
@@ -136,6 +141,7 @@ impl std::error::Error for WholeStreamModelError {}
 /// from that packet's common sender-completion estimate. Every operation uses
 /// checked arithmetic. This is a risk estimate, never a production timing
 /// guarantee.
+#[cfg(test)]
 pub fn analyze_whole_stream(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
@@ -146,6 +152,7 @@ pub fn analyze_whole_stream(
 /// Cancellable form used by bounded Prepare-time analysis. The caller must
 /// bound `packets` before calling; cancellation is checked before allocation,
 /// during the fixed-work packet loop, and before percentile sorting.
+#[cfg(test)]
 pub fn analyze_whole_stream_cancellable(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
@@ -154,6 +161,7 @@ pub fn analyze_whole_stream_cancellable(
     analyze_whole_stream_inner(packets, config, Some(cancelled))
 }
 
+#[cfg(test)]
 fn analyze_whole_stream_inner(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,

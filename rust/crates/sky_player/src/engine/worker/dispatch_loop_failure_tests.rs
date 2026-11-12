@@ -72,7 +72,7 @@ fn sender_failure_record_for_test(
 fn failed_sender_paths_retain_bounded_attempt_and_clock_evidence() {
     let zero = sender_failure_record_for_test(1, SendTransactionStatus::ZeroProgress, 0);
     assert!(
-        zero.contains("requested=1 inserted=0")
+        zero.contains("requested=1 confirmed_count=0 first_inserted=0")
             && zero.contains("attempts=1 status=ZeroProgress"),
         "{zero}"
     );
@@ -83,7 +83,7 @@ fn failed_sender_paths_retain_bounded_attempt_and_clock_evidence() {
     assert!(partial.contains(
         "source_action=0 source_chord=0 up_mask=0x0000 down_mask=0x0003"
     ));
-    assert!(partial.contains("requested=2 inserted=1"));
+    assert!(partial.contains("requested=2 confirmed_count=1 first_inserted=1"));
     assert!(partial.contains("attempts=1 status=IntegrityLost"));
     assert!(partial.contains("retry_reason=PartialProgress { inserted_count: 1 }"));
 
@@ -94,4 +94,188 @@ fn failed_sender_paths_retain_bounded_attempt_and_clock_evidence() {
     );
     assert!(clock_failure.contains("status=ClockFailureAfterSend"));
     assert!(clock_failure.contains("completion_qpc=unavailable"));
+}
+
+#[test]
+fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
+    for (confirmed_mask, attempts, expected_evidence) in [
+        (0b0001, 1, "confirmed_count=0 first_inserted=2 attempts=1"),
+        (0b0011, 2, "confirmed_count=0 first_inserted=2 attempts=2"),
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
+        let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
+        harness.attach_executor_for_test().expect("attach scheduler");
+        let chord = harness.current_executor_chord_for_test();
+        let candidate = harness
+            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .expect("stage candidate")
+            .expect("Down candidate");
+        let packet_mask = candidate.packet_masks.down_mask;
+        let accounting_before = harness.resources.scheduler.accounting();
+        let clock = harness.resources.clock;
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            let started = clock.now().expect("sender start QPC");
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started),
+                    completed_ticks: Some(started),
+                    timing_error: None,
+                },
+            }
+        });
+
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            super::StagedDispatchOutcome::Exit
+        ));
+        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_eq!(
+            harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
+            Some(0)
+        );
+        assert_eq!(harness.resources.backend.in_flight_mask, packet_mask);
+        assert_eq!(
+            harness.resources.backend.release_obligation_mask() & packet_mask,
+            packet_mask
+        );
+        let error = harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .expect("terminal sender error");
+        assert!(error.contains("status=IntegrityLost"), "{error}");
+        assert!(error.contains(expected_evidence), "{error}");
+        let _ = harness.finalize_for_test();
+    }
+}
+
+#[test]
+fn unstable_target_replan_wait_bounds_overdue_dispatch_retries() {
+    let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
+    harness.runtime.verified_target = None;
+    let target = std::sync::Arc::clone(&harness.target);
+    harness.resources.backend.set_preflight_physical_mask_probe(move || {
+        let next_hwnd = match target.load_stable().map(|(hwnd, _)| hwnd) {
+            Some(1) => 2,
+            _ => 1,
+        };
+        assert!(target.publish_for_test(next_hwnd));
+        0
+    });
+    let clock = harness.resources.clock;
+    let epoch = sky_dispatch_win32::clock::QpcTicks::ZERO;
+    harness.resources.playback.epoch = epoch;
+    let accounting_before = harness.resources.scheduler.accounting();
+    let start = clock.now().expect("test start");
+    let duration = clock.duration_from_us(20_000).expect("window duration");
+    let mut stage_attempts = 0usize;
+
+    loop {
+        let now = clock.now().expect("test loop QPC");
+        if now
+            .checked_duration_since(start)
+            .expect("monotonic test QPC")
+            >= duration
+        {
+            break;
+        }
+        let action = evaluate_scheduler_action(&harness.resources.scheduler, now, epoch)
+            .expect("scheduler action");
+        let packet_not_before = match &action {
+            SchedulerAction::Send { timing_window, .. } => timing_window.packet_not_before_qpc,
+            action => panic!("overdue Down must remain eligible for replan: {action:?}"),
+        };
+        assert!(
+            stage_scheduler_action(
+                action,
+                &harness.target,
+                &mut harness.resources,
+                &mut harness.runtime,
+            )
+            .expect("stage with invalid target")
+            .is_none(),
+            "invalid target must not produce a physical candidate"
+        );
+        stage_attempts += 1;
+
+        match wait_after_unstable_target(
+            now,
+            packet_not_before,
+            clock,
+            &harness.resources.waiter,
+            &harness.interrupt,
+            &mut harness.local_metrics,
+            &mut harness.runtime.terminal_error,
+        ) {
+            super::WaitBoundary::Due { .. } => {}
+            super::WaitBoundary::Interrupted(_, _, _) => {
+                let _ = harness.interrupt.try_take();
+            }
+            super::WaitBoundary::Exit => panic!("bounded replan wait failed"),
+        }
+    }
+
+    assert!(stage_attempts >= 3, "stage attempts={stage_attempts}");
+    assert!(
+        stage_attempts <= 40,
+        "target churn caused unbounded retries: {stage_attempts} in 20 ms"
+    );
+    assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
+    assert_eq!(
+        harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
+        Some(0)
+    );
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+}
+
+#[test]
+fn unstable_target_replan_wait_keeps_stop_pause_and_lease_interruptible() {
+    for signal_kind in ["stop", "pause", "lease"] {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
+        let clock = harness.resources.clock;
+        let now = clock.now().expect("test now");
+        let deadline = now
+            .checked_add_duration(clock.duration_from_us(5_000_000).expect("long wait"))
+            .expect("deadline");
+        let accounting_before = harness.resources.scheduler.accounting();
+        match signal_kind {
+            "stop" => harness.quit_requested.store(true, std::sync::atomic::Ordering::Release),
+            "pause" => harness
+                .desired_pause
+                .store(true, std::sync::atomic::Ordering::Release),
+            "lease" => harness.supervisor_expired.latch_expired(),
+            _ => unreachable!(),
+        }
+        assert!(harness.interrupt.signal());
+
+        assert!(matches!(
+            wait_after_unstable_target(
+                now,
+                deadline,
+                clock,
+                &harness.resources.waiter,
+                &harness.interrupt,
+                &mut harness.local_metrics,
+                &mut harness.runtime.terminal_error,
+            ),
+            super::WaitBoundary::Interrupted(_, _, _)
+        ));
+        match signal_kind {
+            "stop" | "lease" => assert!(harness.process_command_control_for_test()),
+            "pause" => assert!(harness.desired_pause.load(std::sync::atomic::Ordering::Acquire)),
+            _ => unreachable!(),
+        }
+        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    }
 }

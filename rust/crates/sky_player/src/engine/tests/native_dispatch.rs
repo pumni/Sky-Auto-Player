@@ -339,7 +339,7 @@ fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
 
     assert!(matches!(step, super::worker::DispatchStep::Continue));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
 }
 
 #[test]
@@ -360,7 +360,7 @@ fn prepared_final_admission_rejects_aba_without_send_cursor_or_accounting_advanc
     assert!(matches!(step, super::worker::DispatchStep::Continue));
     assert_eq!(harness.target.load_stable(), Some((1, 2)));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
     assert_eq!(harness.generation_accounting_for_test(), accounting_before);
     assert_eq!(
         stream.current().expect("rejected entry remains current") as *const _,
@@ -429,12 +429,15 @@ fn normal_prepared_zero_progress_is_fail_closed_without_cursor_advance() {
         calls.load(Ordering::SeqCst)
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
     assert_eq!(harness.backend_active_mask(), 0);
     assert_eq!(harness.backend_possibly_active_mask(), 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(
-        harness.resources.coordinator.generation_accounting().active,
+        harness
+            .legacy_coordinator_fixture
+            .generation_accounting()
+            .active,
         0
     );
 }

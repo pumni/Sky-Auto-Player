@@ -671,9 +671,16 @@ impl TrackedKeyState {
     fn apply_packet_outcome_with_commit_policy(
         &mut self,
         packet: PhysicalPacket,
-        outcome: SendTransactionOutcome,
+        mut outcome: SendTransactionOutcome,
         defer_journal_commit: bool,
     ) -> SendTransactionOutcome {
+        if outcome.is_success() && !outcome.has_complete_evidence_for(packet) {
+            // The raw packet has a single-send contract. Treat contradictory
+            // Complete evidence as an integrity failure and keep the whole
+            // packet uncertain until terminal cleanup reconciles it.
+            outcome.status = SendTransactionStatus::IntegrityLost;
+            outcome.evidence.confirmed_mask = 0;
+        }
         let confirmed_mask = outcome.evidence.confirmed_mask;
         match outcome.status {
             SendTransactionStatus::Complete => {

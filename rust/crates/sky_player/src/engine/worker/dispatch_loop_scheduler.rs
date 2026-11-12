@@ -1,3 +1,4 @@
+#[derive(Debug)]
 enum SchedulerAction {
     Finished,
     Wait {
@@ -8,6 +9,52 @@ enum SchedulerAction {
         down_chord_index: Option<usize>,
         timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     },
+}
+
+const UNSTABLE_TARGET_REPLAN_INTERVAL_US: u64 = 1_000;
+
+fn wait_after_unstable_target(
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    packet_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    terminal_error: &mut Option<String>,
+) -> WaitBoundary {
+    let retry_deadline = if packet_not_before_qpc > now_qpc {
+        packet_not_before_qpc
+    } else {
+        let interval = match qpc_clock.duration_from_us(UNSTABLE_TARGET_REPLAN_INTERVAL_US) {
+            Ok(interval) => interval,
+            Err(error) => {
+                *terminal_error = Some(format!(
+                    "target replan interval conversion failed: {error:?}"
+                ));
+                return WaitBoundary::Exit;
+            }
+        };
+        match now_qpc.checked_add_duration(interval) {
+            Ok(deadline) => deadline,
+            Err(error) => {
+                *terminal_error = Some(format!("target replan deadline overflow: {error}"));
+                return WaitBoundary::Exit;
+            }
+        }
+    };
+
+    wait_for_next_boundary(WaitBoundaryInput {
+        deadline: WaitDeadline {
+            physical_target_qpc: Some(retry_deadline),
+            spin_threshold_ticks: DurationTicks::ZERO,
+            qpc_clock,
+        },
+        signals: WaitSignals { waiter, interrupt },
+        mutable: WaitMutable {
+            local_metrics,
+            terminal_error,
+        },
+    })
 }
 
 fn evaluate_scheduler_action(
@@ -122,7 +169,7 @@ fn sender_failure_record(
         .as_ref()
         .map_or_else(|| "none".to_string(), |chord| chord.chord_index.to_string());
     format!(
-        "source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} inserted={} first_inserted={} attempts={} status={:?} retry_reason={:?} win32_error={:?} pre_call_qpc={} completion_qpc={} timing_error={:?}",
+        "source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} confirmed_count={} first_inserted={} attempts={} status={:?} retry_reason={:?} win32_error={:?} pre_call_qpc={} completion_qpc={} timing_error={:?}",
         candidate.source_action_index,
         source_chord,
         candidate.packet_masks.up_mask,
@@ -146,7 +193,7 @@ fn gate_rejection_record(candidate: &StagedCandidate, reason: &str) -> String {
         .as_ref()
         .map_or_else(|| "none".to_string(), |chord| chord.chord_index.to_string());
     format!(
-        "dispatch gate rejected before SendInput: source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: {reason}",
+        "dispatch gate rejected before SendInput: source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} confirmed_count=unavailable first_inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: {reason}",
         candidate.source_action_index,
         source_chord,
         candidate.packet_masks.up_mask,

@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "test-support"))]
-use super::RuntimeDispatchCoordinator;
 use super::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED,
@@ -29,8 +27,6 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let FinalizeResources {
         mut backend,
         mut scheduler,
-        #[cfg(any(test, feature = "test-support"))]
-        mut legacy_coordinator,
         telemetry,
         playback,
         qpc_clock,
@@ -160,27 +156,6 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // physical release has been attempted from the backend obligation mask.
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "pre_cancel_ledger_audit");
-    #[cfg(any(test, feature = "test-support"))]
-    let pre_cancel_accounting = if let Some(coordinator) = legacy_coordinator.as_ref() {
-        if let Err(error) = coordinator.check_invariants() {
-            record_termination_error(
-                &mut terminal_error,
-                &mut secondary_errors,
-                format!("legacy test coordinator pre-cancel invariant failure: {error}"),
-            );
-        }
-        coordinator.generation_accounting()
-    } else {
-        if let Err(error) = scheduler.check_invariants() {
-            record_termination_error(
-                &mut terminal_error,
-                &mut secondary_errors,
-                format!("scheduler pre-cancel invariant failure: {error}"),
-            );
-        }
-        scheduler.accounting()
-    };
-    #[cfg(not(any(test, feature = "test-support")))]
     let pre_cancel_accounting = {
         if let Err(error) = scheduler.check_invariants() {
             record_termination_error(
@@ -229,16 +204,6 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
 
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_cancellation");
-    #[cfg(any(test, feature = "test-support"))]
-    let terminal_cleanup_result = if let Some(coordinator) = legacy_coordinator.as_mut() {
-        coordinator
-            .cancel_all()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    } else {
-        scheduler.on_verified_terminal_cleanup().map(|_| ())
-    };
-    #[cfg(not(any(test, feature = "test-support")))]
     let terminal_cleanup_result = scheduler.on_verified_terminal_cleanup().map(|_| ());
     if let Err(error) = terminal_cleanup_result {
         record_termination_error(
@@ -249,15 +214,6 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "post_cleanup_ledger_audit");
-    #[cfg(any(test, feature = "test-support"))]
-    let post_cleanup_check = if let Some(coordinator) = legacy_coordinator.as_ref() {
-        coordinator
-            .check_post_cleanup_invariants()
-            .map_err(|error| error.to_string())
-    } else {
-        scheduler.check_invariants()
-    };
-    #[cfg(not(any(test, feature = "test-support")))]
     let post_cleanup_check = scheduler.check_invariants();
     if let Err(error) = post_cleanup_check {
         record_termination_error(
@@ -364,22 +320,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "generation_metrics_export");
-    #[cfg(any(test, feature = "test-support"))]
-    let generation_status_counts = legacy_coordinator.as_ref().map_or_else(
-        || scheduler.generation_status_counts(),
-        RuntimeDispatchCoordinator::generation_status_counts,
-    );
-    #[cfg(not(any(test, feature = "test-support")))]
     let generation_status_counts = scheduler.generation_status_counts();
     *metrics.generation_status_counts.lock() = generation_status_counts;
     #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     {
-        #[cfg(any(test, feature = "test-support"))]
-        let generation_accounting = legacy_coordinator.as_ref().map_or_else(
-            || scheduler.accounting(),
-            RuntimeDispatchCoordinator::generation_accounting,
-        );
-        #[cfg(not(any(test, feature = "test-support")))]
         let generation_accounting = scheduler.accounting();
         *metrics.generation_accounting.lock() = generation_accounting;
     }

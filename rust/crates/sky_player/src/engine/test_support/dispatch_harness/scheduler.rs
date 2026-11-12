@@ -3,7 +3,6 @@
 use super::ProductionDispatchTestHarness;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 
-#[allow(dead_code)]
 impl ProductionDispatchTestHarness {
     pub fn current_executor_chord_for_test(
         &self,
@@ -24,7 +23,7 @@ impl ProductionDispatchTestHarness {
             .map_err(|e| format!("{e:?}"))?;
         let clock = self.resources.clock;
         self.resources.scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
-            &self.resources.coordinator.schedule,
+            &self.legacy_coordinator_fixture.schedule,
             min_hold_ticks,
             frame_ticks,
             |microseconds| {
@@ -33,8 +32,7 @@ impl ProductionDispatchTestHarness {
                     .map_err(|e| format!("{e:?}"))
             },
         )?;
-        self.resources
-            .coordinator
+        self.legacy_coordinator_fixture
             .attach_executor_with_cancellation(
                 min_hold_ticks,
                 frame_ticks,

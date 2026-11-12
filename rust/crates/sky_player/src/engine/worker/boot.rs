@@ -17,9 +17,6 @@ use super::super::{
     BackendConfig, DurationTicks, QpcClock, QpcTicks, SharedMetrics, TrackedKeyState,
     current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
 };
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(any(test, feature = "test-support"))]
-use super::super::{CoordinatorError, RuntimeDispatchCoordinator};
 use super::admission::focus_matches_hwnd;
 use super::{
     DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
@@ -233,8 +230,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     }
     let ConvertedTiming {
-        #[cfg(any(test, feature = "test-support"))]
-        effective_min_hold_us,
         min_hold_ticks,
         frame_ticks,
         mut worker_timing,
@@ -248,67 +243,16 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         .production_forensics
         .set_frame_policies(min_hold_ticks, frame_ticks);
     #[cfg(any(test, feature = "test-support"))]
-    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks_with_checkpoint(
-        schedule,
-        effective_min_hold_us,
-        min_hold_ticks,
-        |us| {
-            qpc_clock
-                .timeline_from_us(us)
-                .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
-        },
-        || {
-            startup_checkpoint(
-                shared,
-                config.focus.require_focus && schedule_has_down,
-                StartupCheckpoint::StreamBuild,
-                startup_hook,
-            )
-            .map_err(|_| CoordinatorError::PreparationCancelled)?;
-            Ok(())
-        },
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::StreamBuild,
+        startup_hook,
     ) {
-        Ok(coordinator) => coordinator,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("test coordinator construction failed: {error}"),
-            );
-        }
-    };
-    #[cfg(any(test, feature = "test-support"))]
-    if let Err(error) = coordinator.attach_executor_with_cancellation(
-        min_hold_ticks,
-        frame_ticks,
-        |us| {
-            qpc_clock
-                .timeline_from_us(us)
-                .map_err(|e| format!("QPC conversion failure: {e:?}"))
-        },
-        || {
-            startup_checkpoint(
-                shared,
-                config.focus.require_focus && schedule_has_down,
-                StartupCheckpoint::StreamMaterialization,
-                startup_hook,
-            )
-            .map_err(|_| "test coordinator materialization cancelled".to_string())?;
-            Ok(())
-        },
-    ) {
-        return admission_failure(
-            &mut backend,
-            metrics,
-            format!("test coordinator executor construction failed: {error}"),
-        );
+        return admission_failure(&mut backend, metrics, error);
     }
-    #[cfg(any(test, feature = "test-support"))]
-    let schedule_ref = &coordinator.schedule;
-    #[cfg(not(any(test, feature = "test-support")))]
-    let schedule_ref = &schedule;
     let scheduler = match sky_dispatch_core::executor::DispatchExecutor::new_with_cancellation(
-        schedule_ref,
+        &schedule,
         min_hold_ticks,
         frame_ticks,
         |us| {
@@ -360,7 +304,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     };
     if let Err(error) = record_unmatched_up_prepare_diagnostics(
-        schedule_ref,
+        &schedule,
         qpc_clock,
         &telemetry,
         || {
@@ -875,8 +819,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         waiter,
         backend,
         scheduler,
-        #[cfg(any(test, feature = "test-support"))]
-        coordinator,
         playback,
         telemetry,
         scheduling,

@@ -661,7 +661,7 @@ fn prepared_down_final_foreground_proof_has_exact_query_scope() {
         super::worker::DispatchStep::Dispatched
     ));
     assert_eq!(mismatch_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(mismatch.resources.coordinator.cursor, 0);
+    assert_eq!(mismatch.legacy_coordinator_fixture.cursor, 0);
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
 
     let mut disabled = ProductionDispatchTestHarness::new_down_only();
@@ -705,7 +705,7 @@ fn prepared_down_owner_rejections_do_not_send_or_advance_accounting() {
         let calls = harness.configure_send_counter();
         let mut stream = harness.build_prepared_stream_for_test();
         let accounting_before = harness.generation_accounting_for_test();
-        let cursor_before = harness.resources.coordinator.cursor;
+        let cursor_before = harness.legacy_coordinator_fixture.cursor;
 
         let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
 
@@ -714,7 +714,7 @@ fn prepared_down_owner_rejections_do_not_send_or_advance_accounting() {
             super::worker::DispatchStep::TerminateStatic(reason) if reason == expected_reason
         ));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(harness.resources.coordinator.cursor, cursor_before);
+        assert_eq!(harness.legacy_coordinator_fixture.cursor, cursor_before);
         assert_eq!(harness.generation_accounting_for_test(), accounting_before);
         assert_eq!(harness.release_obligation_mask_for_test(), 0);
         assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
@@ -1019,7 +1019,7 @@ fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
             target_rejections: harness.local_metrics.final_gate_target_changes,
             focus_rejections: harness.local_metrics.final_gate_focus_losses,
             lease_rejections: harness.local_metrics.final_gate_lease_expirations,
-            cursor: harness.resources.coordinator.cursor,
+            cursor: harness.legacy_coordinator_fixture.cursor,
             active_mask: harness.backend_active_mask(),
             release_obligations: harness.release_obligation_mask_for_test(),
             lease_samples: harness.final_lease_qpc_sample_count_for_test(),
@@ -1138,7 +1138,7 @@ fn stale_published_focus_false_rejects_matching_foreground_before_fresh_query() 
 
     assert!(matches!(step, super::worker::DispatchStep::Continue));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
     assert!(stream.current().is_some());
     assert!(
@@ -1171,7 +1171,7 @@ fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
         0,
         "fresh focus rejection sent input"
     );
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
     assert!(
         stream.current().is_some(),
         "fresh rejection consumed the frame"
@@ -1182,8 +1182,7 @@ fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     assert_eq!(
         harness
-            .resources
-            .coordinator
+            .legacy_coordinator_fixture
             .generation_status_counts()
             .get("dropped_expired")
             .copied()

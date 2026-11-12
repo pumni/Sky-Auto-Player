@@ -28,9 +28,6 @@ use std::sync::atomic::AtomicBool;
 pub(super) struct FinalizeResources {
     pub(super) backend: TrackedKeyState,
     pub(super) scheduler: DispatchExecutor,
-    /// Legacy ledger used only by the coordinator-based deterministic test harness.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) legacy_coordinator: Option<RuntimeDispatchCoordinator>,
     pub(super) telemetry: Arc<Mutex<TelemetryCollector>>,
     pub(super) playback: PlaybackClockState,
     pub(super) qpc_clock: QpcClock,

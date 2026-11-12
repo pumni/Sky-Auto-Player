@@ -29,7 +29,7 @@ fn lifecycle_active_cleanup_barrier_starts_after_verified_safety_up() {
     let post_cleanup_sample = Arc::new(AtomicU64::new(0));
     let sample_store = Arc::clone(&post_cleanup_sample);
     harness
-        .apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(move || {
+        .apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(move || {
             let q = qpc_clock
                 .now()
                 .map_err(|error| format!("active cleanup sample QPC: {error:?}"))?;
@@ -80,19 +80,18 @@ fn lifecycle_cleanup_qpc_failure_and_overflow_leave_down_fail_closed() {
             .expect("lifecycle playback epoch");
 
         let result = if overflow {
-            harness.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-                Ok(QpcTicks::from_raw(u64::MAX - 5))
-            })
+            harness.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
+                || Ok(QpcTicks::from_raw(u64::MAX - 5)),
+            )
         } else {
-            harness.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-                Err("injected post-cleanup QPC failure".to_string())
-            })
+            harness.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
+                || Err("injected post-cleanup QPC failure".to_string()),
+            )
         };
         assert!(result.is_err());
         assert_eq!(
             harness
-                .resources
-                .coordinator
+                .legacy_coordinator_fixture
                 .cancelled_up_token_count_for_test_support(),
             0,
             "failed post-cleanup QPC or barrier must not mint cancellation tokens"
@@ -140,16 +139,15 @@ fn lifecycle_inconclusive_cleanup_does_not_establish_or_bypass_barrier() {
 
     let post_cleanup_sampled = Arc::new(AtomicBool::new(false));
     let sampled = Arc::clone(&post_cleanup_sampled);
-    let result =
-        harness.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(move || {
+    let result = harness
+        .apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(move || {
             sampled.store(true, Ordering::Release);
             Ok(QpcTicks::from_raw(117_300))
         });
     assert!(result.is_err());
     assert_eq!(
         harness
-            .resources
-            .coordinator
+            .legacy_coordinator_fixture
             .cancelled_up_token_count_for_test_support(),
         0,
         "unverified physical cleanup must not mint cancellation tokens"
@@ -262,7 +260,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
             vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
             "{path}: successful musical Down"
         );
-        let before = harness.resources.coordinator.generation_accounting();
+        let before = harness.legacy_coordinator_fixture.generation_accounting();
         assert_eq!(before.activated, 1, "{path}: activated before cleanup");
         assert_eq!(before.active, 1, "{path}: active before cleanup");
         assert_eq!(before.released, 0, "{path}: released before cleanup");
@@ -287,7 +285,10 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: command control must only latch the stop"
                 );
                 assert_eq!(
-                    harness.resources.coordinator.generation_accounting().active,
+                    harness
+                        .legacy_coordinator_fixture
+                        .generation_accounting()
+                        .active,
                     1,
                     "{path}: generation ledger remains available for post-release audit"
                 );
@@ -307,7 +308,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
                 assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
-                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.activated, 0);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
                 assert_eq!(observation.generation_accounting.cancelled, 1);
@@ -357,7 +358,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
                 assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
-                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.activated, 0);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
                 assert_eq!(observation.generation_accounting.cancelled, 1);
@@ -376,7 +377,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
             "manual_pause_cleanup" => {
                 harness.desired_pause.store(true, Ordering::Release);
                 harness
-                    .apply_resumable_lifecycle_transition_for_test()
+                    .apply_legacy_resumable_lifecycle_transition_for_test()
                     .expect("manual pause dispatch-loop cleanup seam");
             }
             "focus_loss" => {
@@ -390,13 +391,13 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 )
                 .expect("focus-loss dispatch-loop transition");
                 harness
-                    .apply_resumable_lifecycle_transition_for_test()
+                    .apply_legacy_resumable_lifecycle_transition_for_test()
                     .expect("focus restoration dispatch-loop cleanup seam");
             }
             "target_hwnd_generation_change" => {
                 harness.target.publish(2);
                 harness
-                    .apply_resumable_lifecycle_transition_for_test()
+                    .apply_legacy_resumable_lifecycle_transition_for_test()
                     .expect("target-change dispatch-loop cleanup seam");
             }
             "system_suspend" => {
@@ -517,7 +518,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
                 assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
-                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.activated, 0);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
                 assert_eq!(observation.generation_accounting.cancelled, 1);
@@ -551,7 +552,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
                 assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
-                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.activated, 0);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
                 assert_eq!(observation.generation_accounting.cancelled, 1);
@@ -601,7 +602,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
             "{path}: one authored Down and one ownership-scoped safety Up"
         );
 
-        let after = harness.resources.coordinator.generation_accounting();
+        let after = harness.legacy_coordinator_fixture.generation_accounting();
         assert_eq!(after.activated, 1, "{path}: activation accounting");
         assert_eq!(after.active, 0, "{path}: active accounting after cleanup");
         assert_eq!(
@@ -613,7 +614,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
 }
 
 #[test]
-fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
+fn terminal_release_precedes_million_generation_scheduler_audit_and_publication() {
     use super::test_support::ProductionDispatchTestHarness;
     use parking_lot::Mutex;
     use sky_dispatch_core::model::{KeyRegistry, RuntimeSchedule};
@@ -623,24 +624,28 @@ fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
     harness.resources.backend.custom_emitter = None;
     let packets = harness.configure_packet_capture();
     harness.resources.backend.active_mask = 1;
-    harness.resources.coordinator =
-        sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
-            RuntimeSchedule {
-                packets: Vec::new(),
-                batches: Vec::new(),
-                intents: Vec::new(),
-                generation_count: GENERATIONS,
-                key_registry: KeyRegistry::new(&[]),
-                reason_table: Vec::new(),
-                down_chords: Vec::new(),
-                schedule_end_offset_us: 0,
-                compile_memory: Default::default(),
-            },
-            0,
-            DurationTicks::ZERO,
-            |us| Ok(TimelineTicks::from_raw(us)),
-        )
-        .expect("million-entry cancellation ledger");
+    let schedule = RuntimeSchedule {
+        packets: Vec::new(),
+        batches: Vec::new(),
+        intents: Vec::new(),
+        generation_count: GENERATIONS,
+        key_registry: KeyRegistry::new(&[]),
+        reason_table: Vec::new(),
+        down_chords: Vec::new(),
+        schedule_end_offset_us: 0,
+        compile_memory: Default::default(),
+    };
+    let qpc_clock = harness.resources.clock;
+    let frame_ticks = qpc_clock
+        .duration_from_us(16_667)
+        .expect("million-generation scheduler frame");
+    harness.resources.scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
+        &schedule,
+        DurationTicks::ZERO,
+        frame_ticks,
+        |us| Ok::<_, String>(TimelineTicks::from_raw(us)),
+    )
+    .expect("million-generation scheduler");
 
     let trace = Arc::new(Mutex::new(Vec::new()));
     let trace_for_sender = Arc::clone(&trace);
@@ -665,13 +670,9 @@ fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
         "the command boundary only latches Quit"
     );
     assert_eq!(
-        harness
-            .resources
-            .coordinator
-            .generation_accounting()
-            .scheduled,
+        harness.generation_accounting_for_test().scheduled,
         GENERATIONS,
-        "the generation ledger has not been traversed or cancelled"
+        "the scheduler has not been traversed or cancelled"
     );
 
     let mut observation = super::worker::FinalizeTestObservation {
@@ -776,15 +777,14 @@ fn failed_resumable_release_and_terminal_escalation_account_for_both_budgets() {
         .set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
 
     let resumable_error = harness
-        .apply_resumable_lifecycle_transition_for_test()
+        .apply_legacy_resumable_lifecycle_transition_for_test()
         .expect_err("uncertain resumable release escalates to terminal cleanup");
     assert_eq!(release_send_count.load(Ordering::SeqCst), 4);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resources.backend.failed_release_mask, 1);
     assert_eq!(
         harness
-            .resources
-            .coordinator
+            .legacy_coordinator_fixture
             .cancelled_up_token_count_for_test_support(),
         0,
         "unverified resumable cleanup must not mint cancellation tokens"
@@ -1032,7 +1032,10 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
         super::worker::DispatchStep::Dispatched
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        0
+    );
     assert_eq!(harness.backend_active_mask() & 0b001, 0b001);
 
     let authored_chord_plan = harness.plan_current_dispatch();
@@ -1042,7 +1045,10 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
         "unrelated chord step: {authored_chord_step:?}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        0
+    );
     assert_eq!(harness.backend_active_mask() & 0b110, 0b110);
 
     harness.align_next_plan_to_future_for_test(500_000);
@@ -1053,7 +1059,10 @@ fn deferred_release_does_not_block_unrelated_down_chord() {
         "cleanup step: {cleanup_step:?}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 3);
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        0
+    );
     assert_eq!(harness.backend_active_mask(), 0);
 }
 
@@ -1109,13 +1118,19 @@ fn manual_pause_retains_authored_up_and_exposes_user_held_key_collision() {
         super::worker::DispatchStep::Dispatched
     ));
     harness.seed_pending_release_for_test(0x15, 50_000);
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        1
+    );
 
     harness
         .suspend_live_input_for_test()
         .expect("manual pause suspension");
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
-    assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        0
+    );
+    assert_eq!(harness.legacy_coordinator_fixture.pending_release_mask(), 0);
     // Model the user physically holding the same instrument key after the
     // verified safety cleanup. SendInput carries no ownership identity, so
     // the resumed authored Up remains an observable Up event.
@@ -1129,15 +1144,14 @@ fn manual_pause_retains_authored_up_and_exposes_user_held_key_collision() {
         harness.dispatch_at_plan_target_for_test(&cleanup),
         super::worker::DispatchStep::Dispatched
     ));
-    assert!(harness.resources.coordinator.is_finished());
+    assert!(harness.legacy_coordinator_fixture.is_finished());
     assert_eq!(
         *packets.lock().expect("packet capture lock"),
         vec![PhysicalPacket::new(0b001, 0)],
         "the authored Up stays in the resumed packet despite an external physical hold"
     );
     harness
-        .resources
-        .coordinator
+        .legacy_coordinator_fixture
         .check_post_cleanup_invariants()
         .expect("clean suspension state");
 }
@@ -1153,7 +1167,10 @@ fn focus_suspend_restore_retains_authored_up_after_safety_cleanup() {
         super::worker::DispatchStep::Dispatched
     ));
     harness.seed_pending_release_for_test(0x15, 50_000);
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        1
+    );
 
     // Focus restoration uses the same production suspension seam before it
     // re-preflights the target.  A resumed planner must not rediscover the
@@ -1161,23 +1178,25 @@ fn focus_suspend_restore_retains_authored_up_after_safety_cleanup() {
     harness
         .suspend_live_input_for_test()
         .expect("focus suspension");
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
-    assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        0
+    );
+    assert_eq!(harness.legacy_coordinator_fixture.pending_release_mask(), 0);
     let packets = harness.configure_packet_capture();
     let cleanup = harness.plan_current_dispatch();
     assert!(matches!(
         harness.dispatch_at_plan_target_for_test(&cleanup),
         super::worker::DispatchStep::Dispatched
     ));
-    assert!(harness.resources.coordinator.is_finished());
+    assert!(harness.legacy_coordinator_fixture.is_finished());
     assert_eq!(
         *packets.lock().expect("packet capture lock"),
         vec![PhysicalPacket::new(0b001, 0)],
         "the frozen authored Up remains physical work after focus restoration"
     );
     harness
-        .resources
-        .coordinator
+        .legacy_coordinator_fixture
         .check_post_cleanup_invariants()
         .expect("clean focus suspension state");
 }
@@ -1201,7 +1220,10 @@ fn pending_release_equal_authored_boundary_sends_one_up_packet() {
     ));
 
     harness.seed_pending_release_for_test(0x15, 220_000);
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 1);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        1
+    );
 
     let equal_boundary = harness.plan_current_dispatch();
     let physical = equal_boundary
@@ -1225,8 +1247,11 @@ fn pending_release_equal_authored_boundary_sends_one_up_packet() {
         *packets.lock().expect("packet capture lock"),
         vec![PhysicalPacket::new(0b011, 0)]
     );
-    assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
-    assert_eq!(harness.resources.coordinator.cursor, 3);
+    assert_eq!(
+        harness.legacy_coordinator_fixture.pending_release_count(),
+        0
+    );
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 3);
 }
 
 #[test]
@@ -1393,7 +1418,7 @@ fn post_cleanup_conversion_failure_fails_closed_without_resuming() {
 
     let result = super::worker::suspend_live_input(
         &mut harness.resources.backend,
-        &mut harness.resources.coordinator,
+        &mut harness.legacy_coordinator_fixture,
         &mut harness.runtime,
         Ok(sky_dispatch_core::time::TimelineTicks::ZERO),
         target_hwnd,

@@ -730,7 +730,7 @@ fn prepared_late_down_keeps_following_up_accounting() {
         assert_eq!(captured[0].confirmed_mask, 1);
         assert_eq!(captured[0].attempts, 1);
     }
-    let after_down = harness.resources.coordinator.generation_accounting();
+    let after_down = harness.legacy_coordinator_fixture.generation_accounting();
     assert_eq!(after_down.activated, 1);
     assert_eq!(after_down.active, 1);
     assert_eq!(after_down.released, 0);
@@ -756,7 +756,7 @@ fn prepared_late_down_keeps_following_up_accounting() {
     }
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
     assert_eq!(harness.backend_active_mask(), 0);
-    let after_up = harness.resources.coordinator.generation_accounting();
+    let after_up = harness.legacy_coordinator_fixture.generation_accounting();
     assert_eq!(after_up.activated, 1);
     assert_eq!(after_up.active, 0);
     assert_eq!(after_up.released, 1);
@@ -824,7 +824,7 @@ fn prepared_mixed_transport_failure_is_fail_closed_without_retry() {
         super::worker::DispatchStep::Terminate(_) | super::worker::DispatchStep::TerminateStatic(_)
     ));
     assert_eq!(evidence.lock().expect("transport evidence").len(), 1);
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
     assert_eq!(harness.backend_active_mask(), 0);
 }
 
@@ -869,14 +869,14 @@ fn prepared_transport_fault_matrix_is_fail_closed_without_retry() {
             assert!(matches!(step, super::worker::DispatchStep::Dispatched));
             let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
             assert!(matches!(step, super::worker::DispatchStep::Dispatched));
-            assert_eq!(harness.resources.coordinator.cursor, 3);
+            assert_eq!(harness.legacy_coordinator_fixture.cursor, 3);
         } else {
             assert!(matches!(
                 step,
                 super::worker::DispatchStep::Terminate(_)
                     | super::worker::DispatchStep::TerminateStatic(_)
             ));
-            assert_eq!(harness.resources.coordinator.cursor, 0);
+            assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
         }
         assert_eq!(
             evidence.lock().expect("transport evidence").len(),
@@ -926,7 +926,7 @@ fn prepared_full_packet_transport_outcome_matrix_is_fail_closed() {
         assert_eq!(captured[0].requested_mask, 0b001);
         assert_eq!(captured[0].attempts, expected_attempts);
         assert_eq!(
-            harness.resources.coordinator.cursor,
+            harness.legacy_coordinator_fixture.cursor,
             u16::from(status == SendTransactionStatus::Complete) as usize
         );
         assert_eq!(
@@ -1119,7 +1119,7 @@ fn prepared_normal_down_lateness_matrix_keeps_one_transport_attempt() {
             assert_eq!(captured[0].attempts, 1, "{label}: boundary A send attempts");
         }
 
-        let accounting = harness.resources.coordinator.generation_accounting();
+        let accounting = harness.legacy_coordinator_fixture.generation_accounting();
         assert_eq!(accounting.activated, 1, "{label}: activated");
         assert_eq!(accounting.active, 1, "{label}: active");
         assert_eq!(accounting.released, 0, "{label}: released");

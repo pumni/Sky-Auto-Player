@@ -79,7 +79,7 @@ pub(super) use dispatch::{AuthoredPacketContext, dispatch_authored_packet};
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use dispatch::{DownBoundaryState, PendingUpRecovery};
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::apply_resumable_lifecycle_transition_for_test;
+pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 #[cfg(any(test, feature = "test-support"))]
@@ -206,8 +206,6 @@ pub(crate) fn finalize_worker_for_test(
             resources: FinalizeResources {
                 backend: resources.backend,
                 scheduler: resources.scheduler,
-                #[cfg(any(test, feature = "test-support"))]
-                legacy_coordinator: Some(resources.coordinator),
                 telemetry: resources.telemetry,
                 playback: resources.playback,
                 qpc_clock: resources.clock,
@@ -653,8 +651,6 @@ pub(crate) struct WorkerResources {
     pub(super) waiter: HybridWaiter,
     pub(super) backend: TrackedKeyState,
     pub(super) scheduler: sky_dispatch_core::executor::DispatchExecutor,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) coordinator: RuntimeDispatchCoordinator,
     pub(super) playback: PlaybackClockState,
     pub(super) telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
     pub(super) scheduling: WorkerSchedulingGuards,

@@ -1,0 +1,12 @@
+{
+  "runner_sha256": "418166dea725c74c593a72b6edbfb7d05c27f7035b909dd3144f08715b88c4fb",
+  "case_runner_sha256": "1d16ffcf95c02aea93b9ccd4de258bb82f9072d256fe8c06d31231a564ba0841",
+  "builder_sha256": "9574cbdd23f74532511f8eb5b173c480aa8e60e589e32283733ac4df2fe16066",
+  "manifest_validator_sha256": "3279833eb59f3cc0834fd344c9186ece4a3d3e86b4090d4ebd02d196a8c121f2",
+  "source_revision": "c48cc02d93204980af6a4d8e7b7dc48ec078f32e",
+  "source_tree_sha": "710d76b5c841f7a9e38d0c272271c7db2794680d",
+  "source_tree_clean": true,
+  "candidate_manifest_sha256": "665bffa161adf5555776dac8215c10e47bc2e3296eaf752a4937c995e5e56449",
+  "control_manifest_sha256": "0e6bc1bb5ed0beb8f0dc04a7a78842137eacff6208eb322a9ca1fecf0117f7c3",
+  "comparison": "C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified"
+}
