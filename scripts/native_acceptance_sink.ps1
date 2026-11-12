@@ -8,7 +8,7 @@ param(
     [string]$ReadyFile,
     [ValidateNotNullOrEmpty()]
     [string]$EventLog,
-    [ValidateSet('LegacyInline', 'SchedulerQueuedV1')]
+    [ValidateSet('LegacyInline', 'SchedulerQueuedV2')]
     [string]$ObserverMode = 'LegacyInline',
     [string]$ObserverSummaryFile,
     [string]$ActivateRequestFile,
@@ -50,6 +50,9 @@ public sealed class NativeKeyMessageData : EventArgs {
     public bool Extended { get; private set; }
     public int VirtualKey { get; private set; }
     public int Message { get; private set; }
+    public byte Direction {
+        get { return Kind == "key_press" || Kind == "sys_key_press" ? (byte)1 : (byte)2; }
+    }
 
     private NativeKeyMessageData(string kind, int scanCode, bool extended, int virtualKey, int message) {
         Kind = kind;
@@ -92,8 +95,8 @@ public sealed class NativeAcceptanceSinkForm : Form {
         bool observed = false;
         try {
             if (observer != null) {
-                observed = observer.ObserveKeyMessage(message.Msg, message.LParam.ToInt64(),
-                    message.HWnd.ToInt64(), handlerStart);
+                observed = observer.ObserveKeyMessage(message.Msg, message.WParam.ToInt64(),
+                    message.LParam.ToInt64(), message.HWnd.ToInt64(), handlerStart);
             } else {
                 NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
                     message.Msg, message.WParam, message.LParam);
@@ -119,6 +122,8 @@ public struct NativeAcceptanceQueuedKey {
     public int ForegroundPid;
     public int ScanCode;
     public bool Extended;
+    public int VirtualKey;
+    public int Message;
     public byte Direction;
 }
 
@@ -172,8 +177,9 @@ public sealed class NativeAcceptanceEventRing {
         _items = new NativeAcceptanceQueuedKey[capacity];
     }
 
-    public bool TryEnqueue(byte direction, int scanCode, bool extended, long qpcTicks,
-        long targetHwnd, int targetPid, long foregroundHwnd, int foregroundPid) {
+    public bool TryEnqueue(byte direction, int scanCode, bool extended, int virtualKey,
+        int message, long qpcTicks, long targetHwnd, int targetPid,
+        long foregroundHwnd, int foregroundPid) {
         lock (_gate) {
             if (_completed) {
                 _internalFailures++;
@@ -201,6 +207,8 @@ public sealed class NativeAcceptanceEventRing {
                 ForegroundPid = foregroundPid,
                 ScanCode = scanCode,
                 Extended = extended,
+                VirtualKey = virtualKey,
+                Message = message,
                 Direction = direction
             };
             _tail = (_tail + 1) % _items.Length;
@@ -304,20 +312,35 @@ public sealed class NativeAcceptanceEventRing {
     }
 
     public static bool RunContractSelfTest() {
-        var ordered = new NativeAcceptanceEventRing(2);
-        if (!ordered.TryEnqueue(1, 0x15, false, 100, 11, 7, 11, 7) ||
-            !ordered.TryEnqueue(2, 0x15, false, 101, 11, 7, 11, 7)) return false;
-        NativeAcceptanceQueuedKey first;
+        var ordered = new NativeAcceptanceEventRing(4);
+        int[] messages = new int[] { 0x0100, 0x0101, 0x0104, 0x0105 };
+        int[] virtualKeys = new int[] { 0x41, 0x41, 0x12, 0x12 };
+        byte[] directions = new byte[] { 1, 2, 1, 2 };
+        for (int index = 0; index < messages.Length; index++) {
+            NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
+                messages[index], new IntPtr(virtualKeys[index]), new IntPtr(0x00150000));
+            if (decoded == null || decoded.VirtualKey != virtualKeys[index] ||
+                decoded.Message != messages[index] ||
+                decoded.Direction != directions[index] ||
+                !ordered.TryEnqueue(decoded.Direction, decoded.ScanCode, decoded.Extended,
+                    decoded.VirtualKey, decoded.Message, 100 + index, 11, 7, 11, 7)) return false;
+        }
         NativeAcceptanceQueuedKey second;
-        if (!ordered.TryDequeue(out first, 0) || !ordered.TryDequeue(out second, 0) ||
-            first.Sequence != 1 || second.Sequence != 2 || first.Direction != 1 ||
-            second.Direction != 2 || first.ScanCode != 0x15 || second.ScanCode != 0x15 ||
-            first.QpcTicks > second.QpcTicks) return false;
+        long previousQpc = Int64.MinValue;
+        for (int index = 0; index < messages.Length; index++) {
+            NativeAcceptanceQueuedKey item;
+            if (!ordered.TryDequeue(out item, 0) || item.Sequence != index + 1 ||
+                item.Direction != directions[index] || item.ScanCode != 0x15 ||
+                item.VirtualKey != virtualKeys[index] || item.Message != messages[index] ||
+                item.QpcTicks < previousQpc) return false;
+            previousQpc = item.QpcTicks;
+        }
+        if (ordered.TryDequeue(out second, 0)) return false;
 
         var bounded = new NativeAcceptanceEventRing(1);
-        if (!bounded.TryEnqueue(1, 0x1D, true, 200, 22, 8, 22, 8) ||
-            bounded.TryEnqueue(2, 0x1D, true, 201, 22, 8, 22, 8) ||
-            bounded.TryEnqueue(2, 0x1D, true, 202, 22, 8, 22, 8)) return false;
+        if (!bounded.TryEnqueue(1, 0x1D, true, 0xA3, 0x0100, 200, 22, 8, 22, 8) ||
+            bounded.TryEnqueue(2, 0x1D, true, 0xA3, 0x0101, 201, 22, 8, 22, 8) ||
+            bounded.TryEnqueue(2, 0x1D, true, 0xA3, 0x0101, 202, 22, 8, 22, 8)) return false;
         NativeAcceptanceRingSnapshot snapshot = bounded.Snapshot();
         NativeAcceptanceQueuedKey retained;
         return snapshot.Overflowed && snapshot.QueueCapacity == 1 &&
@@ -325,12 +348,13 @@ public sealed class NativeAcceptanceEventRing {
             snapshot.EventsEnqueued == 1 && snapshot.Dropped == 2 &&
             bounded.TryDequeue(out retained, 0) && retained.Sequence == 1 &&
             retained.Direction == 1 && retained.ScanCode == 0x1D && retained.Extended &&
+            retained.VirtualKey == 0xA3 && retained.Message == 0x0100 &&
             !bounded.TryDequeue(out retained, 0);
     }
 }
 
 public sealed class NativeAcceptanceEventQueue {
-    public const string ObserverVersion = "scheduler-receiveonly-queue-v1";
+    public const string ObserverVersion = "scheduler-receiveonly-queue-v2";
     public static long QpcFrequency { get { return Stopwatch.Frequency; } }
     private readonly NativeAcceptanceEventRing _ring;
     private readonly string _eventLog;
@@ -388,17 +412,12 @@ public sealed class NativeAcceptanceEventQueue {
         return _ready.WaitOne(timeoutMilliseconds) && _headerFlushed && _startupFailures == 0;
     }
 
-    public bool ObserveKeyMessage(int message, long lParam, long messageHwnd, long qpcTicks) {
-        byte direction;
-        switch (message) {
-            case 0x0100:
-            case 0x0104: direction = 1; break;
-            case 0x0101:
-            case 0x0105: direction = 2; break;
-            default: return false;
-        }
-        int scanCode = (int)((lParam >> 16) & 0xffL);
-        bool extended = ((lParam >> 24) & 0x1L) != 0;
+    public bool ObserveKeyMessage(int message, long wParam, long lParam,
+        long messageHwnd, long qpcTicks) {
+        NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
+            message, new IntPtr(wParam), new IntPtr(lParam));
+        if (decoded == null) return false;
+        byte direction = decoded.Direction;
         int targetPid = 0;
         int foregroundPid = 0;
         long foregroundHwnd = 0;
@@ -418,7 +437,8 @@ public sealed class NativeAcceptanceEventQueue {
             _ring.MarkInternalFailure();
         }
         try {
-            _ring.TryEnqueue(direction, scanCode, extended, qpcTicks, messageHwnd,
+            _ring.TryEnqueue(direction, decoded.ScanCode, decoded.Extended,
+                decoded.VirtualKey, decoded.Message, qpcTicks, messageHwnd,
                 targetPid, foregroundHwnd, foregroundPid);
         } catch {
             _ring.MarkInternalFailure();
@@ -536,7 +556,7 @@ public sealed class NativeAcceptanceEventQueue {
 
     private string HeaderJson() {
         var header = new {
-            schema_version = 3,
+            schema_version = 4,
             run_id = _runId,
             role = _role,
             event_log_id = _eventLogId,
@@ -560,7 +580,7 @@ public sealed class NativeAcceptanceEventQueue {
     private string EventJson(NativeAcceptanceQueuedKey item) {
         long utcTicks = _utcOriginTicks + (long)(((decimal)(item.QpcTicks - _qpcOrigin) * TimeSpan.TicksPerSecond) / Stopwatch.Frequency);
         var record = new {
-            schema_version = 3,
+            schema_version = 4,
             run_id = _runId,
             role = _role,
             event_log_id = _eventLogId,
@@ -569,8 +589,8 @@ public sealed class NativeAcceptanceEventQueue {
             kind = item.Direction == 1 ? "key_press" : "key_release",
             scan_code = item.ScanCode,
             extended = item.Extended,
-            virtual_key = 0,
-            message = 0,
+            virtual_key = item.VirtualKey,
+            message = item.Message,
             observed_utc = new DateTime(utcTicks, DateTimeKind.Utc).ToString("O", CultureInfo.InvariantCulture),
             observed_qpc_ticks = item.QpcTicks,
             target_hwnd = item.TargetHwnd,
@@ -644,12 +664,12 @@ if ([string]::IsNullOrWhiteSpace($Mode) -or
 if ($RunId.Length -gt 128) {
     throw "RunId must contain 1..128 non-whitespace characters"
 }
-if ($ObserverMode -eq 'SchedulerQueuedV1' -and
+if ($ObserverMode -eq 'SchedulerQueuedV2' -and
     ($Mode -ne 'ReceiveOnly' -or [string]::IsNullOrWhiteSpace($ObserverSummaryFile))) {
-    throw 'SchedulerQueuedV1 is opt-in for ReceiveOnly and requires ObserverSummaryFile'
+    throw 'SchedulerQueuedV2 is opt-in for ReceiveOnly and requires ObserverSummaryFile'
 }
 if ($ObserverMode -eq 'LegacyInline' -and -not [string]::IsNullOrWhiteSpace($ObserverSummaryFile)) {
-    throw 'ObserverSummaryFile is only valid for SchedulerQueuedV1'
+    throw 'ObserverSummaryFile is only valid for SchedulerQueuedV2'
 }
 
 Add-Type @"
@@ -742,7 +762,7 @@ $state = @{
 }
 
 $observerVersion = $null
-if ($ObserverMode -eq 'SchedulerQueuedV1') {
+if ($ObserverMode -eq 'SchedulerQueuedV2') {
     $observerVersion = [NativeAcceptanceEventQueue]::ObserverVersion
 } else {
     $eventWriter = [System.IO.StreamWriter]::new(
@@ -825,7 +845,7 @@ $displayTemplate = if ($isProbe) {
 } else {
     "$title`r`n`r`nThis project-owned window is the only permitted real-input sink.`r`nKeep it as the intended target during SendInput runs.`r`n`r`nObserved key presses: {0} | releases: {1}"
 }
-if ($ObserverMode -eq 'SchedulerQueuedV1') {
+if ($ObserverMode -eq 'SchedulerQueuedV2') {
     $schedulerObserver = [NativeAcceptanceEventQueue]::new(
         $EventLog,
         [System.IO.Path]::GetFullPath($ObserverSummaryFile),
@@ -847,7 +867,7 @@ if ($ObserverMode -eq 'SchedulerQueuedV1') {
 $processStartTimeFiletime = [long](Get-Process -Id $PID).StartTime.ToUniversalTime().ToFileTimeUtc()
 $ready = [ordered]@{
     schema_version = 3
-    event_schema_version = 3
+    event_schema_version = if ($ObserverMode -eq 'SchedulerQueuedV2') { 4 } else { 3 }
     run_id = $RunId
     role = $role
     sink_kind = $sinkKind
@@ -859,7 +879,7 @@ $ready = [ordered]@{
     input_policy = $inputPolicy
     process_start_time_filetime = $processStartTimeFiletime
 } | ConvertTo-Json
-if ($ObserverMode -eq 'SchedulerQueuedV1') {
+if ($ObserverMode -eq 'SchedulerQueuedV2') {
     $readyObject = $ready | ConvertFrom-Json
     $readyObject | Add-Member -NotePropertyName observer_version -NotePropertyValue $observerVersion
     $readyObject | Add-Member -NotePropertyName observer_queue_capacity -NotePropertyValue 32768
