@@ -490,10 +490,18 @@ fn suspend_live_input_for_dispatch(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
     target_hwnd: isize,
+    _runtime: &super::WorkerRuntime,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, post_cleanup_qpc)
-        .map(|_| ())
+    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
+        let cleanup_qpc = post_cleanup_qpc()?;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = _runtime.startup_ordering_hook.as_ref() {
+            hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
+        }
+        Ok(cleanup_qpc)
+    })
+    .map(|_| ())
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1174,6 +1182,7 @@ pub(super) fn dispatch(
                             &mut resources.backend,
                             &mut resources.scheduler,
                             preflight_target.hwnd,
+                            &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.verified_target = None;
@@ -1201,6 +1210,7 @@ pub(super) fn dispatch(
                             &mut resources.backend,
                             &mut resources.scheduler,
                             preflight_target.hwnd,
+                            &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.verified_target = None;
@@ -1273,6 +1283,7 @@ pub(super) fn dispatch(
                         &mut resources.backend,
                         &mut resources.scheduler,
                         target.hwnd_for_safety_release(),
+                        &core.runtime,
                         || qpc_clock.now().map_err(|error| format!("{error:?}")),
                     ) {
                         core.runtime.terminal_error =
@@ -1317,6 +1328,7 @@ pub(super) fn dispatch(
                             &mut resources.backend,
                             &mut resources.scheduler,
                             target.hwnd_for_safety_release(),
+                            &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.terminal_error =
