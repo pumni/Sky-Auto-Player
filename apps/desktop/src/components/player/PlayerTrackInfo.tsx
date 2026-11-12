@@ -102,7 +102,13 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
               aria-label={modeDescription}
               title={modeDescription}
             >
-              {playbackMode === 'test' ? 'TEST · No keys' : 'LIVE · Physical mode'}
+              {playbackMode === 'test' ? (
+                <>
+                  TEST<span className="player-mode-badge-detail"> · NO KEYS</span>
+                </>
+              ) : (
+                'PHYSICAL'
+              )}
             </span>
           )}
         </div>

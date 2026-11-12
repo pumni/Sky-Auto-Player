@@ -97,12 +97,13 @@
   background: var(--warning-bg);
 }
 
+.player-track-copy .player-mode-badge .player-mode-badge-detail {
+  font-size: inherit;
+}
+
 @media (max-width: 1100px) {
-  .player-track-copy .player-mode-badge {
-    max-width: 48px;
-    overflow: hidden;
-    font-size: 10px;
-    text-overflow: clip;
+  .player-track-copy .player-mode-badge .player-mode-badge-detail {
+    display: none;
   }
 }
 
@@ -355,8 +356,9 @@
   width: 100%;
   height: 6px;
   appearance: none;
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 999px;
+  overflow: hidden;
   background: var(--surface-raised);
 }
 
