@@ -167,7 +167,14 @@ pub(super) fn failure_matches(
     process_termination_verified: bool,
 ) -> bool {
     expected_failure_reason(scenario)
-        .is_some_and(|expected| terminal_error == Some(expected))
+        .is_some_and(|expected| {
+            terminal_error.is_some_and(|error| {
+                error == expected
+                    || error
+                        .strip_suffix(expected)
+                        .is_some_and(|prefix| prefix.ends_with(": "))
+            })
+        })
         || (scenario == Scenario::OwnerProcessTermination
             && process_termination_verified
             && terminal_error == Some("focus_lost_during_preroll"))
@@ -239,6 +246,26 @@ pub(super) fn failure_result(
 #[cfg(test)]
 mod tests {
     use super::{Scenario, failure_result};
+
+    #[test]
+    fn detailed_terminal_diagnostic_preserves_expected_owner_failure() {
+        let result = failure_result(
+            Scenario::OwnerMismatch,
+            Some("dispatch gate rejected before SendInput: source_action=0: prepared_down_owner_mismatch"),
+            true,
+            0,
+            false,
+            None,
+        );
+
+        assert!(matches!(
+            result,
+            Some((
+                super::super::Verdict::Pass,
+                "window-owner authority failure stopped before the prepared sender"
+            ))
+        ));
+    }
 
     #[test]
     fn synthetic_authority_revocation_does_not_claim_process_termination() {
