@@ -1,7 +1,7 @@
 use super::*;
 use crate::compile::compile_runtime_intents;
 use crate::model::{ActionKind, KeyActionInput};
-use crate::time::{DurationTicks, TimelineTicks};
+use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
 
 #[test]
 fn executor_new_with_cancellation_and_memory_metrics() {
@@ -111,10 +111,7 @@ fn up_slot_timings_preserves_exact_authored_and_floor() {
         timing.authored_up_offset_ticks,
         TimelineTicks::from_raw(25_000)
     );
-    assert_eq!(
-        timing.release_not_before_ticks,
-        TimelineTicks::from_raw(20_000)
-    );
+    assert_eq!(timing.release_not_before_qpc, QpcTicks::from_raw(20_000));
 }
 
 #[test]
@@ -264,13 +261,10 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
         timing0.authored_up_offset_ticks,
         TimelineTicks::from_raw(25_000)
     );
-    assert_eq!(
-        timing0.release_not_before_ticks,
-        TimelineTicks::from_raw(28_000)
-    );
+    assert_eq!(timing0.release_not_before_qpc, QpcTicks::from_raw(28_000));
     // Key 0 floor displacement = 28_000 - 25_000 = 3_000 ticks
     let floor_disp0 = timing0
-        .release_not_before_ticks
+        .release_not_before_qpc
         .as_u64()
         .saturating_sub(timing0.authored_up_offset_ticks.as_u64());
     assert_eq!(floor_disp0, 3_000);
@@ -281,13 +275,10 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
         timing1.authored_up_offset_ticks,
         TimelineTicks::from_raw(40_000)
     );
-    assert_eq!(
-        timing1.release_not_before_ticks,
-        TimelineTicks::from_raw(28_000)
-    );
+    assert_eq!(timing1.release_not_before_qpc, QpcTicks::from_raw(28_000));
     // Key 1 floor displacement = 0 ticks (authored 40_000 > floor 28_000)
     let floor_disp1 = timing1
-        .release_not_before_ticks
+        .release_not_before_qpc
         .as_u64()
         .saturating_sub(timing1.authored_up_offset_ticks.as_u64());
     assert_eq!(floor_disp1, 0);

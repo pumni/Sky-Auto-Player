@@ -5,6 +5,8 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
+#[path = "dispatch_harness/scheduler.rs"]
+mod scheduler;
 #[path = "dispatch_harness/wait_boundary.rs"]
 mod wait_boundary;
 
@@ -235,54 +237,6 @@ impl ProductionDispatchTestHarness {
             coordinator,
             qpc_clock,
         })
-    }
-
-    pub fn current_executor_chord_for_test(
-        &self,
-    ) -> Option<sky_dispatch_core::executor::DownChordTicks> {
-        self.resources
-            .coordinator
-            .executor
-            .as_ref()
-            .and_then(|e| e.current_chord().cloned())
-    }
-
-    pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
-        let frame_ticks = self
-            .resources
-            .clock
-            .duration_from_us(16_667)
-            .map_err(|e| format!("{e:?}"))?;
-        let min_hold_ticks = self
-            .resources
-            .clock
-            .duration_from_us(10_000)
-            .map_err(|e| format!("{e:?}"))?;
-        let clock = self.resources.clock;
-        self.resources
-            .coordinator
-            .attach_executor_with_cancellation(
-                min_hold_ticks,
-                frame_ticks,
-                |us| clock.timeline_from_us(us).map_err(|e| format!("{e:?}")),
-                || Ok(()),
-            )
-    }
-
-    pub fn stage_candidate_for_test(
-        &mut self,
-        up_mask: u16,
-        down_chord: Option<sky_dispatch_core::executor::DownChordTicks>,
-        fallback_ticks: TimelineTicks,
-    ) -> Result<Option<crate::engine::worker::StagedCandidate>, String> {
-        crate::engine::worker::stage_candidate(
-            up_mask,
-            down_chord,
-            &self.target,
-            &mut self.resources,
-            &mut self.runtime,
-            fallback_ticks,
-        )
     }
 
     pub fn dispatch_staged_candidate_for_test(
@@ -1601,6 +1555,20 @@ impl ProductionDispatchTestHarness {
         } else {
             min_hold_ticks
         };
+        let frame_ticks = qpc_clock
+            .duration_from_us(16_667)
+            .expect("test frame conversion");
+        let scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
+            &schedule,
+            effective_min_hold_ticks,
+            frame_ticks,
+            |us| {
+                qpc_clock
+                    .timeline_from_us(us)
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )
+        .expect("scheduler");
         let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
             schedule,
             min_hold_us,
@@ -1641,6 +1609,7 @@ impl ProductionDispatchTestHarness {
             clock: qpc_clock,
             waiter,
             backend,
+            scheduler,
             coordinator,
             playback,
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),

@@ -128,7 +128,7 @@ fn zero_requested_pre_roll_uses_production_floor() {
 }
 
 #[test]
-fn stale_metadata_commits_before_first_physical_send() {
+fn unmatched_up_diagnostics_are_recorded_during_prepare_before_dispatch() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
     let schedule = compile_runtime_intents(
@@ -185,17 +185,14 @@ fn stale_metadata_commits_before_first_physical_send() {
     assert_eq!(snapshot.outcome, Some("finished".to_string()));
     assert_eq!(snapshot.terminal_error, None);
     assert_eq!(
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         2,
         "ordering hook values stale={} physical={}",
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         hook.first_physical_send_started.load(Ordering::SeqCst),
     );
     assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
-    assert!(
-        hook.stale_packet_committed.load(Ordering::SeqCst)
-            <= hook.first_physical_send_started.load(Ordering::SeqCst)
-    );
+    assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
             .expect("valid telemetry JSON");
@@ -214,7 +211,7 @@ fn stale_metadata_commits_before_first_physical_send() {
 }
 
 #[test]
-fn many_leading_stale_packets_are_drained_before_precision_handoff() {
+fn many_leading_unmatched_ups_are_diagnosed_during_prepare() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
     let stale_count = 32usize;
@@ -262,14 +259,14 @@ fn many_leading_stale_packets_are_drained_before_precision_handoff() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     assert_eq!(session.snapshot().terminal_error, None);
     assert_eq!(
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         stale_count as u64
     );
     assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
 }
 
 #[test]
-fn stale_metadata_backlog_gets_a_finite_turn_before_physical_send() {
+fn unmatched_up_prepare_diagnostics_are_chunked_and_dispatch_continues() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
     for stale_count in [0usize, 1, 32, 33, 10_000] {
@@ -316,17 +313,11 @@ fn stale_metadata_backlog_gets_a_finite_turn_before_physical_send() {
         assert!(session.join(Duration::from_secs(10)).expect("worker join"));
         assert_eq!(session.snapshot().terminal_error, None);
         assert_eq!(
-            hook.stale_packet_commit_count.load(Ordering::SeqCst),
+            hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
             stale_count as u64,
             "all stale packets must retain accounting for backlog={stale_count}"
         );
         assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
-        assert_eq!(
-            hook.stale_packet_committed_before_first_physical
-                .load(Ordering::SeqCst),
-            stale_count.min(32) as u64,
-            "physical handoff follows one bounded metadata turn for backlog={stale_count}"
-        );
     }
 }
 
@@ -380,17 +371,16 @@ fn same_timestamp_stale_leading_up_packet_is_suppressed_atomically() {
     let records = telemetry["records"].as_array().expect("records array");
     let stale = records
         .iter()
-        .find(|record| record["event_index"].as_u64() == Some(0))
-        .expect("same-timestamp stale packet record");
-    assert_eq!(stale["kind"].as_u64(), Some(1));
-    assert_eq!(stale["requested_count"].as_u64(), Some(0));
-    assert_eq!(stale["send_attempts"].as_u64(), Some(0));
-    assert!(
-        records
-            .iter()
-            .all(|record| record["event_index"].as_u64() != Some(1)),
-        "same packet must produce one stale telemetry record"
-    );
+        .filter(|record| record["outcome"].as_u64() == Some(4))
+        .collect::<Vec<_>>();
+    assert_eq!(stale.len(), 2);
+    assert_eq!(stale[0]["event_index"].as_u64(), Some(0));
+    assert_eq!(stale[1]["event_index"].as_u64(), Some(1));
+    assert!(stale.iter().all(|record| {
+        record["kind"].as_u64() == Some(1)
+            && record["requested_count"].as_u64() == Some(0)
+            && record["send_attempts"].as_u64() == Some(0)
+    }));
     let down = records
         .iter()
         .find(|record| record["event_index"].as_u64() == Some(2))

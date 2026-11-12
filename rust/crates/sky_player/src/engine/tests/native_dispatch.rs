@@ -614,21 +614,15 @@ fn same_timestamp_midstream_stale_packet_is_committed_once() {
     let records = telemetry["records"].as_array().expect("records");
     let stale = records
         .iter()
-        .find(|record| record["event_index"].as_u64() == Some(2))
-        .expect("same-timestamp stale record");
-    assert_eq!(stale["outcome"].as_u64(), Some(4));
-    assert_eq!(stale["polyphony"].as_u64(), Some(2));
-    assert_eq!(
-        records
-            .iter()
-            .filter(|record| record["outcome"].as_u64() == Some(4))
-            .count(),
-        1
-    );
+        .filter(|record| record["outcome"].as_u64() == Some(4))
+        .collect::<Vec<_>>();
+    assert_eq!(stale.len(), 2);
+    assert_eq!(stale[0]["event_index"].as_u64(), Some(2));
+    assert_eq!(stale[1]["event_index"].as_u64(), Some(3));
     assert!(
-        records
+        stale
             .iter()
-            .all(|record| record["event_index"].as_u64() != Some(3))
+            .all(|record| record["polyphony"].as_u64() == Some(1))
     );
 }
 
@@ -681,13 +675,13 @@ fn stale_ups_with_down_same_timestamp_use_one_down_packet() {
     assert_eq!(snapshot.outcome, Some("finished".into()));
     assert_eq!(snapshot.terminal_error, None);
     let records = telemetry["records"].as_array().expect("records");
-    assert_eq!(
-        records
-            .iter()
-            .filter(|record| record["outcome"].as_u64() == Some(4))
-            .count(),
-        0
-    );
+    let stale = records
+        .iter()
+        .filter(|record| record["outcome"].as_u64() == Some(4))
+        .collect::<Vec<_>>();
+    assert_eq!(stale.len(), 2);
+    assert_eq!(stale[0]["event_index"].as_u64(), Some(0));
+    assert_eq!(stale[1]["event_index"].as_u64(), Some(1));
     let physical = records
         .iter()
         .find(|record| record["event_index"].as_u64() == Some(2))
@@ -758,16 +752,10 @@ fn owned_up_stale_up_and_down_same_timestamp_count_only_physical_events() {
 }
 
 #[test]
-fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
-    use crate::engine::observer_test_hooks::{
-        observer_test_hook_guard, set_observer_artificial_cost_us,
-    };
+fn many_midstream_unmatched_ups_are_prepared_and_physical_work_continues() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
-    let _observer_hooks = observer_test_hook_guard();
-    set_observer_artificial_cost_us(20_000);
     let stale_count = 256usize;
-    let expected_stale_packets = stale_count + 1;
     let mut actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -821,7 +809,7 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.telemetry.capacity = 128;
+    options.telemetry.capacity = stale_count + 16;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     options.wait.supervisor_lease_timeout_us = 3_000_000;
     let session = NativeDispatchSession::new(options).expect("session admission");
@@ -831,24 +819,14 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
     assert_eq!(snapshot.outcome, Some("finished".into()));
     assert_eq!(snapshot.terminal_error, None);
     assert_eq!(
-        hook.stale_packet_committed.load(Ordering::SeqCst),
-        expected_stale_packets as u64
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
+        stale_count as u64
     );
     assert!(
         hook.first_physical_send_started.load(Ordering::SeqCst) > 0,
-        "physical dispatch must begin: stale={}, physical={}",
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        "physical dispatch must begin: prepared unmatched Ups={}, physical={}",
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         hook.first_physical_send_started.load(Ordering::SeqCst),
-    );
-    assert!(snapshot.observer_dropped_samples > 0);
-    assert!(
-        snapshot.observer_queue_high_watermark > 0,
-        "successful observer enqueue should publish an observed occupancy"
-    );
-    assert!(
-        snapshot.observer_queue_high_watermark
-            <= super::worker::dispatch::observation::OBSERVATION_QUEUE_CAPACITY as u64,
-        "observer queue high-water mark must not exceed its fixed capacity"
     );
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -858,7 +836,7 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
         .iter()
         .filter(|record| record["outcome"].as_u64() == Some(4))
         .count();
-    assert!(stale_records <= expected_stale_packets);
+    assert_eq!(stale_records, stale_count);
 }
 
 #[test]

@@ -5,7 +5,6 @@ use super::super::super::{
     TelemetryCollector, TraceContext, TraceDelivery, UpSlotLossReason, trace_outcome_code,
     trace_send_status_code,
 };
-use super::super::physical_timing_guard::PhysicalTimingWindow;
 #[cfg(any(test, feature = "test-support"))]
 use super::super::release_runtime_outcome;
 use super::super::wait::WaitObservation;
@@ -14,6 +13,7 @@ use super::super::{
 };
 use super::timing::DispatchObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
+use sky_dispatch_core::executor::DispatchTimingWindow as PhysicalTimingWindow;
 use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
@@ -51,6 +51,7 @@ pub enum DispatchObservation {
     #[cfg(any(test, feature = "test-support"))]
     Up(UpObservation),
     Wait(WaitObservation),
+    #[cfg(any(test, feature = "test-support"))]
     StaleMetadata(StaleMetadataObservation),
     #[cfg(any(test, feature = "test-support"))]
     BlockedUnfocused(BlockedUnfocusedObservation),

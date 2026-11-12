@@ -1,44 +1,49 @@
 enum SchedulerAction {
     Finished,
     Wait {
-        deadline_ticks: TimelineTicks,
+        deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
     },
     Send {
         up_mask: u16,
         down_chord_index: Option<usize>,
+        timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     },
 }
 
 fn evaluate_scheduler_action(
     executor: &sky_dispatch_core::executor::DispatchExecutor,
-    now: TimelineTicks,
-) -> SchedulerAction {
-    match executor.evaluate(now) {
-        sky_dispatch_core::executor::DispatchAction::Finished => SchedulerAction::Finished,
-        sky_dispatch_core::executor::DispatchAction::Wait { deadline_ticks } => {
-            SchedulerAction::Wait { deadline_ticks }
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<SchedulerAction, String> {
+    match executor
+        .evaluate_at(now_qpc, epoch_qpc)
+        .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))?
+    {
+        sky_dispatch_core::executor::DispatchDecision::Finished => Ok(SchedulerAction::Finished),
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } => {
+            Ok(SchedulerAction::Wait { deadline_qpc })
         }
-        sky_dispatch_core::executor::DispatchAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask,
             down_chord,
-        } => SchedulerAction::Send {
+            timing_window,
+        } => Ok(SchedulerAction::Send {
             up_mask,
             down_chord_index: down_chord.map(|chord| chord.chord_index),
-        },
+            timing_window,
+        }),
     }
 }
 
 fn resolve_scheduler_down_chord(
-    coordinator: &sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
+    executor: &sky_dispatch_core::executor::DispatchExecutor,
     expected_index: Option<usize>,
 ) -> Result<Option<sky_dispatch_core::executor::DownChordTicks>, String> {
     let Some(expected_index) = expected_index else {
         return Ok(None);
     };
-    let chord = coordinator
-        .executor
-        .as_ref()
-        .and_then(|executor| executor.current_chord())
+    let chord = executor
+        .current_chord()
         .ok_or_else(|| "scheduler selected a Down chord that is no longer current".to_string())?;
     if chord.chord_index != expected_index {
         return Err(format!(
@@ -47,6 +52,24 @@ fn resolve_scheduler_down_chord(
         ));
     }
     Ok(Some(chord.clone()))
+}
+
+fn stage_scheduler_action(
+    action: SchedulerAction,
+    target: &SessionTarget,
+    resources: &mut super::WorkerResources,
+    runtime: &mut super::WorkerRuntime,
+) -> Result<Option<StagedCandidate>, String> {
+    let SchedulerAction::Send {
+        up_mask,
+        down_chord_index,
+        timing_window,
+    } = action
+    else {
+        return Ok(None);
+    };
+    let down_chord = resolve_scheduler_down_chord(&resources.scheduler, down_chord_index)?;
+    stage_candidate(up_mask, down_chord, timing_window, target, resources, runtime)
 }
 
 fn pre_wait_candidate_admission(
@@ -65,7 +88,6 @@ fn pre_wait_candidate_admission(
             || !focus_matches(require_focus, focus_active)
         {
             runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
             return StagedDispatchOutcome::Replan;
         }
     }

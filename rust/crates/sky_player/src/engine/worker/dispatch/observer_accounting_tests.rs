@@ -1,8 +1,8 @@
 use super::{
-    DispatchObservation, ObserverRuntime, PendingObservationQueue, StaleMetadataObservation,
-    observer_test_hook_guard, set_observer_abort_after_drains,
+    DispatchObservation, ObserverRuntime, PendingObservationQueue, observer_test_hook_guard,
+    set_observer_abort_after_drains,
 };
-use crate::engine::worker::dispatch::observation::DownObservation;
+use crate::engine::worker::dispatch::observation::{DownObservation, StaleMetadataObservation};
 use crate::engine::{
     DispatchHealthOptions, NativeTelemetryOutput, SharedMetrics, TelemetryCollector, TelemetryMode,
     WorkerTimingState,

@@ -716,8 +716,8 @@ fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
     );
     assert!(position("terminal_release_started") < position("physical_release_attempt"));
     assert!(position("physical_release_attempt") < position("pre_cancel_ledger_audit"));
-    assert!(position("pre_cancel_ledger_audit") < position("coordinator_cancellation"));
-    assert!(position("coordinator_cancellation") < position("post_cleanup_ledger_audit"));
+    assert!(position("pre_cancel_ledger_audit") < position("terminal_cancellation"));
+    assert!(position("terminal_cancellation") < position("post_cleanup_ledger_audit"));
     assert!(position("post_cleanup_ledger_audit") < position("observer_shutdown"));
     assert!(position("observer_shutdown") < position("generation_metrics_export"));
     assert!(position("generation_metrics_export") < position("telemetry_export"));

@@ -4,6 +4,7 @@
 //! samples QPC, reads settings, or walks authored work.
 
 use sky_dispatch_core::{
+    executor::DispatchTimingWindow,
     model::MAX_KEYS,
     time::{DurationTicks, QpcTicks},
 };
@@ -15,15 +16,7 @@ const VALID_KEY_MASK: u16 = (1_u16 << MAX_KEYS) - 1;
 /// hold_floor_mask and release_floor_mask identify packet keys whose stored
 /// physical floor, including a resumable lifecycle barrier for Downs, is later
 /// than the authored target.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PhysicalTimingWindow {
-    pub(crate) authored_target_qpc: QpcTicks,
-    pub(crate) musical_up_not_before_qpc: QpcTicks,
-    pub(crate) down_not_before_qpc: QpcTicks,
-    pub(crate) packet_not_before_qpc: QpcTicks,
-    pub(crate) hold_floor_mask: u16,
-    pub(crate) release_floor_mask: u16,
-}
+pub(crate) type PhysicalTimingWindow = DispatchTimingWindow;
 
 /// Errors that make a physical timing query or observation unusable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -19,13 +19,11 @@ mod authored;
 pub(crate) mod hold_forensics;
 pub(crate) mod observation;
 pub(crate) mod observer;
-mod observer_trace;
+pub(crate) mod observer_trace;
 #[cfg(test)]
 pub(super) use observer_trace::attach_up_slot_traces;
 mod observer_wake;
-pub(crate) use observer_wake::{
-    publish_interrupted_physical_wait, wait_for_metadata_only_deadline,
-};
+pub(crate) use observer_wake::publish_interrupted_physical_wait;
 #[cfg(any(test, feature = "test-support"))]
 mod prepared;
 #[cfg(test)]
@@ -42,6 +40,7 @@ pub(crate) use recovery::{DownMissReason, classify_missed_down_boundary};
 pub enum DispatchStep {
     #[cfg(any(test, feature = "test-support"))]
     NoWork,
+    #[cfg(any(test, feature = "test-support"))]
     Dispatched,
     #[cfg(any(test, feature = "test-support"))]
     Continue,
@@ -55,6 +54,7 @@ pub enum DispatchStep {
 /// The QPC target is deliberately not sufficient on its own: two distinct
 /// authored boundaries may share a target after projection or test setup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct PhysicalBoundaryStamp {
     pub(crate) first_batch_index: usize,
     pub(crate) packet_index: usize,
@@ -66,6 +66,7 @@ pub(crate) struct PhysicalBoundaryStamp {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) enum DownBoundaryState {
     #[default]
     AwaitingFuture,
@@ -108,6 +109,7 @@ impl DownBoundaryAdmission {
 /// A Down miss that has already been classified at its authored boundary,
 /// with only its prepared Up-prefix still waiting for the physical hold floor.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct PendingUpRecovery {
     pub(crate) boundary: PhysicalBoundaryStamp,
     #[cfg(any(test, feature = "test-support"))]
@@ -204,7 +206,7 @@ pub(crate) use authored::dispatch_authored_packet;
 pub(crate) use observation::DispatchObservation;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observer::drain_one_observer;
-pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
+pub(crate) use observer::{ObserverRuntime, PendingObservationQueue};
 pub(crate) use observer_wake::{
     precision_handoff, publish_pending_wait_observation, record_wait_attempt,
     take_deadline_wake_qpc,
@@ -212,6 +214,7 @@ pub(crate) use observer_wake::{
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use prepared::dispatch_prepared_normal_frame;
 
+#[cfg(any(test, feature = "test-support"))]
 use super::super::QpcTicks;
 #[cfg(any(test, feature = "test-support"))]
 use super::super::{ActionKind, TimelineTicks};
@@ -219,6 +222,7 @@ use super::super::{ActionKind, TimelineTicks};
 use super::DispatchPath;
 #[cfg(any(test, feature = "test-support"))]
 use super::planning::NextDispatchPlan;
+#[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::PreparedAuthoredCommit;
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::PreparedBatch;

@@ -3,7 +3,7 @@ use super::{
     GenerationStatus, RuntimeDispatchCoordinator,
 };
 use crate::model::*;
-use crate::time::TimelineTicks;
+use crate::time::{QpcTicks, TimelineTicks};
 use smallvec::SmallVec;
 
 impl RuntimeDispatchCoordinator {
@@ -475,11 +475,13 @@ impl RuntimeDispatchCoordinator {
         }
         let coord_cancelled = self.cancel_live_generations_after_verified_resumable_cleanup()?;
         if let Some(exec) = self.executor.as_mut() {
-            let exec_cancelled = exec.on_verified_cleanup(completion_ticks).map_err(|e| {
-                CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(format!(
-                    "executor verified cleanup barrier failed: {e}"
-                )))
-            })?;
+            let exec_cancelled = exec
+                .on_verified_cleanup_at(QpcTicks::from_raw(completion_ticks.as_u64()))
+                .map_err(|e| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(format!(
+                        "executor verified cleanup barrier failed: {e}"
+                    )))
+                })?;
             if exec_cancelled as usize != coord_cancelled {
                 return Err(CoordinatorError::Invariant(
                     CoordinatorInvariantError::Accounting(format!(

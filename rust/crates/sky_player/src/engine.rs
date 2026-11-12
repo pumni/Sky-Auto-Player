@@ -135,6 +135,7 @@ pub mod observer_test_hooks {
 
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
+#[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 #[cfg(any(test, feature = "test-support"))]
 pub use sky_dispatch_core::model::ActionKind;

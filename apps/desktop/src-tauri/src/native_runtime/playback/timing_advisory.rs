@@ -6,8 +6,8 @@ use crate::commands::{
 use sky_app_core::song::ScheduleMetadata;
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_player::timing_model::{
-    ModelPacket, ModelPacketKind, WholeStreamModelConfig, WholeStreamModelError,
-    WholeStreamPacketEstimate, analyze_whole_stream_cancellable,
+    WholeStreamModelConfig, WholeStreamModelError, WholeStreamPacketEstimate,
+    analyze_dispatch_schedule_cancellable,
 };
 
 const QPC_FREQUENCY_HZ: u64 = 1_000_000;
@@ -225,7 +225,6 @@ fn analyze_variant_with_assumptions_and_hook(
     }
     result.total_packet_count = Some(compiled.packets.len() as u64);
 
-    let mut model_packets = Vec::with_capacity(compiled.packets.len());
     for (index, packet) in compiled.packets.iter().enumerate() {
         if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
             result.packet_count_inspected = index as u64;
@@ -239,26 +238,13 @@ fn analyze_variant_with_assumptions_and_hook(
             );
         }
         result.packet_count_inspected = (index + 1) as u64;
-        let kind = if packet.up_mask == 0 && packet.down_mask == 0 {
-            ModelPacketKind::Metadata
-        } else {
-            ModelPacketKind::Physical
-        };
-        model_packets.push(ModelPacket {
-            // The prepared authored timeline is relative to its epoch and
-            // already expressed in microseconds. At 1 MHz, ticks are µs.
-            authored_target_ticks: packet.scheduled_us,
-            up_mask: packet.up_mask,
-            down_mask: packet.down_mask,
-            kind,
-        });
     }
 
     // Test callers can stop at the adapter/model boundary to deterministically
     // exercise cancellation while an advisory analysis is in flight.
     before_model();
-    let report = match analyze_whole_stream_cancellable(
-        &model_packets,
+    let report = match analyze_dispatch_schedule_cancellable(
+        &compiled,
         assumptions.model_config(policy),
         cancelled,
     ) {
@@ -356,7 +342,6 @@ fn estimated_peak_bytes(action_count: usize) -> Option<u64> {
     let per_action = size_of::<KeyActionInput>()
         .checked_add(size_of::<CompiledBatch>())?
         .checked_add(size_of::<CompiledPacket>())?
-        .checked_add(size_of::<ModelPacket>())?
         .checked_add(size_of::<WholeStreamPacketEstimate>())?
         .checked_add(size_of::<i64>())?
         // Covers three copies of a maximum-length reason across Arc, reason
@@ -528,7 +513,7 @@ mod tests {
         let mixed = analyze(&mixed_schedule, &config, &policy, "mixed-plan");
         assert_eq!(mixed.total_packet_count, Some(3));
         assert_eq!(mixed.packet_count_inspected, 3);
-        assert_eq!(mixed.packet_count_analyzed, 3);
+        assert_eq!(mixed.packet_count_analyzed, 4);
         assert_eq!(mixed.plan_fingerprint, "mixed-plan");
 
         let sparse_schedule = schedule(&[
