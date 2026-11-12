@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "repo": "pumni/Sky-Auto-Player",
+  "samples": [
+    {
+      "repo": "pumni/Sky-Auto-Player",
+      "category": "fixture-full-ci",
+      "run": {
+        "id": 900001,
+        "workflow_id": 315231568,
+        "name": "CI",
+        "head_sha": "0123456789abcdef0123456789abcdef01234567",
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "failure",
+        "run_attempt": 2,
+        "created_at": "2026-11-12T01:00:00Z",
+        "run_started_at": "2026-11-12T01:00:30Z",
+        "updated_at": "2026-11-12T01:03:30Z",
+        "html_url": "https://github.com/pumni/Sky-Auto-Player/actions/runs/900001"
+      },
+      "job_pages": [
+        {
+          "page": 1,
+          "total_count": 6,
+          "jobs": [
+            {
+              "id": 900011,
+              "name": "Windows compile",
+              "status": "completed",
+              "conclusion": "success",
+              "runner_os": "Windows",
+              "runner_name": "runner-a",
+              "started_at": "2026-11-12T01:00:35Z",
+              "completed_at": "2026-11-12T01:01:55Z",
+              "steps": [
+                { "number": 1, "name": "compile", "status": "completed", "conclusion": "success", "started_at": "2026-11-12T01:00:40Z", "completed_at": "2026-11-12T01:01:35Z" },
+                { "number": 2, "name": "test", "status": "completed", "conclusion": "success", "started_at": "2026-11-12T01:01:35Z", "completed_at": "2026-11-12T01:01:50Z" }
+              ]
+            },
+            {
+              "id": 900012,
+              "name": "Ubuntu tests",
+              "status": "completed",
+              "conclusion": "failure",
+              "runner_os": "Ubuntu 24.04",
+              "started_at": "2026-11-12T01:00:40Z",
+              "completed_at": "2026-11-12T01:02:40Z",
+              "steps": [
+                { "number": 1, "name": "checkout", "status": "completed", "conclusion": "success", "started_at": "2026-11-12T01:00:42Z", "completed_at": "2026-11-12T01:00:50Z" },
+                { "number": 2, "name": "test", "status": "completed", "conclusion": "failure", "started_at": null, "completed_at": null }
+              ]
+            },
+            {
+              "id": 900013,
+              "name": "Skipped website",
+              "status": "completed",
+              "conclusion": "skipped",
+              "runner_os": "Ubuntu",
+              "started_at": "2026-11-12T01:02:00Z",
+              "completed_at": "2026-11-12T01:01:00Z",
+              "steps": []
+            },
+            {
+              "id": 900014,
+              "name": "Cancelled proof",
+              "status": "completed",
+              "conclusion": "cancelled",
+              "runner_os": "Windows",
+              "started_at": "2026-11-12T01:01:00Z",
+              "completed_at": "2026-11-12T01:01:50Z",
+              "steps": []
+            }
+          ]
+        },
+        {
+          "page": 2,
+          "total_count": 6,
+          "jobs": [
+            {
+              "id": 900015,
+              "name": "Windows hosted job with missing OS field",
+              "status": "completed",
+              "conclusion": "success",
+              "runner_name": "runner-c",
+              "started_at": "2026-11-12T01:01:00Z",
+              "completed_at": "2026-11-12T01:01:40Z",
+              "steps": []
+            },
+            {
+              "id": 900016,
+              "name": "In progress timing absent",
+              "status": "in_progress",
+              "conclusion": null,
+              "started_at": "2026-11-12T01:03:00Z",
+              "completed_at": null,
+              "steps": [
+                { "number": 1, "name": "waiting", "status": "in_progress", "conclusion": null, "started_at": "2026-11-12T01:03:05Z", "completed_at": null }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,7 +12,6 @@ const LOCAL_SETUP: &str = "uses: ./.github/actions/setup-rust-pinned";
 const WORKFLOWS: &[&str] = &[
     ".github/workflows/ci.yml",
     ".github/workflows/release-v4.yml",
-    ".github/workflows/hosted-v4-signing-proof.yml",
     ".github/workflows/v4-metadata-recovery.yml",
 ];
 const ACTIVE_PIN_CONSUMERS: &[&str] = &[
@@ -459,11 +458,15 @@ fn validate_workflow_source(source: &str, path: &Path) -> Result<usize> {
         let has_action = job.matches(LOCAL_SETUP).count();
         let rust_consumer = is_rust_consumer(&job);
         let expected_non_rust = match path.to_string_lossy().replace('\\', "/").as_str() {
-            ".github/workflows/ci.yml" => {
-                ["desktop_web", "site", "status", "deploy_pages"].contains(&id.as_str())
-            }
+            ".github/workflows/ci.yml" => [
+                "desktop_web",
+                "malware_proof",
+                "site",
+                "status",
+                "deploy_pages",
+            ]
+            .contains(&id.as_str()),
             ".github/workflows/v4-metadata-recovery.yml" => id == "validate",
-            ".github/workflows/hosted-v4-signing-proof.yml" => id == "malware-scan-proof",
             _ => false,
         };
         if !rust_consumer && !expected_non_rust {

@@ -39,21 +39,38 @@ PowerShell script. The current workflow and operator policy are defined in
 
 ## Proof route
 
-`.github/workflows/hosted-v4-signing-proof.yml` runs on relevant pull requests and can be manually
-dispatched from a feature branch. It uses `windows-latest`, a read-only `contents` token, pinned
-checkout and Bun setup actions, and the Rust version declared in
+`.github/workflows/ci.yml` owns the proof entry point. Its conditional
+`signing_proof` job runs on relevant pull requests when the Rust classifier
+selects the signing lane; manually dispatched CI runs request all lanes. There
+is no second pull request workflow for the proof. The job uses `windows-latest`,
+a read-only `contents` token, pinned checkout and Bun setup actions, and the Rust version declared in
 `rust/rust-toolchain.toml`, installed by the repository-local setup action. It does not use a protected environment, GitHub
 secrets, the GitHub API, release commands, artifact uploads, or metadata writes.
 
-The workflow builds one canonical NSIS installer with Tauri updater artifact creation disabled and
+The job builds one canonical NSIS installer with Tauri updater artifact creation disabled and
 with all ambient Tauri signing variables removed. It hashes that installer, then in a later step
 generates a disposable updater key under `RUNNER_TEMP` and signs the unchanged file with Tauri CLI
 2.12.3 and `--app-version`. The Rust verifier checks the exact NSIS filename, installer SHA-256,
 signature bytes, signed filename and version, and public key identity. The workflow first runs
 `cargo xtask ci source-identity` to bind the actual clean checkout to `GITHUB_SHA`; the verifier's
 `--source-sha` argument validates SHA syntax and records it but does not independently compare it to
-Git HEAD. It writes bounded proof JSON to the same temporary directory. An unconditional cleanup step removes
-the owned build tree and test key after success or failure.
+Git HEAD. It writes bounded proof JSON to the same temporary directory. An
+unconditional cleanup step removes the owned build tree and test key after
+success or failure.
+
+The independent `malware_proof` job also runs conditionally from `ci.yml` on
+GitHub-hosted Ubuntu 24.04. It uses no release credentials or uploaded
+artifacts. It builds a disposable NSIS PE, proves ClamAV detects EICAR inside
+compressed NSIS, binds the fixture to exact-byte evidence, runs the release
+scanner's plain and archive controls, rejects an altered installer digest, and
+cleans its runner-local workspace. Both this job and production release
+`attest` use `scripts/ci_bootstrap_clamav.sh`: apt update/install retries and
+timeouts are bounded, apt update uses `APT::Update::Error-Mode=any`, the
+runner's authenticated Ubuntu repositories remain the only package source,
+and `freshclam` must succeed. The ClamAV daemon is stopped only when active. A
+mocked shell harness exercises apt retry, apt failure, daemon state, and
+freshclam failure paths. Scanner definition freshness remains checked by the
+release scanner before evidence is accepted.
 
 The verifier refuses the canonical production updater public root. Rust negative tests cover a
 wrong key, wrong signed version, modified installer bytes, a partial signature, and a mismatched

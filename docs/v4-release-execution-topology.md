@@ -142,13 +142,23 @@ does **not** establish any detection. The former self-hosted-only Defender requi
 produce honest evidence on hosted Windows. The independent GitHub-hosted Ubuntu 24.04
 `attest` job instead requires refreshed ClamAV official malware signatures, a **detected EICAR
 positive control**, and an exact scan of the unchanged production-signed NSIS installer,
-with bounded freshness and file size. The scanner must prove **both plain EICAR\nand EICAR embedded inside compressed NSIS** on the same runner; its attested\nevidence records these two controls independently. Rust verifies a separate JSON record against the
+with bounded freshness and file size. The scanner must prove **both plain EICAR
+and EICAR embedded inside compressed NSIS** on the same runner; its attested
+evidence records these two controls independently. Rust verifies a separate JSON record against the
 signed immutable manifest's exact SHA/size, run ID/attempt, version and source. GitHub OIDC
 attests that evidence alongside `.exe`, `.sig` and SPDX SBOM; `publish` downloads and
 independently verifies the exact-run scanner evidence and OIDC attestation **before any release mutation**.
 The scanner receives **no production private key**. ClamAV is a distinct signature-based engine;
 it is **not equivalent to Defender cloud/behavioral protection**. This change of malware scanner
 policy needs explicit owner security acceptance, even when all CI tests pass.
+
+The production `attest` job and conditional PR `malware_proof` job share
+`scripts/ci_bootstrap_clamav.sh`. Its apt update/install retries and command
+timeouts are bounded, apt update rejects partial repository failures, and
+`freshclam` failure stops the job. The helper uses the runner's configured
+authenticated Ubuntu repositories and does not download binaries or replace
+`clamscan`; `scripts/test_ci_bootstrap_clamav.sh` injects apt and freshness
+failures to verify this behavior.
 
 The `publish` job verifies all attestations against the exact source SHA and candidate bytes
 before Rust creates or publishes an immutable release. Rust checks

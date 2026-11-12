@@ -1,22 +1,27 @@
 # CI validation topology
 
 This document records the accepted validation topology. The Rust-native
-`cargo xtask ci classify` command is the source of lane selection; unknown or
-malformed classification is always fail-closed to full validation. It writes
-the nine lane values and `classification_reason` to stdout and appends them to
-`GITHUB_OUTPUT` using a delimiter-safe multiline record for the human-readable
-reason.
+`cargo xtask ci classify` command is the source of lane selection. Unknown,
+malformed, unavailable, ambiguous, or empty Git diffs fail closed to full
+validation. It writes the lane values and `classification_reason` to stdout and
+appends them to `GITHUB_OUTPUT` using a delimiter-safe multiline record for the
+human-readable reason.
 
 ## Triggers
 
 - `.github/workflows/ci.yml` runs for pushes to `main`, pull requests, and
-  explicit `workflow_dispatch` requests.
+  explicit `workflow_dispatch` requests. It also runs full validation every
+  Sunday at 03:17 UTC.
 - A website-affecting `main` push runs the `site` job, packages the validated
   `apps/website/dist` directory as the Pages artifact, and then runs the automatic
-  Pages deployment after the required status gate succeeds.
+  Pages deployment after the required status gate succeeds. Website package
+  manifest and lockfile changes stay in the site lane.
 - `.github/workflows/pages.yml` is the manual Pages recovery workflow. It is
   `workflow_dispatch`-only and retains its self-contained checkout, install,
   build, verification, and deployment path.
+- Pull request runs share a workflow-and-PR concurrency group and may cancel an
+  older run for the same PR. Manual runs have a unique run-ID group, and only
+  PR runs are cancelable.
 
 ## Classifier outputs
 
@@ -31,18 +36,30 @@ The `changes` job projects these classifier outputs:
 - `package_required`: package and Tauri qualification is required.
 - `updater_required`: updater bridge/contract/E2E validation is required.
 - `release_required`: the Windows release-contract lane is required.
+- `signing_proof_required`: the independent unsigned-before-sign test-key proof
+  is required.
+- `malware_proof_required`: the hosted ClamAV and real NSIS positive-control
+  proof is required.
 - `supply_chain_required`: advisory and dependency-policy checks are required.
 - `site_required`: website validation and Pages artifact packaging are
   required.
 - `classification_reason`: the human-readable classifier explanation.
 
 The `changes` job installs the pinned Rust toolchain, caches the xtask build,
-and has a 15-minute budget for the first cold build. Pull request and push
-classification use the event's explicit base/head commit identities, fetch
-missing commits at shallow depth, and never depend on the checkout's current
-branch or attached-HEAD state. `workflow_dispatch` requests full validation.
-Edits to the Rust classifier and its CLI dispatcher also select full
-validation, matching the previous classifier's self-change policy.
+and has a 15-minute budget for the first cold build. Pull requests explicitly
+use `--diff-mode pr`: the classifier verifies that the checked-out `HEAD` is
+the event head, computes `git merge-base` for event base/head, and diffs from
+that merge base to the head. This avoids treating commits added to `main` after
+the feature branch split as PR changes. Pushes explicitly use
+`--diff-mode push` and diff `before..head`. For a shallow PR checkout,
+bounded retries fetch the event base branch and the repository's
+`refs/pull/<number>/head` ref; the classifier verifies that ref still names the
+event head. It does not ask the base repository to fetch a fork head by its raw
+object ID. Missing, mismatched, or inaccessible refs, source SHA mismatches,
+absent merge bases, malformed paths, failed diffs, and empty diffs request full
+validation with an explanation. `workflow_dispatch` and the weekly schedule
+request full validation. Edits to the Rust classifier, its CLI dispatcher, or
+CI control plane also select full validation.
 
 `static_required` is a derived CI projection, not a classifier output. It is
 true for Rust, Desktop, package, updater, or release work, and for the
@@ -53,17 +70,20 @@ development-server E2E selector.
 
 The Linux `static` job installs Go 1.25.0 and actionlint v1.7.12 at pinned
 versions, then validates every `.github/workflows/*.yml` file before running
-the Rust static and security contracts. The Rust release-runner contract
+the Rust static and security contracts. It also runs deterministic offline
+fixtures for the read-only CI metrics tool. The Rust release-runner contract
 checks that these pins and the actionlint invocation remain in CI.
 
 Unknown paths, classifier failures, and explicit full validation set every
-lane to true. This preserves fail-closed behavior.
+lane to true. The new proof lanes remain independent jobs and never consume the
+candidate artifact as a substitute for either proof.
 
 The aggregate status remains exactly `Sky Auto Player — required CI gate`.
 It requires every selected validation lane to succeed and permits an unselected
 lane only when its classifier output requires that lane to be skipped. A
 successful workflow with a missing required status is not equivalent to this
-gate.
+gate. The status job also requires each selected proof job to succeed and each
+unselected proof job to report `skipped`.
 
 ## Representative path matrix
 
@@ -71,20 +91,33 @@ gate.
 | --- | --- |
 | `README.md` or general `docs/**` | No specialized lane; aggregate status only |
 | `docs/releases/**` | Static validation only; no release contract |
-| `apps/desktop/src/**` | Desktop web/browser and Desktop E2E; no native lane |
-| `apps/desktop/tests/e2e/**` | Desktop web/browser and Desktop E2E; no native lane |
-| `apps/desktop/src-tauri/src/**` | Rust and Windows native Desktop validation |
-| `apps/desktop/src-tauri/tauri.conf.json` | Desktop web, native, package, and updater qualification |
-| Cargo manifests, lockfiles, or toolchain configuration | Rust plus the affected package/updater/release/security lanes |
-| `.bun-version` or `apps/website/package.json` Bun mirror | Every Bun-consuming lane |
-| `apps/website/**` | Site validation and exact Pages artifact packaging |
+| `apps/website/**`, `.github/actions/site-validate/**`, `pages.yml` | Site validation and exact Pages artifact packaging, including website dependency changes |
+| `.bun-version`, Rust setup action, shared toolchain resolver | Full validation across all lanes |
+| `apps/desktop/src/**`, React styles/tests on a PR | Desktop web/browser and E2E; no Windows jobs by default, except the Windows integration paths below |
+| Windows integration paths:<br>`apps/desktop/src/bridge/tauriBridge.ts`<br>`apps/desktop/src/bridge/startupTelemetry.ts`<br>`apps/desktop/src/bridge/generated/**`<br>`apps/desktop/src/platform/runtime.ts`<br>`apps/desktop/src/platform/windowControls.ts`<br>`apps/desktop/src/platform/startupWindowReveal.ts`<br>`apps/desktop/src/platform/systemAppearance.ts`<br>`apps/desktop/src/platform/externalLinks.ts`<br>`apps/desktop/src/app/BootstrapGate.tsx`<br>`apps/desktop/src/app/usePackagedSmokeTest.ts`<br>`apps/desktop/src/main.tsx` | Desktop web/browser and E2E plus Windows native and NSIS package qualification |
+| Any `apps/desktop/**` change on a `main` push | Desktop web/browser and E2E plus Windows candidate/package qualification |
+| `apps/desktop/package.json`, `bun.lock` | Desktop web/browser, Windows candidate/package, updater and dependency checks |
+| `apps/desktop/src-tauri/**` production source/config/hooks/resources | Windows native and package qualification; updater lane for updater identity/behavior changes |
+| NSIS hooks, installer format or packaged payload | Windows package qualification plus signing and malware proofs |
+| Shipping `rust/crates/**` source | Rust/native and Windows package qualification; manifest changes also run dependency checks |
+| Signing adapter, updater trust, Authenticode scripts/contracts | Signing proof plus related Rust, updater, package, and release lanes |
+| Malware scanner, policy, bootstrap, or policy tests | Malware proof and release/security contracts, without an unnecessary Windows NSIS candidate |
+| `.github/workflows/release-v4.yml` | Release contract plus independent signing and malware proofs |
+| `ci.yml`, classifier, Rust toolchain pin, unknown path | Full validation across all lanes |
 | Retired root `desktop/**` or `site/**` | Unknown path; fail-closed full validation |
-| Release workflow or executable release script | Release contract and its required static/security lanes |
-| Classifier or CI workflow | Fail-closed/full validation |
-| Unknown path | Full validation across all lanes |
+| Release executable or policy script | Release contract and its selected Windows/security lanes |
 
 Multi-path changes use the union of their lane requirements. A release note
 does not suppress a lane required by another changed path.
+
+The classifier keeps these Tauri entrypoint and adapter paths in an explicit
+Windows integration owner set. A Rust regression test also scans production
+`.ts`/`.tsx` files for direct runtime imports from `@tauri-apps/api/*` and
+`@tauri-apps/plugin-*`, excluding test/spec files, declaration files, and
+type-only imports, and asserts that each importer selects Windows native and
+package qualification.
+This scan is test-only; path classification does not inspect frontend source at
+runtime. New Tauri runtime adapters must be added to the explicit owner set.
 
 ## Build-once boundaries
 

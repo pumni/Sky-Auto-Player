@@ -1,6 +1,7 @@
 mod bindings;
 mod bun_pin;
 mod ci_contracts;
+mod hosted_malware;
 mod hosted_signing;
 mod recovery_auth;
 mod release_pipeline;
@@ -140,6 +141,7 @@ fn run_with_session(
             tauri_metadata::release_metadata_contract(&root)?;
             release_runner::release_runner_contract(&root)?;
             hosted_signing::hosted_v4_signing_workflow_contract(&root)?;
+            hosted_malware::hosted_malware_proof_contract(&root)?;
             release_pipeline::v4_release_pipeline_contract(&root)?;
             ci_contracts::packaged_ci_contract(&root)?;
             tauri_metadata::v4_legacy_updater_retirement(&root)?;
