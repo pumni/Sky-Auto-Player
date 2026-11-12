@@ -74,12 +74,43 @@ test('rejects invalid durations, run identities, and duplicate run attempts', ()
   assert.throws(() => normalizeSample({}), /run metadata/);
 });
 
-test('does not report a successful run for failed jobs or thin p50/p95 samples', () => {
-  const [run] = parseSnapshotText(fixtureText).runs;
-  assert.equal(run.conclusion, 'failure');
-  assert.equal(run.failures.length, 1);
-  assert.equal(run.comparable_samples, undefined);
+test('rejects completed success/failure contradictions without relabeling the source outcome', () => {
+  const failedSnapshot = structuredClone(fixture);
+  const [failedRun] = parseSnapshotText(JSON.stringify(failedSnapshot)).runs;
+  assert.equal(failedRun.conclusion, 'failure');
+  assert.equal(failedRun.failures.length, 1);
+  assert.equal(failedRun.comparable_samples, undefined);
 
+  for (const jobConclusion of ['failure', 'timed_out', 'action_required']) {
+    const contradictory = structuredClone(fixture);
+    contradictory.samples[0].run.conclusion = 'success';
+    contradictory.samples[0].job_pages[0].jobs[1].conclusion = jobConclusion;
+    assert.throws(
+      () => parseSnapshotText(JSON.stringify(contradictory)),
+      new RegExp(`Run 900001 reports success but has conflicting failed job conclusion\\(s\\): 900012:${jobConclusion}`),
+    );
+  }
+
+  const completedSuccess = structuredClone(fixture);
+  completedSuccess.samples[0].run.conclusion = 'success';
+  completedSuccess.samples[0].job_pages[0].jobs[0].conclusion = 'neutral';
+  completedSuccess.samples[0].job_pages[0].jobs[1].conclusion = 'success';
+  const [successfulRun] = parseSnapshotText(JSON.stringify(completedSuccess)).runs;
+  assert.equal(successfulRun.conclusion, 'success');
+  assert.equal(successfulRun.failures.length, 0);
+  assert.equal(successfulRun.jobs.some((job) => ['failure', 'timed_out', 'action_required'].includes(job.conclusion)), false);
+
+  const inProgress = structuredClone(fixture);
+  inProgress.samples[0].run.status = 'in_progress';
+  inProgress.samples[0].run.conclusion = null;
+  const [partialRun] = parseSnapshotText(JSON.stringify(inProgress)).runs;
+  assert.equal(partialRun.status, 'in_progress');
+  assert.equal(partialRun.conclusion, null);
+  assert.equal(partialRun.failures.length, 1);
+});
+
+test('withholds p50/p95 for thin samples', () => {
+  const [run] = parseSnapshotText(fixtureText).runs;
   const [group] = summarizeSamples([run]);
   assert.equal(group.sample_count, 1);
   assert.equal(group.wall_clock_seconds_p50, null);

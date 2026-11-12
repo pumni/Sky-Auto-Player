@@ -152,6 +152,14 @@ export function normalizeSample(sample) {
   const jobs = rawJobs.map(normalizeJob);
   const conclusion = typeof run.conclusion === 'string' ? run.conclusion.toLowerCase() : null;
   const status = typeof run.status === 'string' ? run.status.toLowerCase() : 'unknown';
+  const failedJobConclusions = new Set(['failure', 'timed_out', 'action_required']);
+  const contradictoryJobs = status === 'completed' && conclusion === 'success'
+    ? jobs.filter((job) => failedJobConclusions.has(job.conclusion))
+    : [];
+  if (contradictoryJobs.length > 0) {
+    const details = contradictoryJobs.map((job) => `${job.id}:${job.conclusion}`).join(', ');
+    fail(`Run ${runId} reports success but has conflicting failed job conclusion(s): ${details}.`);
+  }
 
   const jobCompletionTimes = jobs
     .map((job) => parseTimestamp(job.completed_at, `job ${job.id} completed_at`, { optional: true }))
