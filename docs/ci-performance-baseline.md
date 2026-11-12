@@ -86,8 +86,8 @@ source SHA/tree, `RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER`, and
 before and after. The benchmark commands are:
 
 ```powershell
-cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked --no-run
-cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked -- --test-threads=1
+cargo test --workspace --all-features --locked --manifest-path rust/Cargo.toml --no-run
+cargo test --workspace --all-features --locked --manifest-path rust/Cargo.toml -- --test-threads=1
 ```
 
 Run each once against the empty target and then repeat as a warm run; execute at
@@ -95,4 +95,39 @@ least two warm test runs if time permits. The first command compiles test
 targets. The later test command can still rebuild some objects, so compilation
 and execution are command-level phases, not guaranteed independent work.
 
-<!-- WP-B local benchmark measurements are inserted here before handoff. -->
+### Measured Windows result
+
+Benchmark source: commit
+[`8b2a2b92c90258a2088f4e97d3d489cf1eaf9aa7`](https://github.com/pumni/Sky-Auto-Player/commit/8b2a2b92c90258a2088f4e97d3d489cf1eaf9aa7),
+tree `7a2d33474bb62805d3fed6925c041f4298900daa`, on branch
+`refactor/windows-ci-impact-gates-20261112`.
+
+- Machine: Windows 11 Home x64, build 26300; AMD Ryzen 5 5500U, 6 cores / 12
+  logical processors.
+- Toolchain: `rustc 1.99.1 (58cf8f9c3 2026-10-13)`, host
+  `x86_64-pc-windows-msvc`, LLVM 23.1.1; `cargo 1.99.1 (5f94df478
+  2026-08-27)`.
+- Target: a newly created `%TEMP%\sky-wpb-target-<guid>\target`; it was empty
+  before the cold command and reused for all four measurements. Existing
+  `rust/target` and caches were not deleted or reused as the target directory.
+- Cache environment: `RUSTC_WRAPPER` and `CARGO_BUILD_RUSTC_WRAPPER` unset;
+  `CARGO_INCREMENTAL` unset (Cargo default); `CARGO_HOME` unset (default
+  `%USERPROFILE%\.cargo`); `sccache` not installed. Crate sources in the
+  default Cargo home may already have been cached, so “cold” means empty build
+  target, not a pristine machine or cold network cache.
+- Each wall time below is a PowerShell `Stopwatch` around the exact Cargo
+  process. Cargo's reported profile time and the sum of test-harness durations
+  are shown separately. Every command exited 0.
+
+| Phase | Command | Wall time | Cargo/test output timing | Result |
+| --- | --- | ---: | --- | --- |
+| Cold compile | `cargo test --workspace --all-features --locked --manifest-path rust/Cargo.toml --no-run` | 262.825 s | Cargo profile: 4m 22s | All test executables built |
+| Warm compile | Same `--no-run` command | 14.341 s | Cargo profile: 13.79s | All test executables built |
+| Serial test run 1 | `cargo test --workspace --all-features --locked --manifest-path rust/Cargo.toml -- --test-threads=1` | 372.091 s | Cargo profile: 0.65s; test harnesses: 363.52s | 1,775 passed, 0 failed |
+| Serial test run 2 | Same serial test command | 367.092 s | Cargo profile: 0.85s; test harnesses: 362.42s | 1,775 passed, 0 failed |
+
+These two local warm test repetitions are too few to characterize a stable
+performance distribution and are not comparable to hosted runner timing. They
+show the observed cost of this workspace's serial tests on the listed local
+machine. CI scheduling, CPU contention, filesystem performance, hosted image,
+and network behavior differ. No quantified CI speedup is claimed.
