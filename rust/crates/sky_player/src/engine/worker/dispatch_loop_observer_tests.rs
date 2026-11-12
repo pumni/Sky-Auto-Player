@@ -59,7 +59,6 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
     assert_eq!(evidence.failed_release_mask, 0);
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
-
 #[test]
 fn completion_qpc_missing_and_clock_success_dispatches() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();

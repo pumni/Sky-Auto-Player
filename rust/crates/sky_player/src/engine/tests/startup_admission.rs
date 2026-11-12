@@ -656,6 +656,7 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
 
     let mut matrix = Vec::new();
     let mut qpc_frequency_hz = None;
+    let stale_turn_budget = sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP;
     for stale_count in [0usize, 1, 32, 33, 10_000] {
         let repetitions = if stale_count == 10_000 { 20 } else { 100 };
         let mut samples = Vec::with_capacity(repetitions);
@@ -715,7 +716,11 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
             let pre_call = pre_call.expect("final Down sender-boundary pre-call QPC");
             let authored_target = authored_target.expect("authored target QPC");
             let packet_not_before = packet_not_before.expect("packet eligibility QPC");
-            assert_eq!(stale_at_final_send, stale_count as u64);
+            assert_eq!(
+                stale_at_final_send,
+                stale_count.min(stale_turn_budget) as u64,
+                "a physical send follows at most one bounded stale metadata turn"
+            );
             let authored_delta = delta_us(pre_call, authored_target, frequency);
             let eligibility_delta = delta_us(pre_call, packet_not_before, frequency);
             let wake_delta = wake.map(|wake| delta_us(pre_call, wake, frequency));
@@ -779,7 +784,8 @@ fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
         matrix.push(json!({
             "stale_metadata_count": stale_count,
             "repetitions": repetitions,
-            "total_stale_scanned_per_final_send": stale_count,
+            "stale_metadata_count_in_schedule": stale_count,
+            "stale_turn_budget_before_physical_send": stale_turn_budget,
             "qpc_frequency_hz": qpc_frequency_hz.expect("QPC frequency"),
             "authored_to_pre_call": {
                 "measured_count": authored_to_pre_call_us.len(),

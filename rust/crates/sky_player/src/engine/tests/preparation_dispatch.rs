@@ -269,6 +269,68 @@ fn many_leading_stale_packets_are_drained_before_precision_handoff() {
 }
 
 #[test]
+fn stale_metadata_backlog_gets_a_finite_turn_before_physical_send() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    for stale_count in [0usize, 1, 32, 33, 10_000] {
+        let mut actions = Vec::with_capacity(stale_count + 2);
+        for index in 0..stale_count {
+            actions.push(KeyActionInput {
+                source_action_index: index as u32,
+                kind: ActionKind::Up,
+                scheduled_us: index as u64,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "stale-backlog".into(),
+            });
+        }
+        actions.push(KeyActionInput {
+            source_action_index: stale_count as u32,
+            kind: ActionKind::Down,
+            scheduled_us: 500_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "physical-after-stale-backlog".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: (stale_count + 1) as u32,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "stale-backlog-cleanup".into(),
+        });
+        let schedule =
+            compile_runtime_intents(&actions, &[0x15]).expect("valid stale-backlog schedule");
+        let hook = Arc::new(StartupOrderingHook::default());
+        let mut options = test_session_options(
+            schedule,
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        options.telemetry.capacity = 32;
+        let session = NativeDispatchSession::new(options).expect("session admission");
+        start_with_test_wall_clock_slack(&session);
+        assert!(session.join(Duration::from_secs(10)).expect("worker join"));
+        assert_eq!(session.snapshot().terminal_error, None);
+        assert_eq!(
+            hook.stale_packet_commit_count.load(Ordering::SeqCst),
+            stale_count as u64,
+            "all stale packets must retain accounting for backlog={stale_count}"
+        );
+        assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
+        assert_eq!(
+            hook.stale_packet_committed_before_first_physical
+                .load(Ordering::SeqCst),
+            stale_count.min(32) as u64,
+            "physical handoff follows one bounded metadata turn for backlog={stale_count}"
+        );
+    }
+}
+
+#[test]
 fn all_stale_schedule_finishes_without_precision_or_physical_work() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 

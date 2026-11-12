@@ -548,6 +548,8 @@ pub struct StagedCandidate {
     pub(crate) up_slot_timings: SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>,
 }
 
+include!("dispatch_loop_scheduler.rs");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StagedDispatchOutcome {
     Dispatched,
@@ -754,7 +756,7 @@ pub(crate) fn dispatch_staged_candidate(
             FinalDownAdmissionResult::Allowed => {}
             FinalDownAdmissionResult::Replan => return StagedDispatchOutcome::Replan,
             FinalDownAdmissionResult::Terminal(err) => {
-                runtime.terminal_error = Some(err);
+                runtime.terminal_error = Some(gate_rejection_record(&candidate, &err));
                 return StagedDispatchOutcome::Exit;
             }
         }
@@ -825,13 +827,16 @@ pub(crate) fn dispatch_staged_candidate(
         sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
     ) {
         runtime.verified_target = None;
-        runtime.terminal_error = Some("SendInput split authored chord".to_string());
+        runtime.terminal_error = Some(format!(
+            "SendInput split authored chord: {}",
+            sender_failure_record(&candidate, &send_result)
+        ));
         return StagedDispatchOutcome::Exit;
     }
     if !send_result.is_success() {
         runtime.terminal_error = Some(format!(
-            "SendInput transport failure: status {:?}",
-            send_result.status
+            "SendInput transport failure: {}",
+            sender_failure_record(&candidate, &send_result),
         ));
         return StagedDispatchOutcome::Exit;
     }
@@ -1095,6 +1100,7 @@ pub(super) fn dispatch(
             .as_mut()
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
+        let mut stale_metadata_packets_since_physical = 0usize;
         while core.runtime.terminal_error.is_none() {
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
@@ -1565,31 +1571,51 @@ pub(super) fn dispatch(
                 }
             };
 
-            if resources.coordinator.is_finished_at(effective_now_ticks) {
-                break;
-            }
+            let action = evaluate_scheduler_action(
+                resources.coordinator.executor.as_ref().unwrap(),
+                effective_now_ticks,
+            );
 
-            // Drain stale metadata packets at or before current playback time.
-            match resources
-                .coordinator
-                .prepare_current_stale_packet_at(effective_now_ticks)
+            let stale_deadline_qpc = match next_stale_metadata_deadline_qpc(
+                &resources.coordinator,
+                resources.playback.epoch,
+            ) {
+                Ok(deadline) => deadline,
+                Err(error) => {
+                    core.runtime.terminal_error = Some(error);
+                    break;
+                }
+            };
+            let stale_metadata_due =
+                stale_deadline_qpc.is_some_and(|deadline| deadline <= now_ticks);
+            let physical_send_selected = matches!(&action, SchedulerAction::Send { .. });
+            let stale_scan_cursor_before = resources.coordinator.cursor;
+            let stale_turn_budget =
+                sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP;
+            if !physical_send_selected
+                && (!stale_metadata_due
+                    || matches!(&action, SchedulerAction::Finished)
+                    || stale_metadata_packets_since_physical < stale_turn_budget)
             {
-                Ok(Some(prepared)) => {
-                    match super::dispatch_stale_packet(
+                match resources
+                    .coordinator
+                    .prepare_current_stale_packet_at(effective_now_ticks)
+                {
+                    Ok(Some(prepared)) => match super::dispatch_stale_packet(
                         prepared,
                         &mut resources.coordinator,
                         core.observer.pending.as_ref(),
                         &mut core.metrics.observer_dropped_samples,
                     ) {
                         super::DispatchStep::Dispatched => {
+                            stale_metadata_packets_since_physical =
+                                stale_metadata_packets_since_physical.saturating_add(1);
                             #[cfg(any(test, feature = "test-support"))]
                             if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
                                 hook.mark_stale_packet_committed(
                                     core.runtime.last_dispatch_deadline_wake_qpc.is_some(),
                                 );
-                                if hook.stale_packet_commit_count.load(Ordering::Acquire)
-                                    == sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP as u64
-                                {
+                                if stale_metadata_packets_since_physical == stale_turn_budget {
                                     hook.visit_startup_checkpoint(
                                         super::super::config::StartupCheckpoint::StaleMetadataChunk,
                                     );
@@ -1612,26 +1638,19 @@ pub(super) fn dispatch(
                             );
                             break;
                         }
+                    },
+                    Ok(None) => {}
+                    Err(error) => {
+                        core.runtime.terminal_error = Some(format!(
+                            "coordinator stale-packet preparation failure: {error}"
+                        ));
+                        break;
                     }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    core.runtime.terminal_error = Some(format!(
-                        "coordinator stale-packet preparation failure: {error}"
-                    ));
-                    break;
                 }
             }
 
-            let action = resources
-                .coordinator
-                .executor
-                .as_ref()
-                .unwrap()
-                .evaluate(effective_now_ticks);
-
             match action {
-                sky_dispatch_core::executor::DispatchAction::Finished => {
+                SchedulerAction::Finished => {
                     if resources.coordinator.cursor < resources.coordinator.schedule.batches.len() {
                         let stale_deadline_qpc = match next_stale_metadata_deadline_qpc(
                             &resources.coordinator,
@@ -1685,10 +1704,13 @@ pub(super) fn dispatch(
                             }
                             continue;
                         }
+                        if resources.coordinator.cursor != stale_scan_cursor_before {
+                            continue;
+                        }
                     }
                     break;
                 }
-                sky_dispatch_core::executor::DispatchAction::Wait { deadline_ticks } => {
+                SchedulerAction::Wait { deadline_ticks } => {
                     let wait_target_qpc = match resources
                         .playback
                         .epoch
@@ -1707,14 +1729,24 @@ pub(super) fn dispatch(
 
                     // R2: If there is physical work at this deadline, stage the candidate before waiting
                     let candidate = if let Some(exec) = resources.coordinator.executor.as_ref() {
-                        match exec.evaluate(deadline_ticks) {
-                            sky_dispatch_core::executor::DispatchAction::Send {
+                        match evaluate_scheduler_action(exec, deadline_ticks) {
+                            SchedulerAction::Send {
                                 up_mask,
-                                down_chord,
+                                down_chord_index,
                             } => {
+                                let down_chord = match resolve_scheduler_down_chord(
+                                    &resources.coordinator,
+                                    down_chord_index,
+                                ) {
+                                    Ok(chord) => chord,
+                                    Err(error) => {
+                                        core.runtime.terminal_error = Some(error);
+                                        break;
+                                    }
+                                };
                                 match stage_candidate(
                                     up_mask,
-                                    down_chord.cloned(),
+                                    down_chord,
                                     target,
                                     resources,
                                     &mut core.runtime,
@@ -1750,6 +1782,7 @@ pub(super) fn dispatch(
                     if let Some(stale_deadline_qpc) = stale_deadline_qpc
                         && stale_deadline_qpc > now_ticks
                         && stale_deadline_qpc < target_wait_qpc
+                        && stale_metadata_packets_since_physical < stale_turn_budget
                     {
                         core.runtime.last_dispatch_deadline_wake_qpc = None;
                         core.runtime.last_dispatch_deadline_target_qpc = None;
@@ -1786,63 +1819,29 @@ pub(super) fn dispatch(
                         }
                     }
 
-                    // R1: Pre-wait final control check
-                    if let Some(ref cand) = candidate {
-                        let has_down = cand.packet_masks.down_mask != 0;
-                        if has_down {
-                            let expected = cand
-                                .preflight_target
-                                .expect("target stamp checked in staging");
-                            let control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            match verify_final_down_admission(
-                                target,
-                                expected,
-                                config.focus.require_focus,
-                                focus_active,
-                                control_signals,
-                                timing.lease_timeout_ticks,
-                                qpc_clock,
-                                &shared.publication.progress_clock,
-                                &resources.backend,
-                                &mut resources.playback,
-                                &mut core.runtime,
-                                &mut core.metrics,
-                            ) {
-                                FinalDownAdmissionResult::Allowed => {}
-                                FinalDownAdmissionResult::Replan => continue,
-                                FinalDownAdmissionResult::Terminal(err) => {
-                                    core.runtime.terminal_error = Some(err);
-                                    break;
-                                }
-                            }
-                        } else {
-                            let control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            match final_control_precheck(control_signals) {
-                                FinalControlAdmission::Allowed => {}
-                                FinalControlAdmission::PauseRequested => continue,
-                                FinalControlAdmission::SystemSuspendRequested => {
-                                    core.runtime.terminal_trigger =
-                                        Some(super::control::TerminalTrigger::SystemSuspend);
-                                    break;
-                                }
-                                FinalControlAdmission::PanicRequested
-                                | FinalControlAdmission::QuitRequested
-                                | FinalControlAdmission::SkipRequested => break,
-                            }
+                    // The wait path checks only cheap hints here. The full
+                    // target/foreground/modifier/lease admission remains at
+                    // the final boundary immediately before SendInput.
+                    if let Some(cand) = candidate.as_ref() {
+                        let control_signals = FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        };
+                        match pre_wait_candidate_admission(
+                            cand,
+                            target,
+                            config.focus.require_focus,
+                            focus_active,
+                            control_signals,
+                            &mut core.runtime,
+                        ) {
+                            StagedDispatchOutcome::Dispatched => {}
+                            StagedDispatchOutcome::Replan => continue,
+                            StagedDispatchOutcome::Exit => break,
                         }
                     }
 
@@ -1909,93 +1908,10 @@ pub(super) fn dispatch(
                                 core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
                             }
 
-                            // R2: DIRECT HANDOFF if candidate was staged
+                            // A staged packet owns this deadline handoff. Due
+                            // metadata is serviced in a bounded turn after
+                            // physical work, never between wake and sender.
                             if let Some(cand) = candidate {
-                                let mut stale_scanned = 0usize;
-                                while stale_scanned
-                                    < sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP
-                                {
-                                    match resources
-                                        .coordinator
-                                        .prepare_current_stale_packet_at(cand.authored_target_ticks)
-                                    {
-                                        Ok(Some(prepared)) => {
-                                            stale_scanned += 1;
-                                            match super::dispatch_stale_packet(
-                                                prepared,
-                                                &mut resources.coordinator,
-                                                core.observer.pending.as_ref(),
-                                                &mut core.metrics.observer_dropped_samples,
-                                            ) {
-                                                super::DispatchStep::Dispatched => {
-                                                    #[cfg(any(test, feature = "test-support"))]
-                                                    if let Some(hook) =
-                                                        core.runtime.startup_ordering_hook.as_ref()
-                                                    {
-                                                        hook.mark_stale_packet_committed(
-                                                            core.runtime
-                                                                .last_dispatch_deadline_wake_qpc
-                                                                .is_some(),
-                                                        );
-                                                        if stale_scanned
-                                                            == sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP
-                                                        {
-                                                            hook.visit_startup_checkpoint(
-                                                                super::super::config::StartupCheckpoint::StaleMetadataChunk,
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                super::DispatchStep::Terminate(err) => {
-                                                    core.runtime.terminal_error = Some(err);
-                                                    break;
-                                                }
-                                                super::DispatchStep::TerminateStatic(err) => {
-                                                    core.runtime.terminal_error =
-                                                        Some((*err).to_string());
-                                                    break;
-                                                }
-                                                #[cfg(any(test, feature = "test-support"))]
-                                                super::DispatchStep::Continue
-                                                | super::DispatchStep::NoWork => {
-                                                    core.runtime.terminal_error = Some(
-                                                        "stale packet did not complete its metadata commit"
-                                                            .to_string(),
-                                                    );
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        Ok(None) => break,
-                                        Err(error) => {
-                                            core.runtime.terminal_error = Some(format!(
-                                                "coordinator stale packet preparation failed: {error:?}"
-                                            ));
-                                            break;
-                                        }
-                                    }
-                                }
-                                if core.runtime.terminal_error.is_some() {
-                                    super::dispatch::publish_pending_wait_observation(
-                                        &mut core.runtime,
-                                        core.observer.pending.as_ref(),
-                                        &mut core.metrics,
-                                    );
-                                    break;
-                                }
-                                if stale_scanned
-                                    >= sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::MAX_STALE_PACKETS_SCANNED_PER_STEP
-                                {
-                                    core.runtime.last_dispatch_deadline_wake_qpc = None;
-                                    core.runtime.last_dispatch_deadline_target_qpc = None;
-                                    super::dispatch::publish_pending_wait_observation(
-                                        &mut core.runtime,
-                                        core.observer.pending.as_ref(),
-                                        &mut core.metrics,
-                                    );
-                                    continue;
-                                }
-
                                 let ctx = StagedDispatchContext {
                                     target,
                                     config,
@@ -2022,7 +1938,10 @@ pub(super) fn dispatch(
                                     &mut core.metrics,
                                     core.observer.pending.as_ref(),
                                 ) {
-                                    StagedDispatchOutcome::Dispatched => continue,
+                                    StagedDispatchOutcome::Dispatched => {
+                                        stale_metadata_packets_since_physical = 0;
+                                        continue;
+                                    }
                                     StagedDispatchOutcome::Replan => {
                                         core.runtime.last_dispatch_deadline_wake_qpc = None;
                                         core.runtime.last_dispatch_deadline_target_qpc = None;
@@ -2079,13 +1998,23 @@ pub(super) fn dispatch(
                         }
                     }
                 }
-                sky_dispatch_core::executor::DispatchAction::Send {
+                SchedulerAction::Send {
                     up_mask,
-                    down_chord,
+                    down_chord_index,
                 } => {
+                    let down_chord = match resolve_scheduler_down_chord(
+                        &resources.coordinator,
+                        down_chord_index,
+                    ) {
+                        Ok(chord) => chord,
+                        Err(error) => {
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                    };
                     let candidate = match stage_candidate(
                         up_mask,
-                        down_chord.cloned(),
+                        down_chord,
                         target,
                         resources,
                         &mut core.runtime,
@@ -2113,6 +2042,7 @@ pub(super) fn dispatch(
                         if let Some(stale_deadline_qpc) = stale_deadline_qpc
                             && stale_deadline_qpc > now_ticks
                             && stale_deadline_qpc < candidate.timing_window.packet_not_before_qpc
+                            && stale_metadata_packets_since_physical < stale_turn_budget
                         {
                             core.runtime.last_dispatch_deadline_wake_qpc = None;
                             core.runtime.last_dispatch_deadline_target_qpc = None;
@@ -2144,7 +2074,79 @@ pub(super) fn dispatch(
                                 );
                             }
                             match wait_boundary {
-                                WaitBoundary::Due { .. } | WaitBoundary::Interrupted(..) => {
+                                WaitBoundary::Due { dispatch_qpc, .. } => {
+                                    let _ = interrupt.try_take();
+                                    let stale_now_ticks = match resources
+                                        .playback
+                                        .get_elapsed_allow_pre_epoch(dispatch_qpc, true)
+                                    {
+                                        Ok(ticks) => ticks,
+                                        Err(error) => {
+                                            core.runtime.terminal_error = Some(format!(
+                                                "playback clock failure after metadata wait: {error}"
+                                            ));
+                                            break;
+                                        }
+                                    };
+                                    for _ in 0..stale_turn_budget {
+                                        let prepared = match resources
+                                            .coordinator
+                                            .prepare_current_stale_packet_at(stale_now_ticks)
+                                        {
+                                            Ok(Some(prepared)) => prepared,
+                                            Ok(None) => break,
+                                            Err(error) => {
+                                                core.runtime.terminal_error = Some(format!(
+                                                    "coordinator stale-packet preparation failure: {error}"
+                                                ));
+                                                break;
+                                            }
+                                        };
+                                        match super::dispatch_stale_packet(
+                                            prepared,
+                                            &mut resources.coordinator,
+                                            core.observer.pending.as_ref(),
+                                            &mut core.metrics.observer_dropped_samples,
+                                        ) {
+                                            super::DispatchStep::Dispatched => {
+                                                stale_metadata_packets_since_physical =
+                                                    stale_metadata_packets_since_physical
+                                                        .saturating_add(1);
+                                                #[cfg(any(test, feature = "test-support"))]
+                                                if let Some(hook) =
+                                                    core.runtime.startup_ordering_hook.as_ref()
+                                                {
+                                                    hook.mark_stale_packet_committed(true);
+                                                }
+                                            }
+                                            super::DispatchStep::Terminate(error) => {
+                                                core.runtime.terminal_error = Some(error);
+                                                break;
+                                            }
+                                            super::DispatchStep::TerminateStatic(error) => {
+                                                core.runtime.terminal_error =
+                                                    Some((*error).to_string());
+                                                break;
+                                            }
+                                            #[cfg(any(test, feature = "test-support"))]
+                                            super::DispatchStep::Continue
+                                            | super::DispatchStep::NoWork => {
+                                                core.runtime.terminal_error = Some(
+                                                    "stale packet did not complete its metadata commit"
+                                                        .to_string(),
+                                                );
+                                                break;
+                                            }
+                                        }
+                                        if core.runtime.terminal_error.is_some() {
+                                            break;
+                                        }
+                                    }
+                                    if core.runtime.terminal_error.is_some() {
+                                        break;
+                                    }
+                                }
+                                WaitBoundary::Interrupted(..) => {
                                     let _ = interrupt.try_take();
                                     continue;
                                 }
@@ -2153,60 +2155,25 @@ pub(super) fn dispatch(
                         }
 
                         let has_down = candidate.packet_masks.down_mask != 0;
-                        if has_down {
-                            let expected = candidate
-                                .preflight_target
-                                .expect("target stamp checked in staging");
-                            let control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            match verify_final_down_admission(
-                                target,
-                                expected,
-                                config.focus.require_focus,
-                                focus_active,
-                                control_signals,
-                                timing.lease_timeout_ticks,
-                                qpc_clock,
-                                &shared.publication.progress_clock,
-                                &resources.backend,
-                                &mut resources.playback,
-                                &mut core.runtime,
-                                &mut core.metrics,
-                            ) {
-                                FinalDownAdmissionResult::Allowed => {}
-                                FinalDownAdmissionResult::Replan => continue,
-                                FinalDownAdmissionResult::Terminal(err) => {
-                                    core.runtime.terminal_error = Some(err);
-                                    break;
-                                }
-                            }
-                        } else {
-                            let control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            match final_control_precheck(control_signals) {
-                                FinalControlAdmission::Allowed => {}
-                                FinalControlAdmission::PauseRequested => continue,
-                                FinalControlAdmission::SystemSuspendRequested => {
-                                    core.runtime.terminal_trigger =
-                                        Some(super::control::TerminalTrigger::SystemSuspend);
-                                    break;
-                                }
-                                FinalControlAdmission::PanicRequested
-                                | FinalControlAdmission::QuitRequested
-                                | FinalControlAdmission::SkipRequested => break,
-                            }
+                        let control_signals = FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        };
+                        match pre_wait_candidate_admission(
+                            &candidate,
+                            target,
+                            config.focus.require_focus,
+                            focus_active,
+                            control_signals,
+                            &mut core.runtime,
+                        ) {
+                            StagedDispatchOutcome::Dispatched => {}
+                            StagedDispatchOutcome::Replan => continue,
+                            StagedDispatchOutcome::Exit => break,
                         }
 
                         let wait_target_qpc = candidate.timing_window.packet_not_before_qpc;
@@ -2323,7 +2290,10 @@ pub(super) fn dispatch(
                         &mut core.metrics,
                         core.observer.pending.as_ref(),
                     ) {
-                        StagedDispatchOutcome::Dispatched => continue,
+                        StagedDispatchOutcome::Dispatched => {
+                            stale_metadata_packets_since_physical = 0;
+                            continue;
+                        }
                         StagedDispatchOutcome::Replan => {
                             core.runtime.last_dispatch_deadline_wake_qpc = None;
                             core.runtime.last_dispatch_deadline_target_qpc = None;
@@ -3803,4 +3773,5 @@ mod tests {
     }
 
     include!("dispatch_loop_observer_tests.rs");
+    include!("dispatch_loop_failure_tests.rs");
 }

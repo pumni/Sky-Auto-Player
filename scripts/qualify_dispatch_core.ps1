@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('Smoke', 'Compare', 'Final')]
     [string]$Stage,
+    [ValidateSet('DispatchCore', 'Scheduler')]
+    [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
     [string]$CandidateManifest,
     [string]$ControlManifest,
@@ -22,8 +24,10 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$baseRevision = '843cc0c6a1392dfff0ca4b017551bd1ffb180579'
-$expectedBranch = 'perf/dispatch-core-20261109'
+$baseRevision = if ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
+$baseTree = if ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
+$expectedBranch = if ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+$expectedWorkloadVersion = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
 $caseRunner = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $manifestBuilder = Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'
 $manifestValidator = Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1'
@@ -90,20 +94,68 @@ function Get-CurrentSourceIdentity {
     [ordered]@{ branch = $branch; revision = $script:head; tree = $script:tree; clean = $true }
 }
 
+function Assert-SchedulerManifestIdentity {
+    param($Manifest, [string]$Role, [string]$ExpectedBaseRevision, [string]$ExpectedBaseTree)
+    $expectedSourceRole = if ($Role -eq 'candidate') { 'Candidate' } else { 'Baseline' }
+    if ($Manifest.qualification_profile -ne 'Scheduler' -or $Manifest.source_role -ne $expectedSourceRole -or
+        -not [bool]$Manifest.source_tree_clean -or
+        $Manifest.base_source_revision -ne $ExpectedBaseRevision -or
+        $Manifest.base_source_tree_sha -ne $ExpectedBaseTree) {
+        throw ($Role + ' Scheduler manifest profile, role, base SHA, or source cleanliness is invalid')
+    }
+}
+
+function Assert-SchedulerSourceRoot {
+    param($Manifest, [string]$Role)
+    if ($QualificationProfile -ne 'Scheduler') { return }
+    Assert-SchedulerManifestIdentity -Manifest $Manifest -Role $Role -ExpectedBaseRevision $baseRevision -ExpectedBaseTree $baseTree
+    $sourceRoot = [System.IO.Path]::GetFullPath([string]$Manifest.source_root)
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'rust\Cargo.toml') -PathType Leaf)) {
+        throw ($Role + ' Scheduler source root is missing the Rust workspace')
+    }
+    $revision = (& git -C $sourceRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) { throw ($Role + ' Scheduler source root is not a Git checkout') }
+    $tree = (& git -C $sourceRoot rev-parse 'HEAD^{tree}').Trim()
+    if ($LASTEXITCODE -ne 0) { throw ($Role + ' Scheduler source tree could not be resolved') }
+    $branch = (& git -C $sourceRoot branch --show-current).Trim()
+    if ($LASTEXITCODE -ne 0) { throw ($Role + ' Scheduler source branch could not be resolved') }
+    $changes = (& git -C $sourceRoot status --porcelain --untracked-files=all) -join ''
+    if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($changes)) {
+        throw ($Role + ' Scheduler source root is not clean')
+    }
+    if ($revision -ne $Manifest.source_revision -or $tree -ne $Manifest.source_tree_sha) {
+        throw ($Role + ' Scheduler manifest source SHA/tree differs from its checkout')
+    }
+    if ($Role -eq 'candidate') {
+        if ($sourceRoot -ne $root -or $branch -ne $expectedBranch) {
+            throw 'Scheduler candidate source must be the clean scheduler branch checkout'
+        }
+        & git -C $sourceRoot merge-base --is-ancestor $baseRevision HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'Scheduler candidate is not descended from the pinned base' }
+    } elseif ($revision -ne $baseRevision -or $tree -ne $baseTree -or -not [string]::IsNullOrWhiteSpace($branch)) {
+        throw 'Scheduler baseline must be a detached clean checkout at the pinned base SHA/tree'
+    }
+}
+
 function Read-And-VerifyManifest {
     param([string]$Path, [string]$Role)
     Assert-AbsolutePath $Path ($Role + ' manifest')
     Assert-OutsideRepository $Path ($Role + ' manifest')
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw ($Role + ' manifest does not exist: ' + $Path) }
     $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $manifest -RepositoryRoot $root -Role $Role -AllowHistoricalControl:($Role -eq 'control')
+    $c1TimedVerified = if ($QualificationProfile -eq 'Scheduler') {
+        $false
+    } else {
+        Assert-C1TimedControlProvenance -Manifest $manifest -RepositoryRoot $root -Role $Role -AllowHistoricalControl:($Role -eq 'control')
+    }
+    Assert-SchedulerSourceRoot -Manifest $manifest -Role $Role
     if ($manifest.guard_mode -eq 'adaptive') {
         throw ($Role + ' manifest uses retired adaptive guard mode (#646); only frozen is accepted for qualification')
     }
     if ($manifest.schema_version -ne 1 -or
         $manifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
         $manifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
-        $manifest.source_branch -ne $expectedBranch -or
+        $manifest.source_branch -ne $(if ($QualificationProfile -eq 'Scheduler' -and $Role -eq 'control') { '' } else { $expectedBranch }) -or
         ([bool]$manifest.source_tree_clean -ne (-not $c1TimedVerified)) -or
         -not [bool]$manifest.clean_build -or
         $manifest.cargo_profile -ne 'dist' -or
@@ -112,7 +164,7 @@ function Read-And-VerifyManifest {
         [bool]$manifest.qpc_read_counting -or
         $manifest.observer_mode -ne 'qualification-on' -or
         $manifest.guard_mode -ne 'frozen' -or
-        $manifest.workload_version -ne 'dispatch-core-646-a1' -or
+        $manifest.workload_version -ne $expectedWorkloadVersion -or
         $manifest.target -ne 'x86_64-pc-windows-msvc' -or
         $manifest.cargo_clean_exit_code -ne 0 -or
         $manifest.cargo_build_exit_code -ne 0 -or
@@ -476,6 +528,7 @@ function Invoke-NativeCase {
     }
     $args = @(
         '-NoProfile', '-File', $caseRunner,
+        '-QualificationProfile', $QualificationProfile,
         '-Scenario', $Scenario,
         '-TimingMarginUs', [string]$Margin,
         '-CalibrationPlacement', 'Baseline',
@@ -522,7 +575,7 @@ function Invoke-NativeCase {
         source_revision = $HarnessManifest.source_revision
         source_tree_sha = $HarnessManifest.source_tree_sha
         control_kind = Get-OptionalProperty $HarnessManifest 'control_kind'
-        control_label = if ($HarnessManifest.c1_timed_verified) { 'C1-TIMED-R2' } elseif ($Role -eq 'candidate') { 'Candidate-R2' } else { 'C0' }
+        control_label = if ($QualificationProfile -eq 'Scheduler') { if ($Role -eq 'control') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HarnessManifest.c1_timed_verified) { 'C1-TIMED-R2' } elseif ($Role -eq 'candidate') { 'Candidate-R2' } else { 'C0' }
         base_source_revision = Get-OptionalProperty $HarnessManifest 'base_source_revision'
         base_source_tree_sha = Get-OptionalProperty $HarnessManifest 'base_source_tree_sha'
         base_source_archive_sha256 = Get-OptionalProperty $HarnessManifest 'base_source_archive_sha256'
@@ -798,7 +851,7 @@ try {
     if ($Stage -in @('Compare', 'Final')) {
         Assert-AbsolutePath $ControlManifest 'control manifest'
         $control = Read-And-VerifyManifest $controlManifestPath 'control'
-        if ($Stage -eq 'Compare' -and -not $control.c1_timed_verified -and -not ($control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive')) {
+        if ($QualificationProfile -ne 'Scheduler' -and $Stage -eq 'Compare' -and -not $control.c1_timed_verified -and -not ($control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive')) {
             throw 'Compare requires the leader-approved C1-TIMED control or a Frozen vs Adaptive comparison'
         }
         if ($Stage -eq 'Final' -and $control.c1_timed_verified) {
@@ -873,7 +926,9 @@ try {
         run_id = $runId
         stage = $Stage
         comparison = if ($Stage -eq 'Compare') {
-            if ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
+            if ($QualificationProfile -eq 'Scheduler') {
+                'Pinned base vs scheduler candidate'
+            } elseif ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
                 'Frozen vs Adaptive'
             } else {
                 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified'
@@ -922,7 +977,9 @@ try {
         '# Dispatch Core qualification ' + $Stage,
         '',
         $(if ($Stage -eq 'Compare') {
-            if ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
+            if ($QualificationProfile -eq 'Scheduler') {
+                '**Comparison: pinned base vs Scheduler candidate.**'
+            } elseif ($control -and $control.guard_mode -eq 'frozen' -and $candidate.guard_mode -eq 'adaptive') {
                 '**Comparison: Frozen vs Adaptive.**'
             } else {
                 '**Comparison: C1-TIMED-R2 vs Candidate-R2. C0 is not timed-qualified.**'
@@ -930,7 +987,7 @@ try {
         } else { $null }),
         '- Run: `' + $runId + '`',
         '- Source: `' + $head + '` tree `' + $tree + '` (clean)',
-        '- Candidate-R2: `' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`',
+        '- Candidate: `' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`',
         ('- Control: ' + $(if ($control) { $(if ($control.c1_timed_verified) { 'C1-TIMED-R2 derived from frozen C0 A1; C0 not timed-qualified; ' } else { 'C0; ' }) + '`' + $control.source_revision + '` / `' + $control.cargo_profile + '` / SHA-256 `' + $control.binary_sha256 + '`' } else { 'not applicable' })),
         '- Sessions: ' + $runRows.Count + '; PASS: ' + $passed + '; failed/inconclusive: ' + $failureRows.Count,
         '- Disposition: ' + $(if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -ne 0) { 'FAILED' } else { 'COMPLETED' }),
@@ -966,7 +1023,7 @@ try {
     Copy-Item -LiteralPath $caseRunner -Destination (Join-Path $evidenceRoot 'run_native_acceptance_case.ps1')
     Copy-Item -LiteralPath $manifestBuilder -Destination (Join-Path $evidenceRoot 'build_dispatch_core_harness.ps1')
     Copy-Item -LiteralPath $manifestValidator -Destination (Join-Path $evidenceRoot 'dispatch_harness_manifest.psm1')
-    $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
+    $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -QualificationProfile ' + $QualificationProfile + ' -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
     $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = if ($Stage -eq 'Compare') { 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' } else { $null } }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8

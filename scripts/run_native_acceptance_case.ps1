@@ -1,4 +1,6 @@
 ﻿param(
+    [ValidateSet('DispatchCore', 'Scheduler')]
+    [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
 [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
     [string]$Scenario,
@@ -62,6 +64,9 @@ $report = $null
 $windowIntegrity = $false
 $resultCode = 2
 $head = $null
+$schedulerBaseRevision = 'b9ed666e3ddddc4952831626f1654e1cc9071a10'
+$schedulerBaseTree = 'f554c41b23a3969d02ed29842d4178f6143c9d86'
+$schedulerBranch = 'refactor/scheduler-single-owner-20261112'
 
 Add-Type -TypeDefinition @"
 using System.Runtime.InteropServices;
@@ -171,7 +176,43 @@ try {
     if ($HarnessManifestPath) {
         if (-not $sourceTreeClean) { throw 'immutable harness acceptance requires a clean source checkout' }
         $harnessManifest = (Get-Content -LiteralPath $HarnessManifestPath -Raw) | ConvertFrom-Json
-        $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $harnessManifest -RepositoryRoot $root -Role 'case-runner' -AllowHistoricalControl:$HistoricalSourceAllowed
+        if ($QualificationProfile -eq 'Scheduler') {
+            $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
+            if ($harnessManifest.qualification_profile -ne 'Scheduler' -or
+                $harnessManifest.source_role -notin @('Baseline', 'Candidate') -or
+                -not [bool]$harnessManifest.source_tree_clean -or
+                $harnessManifest.base_source_revision -ne $schedulerBaseRevision -or
+                $harnessManifest.base_source_tree_sha -ne $schedulerBaseTree -or
+                -not (Test-Path -LiteralPath (Join-Path $manifestSourceRoot 'rust\Cargo.toml') -PathType Leaf)) {
+                throw 'Scheduler manifest role, pinned base, source cleanliness, or source root is invalid'
+            }
+            $manifestSourceRevision = (& git -C $manifestSourceRoot rev-parse HEAD).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source root is not a Git checkout' }
+            $manifestSourceTree = (& git -C $manifestSourceRoot rev-parse 'HEAD^{tree}').Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source tree could not be resolved' }
+            $manifestSourceBranch = (& git -C $manifestSourceRoot branch --show-current).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source branch could not be resolved' }
+            $manifestSourceChanges = (& git -C $manifestSourceRoot status --porcelain --untracked-files=all) -join ''
+            if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($manifestSourceChanges) -or
+                $manifestSourceRevision -ne $harnessManifest.source_revision -or
+                $manifestSourceTree -ne $harnessManifest.source_tree_sha) {
+                throw 'Scheduler manifest SHA/tree does not match a clean source checkout'
+            }
+            if ($harnessManifest.source_role -eq 'Candidate') {
+                if ($manifestSourceRoot -ne $root -or $manifestSourceRevision -ne $head -or
+                    $manifestSourceTree -ne $sourceTree -or $manifestSourceBranch -ne $schedulerBranch) {
+                    throw 'Scheduler candidate manifest must match the current clean scheduler branch'
+                }
+                & git -C $manifestSourceRoot merge-base --is-ancestor $schedulerBaseRevision HEAD
+                if ($LASTEXITCODE -ne 0) { throw 'Scheduler candidate does not descend from the pinned base' }
+            } elseif ($manifestSourceRevision -ne $schedulerBaseRevision -or
+                $manifestSourceTree -ne $schedulerBaseTree -or
+                -not [string]::IsNullOrWhiteSpace($manifestSourceBranch)) {
+                throw 'Scheduler baseline must be a detached clean checkout at the pinned base SHA/tree'
+            }
+        } else {
+            $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $harnessManifest -RepositoryRoot $root -Role 'case-runner' -AllowHistoricalControl:$HistoricalSourceAllowed
+        }
         $harnessManifestHash = Get-Sha256 $HarnessManifestPath
         $manifestFeatures = @($harnessManifest.cargo_features)
         $expectedManifestFeatures = if ($QpcReadCountingEvidenceOnly) { @('real-input-acceptance', 'qpc-read-counting') } else { @('real-input-acceptance') }
@@ -183,11 +224,18 @@ try {
         if ($harnessManifest.guard_mode -eq 'adaptive') {
             throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
         }
+        $expectedSourceBranch = if ($QualificationProfile -eq 'Scheduler' -and $harnessManifest.source_role -eq 'Baseline') { '' } elseif ($QualificationProfile -eq 'Scheduler') { $schedulerBranch } else { 'perf/dispatch-core-20261109' }
+        $expectedWorkloadVersion = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+        $sourceIdentityAllowed = if ($QualificationProfile -eq 'Scheduler') {
+            $harnessManifest.source_role -eq 'Baseline' -or $sourceRevisionMatches
+        } else {
+            $HistoricalSourceAllowed -or $sourceRevisionMatches
+        }
         if ($harnessManifest.schema_version -ne 1 -or
-            (-not $HistoricalSourceAllowed -and -not $sourceRevisionMatches) -or
+            -not $sourceIdentityAllowed -or
             $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
-            $harnessManifest.source_branch -ne 'perf/dispatch-core-20261109' -or
+            $harnessManifest.source_branch -ne $expectedSourceBranch -or
             ([bool]$harnessManifest.source_tree_clean -ne (-not $c1TimedVerified)) -or
             -not [bool]$harnessManifest.clean_build -or
             $harnessManifest.cargo_profile -ne 'dist' -or
@@ -195,7 +243,7 @@ try {
             ([bool]$harnessManifest.qpc_read_counting -ne [bool]$QpcReadCountingEvidenceOnly) -or
             $harnessManifest.observer_mode -ne $expectedObserverMode -or
             $harnessManifest.guard_mode -ne 'frozen' -or
-            $harnessManifest.workload_version -ne 'dispatch-core-646-a1' -or
+            $harnessManifest.workload_version -ne $expectedWorkloadVersion -or
             $harnessManifest.target -ne 'x86_64-pc-windows-msvc' -or
             $harnessManifest.rustc_version -ne $rustcVersion.Trim() -or
             -not [string]::Equals($manifestBinaryPath, $harness, [System.StringComparison]::OrdinalIgnoreCase) -or

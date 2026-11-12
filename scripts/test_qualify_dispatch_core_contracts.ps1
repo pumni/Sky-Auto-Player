@@ -12,12 +12,27 @@ if ($parseErrors.Count -ne 0) {
     throw ('qualify_dispatch_core.ps1 parser errors: ' + (($parseErrors | ForEach-Object Message) -join '; '))
 }
 
+foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1')) {
+    $path = Join-Path $PSScriptRoot $scriptName
+    $scriptTokens = $null
+    $scriptErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $path,
+        [ref]$scriptTokens,
+        [ref]$scriptErrors
+    )
+    if ($scriptErrors.Count -ne 0) {
+        throw ($scriptName + ' parser errors: ' + (($scriptErrors | ForEach-Object Message) -join '; '))
+    }
+}
+
 $requiredFunctions = @(
     'Get-OptionalProperty',
     'Get-Percentiles',
     'Get-DeadlineCrossingToPreCallSample',
     'Get-TimingMetrics',
-    'Invoke-NativeCaseFailStopSequence'
+    'Invoke-NativeCaseFailStopSequence',
+    'Assert-SchedulerManifestIdentity'
 )
 foreach ($name in $requiredFunctions) {
     $functionAst = $ast.Find({
@@ -31,6 +46,47 @@ foreach ($name in $requiredFunctions) {
 $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
 if ([regex]::Matches($runnerSource, 'Invoke-NativeCaseFailStopSequence').Count -lt 3) {
     throw 'Smoke and Final must both use the tested fail-stop sequence helper'
+}
+
+$schedulerBaseRevision = 'b9ed666e3ddddc4952831626f1654e1cc9071a10'
+$schedulerBaseTree = 'f554c41b23a3969d02ed29842d4178f6143c9d86'
+$validSchedulerBaseline = [pscustomobject]@{
+    qualification_profile = 'Scheduler'
+    source_role = 'Baseline'
+    source_tree_clean = $true
+    base_source_revision = $schedulerBaseRevision
+    base_source_tree_sha = $schedulerBaseTree
+}
+Assert-SchedulerManifestIdentity -Manifest $validSchedulerBaseline -Role 'control' -ExpectedBaseRevision $schedulerBaseRevision -ExpectedBaseTree $schedulerBaseTree
+$validSchedulerCandidate = [pscustomobject]@{
+    qualification_profile = 'Scheduler'
+    source_role = 'Candidate'
+    source_tree_clean = $true
+    base_source_revision = $schedulerBaseRevision
+    base_source_tree_sha = $schedulerBaseTree
+}
+Assert-SchedulerManifestIdentity -Manifest $validSchedulerCandidate -Role 'candidate' -ExpectedBaseRevision $schedulerBaseRevision -ExpectedBaseTree $schedulerBaseTree
+$rejectedWrongRole = $false
+try {
+    Assert-SchedulerManifestIdentity -Manifest $validSchedulerBaseline -Role 'candidate' -ExpectedBaseRevision $schedulerBaseRevision -ExpectedBaseTree $schedulerBaseTree
+} catch { $rejectedWrongRole = $true }
+if (-not $rejectedWrongRole) { throw 'Scheduler accepted a baseline manifest as the candidate role' }
+$wrongSchedulerBase = [pscustomobject]@{
+    qualification_profile = 'Scheduler'
+    source_role = 'Baseline'
+    source_tree_clean = $true
+    base_source_revision = '0000000000000000000000000000000000000000'
+    base_source_tree_sha = $schedulerBaseTree
+}
+$rejectedWrongBase = $false
+try {
+    Assert-SchedulerManifestIdentity -Manifest $wrongSchedulerBase -Role 'control' -ExpectedBaseRevision $schedulerBaseRevision -ExpectedBaseTree $schedulerBaseTree
+} catch { $rejectedWrongBase = $true }
+if (-not $rejectedWrongBase) { throw 'Scheduler accepted a control manifest with an unpinned base revision' }
+$caseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
+if (-not $caseRunnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$harnessManifest") -or
+    -not $runnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$manifest")) {
+    throw 'Scheduler profile changes removed the established #646 provenance validation path'
 }
 
 $smokeRuns = [System.Collections.Generic.List[string]]::new()

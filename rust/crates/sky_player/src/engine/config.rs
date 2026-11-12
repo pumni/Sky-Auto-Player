@@ -253,6 +253,7 @@ pub struct StartupOrderingHook {
     sequence: AtomicU64,
     pub(crate) stale_packet_committed: AtomicU64,
     pub(crate) stale_packet_commit_count: AtomicU64,
+    pub(crate) stale_packet_committed_before_first_physical: AtomicU64,
     pub(crate) stale_packet_committed_after_wake_count: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
@@ -487,6 +488,10 @@ impl StartupOrderingHook {
             .store(self.next_sequence(), Ordering::SeqCst);
         self.stale_packet_commit_count
             .fetch_add(1, Ordering::SeqCst);
+        if self.first_physical_send_started.load(Ordering::SeqCst) == 0 {
+            self.stale_packet_committed_before_first_physical
+                .fetch_add(1, Ordering::SeqCst);
+        }
         if attributed_wake_available {
             self.stale_packet_committed_after_wake_count
                 .fetch_add(1, Ordering::SeqCst);
