@@ -75,6 +75,43 @@ describe('Track Browser primitives', () => {
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
+  it('shows the native title tooltip only when text is truncated and clears it on reuse', () => {
+    const { rerender } = render(
+      <TrackRow row={row} index={6} selected={false} start={276} onSelect={vi.fn()} />,
+    );
+
+    const title = screen.getByText(row.title, { selector: '.track-title-text' });
+    const titleCell = title.closest('.track-cell-title');
+    expect(title).not.toHaveAttribute('title');
+    expect(titleCell).not.toHaveAttribute('title');
+
+    Object.defineProperties(title, {
+      scrollWidth: { configurable: true, value: 160 },
+      clientWidth: { configurable: true, value: 160 },
+    });
+    fireEvent.pointerEnter(title);
+    expect(title).not.toHaveAttribute('title');
+
+    Object.defineProperty(title, 'clientWidth', { configurable: true, value: 60 });
+    fireEvent.pointerLeave(title);
+    fireEvent.pointerEnter(title);
+    expect(title).toHaveAttribute('title', row.title);
+    expect(titleCell).not.toHaveAttribute('title');
+
+    fireEvent.pointerLeave(title);
+    expect(title).not.toHaveAttribute('title');
+
+    fireEvent.pointerEnter(title);
+    expect(title).toHaveAttribute('title', row.title);
+    const replacement = { ...row, song_id: 'b'.repeat(32), title: 'A different song' };
+    rerender(
+      <TrackRow row={replacement} index={6} selected={false} start={276} onSelect={vi.fn()} />,
+    );
+    const replacementTitle = screen.getByText(replacement.title, { selector: '.track-title-text' });
+    expect(replacementTitle).not.toHaveAttribute('title');
+    expect(screen.getByRole('row', { name: /A different song/ })).toBeInTheDocument();
+  });
+
   it('renders Now Playing independently alongside selection without changing row geometry', () => {
     render(<TrackRow row={row} index={6} selected playing start={276} onSelect={vi.fn()} />);
 

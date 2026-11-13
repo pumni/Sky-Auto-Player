@@ -91,8 +91,20 @@ export const TrackRow = memo(function TrackRow({
       <span className="track-cell track-cell-index" role="gridcell">
         {playing ? <Music2 size={14} aria-hidden="true" /> : ordinal}
       </span>
-      <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
-        <span className="track-title-text">{row.title}</span>
+      <span className="track-cell track-cell-title" role="gridcell">
+        <span
+          key={row.song_id}
+          className="track-title-text"
+          onPointerEnter={(event) => {
+            // Measure only on hover: rows are virtualized and often do not need a tooltip.
+            // Attach it to the text, not the whole cell (which includes action buttons).
+            const element = event.currentTarget;
+            if (element.scrollWidth > element.clientWidth) element.title = row.title;
+          }}
+          onPointerLeave={(event) => event.currentTarget.removeAttribute('title')}
+        >
+          {row.title}
+        </span>
         {metadata && (
           <StatusBadge
             className="track-metadata-status"
