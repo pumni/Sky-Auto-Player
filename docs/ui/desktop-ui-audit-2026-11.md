@@ -36,7 +36,7 @@ Review branch: `ui/workbench-clarity-2026-11`. This review was driven by two nat
 
 | Action | Icon | Rationale |
 | --- | --- | --- |
-| Built-in Songs | `BookMusic` | song sheets / bundled music |
+| Built-in Songs | `Disc3` | recognizable music catalog / bundled songs |
 | Playlist | `ListMusic` | music collection |
 | Auto Play next song | `ListVideo` | list with Play glyph; not Repeat or Shuffle |
 | Reload library | `RefreshCw` | refresh/reload |
