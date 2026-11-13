@@ -293,6 +293,8 @@
   gap: 4px 12px;
   min-width: 0;
   padding: 2px 12px;
+  /* Align the count with the library header instead of hugging the pane edge. */
+  padding-inline-start: 20px;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -527,6 +529,7 @@
   .builtin-pager-wrap {
     gap: 4px 8px;
     padding-inline: 6px;
+    padding-inline-start: 18px;
   }
 
   .builtin-pager {

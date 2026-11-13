@@ -45,7 +45,7 @@ describe('PlayerTrackInfo', () => {
     expect(selectRowAtIndex(store.getState().library, 1)?.liked).toBe(false);
   });
 
-  it('keeps selection independent across built-in page playback and offers a valid now-playing jump', async () => {
+  it('keeps selection independent across built-in page playback without another locate control', async () => {
     const bridge = createMockBridge({ startDelayMs: 5, playbackDurationMs: 120_000 });
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
@@ -70,13 +70,11 @@ describe('PlayerTrackInfo', () => {
     expect(store.getState().library.selectedSongId).toBe(selected.song_id);
 
     render(<PlayerTrackInfo useStore={store} />);
-    const showNowPlaying = screen.getByRole('button', { name: /Show now playing/ });
-    await act(async () => fireEvent.click(showNowPlaying));
-    expect(store.getState().library.builtinPage.committedPage).toBe(2);
+    expect(screen.queryByRole('button', { name: /Show now playing/ })).not.toBeInTheDocument();
+    expect(store.getState().library.builtinPage.committedPage).toBe(1);
     expect(store.getState().library.selectedSongId).toBe(selected.song_id);
     expect(store.getState().playback.currentSong?.songId).toBe(playing?.songId);
     expect(store.getState().playback.context).toEqual(playingContext);
-    expect(selectRowAtIndex(store.getState().library, 100)?.song_id).toBe(playing?.songId);
 
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
     expect(screen.queryByRole('button', { name: /Show now playing/ })).toBeNull();

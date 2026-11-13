@@ -457,7 +457,8 @@ body.is-resizing * {
   background: var(--workbench-control-hover);
 }
 
-.library-playlist-tooltip {
+.library-playlist-tooltip,
+.track-title-tooltip {
   z-index: 20;
   max-width: min(320px, calc(100vw - 64px));
   padding: 6px 9px;

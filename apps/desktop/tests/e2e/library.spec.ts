@@ -1356,9 +1356,7 @@ test('Built-in pager control centers stay fixed across 9→10 and 99→100', asy
   }
 });
 
-test('Show now playing scrolls to a deep built-in row across and within pages', async ({
-  page,
-}) => {
+test('Locate selected follows the selected row without replacing Now Playing', async ({ page }) => {
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
@@ -1391,9 +1389,14 @@ test('Show now playing scrolls to a deep built-in row across and within pages', 
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
   await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
 
-  await page.getByRole('button', { name: 'Show now playing, row 175' }).click();
+  await expect(player.getByRole('button', { name: /Show now playing/ })).toHaveCount(0);
+  const locateSelected = page.locator('.builtin-pager-wrap').getByRole('button', {
+    name: 'Locate selected',
+  });
+  await expect(locateSelected).toBeEnabled();
+  await locateSelected.click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
-  await expect(song175).toBeInViewport();
+  await expect(song180).toBeInViewport();
   await expect(song180).toHaveAttribute('aria-selected', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
 
@@ -1401,8 +1404,8 @@ test('Show now playing scrolls to a deep built-in row across and within pages', 
     element.scrollTop = 0;
   });
   await expect.poll(() => table.evaluate((element) => element.scrollTop)).toBe(0);
-  await page.getByRole('button', { name: 'Show now playing, row 175' }).click();
-  await expect(song175).toBeInViewport();
+  await locateSelected.click();
+  await expect(song180).toBeInViewport();
   await expect(song180).toHaveAttribute('aria-selected', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Song 175');
 
@@ -1446,7 +1449,8 @@ test('Built-in playback crosses page boundaries without replacing selection', as
   await expect(song100).toHaveAttribute('aria-selected', 'true');
   await expect(song100).not.toHaveAttribute('aria-current', 'true');
 
-  await page.getByRole('button', { name: 'Show now playing, row 101' }).click();
+  await expect(player.getByRole('button', { name: /Show now playing/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Next page' }).click();
   const pageTwo = page.getByRole('grid', { name: 'Built-in Songs, page 2' });
   const song101 = page.getByRole('row', { name: /Song 101/ });
   await expect(pageTwo).toBeVisible();
@@ -1463,7 +1467,7 @@ test('Built-in playback crosses page boundaries without replacing selection', as
   await expect(song100).toBeInViewport();
   await expect(song100).toHaveAttribute('aria-selected', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Song 101');
-  await page.getByRole('button', { name: 'Show now playing, row 101' }).click();
+  await page.getByRole('button', { name: 'Next page' }).click();
   await expect(pageTwo).toBeVisible();
   await expect(song101).toBeInViewport();
   await expect(song101).toHaveAttribute('aria-current', 'true');

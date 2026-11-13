@@ -1,4 +1,6 @@
-import { memo, type CSSProperties, type ReactNode } from 'react';
+import { memo, useState, type CSSProperties, type ReactNode } from 'react';
+import { Focusable } from 'react-aria-components';
+import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
 import { Heart, Music2 } from 'lucide-react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
@@ -69,6 +71,7 @@ export const TrackRow = memo(function TrackRow({
   onToggleLiked,
   actions,
 }: TrackRowProps) {
+  const [clippedHoverSongId, setClippedHoverSongId] = useState<string | null>(null);
   const style: CSSProperties = { transform: `translateY(${start}px)` };
   const metadata = row.metadata_state === 'ready' ? null : metadataStatus(row.metadata_state);
   return (
@@ -91,22 +94,48 @@ export const TrackRow = memo(function TrackRow({
       <span className="track-cell track-cell-index" role="gridcell">
         {playing ? <Music2 size={14} aria-hidden="true" /> : ordinal}
       </span>
-      <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
-        <span className="track-title-text">{row.title}</span>
-        {metadata && (
-          <StatusBadge
-            className="track-metadata-status"
-            tone={metadata.tone}
-            aria-label={metadata.label}
-            title={metadata.label}
-          >
-            {metadata.value}
-          </StatusBadge>
-        )}
-        {selected && <span className="visually-hidden">Selected for inspection</span>}
-        {playing && <span className="visually-hidden">Now Playing</span>}
-        {actions}
-      </span>
+      <TooltipTrigger
+        isOpen={clippedHoverSongId === row.song_id}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setClippedHoverSongId(null);
+        }}
+      >
+        <Focusable>
+          <span className="track-cell track-cell-title" role="gridcell" tabIndex={-1}>
+            <span
+              className="track-title-text"
+              onPointerEnter={(event) => {
+                // Preserve the grid's one-focus-target keyboard model. The existing
+                // gridcell is the tooltip anchor; text clipping alone controls opening.
+                if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+                const element = event.currentTarget;
+                setClippedHoverSongId(
+                  element.scrollWidth > element.clientWidth ? row.song_id : null,
+                );
+              }}
+              onPointerLeave={() => setClippedHoverSongId(null)}
+            >
+              {row.title}
+            </span>
+            {metadata && (
+              <StatusBadge
+                className="track-metadata-status"
+                tone={metadata.tone}
+                aria-label={metadata.label}
+                title={metadata.label}
+              >
+                {metadata.value}
+              </StatusBadge>
+            )}
+            {selected && <span className="visually-hidden">Selected for inspection</span>}
+            {playing && <span className="visually-hidden">Now Playing</span>}
+            {actions}
+          </span>
+        </Focusable>
+        <Tooltip className="track-title-tooltip" placement="top start">
+          {row.title}
+        </Tooltip>
+      </TooltipTrigger>
       <span className="track-cell track-cell-liked" role="gridcell">
         <button
           className={`track-like-button${row.liked ? ' is-liked' : ''}`}
