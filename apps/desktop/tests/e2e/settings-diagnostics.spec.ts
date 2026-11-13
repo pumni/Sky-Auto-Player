@@ -260,9 +260,15 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
   if (headingAlignment) {
     expect(headingAlignment.iconName).toContain('lucide-hand-heart');
     expect(headingAlignment.iconSize).toEqual({ width: 34, height: 34 });
-    expect(Math.abs(headingAlignment.iconCenterY - headingAlignment.copyCenterY)).toBeLessThanOrEqual(1);
-    expect(Math.abs(headingAlignment.glyphCenterX - headingAlignment.iconCenterX)).toBeLessThanOrEqual(1);
-    expect(Math.abs(headingAlignment.glyphCenterY - headingAlignment.iconCenterY)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(headingAlignment.iconCenterY - headingAlignment.copyCenterY),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(headingAlignment.glyphCenterX - headingAlignment.iconCenterX),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(headingAlignment.glyphCenterY - headingAlignment.iconCenterY),
+    ).toBeLessThanOrEqual(1);
   }
 
   const bank = dialog.locator('.donate-bank-card');
