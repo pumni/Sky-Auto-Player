@@ -142,4 +142,4 @@ Reports are appreciated; coordinated disclosure is the norm.
 
 ## Recognition
 
-Credit is given in the next release `CHANGELOG.md` entry unless the reporter opts out.
+Credit is given in the next published GitHub Release notes unless the reporter opts out.

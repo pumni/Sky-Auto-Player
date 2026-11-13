@@ -50,9 +50,12 @@ measurements, and limitations intact.
 - **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
   (original reports, run logs, binary traces and screenshot provenance are
   retrievable at pinned commit URLs; not current qualification).
-- The wake-calibration export fixture and checksum remain because
-  `scripts/test_startup_calibration_evidence_export.ps1` reads them.
-- **Release-specific records:** [releases](releases/).
+- The startup-calibration exporter regression creates synthetic LF/CRLF
+  records and checks their canonical bytes and sidecars; retired evidence is
+  linked from [HISTORY.md](HISTORY.md).
+- **Published release history:** [GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
+  Each release candidate still requires source-tagged notes at
+  `docs/releases/{tag}.md` before preflight; see [release authority](v4-release-authority.md).
 - Use [HISTORY.md](HISTORY.md) to retrieve removed issue/phase reports by full
   source SHA; do not mistake those archived results for current behavior.
 
