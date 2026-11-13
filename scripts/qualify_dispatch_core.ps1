@@ -739,11 +739,11 @@ if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -e
 function Assert-SchedulerObserverPairMode {
     param($Control, $Candidate)
     if ($QualificationProfile -ne 'Scheduler') { return }
-    $expectedVersion = 'scheduler-receiveonly-queue-v2'
+    $expectedVersion = 'scheduler-receiveonly-queue-v3-compat3'
     foreach ($row in @($Control, $Candidate)) {
-        if ($row.receiveonly_observer_mode -ne 'SchedulerQueuedV2' -or
+        if ($row.receiveonly_observer_mode -ne 'SchedulerQueuedV3Compat3' -or
             $row.receiveonly_observer_version -ne $expectedVersion) {
-            throw 'Scheduler baseline and candidate must use the same versioned ReceiveOnly observer'
+            throw 'Scheduler baseline and candidate must use SchedulerQueuedV3Compat3 with the same observer version'
         }
     }
 }
@@ -968,11 +968,11 @@ try {
         run_id = $runId
         stage = $Stage
         comparison = $comparisonDescription
-        receiveonly_observer = [ordered]@{ mode = if ($QualificationProfile -eq 'Scheduler') { 'SchedulerQueuedV2' } else { 'LegacyInline' }; version = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-receiveonly-queue-v2' } else { $null } }
+        receiveonly_observer = [ordered]@{ mode = if ($QualificationProfile -eq 'Scheduler') { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }; version = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-receiveonly-queue-v3-compat3' } else { $null } }
         source = $source
         candidate = [ordered]@{ manifest_sha256 = $candidate.manifest_sha256; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); binary_sha256 = $candidate.binary_sha256 }
         control = if ($control) { [ordered]@{ control_label = $controlLabel; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; base_source_archive_sha256 = Get-OptionalProperty $control 'base_source_archive_sha256'; base_source_file_sha256 = Get-OptionalProperty $control 'base_source_file_sha256'; overlay_sha256 = Get-OptionalProperty $control 'overlay_sha256'; derived_source_file_sha256 = Get-OptionalProperty $control 'derived_source_file_sha256'; source_changes_sha256 = Get-OptionalProperty $control 'source_changes_sha256'; derived_source_inventory_sha256 = Get-OptionalProperty $control 'derived_source_inventory_sha256'; profile = $control.cargo_profile; features = @($control.cargo_features); binary_sha256 = $control.binary_sha256 } } else { $null }
-        parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { $Pairs }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID'; receiveonly_observer_mode = if ($QualificationProfile -eq 'Scheduler') { 'SchedulerQueuedV2' } else { 'LegacyInline' }; receiveonly_observer_version = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-receiveonly-queue-v2' } else { $null } }
+        parameters = [ordered]@{ pairs = if ($Stage -eq 'Smoke') { 1 } else { $Pairs }; sample_seconds = if ($Stage -eq 'Smoke') { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID'; receiveonly_observer_mode = if ($QualificationProfile -eq 'Scheduler') { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }; receiveonly_observer_version = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-receiveonly-queue-v3-compat3' } else { $null } }
         environment = [ordered]@{ rustc_version = $rustcVersion.Trim(); windows_caption = $os.Caption; windows_version = $os.Version; windows_build = $os.BuildNumber; processor_name = $cpu.Name; processor_cores = $cpu.NumberOfCores; processor_logical_processors = $cpu.NumberOfLogicalProcessors; power_scheme = (& powercfg /getactivescheme | Out-String).Trim() }
         run_count = $runRows.Count
         passed_count = $passed

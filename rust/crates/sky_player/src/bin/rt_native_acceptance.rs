@@ -887,6 +887,9 @@ mod suspend_terminal_tests;
 #[cfg(test)]
 #[path = "rt_native_acceptance_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "observer_protocol_tests.rs"]
+mod observer_protocol_tests;
 }
 
 fn main() {

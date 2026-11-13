@@ -1,5 +1,6 @@
 param(
     [switch]$SelfTest,
+    [string]$SelfTestFixtureRoot,
     [ValidateSet("ReceiveOnly", "InertFocusProbe")]
     [string]$Mode,
     [ValidateNotNullOrEmpty()]
@@ -8,7 +9,7 @@ param(
     [string]$ReadyFile,
     [ValidateNotNullOrEmpty()]
     [string]$EventLog,
-    [ValidateSet('LegacyInline', 'SchedulerQueuedV2')]
+    [ValidateSet('LegacyInline', 'SchedulerQueuedV2', 'SchedulerQueuedV3Compat3')]
     [string]$ObserverMode = 'LegacyInline',
     [string]$ObserverSummaryFile,
     [string]$ActivateRequestFile,
@@ -354,7 +355,10 @@ public sealed class NativeAcceptanceEventRing {
 }
 
 public sealed class NativeAcceptanceEventQueue {
-    public const string ObserverVersion = "scheduler-receiveonly-queue-v2";
+    public const string V2ObserverMode = "SchedulerQueuedV2";
+    public const string V2ObserverVersion = "scheduler-receiveonly-queue-v2";
+    public const string V3Compat3ObserverMode = "SchedulerQueuedV3Compat3";
+    public const string V3Compat3ObserverVersion = "scheduler-receiveonly-queue-v3-compat3";
     public static long QpcFrequency { get { return Stopwatch.Frequency; } }
     private readonly NativeAcceptanceEventRing _ring;
     private readonly string _eventLog;
@@ -362,6 +366,9 @@ public sealed class NativeAcceptanceEventQueue {
     private readonly string _runId;
     private readonly string _role;
     private readonly string _eventLogId;
+    private readonly string _observerMode;
+    private readonly string _observerVersion;
+    private readonly int _eventSchemaVersion;
     private readonly long _targetHwnd;
     private readonly int _targetPid;
     private readonly Label _label;
@@ -386,17 +393,27 @@ public sealed class NativeAcceptanceEventQueue {
 
     public NativeAcceptanceEventQueue(string eventLog, string summaryFile, string runId,
         string role, string eventLogId, long targetHwnd, int targetPid, int capacity,
+        string observerMode, string observerVersion, int eventSchemaVersion,
         Label label, string displayTemplate) {
         if (String.IsNullOrWhiteSpace(eventLog) || String.IsNullOrWhiteSpace(summaryFile) ||
             String.IsNullOrWhiteSpace(runId) || String.IsNullOrWhiteSpace(role) ||
             String.IsNullOrWhiteSpace(eventLogId) || targetHwnd <= 0 || targetPid <= 0) {
             throw new ArgumentException("Scheduler observer identity and output paths are required");
         }
+        bool validV2 = observerMode == V2ObserverMode && observerVersion == V2ObserverVersion && eventSchemaVersion == 4;
+        bool validV3Compat3 = observerMode == V3Compat3ObserverMode &&
+            observerVersion == V3Compat3ObserverVersion && eventSchemaVersion == 3;
+        if (!validV2 && !validV3Compat3) {
+            throw new ArgumentException("Scheduler observer mode, version, and event schema must be an authorized tuple");
+        }
         _eventLog = eventLog;
         _summaryFile = summaryFile;
         _runId = runId;
         _role = role;
         _eventLogId = eventLogId;
+        _observerMode = observerMode;
+        _observerVersion = observerVersion;
+        _eventSchemaVersion = eventSchemaVersion;
         _targetHwnd = targetHwnd;
         _targetPid = targetPid;
         _ring = new NativeAcceptanceEventRing(capacity);
@@ -444,6 +461,21 @@ public sealed class NativeAcceptanceEventQueue {
             _ring.MarkInternalFailure();
         }
         return true;
+    }
+
+    public bool EnqueueContractMessage(int message, int virtualKey, int scanCode,
+        bool extended, long qpcTicks, long foregroundHwnd, int foregroundPid) {
+        NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
+            message, new IntPtr(virtualKey), new IntPtr(((long)scanCode << 16) | (extended ? (1L << 24) : 0L)));
+        if (decoded == null || foregroundHwnd <= 0 || foregroundPid <= 0) return false;
+        try {
+            return _ring.TryEnqueue(decoded.Direction, decoded.ScanCode, decoded.Extended,
+                decoded.VirtualKey, decoded.Message, qpcTicks, _targetHwnd, _targetPid,
+                foregroundHwnd, foregroundPid);
+        } catch {
+            _ring.MarkInternalFailure();
+            return false;
+        }
     }
 
     public void RecordHandlerLatency(long startQpc, long endQpc) {
@@ -517,7 +549,8 @@ public sealed class NativeAcceptanceEventQueue {
             NativeAcceptanceRingSnapshot snapshot = _ring.Snapshot();
             var summary = new {
                 schema_version = 1,
-                observer_version = ObserverVersion,
+                observer_mode = _observerMode,
+                observer_version = _observerVersion,
                 run_id = _runId,
                 role = _role,
                 event_log_id = _eventLogId,
@@ -555,12 +588,16 @@ public sealed class NativeAcceptanceEventQueue {
     }
 
     private string HeaderJson() {
+        IntPtr foreground = GetForegroundWindow();
+        uint foregroundPid;
+        GetWindowThreadProcessId(foreground, out foregroundPid);
         var header = new {
-            schema_version = 4,
+            schema_version = _eventSchemaVersion,
             run_id = _runId,
             role = _role,
             event_log_id = _eventLogId,
-            observer_version = ObserverVersion,
+            observer_mode = _observerMode,
+            observer_version = _observerVersion,
             sequence = 0L,
             kind = "stream_start",
             scan_code = 0,
@@ -571,8 +608,8 @@ public sealed class NativeAcceptanceEventQueue {
             observed_qpc_ticks = _qpcOrigin,
             target_hwnd = _targetHwnd,
             target_pid = _targetPid,
-            foreground_hwnd = _targetHwnd,
-            foreground_pid = _targetPid
+            foreground_hwnd = foreground.ToInt64(),
+            foreground_pid = (int)foregroundPid
         };
         return JsonSerializer.Serialize(header);
     }
@@ -580,11 +617,12 @@ public sealed class NativeAcceptanceEventQueue {
     private string EventJson(NativeAcceptanceQueuedKey item) {
         long utcTicks = _utcOriginTicks + (long)(((decimal)(item.QpcTicks - _qpcOrigin) * TimeSpan.TicksPerSecond) / Stopwatch.Frequency);
         var record = new {
-            schema_version = 4,
+            schema_version = _eventSchemaVersion,
             run_id = _runId,
             role = _role,
             event_log_id = _eventLogId,
-            observer_version = ObserverVersion,
+            observer_mode = _observerMode,
+            observer_version = _observerVersion,
             sequence = item.Sequence,
             kind = item.Direction == 1 ? "key_press" : "key_release",
             scan_code = item.ScanCode,
@@ -614,6 +652,47 @@ public sealed class NativeAcceptanceEventQueue {
     }
 }
 "@
+
+function New-NativeAcceptanceReadyRecord {
+    param(
+        [string]$FixtureRunId,
+        [string]$FixtureRole,
+        [string]$FixtureSinkKind,
+        [int]$FixturePid,
+        [long]$FixtureHwnd,
+        [string]$FixtureTitle,
+        [string]$FixtureEventLogId,
+        [long]$FixtureProcessStartTimeFiletime,
+        [string]$FixtureObserverMode
+    )
+    $eventSchemaVersion = if ($FixtureObserverMode -eq 'SchedulerQueuedV2') { 4 } else { 3 }
+    $record = [ordered]@{
+        schema_version = 3
+        event_schema_version = $eventSchemaVersion
+        run_id = $FixtureRunId
+        role = $FixtureRole
+        sink_kind = $FixtureSinkKind
+        event_log_id = $FixtureEventLogId
+        pid = $FixturePid
+        hwnd = $FixtureHwnd
+        title = $FixtureTitle
+        process = 'native_acceptance_sink.ps1'
+        input_policy = 'receives_only; benchmark must use SendInput'
+        process_start_time_filetime = $FixtureProcessStartTimeFiletime
+    }
+    if ($FixtureObserverMode -in @('SchedulerQueuedV2', 'SchedulerQueuedV3Compat3')) {
+        $observerVersion = if ($FixtureObserverMode -eq 'SchedulerQueuedV2') {
+            [NativeAcceptanceEventQueue]::V2ObserverVersion
+        } else {
+            [NativeAcceptanceEventQueue]::V3Compat3ObserverVersion
+        }
+        $record.observer_mode = $FixtureObserverMode
+        $record.observer_version = $observerVersion
+        $record.observer_queue_capacity = 32768
+        $record.observer_qpc_frequency_hz = [NativeAcceptanceEventQueue]::QpcFrequency
+    }
+    return $record
+}
 
 if ($SelfTest) {
     function Assert-NativeDecoder {
@@ -651,6 +730,49 @@ if ($SelfTest) {
     Assert-NativeDecoder $extended.Extended "extended flag"
     Assert-NativeDecoder ([NativeAcceptanceEventRing]::RunContractSelfTest()) "bounded queue order, sequence, and overflow"
 
+    if (-not [string]::IsNullOrWhiteSpace($SelfTestFixtureRoot)) {
+        $fixtureRoot = [System.IO.Path]::GetFullPath($SelfTestFixtureRoot)
+        New-Item -ItemType Directory -Force -Path $fixtureRoot | Out-Null
+        $fixtureRunId = 'v3-compat3-contract'
+        $fixtureEventLog = Join-Path $fixtureRoot 'events.jsonl'
+        $fixtureSummary = Join-Path $fixtureRoot 'summary.json'
+        $fixtureReady = Join-Path $fixtureRoot 'ready.json'
+        $fixtureHwnd = 42L
+        $fixturePid = [int]$PID
+        $fixtureQueue = [NativeAcceptanceEventQueue]::new(
+            $fixtureEventLog, $fixtureSummary, $fixtureRunId, 'ReceiveOnly',
+            'v3-compat3-event-log', $fixtureHwnd, $fixturePid, 32768,
+            [NativeAcceptanceEventQueue]::V3Compat3ObserverMode,
+            [NativeAcceptanceEventQueue]::V3Compat3ObserverVersion, 3, $null, '')
+        Assert-NativeDecoder ($fixtureQueue.WaitForReady(5000)) 'Compat3 stream header flush'
+        $fixtureQpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        $fixtureMessages = @(0x0100, 0x0101, 0x0104, 0x0105)
+        $fixtureVirtualKeys = @(0x41, 0x41, 0x12, 0x12)
+        $fixtureScanCodes = @(0x1E, 0x1E, 0x38, 0x38)
+        for ($index = 0; $index -lt $fixtureMessages.Count; $index++) {
+            $accepted = $fixtureQueue.EnqueueContractMessage(
+                [int]$fixtureMessages[$index], [int]$fixtureVirtualKeys[$index],
+                [int]$fixtureScanCodes[$index], $false, $fixtureQpc + $index,
+                $fixtureHwnd, $fixturePid)
+            Assert-NativeDecoder ($accepted) "Compat3 serializer fixture message $index enqueued"
+        }
+        Assert-NativeDecoder ($fixtureQueue.Complete()) 'Compat3 serializer fixture writer flush'
+        $readyRecord = New-NativeAcceptanceReadyRecord `
+            -FixtureRunId $fixtureRunId `
+            -FixtureRole 'ReceiveOnly' `
+            -FixtureSinkKind 'SkyAutoPlayer.NativeAcceptanceSink' `
+            -FixturePid $fixturePid `
+            -FixtureHwnd $fixtureHwnd `
+            -FixtureTitle 'Sky Auto Player — Native Acceptance Sink' `
+            -FixtureEventLogId 'v3-compat3-event-log' `
+            -FixtureProcessStartTimeFiletime 123 `
+            -FixtureObserverMode 'SchedulerQueuedV3Compat3'
+        [System.IO.File]::WriteAllText(
+            $fixtureReady,
+            (ConvertTo-Json -InputObject $readyRecord -Depth 4),
+            [System.Text.UTF8Encoding]::new($false))
+    }
+
     Write-Output "native acceptance sink decoder and Scheduler observer self-test: PASS"
     exit 0
 }
@@ -664,12 +786,12 @@ if ([string]::IsNullOrWhiteSpace($Mode) -or
 if ($RunId.Length -gt 128) {
     throw "RunId must contain 1..128 non-whitespace characters"
 }
-if ($ObserverMode -eq 'SchedulerQueuedV2' -and
+if ($ObserverMode -in @('SchedulerQueuedV2', 'SchedulerQueuedV3Compat3') -and
     ($Mode -ne 'ReceiveOnly' -or [string]::IsNullOrWhiteSpace($ObserverSummaryFile))) {
-    throw 'SchedulerQueuedV2 is opt-in for ReceiveOnly and requires ObserverSummaryFile'
+    throw 'Queued Scheduler observers are opt-in for ReceiveOnly and require ObserverSummaryFile'
 }
 if ($ObserverMode -eq 'LegacyInline' -and -not [string]::IsNullOrWhiteSpace($ObserverSummaryFile)) {
-    throw 'ObserverSummaryFile is only valid for SchedulerQueuedV2'
+    throw 'ObserverSummaryFile is only valid for queued Scheduler observer modes'
 }
 
 Add-Type @"
@@ -763,7 +885,9 @@ $state = @{
 
 $observerVersion = $null
 if ($ObserverMode -eq 'SchedulerQueuedV2') {
-    $observerVersion = [NativeAcceptanceEventQueue]::ObserverVersion
+    $observerVersion = [NativeAcceptanceEventQueue]::V2ObserverVersion
+} elseif ($ObserverMode -eq 'SchedulerQueuedV3Compat3') {
+    $observerVersion = [NativeAcceptanceEventQueue]::V3Compat3ObserverVersion
 } else {
     $eventWriter = [System.IO.StreamWriter]::new(
         $EventLog,
@@ -845,7 +969,7 @@ $displayTemplate = if ($isProbe) {
 } else {
     "$title`r`n`r`nThis project-owned window is the only permitted real-input sink.`r`nKeep it as the intended target during SendInput runs.`r`n`r`nObserved key presses: {0} | releases: {1}"
 }
-if ($ObserverMode -eq 'SchedulerQueuedV2') {
+if ($ObserverMode -in @('SchedulerQueuedV2', 'SchedulerQueuedV3Compat3')) {
     $schedulerObserver = [NativeAcceptanceEventQueue]::new(
         $EventLog,
         [System.IO.Path]::GetFullPath($ObserverSummaryFile),
@@ -855,6 +979,9 @@ if ($ObserverMode -eq 'SchedulerQueuedV2') {
         [long]$hwnd,
         [int]$PID,
         32768,
+        $ObserverMode,
+        $observerVersion,
+        $(if ($ObserverMode -eq 'SchedulerQueuedV2') { 4 } else { 3 }),
         $label,
         $displayTemplate
     )
@@ -865,27 +992,17 @@ if ($ObserverMode -eq 'SchedulerQueuedV2') {
     }
 }
 $processStartTimeFiletime = [long](Get-Process -Id $PID).StartTime.ToUniversalTime().ToFileTimeUtc()
-$ready = [ordered]@{
-    schema_version = 3
-    event_schema_version = if ($ObserverMode -eq 'SchedulerQueuedV2') { 4 } else { 3 }
-    run_id = $RunId
-    role = $role
-    sink_kind = $sinkKind
-    event_log_id = $state.event_log_id
-    pid = [int]$PID
-    hwnd = [long]$hwnd
-    title = $title
-    process = "native_acceptance_sink.ps1"
-    input_policy = $inputPolicy
-    process_start_time_filetime = $processStartTimeFiletime
-} | ConvertTo-Json
-if ($ObserverMode -eq 'SchedulerQueuedV2') {
-    $readyObject = $ready | ConvertFrom-Json
-    $readyObject | Add-Member -NotePropertyName observer_version -NotePropertyValue $observerVersion
-    $readyObject | Add-Member -NotePropertyName observer_queue_capacity -NotePropertyValue 32768
-    $readyObject | Add-Member -NotePropertyName observer_qpc_frequency_hz -NotePropertyValue ([NativeAcceptanceEventQueue]::QpcFrequency)
-    $ready = $readyObject | ConvertTo-Json
-}
+$readyObject = New-NativeAcceptanceReadyRecord `
+    -FixtureRunId $RunId `
+    -FixtureRole $role `
+    -FixtureSinkKind $sinkKind `
+    -FixturePid ([int]$PID) `
+    -FixtureHwnd ([long]$hwnd) `
+    -FixtureTitle $title `
+    -FixtureEventLogId $state.event_log_id `
+    -FixtureProcessStartTimeFiletime $processStartTimeFiletime `
+    -FixtureObserverMode $ObserverMode
+$ready = ConvertTo-Json -InputObject $readyObject -Depth 4
 Write-Output $ready
 Set-Content -Path $ReadyFile -Value $ready -Encoding UTF8
 

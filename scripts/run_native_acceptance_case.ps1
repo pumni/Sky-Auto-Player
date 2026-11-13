@@ -30,7 +30,7 @@ $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
 $receiveOnlyObserverVersion = if ($QualificationProfile -eq 'Scheduler') {
-    'scheduler-receiveonly-queue-v2'
+    'scheduler-receiveonly-queue-v3-compat3'
 } else {
     $null
 }
@@ -97,8 +97,7 @@ function Wait-ReadyRecord {
 
 function Assert-SinkIdentity {
     param($Record, [int]$SessionId, [string]$ExpectedObserverVersion)
-    $expectedEventSchemaVersion = if ($ExpectedObserverVersion) { 4 } else { 3 }
-    if ($Record.schema_version -ne 3 -or $Record.event_schema_version -ne $expectedEventSchemaVersion -or $Record.run_id -ne $runId -or $Record.role -ne 'ReceiveOnly') {
+    if ($Record.schema_version -ne 3 -or $Record.event_schema_version -ne 3 -or $Record.run_id -ne $runId -or $Record.role -ne 'ReceiveOnly') {
         throw 'receive-only sink ready record schema, role, or run ID mismatch'
     }
     if ($Record.sink_kind -ne 'SkyAutoPlayer.NativeAcceptanceSink' -or $Record.title -ne 'Sky Auto Player — Native Acceptance Sink' -or $Record.process -ne 'native_acceptance_sink.ps1' -or $Record.input_policy -ne 'receives_only; benchmark must use SendInput') {
@@ -108,12 +107,14 @@ function Assert-SinkIdentity {
         throw 'sink ready record omitted process, HWND, event-log, or start-time identity'
     }
     if ($ExpectedObserverVersion) {
-        if ($Record.observer_version -ne $ExpectedObserverVersion -or
+        if ($ExpectedObserverVersion -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+            $Record.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+            $Record.observer_version -ne $ExpectedObserverVersion -or
             $Record.observer_queue_capacity -ne 32768 -or
             $Record.observer_qpc_frequency_hz -le 0) {
-            throw 'Scheduler ReceiveOnly observer version or queue provenance mismatch'
+            throw 'Scheduler ReceiveOnly V3 Compat3 observer mode, version, or queue provenance mismatch'
         }
-    } elseif ($Record.PSObject.Properties['observer_version']) {
+    } elseif ($Record.PSObject.Properties['observer_version'] -or $Record.PSObject.Properties['observer_mode']) {
         throw 'DispatchCore must retain the legacy ReceiveOnly observer protocol'
     }
     $owner = Get-Process -Id ([int]$Record.pid)
@@ -133,23 +134,31 @@ function Assert-SinkIdentity {
     }
     for ($index = 0; $index -lt $records.Count; $index++) {
         $event = $records[$index]
-        $expectedEventSchemaVersion = if ($ExpectedObserverVersion) { 4 } else { 3 }
+        $expectedEventSchemaVersion = 3
         if ($event.schema_version -ne $expectedEventSchemaVersion -or $event.run_id -ne $runId -or $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Record.event_log_id -or $event.sequence -ne $index -or ($index -gt 0 -and $event.kind -eq 'stream_start')) {
             throw ('pre-arm sink stream identity or sequence mismatch at record ' + $index)
         }
-        if ($ExpectedObserverVersion -and $event.observer_version -ne $ExpectedObserverVersion) {
-            throw ('pre-arm Scheduler observer version mismatch at record ' + $index)
+        if ($ExpectedObserverVersion -and
+            ($event.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+                $event.observer_version -ne $ExpectedObserverVersion)) {
+            throw ('pre-arm Scheduler observer mode or version mismatch at record ' + $index)
+        }
+        if (-not $ExpectedObserverVersion -and
+            ($event.PSObject.Properties['observer_mode'] -or $event.PSObject.Properties['observer_version'])) {
+            throw ('pre-arm DispatchCore stream must retain the legacy observer protocol at record ' + $index)
         }
     }
 }
 
 function Assert-SchedulerObserverEvidence {
     param($Ready, $Summary, [object[]]$Records, [string]$ExpectedObserverVersion)
-    if ($ExpectedObserverVersion -ne 'scheduler-receiveonly-queue-v2' -or
-        $Ready.event_schema_version -ne 4 -or
+    if ($ExpectedObserverVersion -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+        $Ready.schema_version -ne 3 -or $Ready.event_schema_version -ne 3 -or
+        $Ready.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
         $Ready.observer_version -ne $ExpectedObserverVersion -or
+        $Summary.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
         $Summary.observer_version -ne $ExpectedObserverVersion) {
-        throw 'ReceiveOnly observer version is not the authorized Scheduler queue protocol'
+        throw 'ReceiveOnly observer identity is not the authorized SchedulerQueuedV3Compat3 protocol'
     }
     if ($Summary.schema_version -ne 1 -or $Summary.run_id -ne $runId -or
         $Summary.role -ne 'ReceiveOnly' -or $Summary.event_log_id -ne $Ready.event_log_id -or
@@ -185,17 +194,30 @@ function Assert-SchedulerObserverEvidence {
     $previousQpc = -1L
     foreach ($index in 0..($Records.Count - 1)) {
         $event = $Records[$index]
-        if ($event.schema_version -ne 4 -or $event.run_id -ne $Ready.run_id -or
+        if ($event.schema_version -ne 3 -or $event.run_id -ne $Ready.run_id -or
             $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Ready.event_log_id -or
+            $event.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
             $event.observer_version -ne $ExpectedObserverVersion -or
             [long]$event.sequence -ne $index) {
             throw ('Scheduler observer identity or sequence mismatch at record ' + $index)
         }
         if ($index -eq 0) {
-            if ($event.kind -ne 'stream_start') { throw 'Scheduler observer header is missing' }
+            if ($event.kind -ne 'stream_start' -or
+                $null -eq $event.PSObject.Properties['observed_qpc_ticks'] -or
+                [long]$event.observed_qpc_ticks -le 0 -or
+                [long]$event.target_hwnd -ne [long]$Ready.hwnd -or
+                [int]$event.target_pid -ne [int]$Ready.pid -or
+                $null -eq $event.PSObject.Properties['foreground_hwnd'] -or
+                $null -eq $event.PSObject.Properties['foreground_pid']) {
+                throw 'Scheduler observer header is missing schema-3-compatible provenance'
+            }
+            $previousQpc = [long]$event.observed_qpc_ticks
             continue
         }
         if ($event.kind -notin @('key_press', 'key_release') -or
+            $null -eq $event.PSObject.Properties['scan_code'] -or
+            [int]$event.scan_code -le 0 -or [int]$event.scan_code -gt 0xff -or
+            $null -eq $event.PSObject.Properties['extended'] -or
             [long]$event.target_hwnd -ne [long]$Ready.hwnd -or
             [int]$event.target_pid -ne [int]$Ready.pid -or
             [long]$event.foreground_hwnd -ne [long]$Ready.hwnd -or
@@ -204,6 +226,8 @@ function Assert-SchedulerObserverEvidence {
         }
         if ($null -eq $event.PSObject.Properties['virtual_key'] -or
             $null -eq $event.PSObject.Properties['message'] -or
+            $null -eq $event.PSObject.Properties['observed_qpc_ticks'] -or
+            [long]$event.observed_qpc_ticks -le 0 -or
             [int]$event.virtual_key -le 0 -or [int]$event.virtual_key -gt 0xffff) {
             throw ('Scheduler key metadata is missing or invalid at record ' + $index)
         }
@@ -363,7 +387,7 @@ try {
     $sessionId = (Get-Process -Id $PID).SessionId
     $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
     if ($receiveOnlyObserverVersion) {
-        $sinkArgv += @('-ObserverMode', 'SchedulerQueuedV2', '-ObserverSummaryFile', $sinkObserverSummaryPath)
+        $sinkArgv += @('-ObserverMode', 'SchedulerQueuedV3Compat3', '-ObserverSummaryFile', $sinkObserverSummaryPath)
     }
     $sinkProcess = Start-Process -FilePath $pwshPath -ArgumentList $sinkArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'sink.stdout.log') -RedirectStandardError (Join-Path $runDir 'sink.stderr.log')
     $sink = Wait-ReadyRecord $readyPath $sinkProcess
@@ -450,7 +474,7 @@ try {
         sink_ready_path = 'sink-ready.json'
         sink_event_path = 'sink-events.jsonl'
         sink_observer_summary_path = if ($receiveOnlyObserverVersion) { 'sink-observer-summary.json' } else { $null }
-        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV2' } else { 'LegacyInline' }
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
         receiveonly_observer_version = $receiveOnlyObserverVersion
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
@@ -580,7 +604,7 @@ try {
         harness_observed_event_count = [long]$details.observed_sink_event_count
         sequence_contiguous = $true
         report_window_match = $windowIntegrity
-        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV2' } else { 'LegacyInline' }
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
         receiveonly_observer_version = $receiveOnlyObserverVersion
         observer_events_seen = if ($observerSummary) { [long]$observerSummary.events_seen } else { $null }
         observer_events_enqueued = if ($observerSummary) { [long]$observerSummary.events_enqueued } else { $null }
@@ -642,7 +666,7 @@ try {
         expected_event_count = [long]$details.expected_sink_event_count
         observed_event_count = $observedWindow.Count
         report_window_match = $windowIntegrity
-        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV2' } else { 'LegacyInline' }
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
         receiveonly_observer_version = $receiveOnlyObserverVersion
         observer_events_seen = if ($observerSummary) { [long]$observerSummary.events_seen } else { $null }
         observer_events_enqueued = if ($observerSummary) { [long]$observerSummary.events_enqueued } else { $null }
