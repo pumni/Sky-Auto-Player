@@ -325,36 +325,39 @@ describe('PlayerTrackInfo', () => {
   it.each([
     { level: 'medium', tone: 'warning', text: 'Medium risk' },
     { level: 'high', tone: 'danger', text: 'High risk' },
-  ] as const)('uses the shared $tone badge for $level prepared risk', async ({ level, tone, text }) => {
-    const store = createDesktopStore(createMockBridge());
-    await act(async () => store.getState().initialize());
-    const row = selectRowAtIndex(store.getState().library, 0);
-    if (!row) throw new Error('mock Library is too small');
-    await act(async () => store.getState().selectSong(row.song_id));
-    await act(async () => store.getState().prepareSelectedPlayback());
-    const playback = store.getState().playback;
-    const prepared = playback.prepared;
-    if (!prepared) throw new Error('expected prepared mock playback');
-    act(() =>
-      store.setState({
-        playback: {
-          ...playback,
-          prepared: {
-            ...prepared,
-            risk: { ...prepared.risk, level, headline: 'Timing review required' },
+  ] as const)(
+    'uses the shared $tone badge for $level prepared risk',
+    async ({ level, tone, text }) => {
+      const store = createDesktopStore(createMockBridge());
+      await act(async () => store.getState().initialize());
+      const row = selectRowAtIndex(store.getState().library, 0);
+      if (!row) throw new Error('mock Library is too small');
+      await act(async () => store.getState().selectSong(row.song_id));
+      await act(async () => store.getState().prepareSelectedPlayback());
+      const playback = store.getState().playback;
+      const prepared = playback.prepared;
+      if (!prepared) throw new Error('expected prepared mock playback');
+      act(() =>
+        store.setState({
+          playback: {
+            ...playback,
+            prepared: {
+              ...prepared,
+              risk: { ...prepared.risk, level, headline: 'Timing review required' },
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    const { container } = render(<PlayerTrackInfo useStore={store} />);
-    const badge = container.querySelector<HTMLElement>('.player-risk');
-    expect(badge).toHaveTextContent(text);
-    expect(badge).toHaveClass('status-badge');
-    expect(badge).toHaveAttribute('data-tone', tone);
-    expect(badge).toHaveAttribute('aria-label', 'Timing review required');
-    expect(badge).toHaveAttribute('title', 'Timing review required');
-  });
+      const { container } = render(<PlayerTrackInfo useStore={store} />);
+      const badge = container.querySelector<HTMLElement>('.player-risk');
+      expect(badge).toHaveTextContent(text);
+      expect(badge).toHaveClass('status-badge');
+      expect(badge).toHaveAttribute('data-tone', tone);
+      expect(badge).toHaveAttribute('aria-label', 'Timing review required');
+      expect(badge).toHaveAttribute('title', 'Timing review required');
+    },
+  );
 
   it('labels a prepared song and preserves last-played meaning after Stop', async () => {
     const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));

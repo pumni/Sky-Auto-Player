@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 
-test('Locate selected in the pager footer centers an off-screen row on demand', async ({ page }) => {
+test('Locate selected in the pager footer centers an off-screen row on demand', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 987, height: 691 });
   await page.goto('/?mockCatalogCount=112');
 
@@ -11,7 +13,11 @@ test('Locate selected in the pager footer centers an off-screen row on demand', 
   });
   await expect(locate).toBeDisabled();
   await expect(locate.locator('svg')).toHaveClass(/lucide-locate-fixed/);
-  await expect(page.getByRole('contentinfo', { name: 'Player controls' }).getByRole('button', { name: 'Locate selected' })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('contentinfo', { name: 'Player controls' })
+      .getByRole('button', { name: 'Locate selected' }),
+  ).toHaveCount(0);
   await selected.click();
   await expect(selected).toHaveAttribute('aria-selected', 'true');
   await expect(locate).toBeEnabled();
@@ -29,7 +35,9 @@ test('Locate selected in the pager footer centers an off-screen row on demand', 
   await expect(locate).toBeEnabled();
 });
 
-test('Locate selected in the pager footer restores the original built-in page', async ({ page }) => {
+test('Locate selected in the pager footer restores the original built-in page', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 987, height: 691 });
   await page.goto('/?mockCatalogCount=112');
 

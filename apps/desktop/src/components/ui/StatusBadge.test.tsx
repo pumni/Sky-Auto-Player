@@ -18,8 +18,12 @@ describe('StatusBadge', () => {
   it('retains explicit warning and danger meaning rather than relying on color alone', () => {
     render(
       <>
-        <StatusBadge tone="warning" title="Conversion review required">Review</StatusBadge>
-        <StatusBadge tone="danger" aria-label="Playback blocked">High risk</StatusBadge>
+        <StatusBadge tone="warning" title="Conversion review required">
+          Review
+        </StatusBadge>
+        <StatusBadge tone="danger" aria-label="Playback blocked">
+          High risk
+        </StatusBadge>
         <StatusBadge appearance="plain">Test · no keys</StatusBadge>
       </>,
     );

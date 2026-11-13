@@ -39,7 +39,9 @@ test('status badges inherit semantic tokens across dark palettes and Light', asy
     const styles = await page.evaluate(() => {
       const host = document.getElementById('status-badge-theme-probe');
       if (!host) throw new Error('Badge theme probe is missing');
-      const neutral = host.querySelector<HTMLElement>('[data-tone="neutral"][data-appearance="soft"]');
+      const neutral = host.querySelector<HTMLElement>(
+        '[data-tone="neutral"][data-appearance="soft"]',
+      );
       const warning = host.querySelector<HTMLElement>('[data-tone="warning"]');
       const danger = host.querySelector<HTMLElement>('[data-tone="danger"]');
       const plain = host.querySelector<HTMLElement>('[data-appearance="plain"]');
