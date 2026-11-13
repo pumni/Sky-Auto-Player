@@ -124,7 +124,9 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
 
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Play' })));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    });
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Playback confirmation' })).not.toBeInTheDocument();
