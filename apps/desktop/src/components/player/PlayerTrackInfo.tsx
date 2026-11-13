@@ -1,10 +1,6 @@
-import { Heart, LocateFixed, Music2 } from 'lucide-react';
+import { Heart, Music2 } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
-import {
-  playbackSessionStatusConcern,
-  selectNowPlayingIndex,
-  selectSongById,
-} from '../../state/store';
+import { playbackSessionStatusConcern, selectSongById } from '../../state/store';
 import { StatusBadge } from '../ui/StatusBadge';
 import { playerStateLabel } from './playerFormatting';
 
@@ -39,8 +35,6 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
     return null;
   });
   const setSongLiked = useStore((store) => store.setSongLiked);
-  const nowPlayingIndex = useStore((store) => selectNowPlayingIndex(store));
-  const showNowPlaying = useStore((store) => store.showNowPlaying);
 
   const fallbackIdentity = selectedRow;
   const title =
@@ -116,17 +110,6 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           onClick={() => void setSongLiked(likeSongId, !liked)}
         >
           <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
-        </button>
-      )}
-      {nowPlayingIndex !== null && (
-        <button
-          className="icon-button player-show-now-playing"
-          type="button"
-          aria-label={`Show now playing, row ${nowPlayingIndex + 1}`}
-          title="Show now playing"
-          onClick={() => void showNowPlaying()}
-        >
-          <LocateFixed size={16} aria-hidden="true" />
         </button>
       )}
       {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
