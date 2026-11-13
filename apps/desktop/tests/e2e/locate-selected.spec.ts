@@ -10,7 +10,7 @@ test('Locate selected in the pager footer centers an off-screen row on demand', 
     name: 'Locate selected',
   });
   await expect(locate).toBeDisabled();
-  await expect(locate.locator('svg')).toHaveClass(/lucide-target/);
+  await expect(locate.locator('svg')).toHaveClass(/lucide-locate-fixed/);
   await expect(page.getByRole('contentinfo', { name: 'Player controls' }).getByRole('button', { name: 'Locate selected' })).toHaveCount(0);
   await selected.click();
   await expect(selected).toHaveAttribute('aria-selected', 'true');

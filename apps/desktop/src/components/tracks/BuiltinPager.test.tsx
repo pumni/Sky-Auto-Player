@@ -17,7 +17,7 @@ describe('BuiltinPager', () => {
     const action = screen.getByRole('button', { name: 'Locate selected' });
     expect(action).toBeDisabled();
     expect(action).toHaveAttribute('title', 'Go to selected song');
-    expect(action.querySelector('svg')).toHaveClass('lucide-target');
+    expect(action.querySelector('svg')).toHaveClass('lucide-locate-fixed');
     expect(action.closest('.builtin-pager-leading')).toContainElement(
       screen.getByText('1–100 of 112 songs'),
     );

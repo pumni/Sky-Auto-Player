@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, Target } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, LocateFixed } from 'lucide-react';
 import {
   useEffect,
   useId,
@@ -306,7 +306,7 @@ export function BuiltinPager({ useStore, onLocateSelected }: BuiltinPagerProps) 
             disabled={!canLocateSelected}
             onClick={onLocateSelected}
           >
-            <Target size={16} aria-hidden="true" />
+            <LocateFixed size={16} aria-hidden="true" />
           </button>
         )}
       </div>
