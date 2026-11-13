@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const ROOTS: &[&str] = &[
-    "src",
-    "desktop",
+    "apps/desktop/src",
+    "apps/desktop/src-tauri/src",
     "rust",
     "scripts",
     ".github/workflows",
@@ -14,6 +14,7 @@ const ROOTS: &[&str] = &[
     "tests",
     ".config",
 ];
+const REQUIRED_ROOTS: &[&str] = &["apps/desktop/src", "apps/desktop/src-tauri/src", "rust"];
 
 const IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -361,37 +362,87 @@ fn has_source_extension(path: &Path) -> bool {
         })
 }
 
-fn files(root: &Path) -> Vec<PathBuf> {
+fn scan_root_directory(root: &Path, relative: &str, required: bool) -> Result<Option<PathBuf>> {
+    let base = root.join(relative);
+    match fs::metadata(&base) {
+        Ok(metadata) if metadata.is_dir() => Ok(Some(base)),
+        Ok(_) => Err(format!(
+            "durable-name audit cannot traverse `{relative}`: expected a directory"
+        )
+        .into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !required => {
+            let mut ancestor = base.parent();
+            while let Some(path) = ancestor {
+                if path == root {
+                    break;
+                }
+                match fs::metadata(path) {
+                    Ok(metadata) if metadata.is_dir() => return Ok(None),
+                    Ok(_) => {
+                        return Err(format!(
+                            "durable-name audit cannot traverse `{relative}`: ancestor `{}` is not a directory",
+                            path.strip_prefix(root).unwrap_or(path).display()
+                        )
+                        .into());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        ancestor = path.parent();
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "durable-name audit cannot inspect `{}`: {error}",
+                            path.strip_prefix(root).unwrap_or(path).display()
+                        )
+                        .into());
+                    }
+                }
+            }
+            Ok(None)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "durable-name audit cannot traverse `{relative}`: required scan root is missing"
+        )
+        .into()),
+        Err(error) => {
+            Err(format!("durable-name audit cannot inspect `{relative}`: {error}").into())
+        }
+    }
+}
+
+fn files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut output = Vec::new();
     for relative in ROOTS {
-        let base = root.join(relative);
-        if !base.is_dir() {
+        let required = REQUIRED_ROOTS.contains(relative);
+        let Some(base) = scan_root_directory(root, relative, required)? else {
             continue;
+        };
+        let walker = WalkDir::new(base)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                !entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| IGNORED_DIRS.contains(&name))
+            });
+        for entry in walker {
+            let entry = entry.map_err(|error| {
+                format!("durable-name audit traversal failed in `{relative}`: {error}")
+            })?;
+            if entry.file_type().is_file() {
+                output.push(entry.into_path());
+            }
         }
-        output.extend(
-            WalkDir::new(base)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|entry| {
-                    !entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| IGNORED_DIRS.contains(&name))
-                })
-                .filter_map(std::result::Result::ok)
-                .filter(|entry| entry.file_type().is_file())
-                .map(|entry| entry.into_path()),
-        );
     }
     output.sort();
     output.dedup();
-    output
+    Ok(output)
 }
 
 pub(crate) fn run(root: &Path) -> Result<()> {
     let audit_paths = [root.join("rust/xtask/src/audits/durable_names.rs")];
     let mut violations = Vec::new();
-    for path in files(root) {
+    for path in files(root)? {
         if audit_paths.contains(&path) || !path.is_file() {
             continue;
         }
@@ -407,9 +458,8 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         if !has_source_extension(&path) {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("durable-name audit cannot read `{relative}`: {error}"))?;
         for (line, value) in text.lines().enumerate() {
             if line_has_unretained_history_name(&relative, value) {
                 violations.push(format!(
@@ -430,6 +480,53 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_REPO_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new() -> Self {
+            for _ in 0..100 {
+                let id = TEMP_REPO_ID.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "sky-xtask-durable-names-{}-{id}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create isolated audit fixture: {error}"),
+                }
+            }
+            panic!("could not allocate isolated audit fixture directory");
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn write(&self, relative: &str, contents: impl AsRef<[u8]>) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().expect("fixture file has a parent"))
+                .expect("create fixture parent");
+            fs::write(path, contents).expect("write isolated audit fixture");
+        }
+
+        fn create_required_roots(&self) {
+            for path in REQUIRED_ROOTS {
+                fs::create_dir_all(self.0.join(path)).expect("create required scan root");
+            }
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn detects_phase_and_ordinal_implementation_names() {
@@ -586,5 +683,115 @@ mod tests {
             "tests/fixtures/settings/compatibility_cases.json",
             r#""C:\\Wave2\\Songs\\Dandelions.txt""#
         ));
+    }
+
+    #[test]
+    fn scan_roots_cover_current_desktop_native_and_rust_sources() {
+        let repo = TempRepo::new();
+        repo.create_required_roots();
+        for path in [
+            "apps/desktop/src/App.tsx",
+            "apps/desktop/src/main.ts",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "rust/crates/example/src/lib.rs",
+        ] {
+            repo.write(path, "current source");
+        }
+
+        let scanned = files(repo.path()).expect("active scan roots should be traversable");
+        for path in [
+            "apps/desktop/src/App.tsx",
+            "apps/desktop/src/main.ts",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "rust/crates/example/src/lib.rs",
+        ] {
+            assert!(
+                scanned.contains(&repo.path().join(path)),
+                "durable-name scanner omitted {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn durable_name_audit_rejects_markers_in_current_source_roots() {
+        let repo = TempRepo::new();
+        repo.create_required_roots();
+        let marker = format!("{}{}", "phase", "8");
+        for path in [
+            "apps/desktop/src/App.tsx",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "rust/crates/example/src/lib.rs",
+        ] {
+            repo.write(path, format!("const _ACTIVE_SOURCE: &str = \"{marker}\";"));
+        }
+
+        let error = run(repo.path())
+            .expect_err("active desktop and Rust sources must be inspected")
+            .to_string();
+        for path in [
+            "apps/desktop/src/App.tsx",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "rust/crates/example/src/lib.rs",
+        ] {
+            assert!(error.contains(path), "diagnostic omitted {path}: {error}");
+        }
+    }
+
+    #[test]
+    fn missing_required_roots_fail_and_generated_or_bundled_data_stays_excluded() {
+        let missing = TempRepo::new();
+        let error = files(missing.path())
+            .expect_err("a missing active scan root must not silently reduce coverage")
+            .to_string();
+        assert!(error.contains("apps/desktop/src"));
+        drop(missing);
+
+        let broken = TempRepo::new();
+        broken.write("apps/desktop/src", "not a directory");
+        let error = files(broken.path())
+            .expect_err("an active scan root that is not a directory must fail")
+            .to_string();
+        assert!(error.contains("apps/desktop/src"));
+        assert!(error.contains("expected a directory"));
+
+        let broken_optional = TempRepo::new();
+        broken_optional.create_required_roots();
+        broken_optional.write("apps/website", "not a directory");
+        let error = files(broken_optional.path())
+            .expect_err("a broken ancestor must not be treated as an absent optional root")
+            .to_string();
+        assert!(error.contains("apps/website/src"));
+        assert!(error.contains("ancestor"));
+
+        let repo = TempRepo::new();
+        repo.create_required_roots();
+        let marker = format!("{}{}", "phase", "8");
+        for path in [
+            "apps/desktop/src/node_modules/vendor/index.ts",
+            "apps/desktop/src/dist/generated.ts",
+            "rust/target/generated.rs",
+            "builtin-songs/sheets/example.txt",
+        ] {
+            repo.write(path, &marker);
+        }
+        repo.write("apps/desktop/src/icon.png", marker.as_bytes());
+
+        let scanned = files(repo.path()).expect("active roots should remain traversable");
+        assert!(
+            run(repo.path()).is_ok(),
+            "excluded data must not be scanned"
+        );
+        for excluded in [
+            "apps/desktop/src/node_modules/vendor/index.ts",
+            "apps/desktop/src/dist/generated.ts",
+            "rust/target/generated.rs",
+            "builtin-songs/sheets/example.txt",
+        ] {
+            assert!(
+                !scanned.contains(&repo.path().join(excluded)),
+                "scanner unexpectedly traversed excluded path {excluded}"
+            );
+        }
+        assert!(!has_source_extension(Path::new("icon.png")));
     }
 }

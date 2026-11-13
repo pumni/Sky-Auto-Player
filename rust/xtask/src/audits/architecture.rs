@@ -12,7 +12,7 @@ use allowlist::{ArchitectureException, parse_architecture_allowlist};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const FORBIDDEN_APP_CORE_DEPENDENCIES: &[&str] = &[
@@ -412,6 +412,24 @@ fn adapter_boundary(root: &Path) -> Result<()> {
     adapter_dependency_boundary(&manifest)
 }
 
+fn required_source_directory(root: &Path, relative: &str) -> Result<PathBuf> {
+    let path = root.join(relative);
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Err(format!(
+            "architecture audit cannot traverse `{relative}`: expected a directory"
+        )
+        .into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "architecture audit cannot traverse `{relative}`: required scan root is missing"
+        )
+        .into()),
+        Err(error) => {
+            Err(format!("architecture audit cannot inspect `{relative}`: {error}").into())
+        }
+    }
+}
+
 fn app_core_boundary(root: &Path) -> Result<()> {
     let manifest_path = root.join("rust/crates/sky_app_core/Cargo.toml");
     let manifest: toml::Value = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
@@ -422,12 +440,9 @@ fn app_core_boundary(root: &Path) -> Result<()> {
     {
         return Err(format!("sky_app_core must not depend directly on {dependency}").into());
     }
-    let source_root = root.join("rust/crates/sky_app_core/src");
-    for entry in WalkDir::new(source_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
+    let source_root = required_source_directory(root, "rust/crates/sky_app_core/src")?;
+    for entry in WalkDir::new(source_root).follow_links(false) {
+        let entry = entry?;
         if !entry.file_type().is_file()
             || entry.path().extension().and_then(|ext| ext.to_str()) != Some("rs")
         {
@@ -758,74 +773,78 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             }
         }
     }
-    let app_core_source = root.join("rust/crates/sky_app_core/src");
-    if app_core_source.is_dir() {
-        for path in WalkDir::new(&app_core_source).follow_links(false) {
-            let path = path?;
-            if !path.file_type().is_file()
-                || path
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    != Some("rs")
-            {
-                continue;
-            }
-            let relative = path
+    let app_core_source = required_source_directory(root, "rust/crates/sky_app_core/src")?;
+    for path in WalkDir::new(&app_core_source).follow_links(false) {
+        let path = path?;
+        if !path.file_type().is_file()
+            || path
                 .path()
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let joined = clean_lines(&fs::read_to_string(path.path())?).join("");
-            if [
-                "tauri",
-                "windows-sys",
-                "windows_sys",
-                "sky_desktop_shell",
-                "sky_player",
-            ]
-            .iter()
-            .any(|marker| joined.contains(marker))
-            {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &relative,
-                    "app_core_dependency",
-                    "sky_app_core source references a forbidden delivery/platform/player dependency",
-                );
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("rs")
+        {
+            continue;
+        }
+        let relative = path
+            .path()
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let joined = clean_lines(&fs::read_to_string(path.path())?).join("");
+        if [
+            "tauri",
+            "windows-sys",
+            "windows_sys",
+            "sky_desktop_shell",
+            "sky_player",
+        ]
+        .iter()
+        .any(|marker| joined.contains(marker))
+        {
+            architecture_record(
+                &mut errors,
+                &mut warnings,
+                &allowlist,
+                &relative,
+                "app_core_dependency",
+                "sky_app_core source references a forbidden delivery/platform/player dependency",
+            );
+        }
+    }
+    let dispatch_dir =
+        required_source_directory(root, "rust/crates/sky_player/src/engine/worker/dispatch")?;
+    let mut actual = BTreeSet::new();
+    for entry in fs::read_dir(&dispatch_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("rs")
+        {
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| "dispatch module name must be valid UTF-8")?;
+            if !name.ends_with("_tests.rs") {
+                actual.insert(name);
             }
         }
     }
-    let dispatch_dir = root.join("rust/crates/sky_player/src/engine/worker/dispatch");
-    if dispatch_dir.is_dir() {
-        let actual: BTreeSet<String> = fs::read_dir(&dispatch_dir)?
-            .filter_map(std::result::Result::ok)
-            .filter_map(|entry| {
-                (entry
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    == Some("rs"))
-                .then(|| entry.file_name().to_string_lossy().into_owned())
-            })
-            .filter(|name| !name.ends_with("_tests.rs"))
-            .collect();
-        let expected: BTreeSet<String> = CANONICAL_DISPATCH_FILES
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
-        for name in actual.difference(&expected) {
-            errors.push(format!(
-                "[unexpected_dispatch_module] {name}: dispatch module is not canonical"
-            ));
-        }
-        for name in expected.difference(&actual) {
-            errors.push(format!(
-                "[missing_dispatch_module] {name}: canonical dispatch module is missing"
-            ));
-        }
+    let expected: BTreeSet<String> = CANONICAL_DISPATCH_FILES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    for name in actual.difference(&expected) {
+        errors.push(format!(
+            "[unexpected_dispatch_module] {name}: dispatch module is not canonical"
+        ));
+    }
+    for name in expected.difference(&actual) {
+        errors.push(format!(
+            "[missing_dispatch_module] {name}: canonical dispatch module is missing"
+        ));
     }
 
     for crate_name in [
@@ -834,10 +853,8 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
         "sky_app_core",
         "sky_player",
     ] {
-        let source_root = root.join("rust/crates").join(crate_name).join("src");
-        if !source_root.is_dir() {
-            continue;
-        }
+        let source_root =
+            required_source_directory(root, &format!("rust/crates/{crate_name}/src"))?;
         for path in WalkDir::new(&source_root).follow_links(false) {
             let path = path?;
             if !path.file_type().is_file()
@@ -1060,10 +1077,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
     let mut production_unsafe_modules = BTreeSet::new();
     let mut cfg_test_unsafe_modules = Vec::new();
     for source_root in UNSAFE_AUDIT_SOURCE_ROOTS {
-        let absolute_root = root.join(source_root);
-        if !absolute_root.is_dir() {
-            continue;
-        }
+        let absolute_root = required_source_directory(root, source_root)?;
         for path in WalkDir::new(&absolute_root).follow_links(false) {
             let path = path?;
             if !path.file_type().is_file()

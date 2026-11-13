@@ -12,6 +12,37 @@ fn current_adapter_dependency_boundary_passes() {
 }
 
 #[test]
+fn required_architecture_scan_roots_fail_closed_when_missing_or_not_directories() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "sky-xtask-architecture-scan-root-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create isolated scan-root fixture");
+
+    let missing = required_source_directory(&root, "rust/crates/sky_player/src")
+        .expect_err("missing active source roots must fail");
+    assert!(missing.to_string().contains("rust/crates/sky_player/src"));
+
+    let source = root.join("rust/crates/sky_player/src");
+    std::fs::create_dir_all(&source).expect("create active source root");
+    assert_eq!(
+        required_source_directory(&root, "rust/crates/sky_player/src").unwrap(),
+        source
+    );
+    std::fs::remove_dir_all(&source).expect("remove active source root");
+    std::fs::write(&source, "not a directory").expect("replace scan root with a file");
+
+    let not_directory = required_source_directory(&root, "rust/crates/sky_player/src")
+        .expect_err("a non-directory active root must fail");
+    assert!(not_directory.to_string().contains("expected a directory"));
+    std::fs::remove_dir_all(root).expect("remove isolated scan-root fixture");
+}
+
+#[test]
 fn native_runtime_module_budgets_reject_regrowth_and_cover_the_current_tree() {
     assert_eq!(
         native_runtime_line_budget_violation("native_runtime.rs", "one\ntwo\n", 1),

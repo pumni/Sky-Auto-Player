@@ -657,6 +657,46 @@ mod tests {
     }
 
     #[test]
+    fn desktop_source_scan_covers_active_tsx_and_excludes_generated_or_vendor_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-xtask-desktop-source-scan-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("src")).expect("create active desktop source root");
+        fs::create_dir_all(root.join("node_modules/vendor")).expect("create vendor fixture");
+        fs::create_dir_all(root.join("dist")).expect("create generated fixture");
+        fs::write(root.join("src/App.tsx"), "import React from 'react';\n")
+            .expect("write active desktop source");
+        fs::write(
+            root.join("node_modules/vendor/index.ts"),
+            "import { defineConfig } from 'astro/config';\n",
+        )
+        .expect("write vendor fixture");
+        fs::write(
+            root.join("dist/generated.tsx"),
+            "import { defineConfig } from 'astro/config';\n",
+        )
+        .expect("write generated fixture");
+
+        assert!(validate_source_imports(App::Desktop, &root).is_ok());
+
+        fs::write(
+            root.join("src/App.tsx"),
+            "import { defineConfig } from 'astro/config';\n",
+        )
+        .expect("write active boundary violation");
+        let error = validate_source_imports(App::Desktop, &root)
+            .expect_err("active desktop TypeScript must be checked")
+            .to_string();
+        assert!(error.replace('\\', "/").contains("src/App.tsx"));
+        fs::remove_dir_all(root).expect("remove isolated source scan fixture");
+    }
+
+    #[test]
     fn astro_build_entrypoints_cannot_spawn_cargo_or_tauri_builds() {
         assert!(
             validate_website_build_source("import { defineConfig } from 'astro/config';").is_ok()

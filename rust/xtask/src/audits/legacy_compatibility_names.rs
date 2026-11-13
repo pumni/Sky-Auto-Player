@@ -515,7 +515,41 @@ mod tests {
 
     #[test]
     fn maintained_source_scan_covers_native_desktop_and_website_code() {
-        assert!(SCAN_ROOTS.contains(&"apps/desktop/src-tauri"));
-        assert!(SCAN_ROOTS.contains(&"apps/website/src"));
+        let repo = TempRepo::new();
+        let retired_name = format!("{}{}", "python", "_retired");
+        let active_paths = [
+            "apps/desktop/src/App.tsx",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/website/src/pages/index.astro",
+            "rust/crates/example/src/lib.rs",
+            "rust/xtask/src/fixture.rs",
+            "docs/architecture.md",
+        ];
+        for path in active_paths {
+            repo.write(path, &retired_name);
+        }
+
+        let error = run(repo.path())
+            .expect_err("maintained application, Rust and documentation roots must be scanned")
+            .to_string();
+        for path in active_paths {
+            assert!(error.contains(path), "diagnostic omitted {path}: {error}");
+        }
+    }
+
+    #[test]
+    fn generated_third_party_and_historical_paths_remain_excluded() {
+        let repo = TempRepo::new();
+        let retired_name = format!("{}{}", "python", "_retired");
+        for path in [
+            "apps/desktop/src/node_modules/vendor/index.ts",
+            "apps/desktop/src/dist/generated.ts",
+            "rust/crates/example/target/generated.rs",
+            "docs/adr/ADR-0001-record.md",
+        ] {
+            repo.write(path, &retired_name);
+        }
+
+        assert!(run(repo.path()).is_ok());
     }
 }
