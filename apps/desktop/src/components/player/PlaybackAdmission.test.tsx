@@ -117,8 +117,9 @@ describe('PlaybackAdmission recovery actions', () => {
     );
     const readyAdvisory = store
       .getState()
-      .playback.prepared?.variants.find((variant) => variant.decision === 'proceed')
-      ?.timing_advisory;
+      .playback.prepared?.variants.find(
+        (variant) => variant.decision === 'proceed',
+      )?.timing_advisory;
     expect(readyAdvisory?.status).toBe('modeled_risk');
     expect(readyAdvisory?.plan_fingerprint).toBe('mock-plan');
     expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
