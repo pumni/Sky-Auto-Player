@@ -642,6 +642,8 @@ test('compact Player Dock presents one readable dry-run status without moving tr
         ? {
             borderTopWidth: getComputedStyle(progressElement).borderTopWidth,
             overflow: getComputedStyle(progressElement).overflow,
+            height: getComputedStyle(progressElement).height,
+            alignSelf: getComputedStyle(progressElement).alignSelf,
           }
         : null,
       statusMetrics: statusElement
@@ -684,7 +686,12 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   expect(geometry.testModeMetrics?.scrollWidth).toBeLessThanOrEqual(
     (geometry.testModeMetrics?.clientWidth ?? 0) + 1,
   );
-  expect(geometry.progressStyles).toEqual({ borderTopWidth: '0px', overflow: 'hidden' });
+  expect(geometry.progressStyles).toEqual({
+    borderTopWidth: '0px',
+    overflow: 'hidden',
+    height: '4px',
+    alignSelf: 'center',
+  });
 });
 
 test('active Runtime tab and focus survive docked-to-overlay viewport transitions', async ({

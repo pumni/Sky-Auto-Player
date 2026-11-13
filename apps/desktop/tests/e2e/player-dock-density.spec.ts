@@ -50,6 +50,7 @@ for (const viewport of [
       const pager = rect(required('.builtin-pager-wrap'));
       return {
         pagerHeight: pager.height,
+        progressHeight: rect(required('.player-timeline progress')).height,
         bottomGap: browser.bottom - pager.bottom,
         documentWidth: document.documentElement.scrollWidth,
         dock: { left: dock.left, right: dock.right, top: dock.top, bottom: dock.bottom },
@@ -66,6 +67,7 @@ for (const viewport of [
       };
     });
     expect(geometry.pagerHeight).toBeLessThanOrEqual(38);
+    expect(geometry.progressHeight).toBe(4);
     expect(Math.abs(geometry.bottomGap)).toBeLessThanOrEqual(1);
     expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
     expect(geometry.tools).toHaveLength(3);
