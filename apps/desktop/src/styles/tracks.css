@@ -332,6 +332,8 @@
 }
 
 .builtin-pager-range {
+  /* Fill the leading grid cell instead of resizing to each page-range string. */
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--text-tertiary);
