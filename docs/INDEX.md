@@ -20,9 +20,7 @@ invariants that must not be discarded because an implementation differs.
   [desktop JavaScript tooling](desktop-tooling.md).
   **Library:** [playlist/import contract](library-v1-contract.md).
 - **Sheet compatibility and playback consent:** [desktop workbench](desktop-workbench.md#sheet-compatibility-and-playback-preparation),
-  [source decoding](song-source-decoding.md), [15-key planning](song-planning.md),
-  and [numeric compatibility](song-numeric-compatibility.md) (maintained rules;
-  recorded migration inventory is revision-bound).
+  [source decoding](song-source-decoding.md), and [15-key planning](song-planning.md).
 - **Built-in songs:** [manifest](../builtin-songs/manifest.json) for current entries;
   [song curation audit](song-curation/README.md) for review methods and
   revision-bound inventory evidence.
@@ -46,8 +44,9 @@ These are useful when tracing a decision or reproducing an earlier result,
 not as instructions for current code. Keep recorded SHAs, hardware,
 measurements, and limitations intact.
 
-- **Decisions:** [ADRs](adr/) (retired ADR-0001 and ADR-0010 through ADR-0018
-  remain indexed with immutable links in [HISTORY.md](HISTORY.md)).
+- **Decisions:** [ADRs](adr/) (retired ADR-0001, ADR-0002, ADR-0003, ADR-0005,
+  and ADR-0010 through ADR-0018 remain available through immutable links in
+  [HISTORY.md](HISTORY.md)).
 - **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
   (original reports, run logs, binary traces and screenshot provenance are
   retrievable at pinned commit URLs; not current qualification).

@@ -64,11 +64,21 @@ Composed column durations use `60,000 / bpm` milliseconds multiplied by the
 column tempo changer (1, 1/2, 1/4, or 1/8). The first composed onset is 100 ms.
 The decoder accumulates exact floating-point millisecond boundaries, rounds
 each emitted boundary to the nearest millisecond, then converts it to
-microseconds. A `span` of 1 is a one-shot with zero duration; spans greater than
-1 use the difference between rounded start and end boundaries. These rules
-apply to composed v1 through v5. Recorded and flat timestamps are stored in
-milliseconds and are converted directly to microseconds; recorded songs do not
-get an additional BPM conversion.
+microseconds. This source-column conversion uses positive-value `round()`
+(half ties away from zero); nearest-even rounding belongs to the separate
+tempo-scaled planning path. A `span` of 1 is a one-shot with zero duration;
+spans greater than 1 use the difference between rounded start and end
+boundaries. These rules apply to composed v1 through v5. Recorded and flat
+timestamps, and recorded durations, must be finite, nonnegative millisecond
+values. They are multiplied by 1,000 and rounded to integer microseconds with
+positive-value `round()`; unrepresentable results are rejected. Recorded
+songs do not get an additional BPM conversion, and recorded onset-plus-duration
+is checked for overflow.
+
+`rust/crates/sky_app_core/src/song/decode.rs` owns the checked unit conversion
+and composed boundaries. `rust/crates/sky_app_core/tests/song_source_decoding.rs`
+covers `recorded_v1_through_v4_keep_their_layer_time_pitch_and_duration_semantics`
+and `composed_timing_rounds_millisecond_boundaries_with_long_compositions`.
 
 `DecodeDiagnostics` reports authored source notes, expanded canonical events,
 tracks, columns, sustain, skipped empty masks, and potential same-key collisions

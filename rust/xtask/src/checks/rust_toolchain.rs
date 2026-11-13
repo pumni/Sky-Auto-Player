@@ -21,7 +21,6 @@ const ACTIVE_PIN_CONSUMERS: &[&str] = &[
     "apps/desktop/scripts/profile-builtin-library.mjs",
     "apps/desktop/src-tauri/src/native_runtime/tests/catalog_viewport_benchmark.rs",
     "docs/rust-toolchain-policy.md",
-    "docs/v4-hosted-signing-proof.md",
     "rust/xtask/src/checks/ci_contracts.rs",
     "rust/xtask/src/checks/hosted_signing.rs",
 ];
@@ -752,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn compiler_version_scan_avoids_unrelated_tool_and_document_versions() {
+    fn compiler_version_scan_avoids_unrelated_versions_and_checks_active_consumer() {
         assert!(rust_version_assertion(
             "Expected stable Rust 7.8.9 from the source pin"
         ));
@@ -761,12 +760,21 @@ mod tests {
         assert!(!rust_version_assertion(
             "Tauri signer then signs bytes; Rust verifier checks the CLI version 2.12.3."
         ));
+        const ACTIVE_SCRIPT: &str = "apps/desktop/scripts/profile-builtin-library.mjs";
+        assert!(ACTIVE_PIN_CONSUMERS.contains(&ACTIVE_SCRIPT));
+        assert!(!ACTIVE_PIN_CONSUMERS.contains(&"docs/v4-hosted-signing-proof.md"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        let source = fs::read_to_string(root.join(ACTIVE_SCRIPT)).unwrap();
+        validate_active_consumer(ACTIVE_SCRIPT, &source).unwrap();
         assert_rejected(
             validate_active_consumer(
-                "apps/desktop/scripts/profile-builtin-library.mjs",
-                "const rustcVersion = '7.8.8'; // packaged artifact provenance",
+                ACTIVE_SCRIPT,
+                &format!("{source}\nconst rustcVersion = '1.80.0';\n"),
             ),
-            "stale packaged build compiler provenance",
+            "active build-profile consumer with independent Rust version selection",
         );
     }
 
