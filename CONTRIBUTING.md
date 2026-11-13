@@ -59,10 +59,12 @@ direct tests, active docs, and repository checks as the evidence system.
    implementation work.
 2. During editing, run focused tests for the changed boundary. Avoid running every broad group after
    each edit.
-3. Before review, run `cargo xtask check all` once against the final relevant source state. It
-   includes the static, Rust, desktop, and native desktop groups; do not automatically run those
-   groups individually and then repeat them through `check all`. Repeat a passed gate only if a
-   later change invalidates its inputs or coverage.
+3. Before each intermediate review, run focused checks for the changed boundary and report them.
+   Before final merge readiness, run `cargo xtask check all` once against the final relevant source
+   state and ensure applicable required CI has passed at the exact PR HEAD. It includes the static,
+   Rust, desktop, and native desktop groups; do not automatically run those groups individually and
+   then repeat them through `check all`. Repeat a passed gate only if a later change invalidates its
+   inputs or coverage.
 4. Do not repeat full cold/warm performance baselines or native acceptance without a new behavior or
    performance change. Run specialized package, updater, release, Windows timing, or benchmark
    evidence when the changed boundary requires it.

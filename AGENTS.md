@@ -31,8 +31,9 @@ music-sheet player for Sky: Children of the Light.
   behavior changes.
 - Local editing and testing are within scope. Remote branch/PR/issue/release
   changes need authorization for the requested action.
-- Run focused checks and report what ran. The pre-review full local gate is
-  `cargo xtask check all`; required CI must pass at the exact PR head before merge.
+- Run focused checks and report what ran before intermediate review. The full
+  local gate `cargo xtask check all` and required CI must pass at the exact PR
+  head for final merge readiness.
 - Prefer names that describe current responsibilities. Historical labels remain
   human review context; retain genuine version/schema IDs and live immutable
   identifiers when their consumers require them.
