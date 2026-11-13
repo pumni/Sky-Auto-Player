@@ -1,64 +1,44 @@
 # Technical Documentation — Find by Task
 
-This is a locator, not a checklist. Open the references relevant to the
-problem; code and tests at the checked-out SHA establish implementation
-behavior. Security, timing, and release contracts also define intended
-invariants that must not be discarded because an implementation differs.
+Open only the contract relevant to the change. Code and tests at the checked-out
+SHA describe implementation; active security, timing, and release contracts
+describe intended invariants. This index is a route map, not a reading checklist.
 
-## Active contracts and references
+## Current contracts
 
-- **Architecture and ownership:** [architecture](architecture.md) for repository-wide
-  structure and module ownership; [playback engine](playback-engine.md) for
-  the normative realtime playback architecture.
-- **Playback architecture:** [playback engine](playback-engine.md) (scheduler,
-  sender timing, admission, cleanup, and bounded observation).
-- **Playback qualification:** [playback verification](playback-verification.md)
-  (native sink, Scheduler profile, Final matrix, and evidence requirements).
-- **Desktop UI:** [workbench](desktop-workbench.md),
-  [current UI image reference](ui/README.md) when visual inspection is needed,
-  [React Aria type boundary](desktop-type-boundary.md),
-  [desktop JavaScript tooling](desktop-tooling.md).
-  **Library:** [playlist/import contract](library-v1-contract.md).
-- **Sheet compatibility and playback consent:** [desktop workbench](desktop-workbench.md#sheet-compatibility-and-playback-preparation),
-  [source decoding](song-source-decoding.md), and [15-key planning](song-planning.md).
-- **Built-in songs:** [manifest](../builtin-songs/manifest.json) for current entries;
-  [song curation audit](song-curation/README.md) for review methods and
-  revision-bound inventory evidence.
-- **Security:** [SECURITY.md](../SECURITY.md).
-- **Packaging and updater:** [distribution](distribution-and-update.md),
+- **Ownership and module boundaries:** [architecture](architecture.md).
+- **Native playback:** [engine and timing](playback-engine.md) for scheduling,
+  admission, focus, and cleanup; [verification](playback-verification.md) for
+  native sink and timing qualification. Browser mocks are not native timing evidence.
+- **Desktop UI:** [workbench](desktop-workbench.md) for user interactions,
+  [React Aria types](desktop-type-boundary.md), and
+  [JavaScript tooling](desktop-tooling.md). Consult the
+  [current visual reference](ui/README.md) only for visual work; check its capture SHA.
+- **Library and built-in songs:** [library identity/membership](library-v1-contract.md),
+  [bundled manifest](../builtin-songs/manifest.json), and
+  [catalog curation/qualification](song-curation/README.md).
+- **Sheet compatibility:** [source decoding](song-source-decoding.md),
+  [15-key planning](song-planning.md), and the
+  [workbench preparation flow](desktop-workbench.md#sheet-compatibility-and-playback-preparation).
+- **Security:** [security boundary](../SECURITY.md).
+- **Packaging and updates:** [distribution](distribution-and-update.md) and
   [Tauri packaging](v4-tauri-packaging.md).
-- **Release operations:** [release authority](v4-release-authority.md),
-  [execution topology](v4-release-execution-topology.md)
-  (active runbook; dated v4.2.0 compatibility proof is historical),
-  [updater key custody](v4-updater-key-custody.md),
+- **Release or signing:** [release authority](v4-release-authority.md),
+  [execution/recovery](v4-release-execution-topology.md),
+  [updater key custody](v4-updater-key-custody.md), and
   [Authenticode](v4-authenticode-provider-seam.md).
-- **CI and development:** [CI topology](ci-validation-topology.md),
-  [Rust toolchain](rust-toolchain-policy.md),
+- **CI and development:** [CI checks](ci-validation-topology.md),
+  [Rust toolchain](rust-toolchain-policy.md), and
   [contributing](../CONTRIBUTING.md).
-- **When measuring or investigating:** use the focused contracts above;
-  archived measurements are available through [HISTORY.md](HISTORY.md).
 
-## Revision-bound records
+## History is not a live contract
 
-These are useful when tracing a decision or reproducing an earlier result,
-not as instructions for current code. Keep recorded SHAs, hardware,
-measurements, and limitations intact.
+- [HISTORY.md](HISTORY.md) links original decisions, snapshots, and evidence
+  at immutable Git SHAs. Use them for provenance, not current qualification.
+- Published user-facing notes live in [GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
+  An unreleased candidate still needs source-tagged `docs/releases/{tag}.md`
+  before preflight; see [release authority](v4-release-authority.md).
 
-- **Historical decisions:** Retired ADR source snapshots are available through
-  immutable links in [HISTORY.md](HISTORY.md); use the current contracts above
-  for active requirements.
-- **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
-  (original reports, run logs, binary traces and screenshot provenance are
-  retrievable at pinned commit URLs; not current qualification).
-- The startup-calibration exporter regression creates synthetic LF/CRLF
-  records and checks their canonical bytes and sidecars; retired evidence is
-  linked from [HISTORY.md](HISTORY.md).
-- **Published release history:** [GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
-  Each release candidate still requires source-tagged notes at
-  `docs/releases/{tag}.md` before preflight; see [release authority](v4-release-authority.md).
-- Use [HISTORY.md](HISTORY.md) to retrieve removed issue/phase reports by full
-  source SHA; do not mistake those archived results for current behavior.
-
-If an active contract disagrees with source, inspect both and report the
-discrepancy before changing the relevant owner. Historical test evidence
-and browser mocks cannot establish current native Windows timing behavior.
+If an active contract and the checked-out source disagree, investigate both
+before changing the owning source, tests, or contract. Report uncertainty
+rather than silently treating old implementation details as permanent.

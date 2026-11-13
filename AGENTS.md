@@ -1,39 +1,43 @@
-# Sky Auto Player — Agent Context
+# Sky Auto Player — Agent Guide
 
-Windows 11 desktop app (Tauri 2, React/TypeScript) with a Rust-native
-music-sheet player for Sky: Children of the Light.
+Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
 
-## Project boundaries
+## Non-negotiable boundaries
 
-- The desktop UI and website live in `apps/desktop/` and `apps/website/`;
-  each keeps its independent Bun manifest and lockfile. The Rust workspace
-  remains under `rust/`.
 - Gameplay input uses Windows `SendInput` only. No game-memory access,
-  file tampering, process hooks, DLL injection, debugger attachment, or
-  anti-cheat bypass. See [SECURITY.md](SECURITY.md).
-- Keep domain/orchestration separate from Win32 effects. The native timing
-  and focus contracts matter; see [architecture](docs/architecture.md) and
-  [playback engine](docs/playback-engine.md) for changes to those boundaries.
-- Rust and Bun are the canonical product/development toolchains; do not
-  introduce a Python product runtime or general-purpose repository toolchain.
-  The existing Python ClamAV scanner is a narrowly scoped hosted-release
-  adapter governed by [release authority](docs/v4-release-authority.md).
-- Preserve updater and release trust requirements in
-  [distribution-and-update.md](docs/distribution-and-update.md).
+  file tampering, hooks, injection, debugger attach, or anti-cheat bypass.
+  See [SECURITY.md](SECURITY.md).
+- Keep domain/orchestration separate from Win32 effects. Preserve native
+  timing, focus, and cleanup; browser mocks do not qualify native timing.
+  For related work read [architecture](docs/architecture.md) and
+  [playback](docs/playback-engine.md).
+- Preserve updater/signing/release trust; consult
+  [release authority](docs/v4-release-authority.md) and
+  [distribution](docs/distribution-and-update.md) when it is in scope.
+- Rust and Bun are the product toolchains. No Python product runtime;
+  hosted Python ClamAV is a narrow release-only exception.
 
-## Working in this repository
+## Context on demand
 
-- Use code, tests, and configuration at the checked-out commit for current
-  implementation behavior. Old ADRs, benchmarks, and release evidence describe
-  their recorded revisions, not current qualification.
-- [docs/INDEX.md](docs/INDEX.md) locates task-specific contracts. Open only
-  the references relevant to the change; update a current contract when its
-  behavior changes.
-- Local editing and testing are within scope. Remote branch/PR/issue/release
-  changes need authorization for the requested action.
-- Run focused checks and report what ran before intermediate review. The full
-  local gate `cargo xtask check all` and required CI must pass at the exact PR
-  head for final merge readiness.
-- Prefer names that describe current responsibilities. Historical labels remain
-  human review context; retain genuine version/schema IDs and live immutable
-  identifiers when their consumers require them.
+- `apps/desktop/` and `apps/website/` have separate Bun manifests and
+  lockfiles; the Rust workspace is in `rust/`.
+- Start with task-relevant source, tests, and config at the checked-out SHA.
+  Use [docs/INDEX.md](docs/INDEX.md) to find a *relevant* contract, not to
+  preload the documentation tree for routine edits.
+- Active contracts state intended invariants; code/tests show implementation.
+  Investigate conflicts rather than freezing a historical design.
+  [Historical records](docs/HISTORY.md) apply only to their pinned revisions.
+
+## Work and verification
+
+- Evaluate alternatives for substantial refactors; preserve correctness and
+  live identifiers, not an exact module layout or old naming scheme.
+- Local edits and disposable tests are within scope. Remote branch, PR,
+  issue, credential, release, and deployment writes need authorization.
+- Use focused tests and relevant lint/format while iterating. Report exact
+  commands, outcomes, skips, and limitations for intermediate review.
+- For final merge readiness, run `cargo xtask check all` on final relevant
+  source and verify required CI on exact PR HEAD; do not repeatedly run
+  full suites on unchanged inputs or claim an unrun/failed gate passed.
+- Update the owning contract when its behavior changes; avoid duplicate
+  instruction layers.
