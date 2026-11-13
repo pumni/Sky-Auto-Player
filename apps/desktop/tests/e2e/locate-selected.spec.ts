@@ -22,7 +22,8 @@ test('Built-in pager count has a readable left inset and no duplicate dock locat
     });
     await expect(locate).toHaveCount(1);
 
-    await page.getByRole('row', { name: /Blue Bird/ }).click();
+    // mockCatalogCount generates Song 1…N, not the named default mock fixtures.
+    await page.getByRole('row', { name: /Song 2\b/ }).click();
     const dock = page.getByRole('contentinfo', { name: 'Player controls' });
     await dock.getByRole('button', { name: 'Play', exact: true }).click();
     await expect(dock.getByText('Playing', { exact: true })).toBeVisible();

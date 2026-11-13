@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test';
 test('song title tooltip appears only for clipped text at narrow and wide layouts', async ({
   page,
 }) => {
-  await page.goto('/?mockCatalogCount=112');
+  // Use the named default fixture so Aurora Landing exists in both viewport sizes.
+  await page.goto('/');
   const row = page.getByRole('row', { name: /Aurora Landing/ });
   const title = row.locator('.track-title-text');
   const cell = row.locator('.track-cell-title');
