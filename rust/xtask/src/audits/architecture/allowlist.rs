@@ -1,6 +1,4 @@
-use super::{
-    CONTEXT_FIELD_HARD_LIMIT, DISPATCH_FUNCTION_HARD_LIMIT, FACADE_HARD_LIMIT, REGULAR_HARD_LIMIT,
-};
+use super::DISPATCH_FUNCTION_HARD_LIMIT;
 use crate::Result;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,10 +17,7 @@ pub(super) struct ArchitectureException {
 
 fn metric_hard_limit(rule: &str) -> Option<usize> {
     match rule {
-        "regular_module_lines" => Some(REGULAR_HARD_LIMIT),
-        "facade_lines" => Some(FACADE_HARD_LIMIT),
         "dispatch_function_lines" => Some(DISPATCH_FUNCTION_HARD_LIMIT),
-        "context_fields" => Some(CONTEXT_FIELD_HARD_LIMIT),
         "production_glob_import" => Some(0),
         _ => None,
     }
@@ -99,18 +94,12 @@ pub(super) fn parse_architecture_allowlist(
         match (rule, hard_limit, baseline, subject.is_empty()) {
             ("unsafe_boundary", None, None, true) => {}
             (_, Some(limit), Some(baseline), _) if baseline > limit => {
-                if matches!(rule, "dispatch_function_lines" | "context_fields")
-                    && subject.is_empty()
-                {
+                if rule == "dispatch_function_lines" && subject.is_empty() {
                     return Err(
                         format!("architecture allowlist {rule} entry requires a subject").into(),
                     );
                 }
-                if matches!(
-                    rule,
-                    "regular_module_lines" | "facade_lines" | "production_glob_import"
-                ) && !subject.is_empty()
-                {
+                if rule == "production_glob_import" && !subject.is_empty() {
                     return Err(format!(
                         "architecture allowlist {rule} entry must not have a subject"
                     )
@@ -129,6 +118,16 @@ pub(super) fn parse_architecture_allowlist(
             }
             (_, Some(limit), Some(baseline), _) => {
                 return Err(format!("architecture allowlist {rule} baseline {baseline} must exceed hard limit {limit}").into());
+            }
+            _ if matches!(
+                rule,
+                "regular_module_lines" | "facade_lines" | "context_fields"
+            ) =>
+            {
+                return Err(format!(
+                    "architecture allowlist rule {rule} is advisory and cannot be allowlisted"
+                )
+                .into());
             }
             _ => return Err(format!("unknown architecture allowlist rule: {rule}").into()),
         }

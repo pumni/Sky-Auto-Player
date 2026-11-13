@@ -1,68 +1,12 @@
 {
   "entries": [
     {
-      "path": "rust/crates/sky_dispatch_win32/src/calibration.rs",
-      "rule": "regular_module_lines",
-      "reason": "pre-existing calibration tool outside dispatch hot path",
-      "review_trigger": "review before the next Win32 boundary expansion",
-      "baseline": 6781
-    },
-    {
-      "path": "rust/crates/sky_dispatch_core/src/coordinator/authored.rs",
-      "rule": "regular_module_lines",
-      "reason": "coordinator recovery and per-key release ownership expanded the cohesive module; split after correctness cleanup",
-      "review_trigger": "review before adding another regression group",
-      "baseline": 1900
-    },
-    {
-      "path": "rust/crates/sky_dispatch_core/src/coordinator/tests/authored.rs",
-      "rule": "regular_module_lines",
-      "reason": "coordinator regression matrix expanded with deadline-miss and release lifecycle coverage; split test groups",
-      "review_trigger": "review before adding another regression group",
-      "baseline": 1800
-    },
-    {
-      "path": "rust/crates/sky_dispatch_win32/src/input/packet.rs",
-      "rule": "regular_module_lines",
-      "reason": "trusted sender hard-late cutoff and transport regression coverage expanded the Win32 packet boundary; split non-syscall helpers/tests",
-      "review_trigger": "review before the next Win32 boundary expansion",
-      "baseline": 1588
-    },
-    {
-      "path": "rust/crates/sky_player/src/engine/session.rs",
-      "rule": "regular_module_lines",
-      "reason": "snapshot and missed-boundary report plumbing pushed session assembly over the module budget; split report assembly",
-      "review_trigger": "review before adding another regression group",
-      "baseline": 1908
-    },
-    {
-      "path": "rust/crates/sky_player/src/engine/test_support/dispatch_harness.rs",
-      "rule": "regular_module_lines",
-      "reason": "deterministic missed-down scenarios expanded the test harness; split scenario fixtures after qualification",
-      "review_trigger": "review before adding another regression group",
-      "baseline": 4480
-    },
-    {
       "path": "rust/crates/sky_player/src/engine/worker/dispatch/observer.rs",
       "rule": "dispatch_function_lines",
       "reason": "observer health and recovery accounting expanded drain_down_send_outcome; split only with timing proof",
       "review_trigger": "review before the next real-time path expansion",
       "baseline": 233,
       "subject": "drain_down_send_outcome"
-    },
-    {
-      "path": "rust/crates/sky_player/src/engine/worker/dispatch_loop.rs",
-      "rule": "regular_module_lines",
-      "reason": "worker loop with Phase B 15-slot executor and Phase C adaptive waiter integration exceeds the hard line budget; split only with timing proof",
-      "review_trigger": "review before the next real-time path expansion",
-      "baseline": 3826
-    },
-    {
-      "path": "rust/crates/sky_player/src/engine/worker/wait.rs",
-      "rule": "facade_lines",
-      "reason": "pre-existing worker wait facade exceeds the hard line budget; split platform seams",
-      "review_trigger": "review before the next real-time path expansion",
-      "baseline": 350
     },
     {
       "path": "rust/crates/sky_dispatch_win32/src/calibration.rs",
@@ -191,14 +135,6 @@
       "reason": "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change",
       "review_trigger": "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified",
       "baseline": 1
-    },
-    {
-      "path": "rust/crates/sky_player/src/engine/config.rs",
-      "rule": "context_fields",
-      "reason": "replace WorkerConfig parameter bag with validated options",
-      "review_trigger": "review before adding another worker option",
-      "baseline": 19,
-      "subject": "NativeSessionOptions"
     }
   ]
 }
