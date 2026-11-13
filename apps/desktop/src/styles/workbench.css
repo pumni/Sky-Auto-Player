@@ -754,23 +754,6 @@ body.is-resizing * {
   background: var(--control-hover);
 }
 
-.track-browser-locate-button {
-  flex: 0 0 auto;
-  margin-left: auto;
-  min-height: 28px;
-  padding-inline: 9px;
-  border-color: var(--border-subtle);
-  color: var(--text-secondary);
-  background: transparent;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.track-browser-locate-button:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: var(--workbench-control-hover);
-}
-
 .playlist-add-songs-button {
   display: inline-flex;
   align-items: center;

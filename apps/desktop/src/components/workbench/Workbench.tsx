@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
+import type { TrackTableHandle } from '../tracks/TrackTable';
 import { LibraryNavigator } from '../library/LibraryNavigator';
 import { TrackBrowser } from '../tracks/TrackBrowser';
 import { UtilityPane } from '../utility/UtilityPane';
@@ -23,6 +24,7 @@ import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
   utilityTriggerRef: RefObject<HTMLButtonElement | null>;
+  locateSelectedRef: RefObject<TrackTableHandle | null>;
   useStore: DesktopStoreHook;
 }
 
@@ -64,7 +66,7 @@ function useWorkbenchWidth(workbenchRef: RefObject<HTMLElement | null>): Workben
   return measurement;
 }
 
-export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
+export function Workbench({ utilityTriggerRef, locateSelectedRef, useStore }: WorkbenchProps) {
   const workbenchRef = useRef<HTMLElement>(null);
   const viewport = useWorkbenchWidth(workbenchRef);
   const viewportWidth = viewport.width;
@@ -216,7 +218,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
         onCommit={(value) => layout.setNavigatorWidth(value, true)}
       />
       <WorkbenchPane className="track-browser-workbench-pane">
-        <TrackBrowser useStore={useStore} />
+        <TrackBrowser useStore={useStore} locateSelectedRef={locateSelectedRef} />
       </WorkbenchPane>
       {utility.open && (
         <>

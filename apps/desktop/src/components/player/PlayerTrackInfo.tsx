@@ -74,10 +74,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       : playbackMode === 'live'
         ? '. Normal playback may send physical input.'
         : '');
-  const modeDescription =
-    playbackMode === 'test'
-      ? 'Dry run: no physical keyboard input is sent.'
-      : 'Normal playback: physical keyboard input may be sent only when the session and target permit it.';
+  const testModeDescription = 'Dry run: no physical keyboard input is sent.';
 
   return (
     <div className="player-track-info" role="group" aria-label={`Playback for ${title}`}>
@@ -96,19 +93,13 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           >
             {baseStatus}
           </span>
-          {playbackMode && (
+          {playbackMode === 'test' && (
             <span
-              className={`player-mode-badge is-${playbackMode}`}
-              aria-label={modeDescription}
-              title={modeDescription}
+              className="player-test-mode"
+              aria-label={testModeDescription}
+              title={testModeDescription}
             >
-              {playbackMode === 'test' ? (
-                <>
-                  TEST<span className="player-mode-badge-detail"> · NO KEYS</span>
-                </>
-              ) : (
-                'PHYSICAL'
-              )}
+              Test<span className="player-test-mode-detail"> · no keys</span>
             </span>
           )}
         </div>

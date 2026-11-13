@@ -585,7 +585,7 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   const status = player.locator('.player-track-status');
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
-  await expect(player.locator('.player-mode-badge')).toHaveText('PHYSICAL');
+  await expect(player.locator('.player-mode-badge')).toHaveCount(0);
   await expect(status).toHaveCount(1);
   await expect(player.getByText('Now Playing', { exact: true })).toHaveCount(0);
 
@@ -608,8 +608,8 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
   await expect(status).toHaveAttribute('aria-label', /no physical input is sent/i);
-  await expect(player.locator('.player-mode-badge')).toContainText('TEST');
-  await expect(player.locator('.player-mode-badge')).toHaveAttribute(
+  await expect(player.locator('.player-test-mode')).toContainText('Test');
+  await expect(player.locator('.player-test-mode')).toHaveAttribute(
     'aria-label',
     /no physical keyboard input is sent/i,
   );
@@ -628,15 +628,15 @@ test('compact Player Dock presents one readable dry-run status without moving tr
         : null;
     };
     const statusElement = document.querySelector<HTMLElement>('.player-track-status');
-    const badgeElement = document.querySelector<HTMLElement>('.player-mode-badge');
+    const testModeElement = document.querySelector<HTMLElement>('.player-test-mode');
     const progressElement = document.querySelector<HTMLElement>('.player-timeline progress');
     return {
       dock: getRect('.player-bar'),
       title: getRect('.player-track-copy strong'),
       status: getRect('.player-track-status'),
       transport: getRect('.player-transport'),
-      badgeMetrics: badgeElement
-        ? { clientWidth: badgeElement.clientWidth, scrollWidth: badgeElement.scrollWidth }
+      testModeMetrics: testModeElement
+        ? { clientWidth: testModeElement.clientWidth, scrollWidth: testModeElement.scrollWidth }
         : null,
       progressStyles: progressElement
         ? {
@@ -681,8 +681,8 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   expect(geometry.statusMetrics?.scrollWidth).toBeLessThanOrEqual(
     (geometry.statusMetrics?.clientWidth ?? 0) + 1,
   );
-  expect(geometry.badgeMetrics?.scrollWidth).toBeLessThanOrEqual(
-    (geometry.badgeMetrics?.clientWidth ?? 0) + 1,
+  expect(geometry.testModeMetrics?.scrollWidth).toBeLessThanOrEqual(
+    (geometry.testModeMetrics?.clientWidth ?? 0) + 1,
   );
   expect(geometry.progressStyles).toEqual({ borderTopWidth: '0px', overflow: 'hidden' });
 });

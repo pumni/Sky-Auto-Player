@@ -262,12 +262,8 @@ describe('PlayerTrackInfo', () => {
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(screen.getByText(label, { selector: '.player-track-status' })).toBeInTheDocument();
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
-    const modeBadge = container.querySelector<HTMLElement>('.player-mode-badge');
-    expect(modeBadge).toHaveTextContent('PHYSICAL');
-    expect(modeBadge).toHaveAttribute(
-      'aria-label',
-      'Normal playback: physical keyboard input may be sent only when the session and target permit it.',
-    );
+    expect(container.querySelector('.player-mode-badge')).toBeNull();
+    expect(container.querySelector('.player-test-mode')).toBeNull();
     expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
   });
 
@@ -289,9 +285,9 @@ describe('PlayerTrackInfo', () => {
       'aria-label',
       `${row.title}: Playing. Dry run; no physical input is sent.`,
     );
-    const modeBadge = container.querySelector<HTMLElement>('.player-mode-badge');
-    expect(modeBadge).toHaveTextContent('TEST · NO KEYS');
-    expect(modeBadge).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
+    const testMode = container.querySelector<HTMLElement>('.player-test-mode');
+    expect(testMode).toHaveTextContent('Test · no keys');
+    expect(testMode).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
   });
 
@@ -316,7 +312,7 @@ describe('PlayerTrackInfo', () => {
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     const status = container.querySelector<HTMLElement>('.player-track-status');
     expect(status).toHaveTextContent('Playback status uncertain');
-    expect(container.querySelector('.player-mode-badge')).toHaveTextContent('TEST · NO KEYS');
+    expect(container.querySelector('.player-test-mode')).toHaveTextContent('Test · no keys');
     expect(status).toHaveAttribute(
       'aria-label',
       expect.stringContaining('no physical input is sent.'),

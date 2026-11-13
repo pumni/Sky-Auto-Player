@@ -1,7 +1,8 @@
-import { FlaskConical, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
+import { FlaskConical, ListStart, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
+import type { TrackTableHandle } from '../tracks/TrackTable';
 import {
   playbackSessionStatusConcern,
   type DesktopStore,
@@ -11,9 +12,10 @@ import {
 interface PlayerToolsProps {
   useStore: DesktopStoreHook;
   utilityTriggerRef?: RefObject<HTMLButtonElement | null> | undefined;
+  locateSelectedRef?: RefObject<TrackTableHandle | null> | undefined;
 }
 
-export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
+export function PlayerTools({ useStore, utilityTriggerRef, locateSelectedRef }: PlayerToolsProps) {
   const settings = useStore((store) => store.settings);
   const autoPlayEnabled = settings?.auto_play ?? true;
   const defaults = settings?.playback_defaults;
@@ -24,6 +26,20 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const prepare = useStore((store) => store.prepareSelectedPlayback);
   const start = useStore((store) => store.startPreparedPlayback);
   const selectedSongId = useStore((store) => store.library.selectedSongId);
+  const canLocateSelected = useStore((store) => {
+    const library = store.library;
+    return Boolean(
+      locateSelectedRef &&
+        library.source.kind === 'smart' &&
+        library.source.id === 'builtin' &&
+        !library.loading &&
+        library.selectedSongId &&
+        library.selectedSongIndex !== null &&
+        library.membershipRevision === library.indexMembershipRevision &&
+        library.selectedSongIndex >= 0 &&
+        library.selectedSongIndex < library.resultTotal,
+    );
+  });
   const playback = useStore((store) => store.playback);
   const hasPreparedPlayback = playback.prepared !== null;
   const sessionStatusConcern = useStore((store) => playbackSessionStatusConcern(store.playback));
@@ -67,6 +83,20 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 
   return (
     <div className="player-tools">
+      <div className="player-tooltip-anchor">
+        <AriaButton
+          className="icon-button player-tool-button player-locate-selected-button"
+          aria-label="Locate selected"
+          aria-describedby="player-locate-selected-tooltip"
+          isDisabled={!canLocateSelected}
+          onPress={() => void locateSelectedRef?.current?.locateSelected()}
+        >
+          <ListStart size={18} aria-hidden="true" />
+        </AriaButton>
+        <span id="player-locate-selected-tooltip" className="player-tool-tooltip" role="tooltip">
+          Center selected song in Built-in Songs
+        </span>
+      </div>
       <div className="player-tooltip-anchor">
         <AriaButton
           className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}

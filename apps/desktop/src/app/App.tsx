@@ -3,6 +3,7 @@ import type { DesktopBridge } from '../bridge/DesktopBridge';
 import { BootstrapGate } from './BootstrapGate';
 import { AppTitleBar } from '../components/chrome/AppTitleBar';
 import { PlayerBar } from '../components/player/PlayerBar';
+import type { TrackTableHandle } from '../components/tracks/TrackTable';
 import { Workbench } from '../components/workbench/Workbench';
 import { createDesktopStore } from '../state/store';
 import { createWindowControls } from '../platform/windowControls';
@@ -51,6 +52,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export function App({ bridge }: AppProps) {
   const utilityTriggerRef = useRef<HTMLButtonElement>(null);
+  const locateSelectedRef = useRef<TrackTableHandle>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const useStore = useMemo(() => createDesktopStore(bridge), [bridge]);
@@ -121,8 +123,16 @@ export function App({ bridge }: AppProps) {
             windowControls={windowControls}
             onSettingsOpen={() => setSettingsMounted(true)}
           />
-          <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
-          <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+          <Workbench
+            useStore={useStore}
+            utilityTriggerRef={utilityTriggerRef}
+            locateSelectedRef={locateSelectedRef}
+          />
+          <PlayerBar
+            useStore={useStore}
+            utilityTriggerRef={utilityTriggerRef}
+            locateSelectedRef={locateSelectedRef}
+          />
           <Suspense fallback={null}>
             {(settingsOpen || settingsMounted) && (
               <SettingsPanel
