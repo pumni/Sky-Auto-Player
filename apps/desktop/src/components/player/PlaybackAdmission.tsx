@@ -103,27 +103,11 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
           message: blockedMessage,
         }
       : null);
-  if (!presentedIssue) {
-    const readyAdvisory =
-      prepared?.admission === 'ready'
-        ? prepared.variants.find((variant) => variant.decision === 'proceed')?.timing_advisory
-        : undefined;
-    if (!readyAdvisory) return null;
-    return (
-      <section
-        className="player-admission player-admission-timing"
-        aria-label="Prepared playback timing advisory"
-      >
-        <div className="admission-copy">
-          <strong>Prepared timing advisory</strong>
-          <span className="muted">
-            This offline estimate is informational and does not affect playback admission.
-          </span>
-        </div>
-        <TimingAdvisory advisory={readyAdvisory} />
-      </section>
-    );
-  }
+  // A ready plan auto-starts from Play. Rendering its informational timing
+  // advisory here makes a transient popover flash between prepare and start.
+  // Keep plan diagnostics in the prepared DTO, but only interrupt for actual
+  // confirmation or actionable playback errors.
+  if (!presentedIssue) return null;
 
   const ownedSession = playback.sessionId !== null;
   const canStop =

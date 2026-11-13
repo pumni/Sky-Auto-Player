@@ -125,9 +125,37 @@ describe('Track Browser primitives', () => {
     expect(screen.getByText('Loading')).toHaveAttribute('aria-label', 'Metadata loading');
     expect(screen.getByText('Unavailable')).toHaveAttribute('aria-label', 'Metadata unavailable');
     expect(document.querySelectorAll('.track-metadata-status')).toHaveLength(2);
+    expect(screen.getByText('Loading')).toHaveClass('status-badge');
+    expect(screen.getByText('Loading')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByText('Unavailable')).toHaveClass('status-badge');
+    expect(screen.getByText('Unavailable')).toHaveAttribute('data-tone', 'danger');
     expect(screen.getAllByRole('gridcell', { name: '—' })).toHaveLength(4);
     expect(screen.queryByText('Unknown')).toBeNull();
     expect(document.querySelectorAll('.risk-dot')).toHaveLength(0);
+  });
+
+  it('shares the same neutral design for metadata review and physical risk', () => {
+    render(
+      <>
+        <TrackRow
+          row={{ ...row, song_id: 'd'.repeat(32), metadata_state: 'requires_confirmation' }}
+          index={0}
+          selected={false}
+          start={0}
+          onSelect={vi.fn()}
+        />
+        <TrackRow
+          row={{ ...row, song_id: 'e'.repeat(32), metadata_state: 'physical_risk' }}
+          index={1}
+          selected={false}
+          start={46}
+          onSelect={vi.fn()}
+        />
+      </>,
+    );
+    expect(screen.getByText('Review')).toHaveAttribute('data-tone', 'warning');
+    expect(screen.getByText('Risk')).toHaveAttribute('data-tone', 'warning');
+    expect(document.querySelectorAll('.track-metadata-status.status-badge')).toHaveLength(2);
   });
 
   it('renders loading placeholders for unloaded rows', () => {

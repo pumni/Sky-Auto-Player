@@ -585,7 +585,7 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   const status = player.locator('.player-track-status');
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
-  await expect(player.locator('.player-mode-badge')).toContainText('LIVE');
+  await expect(player.locator('.player-mode-badge')).toHaveCount(0);
   await expect(status).toHaveCount(1);
   await expect(player.getByText('Now Playing', { exact: true })).toHaveCount(0);
 
@@ -608,6 +608,11 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
   await expect(status).toHaveAttribute('aria-label', /no physical input is sent/i);
+  await expect(player.locator('.player-test-mode')).toContainText('Test');
+  await expect(player.locator('.player-test-mode')).toHaveAttribute(
+    'aria-label',
+    /no physical keyboard input is sent/i,
+  );
   await expect(status).toHaveCount(1);
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
   await expect(player.getByRole('button', { name: 'Add to Liked Songs' })).toBeVisible();
@@ -623,11 +628,24 @@ test('compact Player Dock presents one readable dry-run status without moving tr
         : null;
     };
     const statusElement = document.querySelector<HTMLElement>('.player-track-status');
+    const testModeElement = document.querySelector<HTMLElement>('.player-test-mode');
+    const progressElement = document.querySelector<HTMLElement>('.player-timeline progress');
     return {
       dock: getRect('.player-bar'),
       title: getRect('.player-track-copy strong'),
       status: getRect('.player-track-status'),
       transport: getRect('.player-transport'),
+      testModeMetrics: testModeElement
+        ? { clientWidth: testModeElement.clientWidth, scrollWidth: testModeElement.scrollWidth }
+        : null,
+      progressStyles: progressElement
+        ? {
+            borderTopWidth: getComputedStyle(progressElement).borderTopWidth,
+            overflow: getComputedStyle(progressElement).overflow,
+            height: getComputedStyle(progressElement).height,
+            alignSelf: getComputedStyle(progressElement).alignSelf,
+          }
+        : null,
       statusMetrics: statusElement
         ? {
             display: getComputedStyle(statusElement).display,
@@ -665,6 +683,15 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   expect(geometry.statusMetrics?.scrollWidth).toBeLessThanOrEqual(
     (geometry.statusMetrics?.clientWidth ?? 0) + 1,
   );
+  expect(geometry.testModeMetrics?.scrollWidth).toBeLessThanOrEqual(
+    (geometry.testModeMetrics?.clientWidth ?? 0) + 1,
+  );
+  expect(geometry.progressStyles).toEqual({
+    borderTopWidth: '0px',
+    overflow: 'hidden',
+    height: '4px',
+    alignSelf: 'center',
+  });
 });
 
 test('active Runtime tab and focus survive docked-to-overlay viewport transitions', async ({

@@ -238,6 +238,39 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
+  const headingAlignment = await dialog.locator('.donate-heading').evaluate((element) => {
+    const icon = element.querySelector('.donate-heading-icon');
+    const glyph = icon?.querySelector('svg');
+    const copy = element.querySelector(':scope > div:last-child');
+    if (!icon || !glyph || !copy) return null;
+    const iconRect = icon.getBoundingClientRect();
+    const glyphRect = glyph.getBoundingClientRect();
+    const copyRect = copy.getBoundingClientRect();
+    return {
+      iconCenterY: iconRect.top + iconRect.height / 2,
+      copyCenterY: copyRect.top + copyRect.height / 2,
+      glyphCenterX: glyphRect.left + glyphRect.width / 2,
+      iconCenterX: iconRect.left + iconRect.width / 2,
+      glyphCenterY: glyphRect.top + glyphRect.height / 2,
+      iconSize: { width: iconRect.width, height: iconRect.height },
+      iconName: glyph.getAttribute('class'),
+    };
+  });
+  expect(headingAlignment).not.toBeNull();
+  if (headingAlignment) {
+    expect(headingAlignment.iconName).toContain('lucide-hand-heart');
+    expect(headingAlignment.iconSize).toEqual({ width: 34, height: 34 });
+    expect(
+      Math.abs(headingAlignment.iconCenterY - headingAlignment.copyCenterY),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(headingAlignment.glyphCenterX - headingAlignment.iconCenterX),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(headingAlignment.glyphCenterY - headingAlignment.iconCenterY),
+    ).toBeLessThanOrEqual(1);
+  }
+
   const bank = dialog.locator('.donate-bank-card');
   const qr = bank.locator('.donate-qr-frame');
   const detailRows = bank.locator('.donate-bank-reference-row');

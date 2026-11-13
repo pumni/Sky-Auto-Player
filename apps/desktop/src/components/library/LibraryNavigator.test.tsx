@@ -26,7 +26,7 @@ describe('LibraryNavigator built-in source', () => {
     const library = within(navigator);
     const builtin = library.getByRole('button', { name: /Built-in Songs/ });
     expect(builtin).toBeEnabled();
-    expect(builtin.querySelector('svg')).toHaveClass('lucide-book-open');
+    expect(builtin.querySelector('svg')).toHaveClass('lucide-disc-3');
     expect(builtin).toHaveTextContent('96');
     expect(library.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
     expect(library.getByText('Playlists')).toBeInTheDocument();
@@ -35,6 +35,9 @@ describe('LibraryNavigator built-in source', () => {
 
     view.rerender(
       <LibraryNavigator collapsed onToggleCollapsed={() => undefined} useStore={store} />,
+    );
+    expect(screen.getByRole('button', { name: /Built-in Songs/ }).querySelector('svg')).toHaveClass(
+      'lucide-disc-3',
     );
     expect(screen.queryByRole('button', { name: 'Playlists' })).toBeNull();
     expect(screen.getByRole('group', { name: 'Playlists' })).toBeInTheDocument();

@@ -17,7 +17,10 @@ Review branch: `ui/workbench-clarity-2026-11`. This review was driven by two nat
 | P1 | Playback profile | Wide two-sided field rows and cramped Timing Margin made the popover unnecessarily dense; advanced values and Test competed for attention | **Changed:** three aligned primary selects, separate full-width margin stepper, secondary calculated-timing disclosure, separated preview group |
 | P1 | Disabled preview | Test was disabled with no visible reason when no song was selected | **Changed:** explanatory no-song or busy-session copy, without bypassing playback admission checks |
 | P1 | Player icon comprehension | Auto, Profile and Inspector are icon-only controls; names need to be perceivable through focus and hover | **Changed:** Auto and Inspector explicit tooltips; Profile retains an accessible name and title. **Later:** standardize the tooltip pattern across all icon-only controls |
-| P1 | Browser and Inspector identity | The selected song may be visible in Inspector/player while scrolled outside the current table viewport; this is expected virtualization but hard to navigate | **Changed:** context-only Locate selected button when selected index is outside the visible range; scrolls or returns to the built-in page on demand, without unexpected automatic navigation. Verify virtualization and focus in native Tauri. |
+| P1 | Status badges across desktop | Player Dock risk, library metadata warnings and Test used different sizing, colored fills or text treatment; colors competed with theme | **Changed:** shared StatusBadge with theme tokens for text, borders, surface and radius. Soft neutral labels use one visual language; medium/high risk and metadata warnings use only a small semantic warning/danger dot plus explicit text, while Test is plain/quiet. Keep native confirmation and risk rationale unchanged. Verify Graphite/other dark palettes, Light, forced colors and narrow Windows WebView2. |
+| P1 | Player Dock: playback mode clarity | LIVE/PHYSICAL beside Paused introduced redundant warning color, and a 48px cap cut text mid-word | **Changed:** remove the default-mode badge. Dry run uses shared StatusBadge in quiet appearance (compact Test at narrow widths); status accessibility and tooltip retain explicit no-input messaging. |
+| P2 | Player Dock: progress caps | The native `<progress>` fill appeared square at the leading edge near 0:02, despite border radius on its inner value | **Changed:** remove the 1px border from the 6px track and clip the fill to the rounded track. Keep native, read-only progress semantics; verify at 0/2 seconds, mid-track and completion on WebView2. |
+| P1 | Browser and Inspector identity | Selected and playing identities are independent; both the browser header and Player Dock were poor homes for list navigation | **Changed:** Locate selected moves to the Built-in Songs pager footer beside the row count, using the neutral Lucide LocateFixed icon. Enabled for a valid selected row; centers it or returns to its built-in page on demand without automatic navigation. Verify native focus and compact footer. |
 | P0 | Playback confirmation | Screenshot showed a full-width, three-column confirmation with a huge empty Cancel card and raw timing analytics occupying the library | **Changed:** centered, width-constrained confirmation; compact decision buttons, Not now cancellation and per-option expandable estimates. Risk headline and full reason remain visible. |
 | P1 | Compact Timing Margin | A single margin setting occupied a full card within the Playback profile | **Changed:** condensed into a single line with small recommendation and +/- beside the value, preserving backend increments. |
 | P1 | Narrow Inspector | Pitch warning and compatibility content occupy most of the visible details pane; downstream risk guidance requires scrolling | **Open:** verify that warnings and necessary confirmation controls are discoverable and fully keyboard-reachable at 800×560; never suppress safety content |
@@ -33,7 +36,7 @@ Review branch: `ui/workbench-clarity-2026-11`. This review was driven by two nat
 
 | Action | Icon | Rationale |
 | --- | --- | --- |
-| Built-in Songs | `BookMusic` | song sheets / bundled music |
+| Built-in Songs | `Disc3` | recognizable music catalog / bundled songs |
 | Playlist | `ListMusic` | music collection |
 | Auto Play next song | `ListVideo` | list with Play glyph; not Repeat or Shuffle |
 | Reload library | `RefreshCw` | refresh/reload |
@@ -57,5 +60,8 @@ Icon meaning should be independently accessible via `aria-label` (or visible tex
 6. Test the inspector pitch-risk warning, the conversion confirmation, pagination (including numeric jump), runtime diagnostics and recovery for errors.
 7. Run keyboard-only navigation, screen-reader accessible names, palette/Light/Dark, Windows High Contrast and reduced-motion checks.
 8. Run from the desktop app: `bun run check` and `bun run test:e2e`. Run from the root: `cargo xtask check all`. Inspect the native Tauri shell after building `native_calibration.exe` on a new worktree.
+9. On native WebView2 at 1649×927, 1005×615, and 800×560: inspect the timeline at 0:00, 0:02, midpoint and completion for rounded caps; verify normal playback has no redundant mode badge, dry run retains neutral Test / Test · no keys with a complete no-input explanation, and the pager-footer LocateFixed action stays within the compact row beside the song count, centers the selected built-in row, and never changes selection.
+
+- The Donate heading uses Lucide HandHeart to communicate support; Liked Songs keeps its Heart icon.
 
 **Validation status:** code changes and tests have been committed to the review branch; Bun/Playwright, the Rust/native gates, and native screenshot comparison have **not** been executed by the assistant. Do not merge on source inspection alone.

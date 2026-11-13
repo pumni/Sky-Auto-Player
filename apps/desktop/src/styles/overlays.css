@@ -473,7 +473,7 @@
 
 .donate-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
@@ -487,11 +487,17 @@
   display: grid;
   flex: 0 0 34px;
   place-items: center;
+  box-sizing: border-box;
+  width: 34px;
   height: 34px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   color: var(--accent-ink);
   background: var(--surface-raised);
+}
+
+.donate-heading-icon svg {
+  display: block;
 }
 
 .donate-provider-grid {

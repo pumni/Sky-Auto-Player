@@ -1,7 +1,7 @@
 # Built-in song inventory summary
 
 - Active manifest entries audited: 112
-- Manifest SHA-256: `1d1d0ac0f7d707504abfaf9449a52af3e6867a48b7abf497f65ea650323452a1`
+- Manifest SHA-256: `cadc4367bba6cb707c321466d365f1c0c4dba59be540ffd48935fe1eeec0d2ac`
 - Generated with: `cargo xtask song-audit inventory`
 - Runtime/parser policy: existing source decoder, planner and frozen 60 FPS / one-frame / zero-margin policy.
 
@@ -42,12 +42,13 @@ These filters only surface measurements. They do not rate musical quality.
 - `sheets/save your tear.json`
 - `sheets/Something Just Like This.json`
 
-### Below 2 authored onsets per active second (7)
+### Below 2 authored onsets per active second (8)
 
 - `sheets/easy on me.json`
 - `sheets/Glimpse of Us.json`
 - `sheets/Howl's Moving Castle v2.json`
 - `sheets/In The End.json`
+- `sheets/Kiss The Rain.json`
 - `sheets/Lovely-Billie Eilish ft. Khalid.json`
 - `sheets/Say So - Doja Cat.json`
 - `sheets/thần thoại OST.json`

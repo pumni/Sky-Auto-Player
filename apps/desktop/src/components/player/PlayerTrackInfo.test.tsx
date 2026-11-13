@@ -262,6 +262,8 @@ describe('PlayerTrackInfo', () => {
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(screen.getByText(label, { selector: '.player-track-status' })).toBeInTheDocument();
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(container.querySelector('.player-mode-badge')).toBeNull();
+    expect(container.querySelector('.player-test-mode')).toBeNull();
     expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
   });
 
@@ -283,10 +285,11 @@ describe('PlayerTrackInfo', () => {
       'aria-label',
       `${row.title}: Playing. Dry run; no physical input is sent.`,
     );
-    expect(screen.getByText('TEST · No keys')).toHaveAttribute(
-      'aria-label',
-      'Dry run: no physical keyboard input is sent.',
-    );
+    const testMode = container.querySelector<HTMLElement>('.player-test-mode');
+    expect(testMode).toHaveTextContent('Test · no keys');
+    expect(testMode).toHaveClass('status-badge');
+    expect(testMode).toHaveAttribute('data-appearance', 'plain');
+    expect(testMode).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
   });
 
@@ -311,13 +314,50 @@ describe('PlayerTrackInfo', () => {
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     const status = container.querySelector<HTMLElement>('.player-track-status');
     expect(status).toHaveTextContent('Playback status uncertain');
-    expect(screen.getByText('TEST · No keys')).toBeInTheDocument();
+    expect(container.querySelector('.player-test-mode')).toHaveTextContent('Test · no keys');
     expect(status).toHaveAttribute(
       'aria-label',
       expect.stringContaining('no physical input is sent.'),
     );
     expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
   });
+
+  it.each([
+    { level: 'medium', tone: 'warning', text: 'Medium risk' },
+    { level: 'high', tone: 'danger', text: 'High risk' },
+  ] as const)(
+    'uses the shared $tone badge for $level prepared risk',
+    async ({ level, tone, text }) => {
+      const store = createDesktopStore(createMockBridge());
+      await act(async () => store.getState().initialize());
+      const row = selectRowAtIndex(store.getState().library, 0);
+      if (!row) throw new Error('mock Library is too small');
+      await act(async () => store.getState().selectSong(row.song_id));
+      await act(async () => store.getState().prepareSelectedPlayback());
+      const playback = store.getState().playback;
+      const prepared = playback.prepared;
+      if (!prepared) throw new Error('expected prepared mock playback');
+      act(() =>
+        store.setState({
+          playback: {
+            ...playback,
+            prepared: {
+              ...prepared,
+              risk: { ...prepared.risk, level, headline: 'Timing review required' },
+            },
+          },
+        }),
+      );
+
+      const { container } = render(<PlayerTrackInfo useStore={store} />);
+      const badge = container.querySelector<HTMLElement>('.player-risk');
+      expect(badge).toHaveTextContent(text);
+      expect(badge).toHaveClass('status-badge');
+      expect(badge).toHaveAttribute('data-tone', tone);
+      expect(badge).toHaveAttribute('aria-label', 'Timing review required');
+      expect(badge).toHaveAttribute('title', 'Timing review required');
+    },
+  );
 
   it('labels a prepared song and preserves last-played meaning after Stop', async () => {
     const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
