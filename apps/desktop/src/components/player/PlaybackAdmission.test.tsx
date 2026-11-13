@@ -100,7 +100,7 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(screen.queryByRole('group', { name: 'Playback confirmation' })).toBeNull();
   });
 
-  it('shows ready-plan modeled pressure without disabling playback', async () => {
+  it('keeps ready-plan timing data without flashing an advisory before Play', async () => {
     const store = createDesktopStore(createMockBridge({ readyPlanAdvisoryStatus: 'modeled_risk' }));
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 1);
@@ -115,12 +115,19 @@ describe('PlaybackAdmission recovery actions', () => {
         <PlaybackAdmission useStore={store} />
       </>,
     );
-    expect(
-      screen
-        .getByLabelText('Prepared playback timing advisory')
-        .querySelector('[data-plan-fingerprint="mock-plan"]'),
-    ).toHaveAttribute('data-status', 'modeled_risk');
+    const readyAdvisory = store
+      .getState()
+      .playback.prepared?.variants.find((variant) => variant.decision === 'proceed')
+      ?.timing_advisory;
+    expect(readyAdvisory?.status).toBe('modeled_risk');
+    expect(readyAdvisory?.plan_fingerprint).toBe('mock-plan');
+    expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Play' })));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Playback confirmation' })).not.toBeInTheDocument();
   });
 
   it('reconciles a recoverable status issue and restores the normal Pause control', async () => {

@@ -14,6 +14,43 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
+test('Play skips transient ready-plan popovers while retaining real risk confirmation', async ({
+  page,
+}) => {
+  await page.goto('/?mockStartDelayMs=300&mockPlaybackDurationMs=120000');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await page.evaluate(() => {
+    document.documentElement.dataset.readyAdvisoryInsertions = '0';
+    const dock = document.querySelector('.player-bar');
+    if (!dock) throw new Error('Player Dock is missing');
+    const observer = new MutationObserver((records) => {
+      const inserted = records.some((record) =>
+        Array.from(record.addedNodes).some(
+          (node) =>
+            node instanceof Element &&
+            (node.matches('.player-admission-timing') ||
+              node.querySelector('.player-admission-timing') !== null),
+        ),
+      );
+      if (inserted) document.documentElement.dataset.readyAdvisoryInsertions = '1';
+    });
+    observer.observe(dock, { subtree: true, childList: true });
+  });
+
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-ready-advisory-insertions', '0');
+  await expect(player.locator('.player-admission')).toHaveCount(0);
+  await player.getByRole('button', { name: 'Stop' }).click();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByRole('group', { name: 'Playback confirmation' })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Not now' })).toBeEnabled();
+});
+
 test('Player Bar communicates the no-selection state without actionable playback', async ({
   page,
 }) => {

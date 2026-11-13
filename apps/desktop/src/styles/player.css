@@ -796,19 +796,6 @@
   border-radius: var(--radius-panel);
 }
 
-.player-admission-timing {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1.35fr);
-  align-items: start;
-  border-color: var(--border-subtle);
-  border-left-color: var(--border-subtle);
-}
-
-.player-admission-timing .admission-copy span {
-  color: var(--text-tertiary);
-  white-space: normal;
-}
-
 .player-admission-recoverable_status,
 .player-admission-conflict {
   border-color: var(--warning-border);
@@ -1111,10 +1098,6 @@
 }
 
 @media (max-width: 700px) {
-  .player-admission-timing {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .player-bar {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
