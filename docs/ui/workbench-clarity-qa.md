@@ -27,7 +27,7 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 
 ## Manual acceptance
 
-- Locate selected is an icon-only action in the bottom Player Dock, not in the track browser header. It is enabled for a valid selected built-in row, even when already visible; activating it centers the row (or returns to its built-in page) without changing the selection or auto-scrolling before activation. In other library sources it is disabled.
+- Locate selected sits beside the row-count text in the Built-in Songs pager footer, not in Player Dock or browser header. The neutral Lucide Target (bullseye) icon has a Go to selected song tooltip, is disabled until a valid song is selected, and centers that row (or returns to its page) only when clicked. It does not change selection. The footer stays compact at narrow widths.
 - At 1366×768 and 800×560, distinguish the playing row (accent title and rail) from the selected row (neutral rail and selected background), including their combined state.
 - At 1649×927, 1005×615 and 800×560, the player dock is icon-only on the right: no standalone Test button, Auto label or long numeric profile string. Its controls must not overlap or clip.
 - Playback profile is a labeled, scrollable popover with three aligned Hold/Tempo/FPS selectors, a full-width Timing Margin stepper and readable recommendation, and a collapsed Calculated timing section. Its Test playback (no input) action remains available and must never send physical keystrokes.
@@ -36,12 +36,12 @@ Run the canonical `cargo xtask check all` from the new worktree root before prop
 - Normal playback shows no redundant mode badge; the current playback state remains the primary status. Dry run shows neutral inline Test · no keys (compact Test at 1100px or less), not a colorful pill. The status and tooltip still explain that no physical input is sent; preserve risk warnings separately. Verify at 800×560.
 - Verify the native progress bar has rounded leading/trailing caps at 0:00, 0:02, mid-track and completion; it remains a read-only `<progress>`, not a seek slider.
 - Check the native Tauri/Windows app; Chromium mock screenshots alone cannot verify keyboard input or focus handling. With no song selected, Inspector should show a centered action cue instead of a tiny top-left line.
-- Lucide icon semantics: BookMusic for built-in sheets, Heart for likes, ListMusic for playlists/auto-queue, RefreshCw for reload, ListStart for Locate selected in the bottom Player Dock, SlidersHorizontal for profile, PanelRight for Inspector, FlaskConical for a safe test, Music2 for current-track identity, and the usual transport shapes for playback. All icon-only controls need accessible names and tooltips.
+- Lucide icon semantics: BookMusic for built-in sheets, Heart for likes, ListMusic for playlists/auto-queue, RefreshCw for reload, Target for Locate selected beside the pager range, SlidersHorizontal for profile, PanelRight for Inspector, FlaskConical for a safe test, Music2 for current-track identity, and the usual transport shapes for playback. All icon-only controls need accessible names and tooltips.
 - In Song Details, loss reasons and conversion consent remain visible. Technical counters expand independently, and low-risk explanations collapse.
 - A risk confirmation no longer stretches across the library: visible risk text, compact option buttons, collapsible per-option timing estimates, and a small Not now action that cancels prepared playback without starting. Check both one-decision (native screenshot) and three-decision (mock) variants; opening estimates must not clip at 800×560.
 - In Playback profile, Timing Margin is a compact single-line setting (label/recommendation plus increment controls) rather than a large separate card; its min/max disable behavior and persisted backend values must remain correct.
 - In Runtime → Performance, dry run shows a single unmeasured-state message; real samples remain visible for physical sessions.
-- Inspect Light mode, forced colors, focus rings, reduced-motion behavior, and scrollbars.
+- Verify Donate heading uses HandHeart (not Heart); Liked Songs still uses Heart. Inspect Light mode, forced colors, focus rings, reduced-motion behavior, and scrollbars.
 - Validate sender-metadata export with and without a real session. Export remains backend-owned because frontend session identity alone does not establish trace availability.
 
 ## Workbench resize lane

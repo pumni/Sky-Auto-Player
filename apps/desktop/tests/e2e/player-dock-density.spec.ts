@@ -68,8 +68,9 @@ for (const viewport of [
     expect(geometry.pagerHeight).toBeLessThanOrEqual(38);
     expect(Math.abs(geometry.bottomGap)).toBeLessThanOrEqual(1);
     expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
-    expect(geometry.tools).toHaveLength(4);
-    expect(geometry.tools.map((tool) => tool.label)).toContain('Locate selected');
+    expect(geometry.tools).toHaveLength(3);
+    expect(geometry.tools.map((tool) => tool.label)).not.toContain('Locate selected');
+    await expect(page.locator('.builtin-pager-locate')).toBeVisible();
     for (const tool of geometry.tools) {
       expect(tool.left, tool.label).toBeGreaterThanOrEqual(geometry.dock.left);
       expect(tool.right, tool.label).toBeLessThanOrEqual(geometry.dock.right);

@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { BuiltinPager } from './BuiltinPager';
@@ -7,6 +7,28 @@ import { TrackBrowser } from './TrackBrowser';
 
 describe('BuiltinPager', () => {
   afterEach(cleanup);
+
+  it('shows a target icon next to the count and locates a valid selected song', async () => {
+    const store = createDesktopStore(createMockBridge({ catalogCount: 112 }));
+    await act(async () => store.getState().initialize());
+    const locateSelected = vi.fn();
+    render(<BuiltinPager useStore={store} onLocateSelected={locateSelected} />);
+
+    const action = screen.getByRole('button', { name: 'Locate selected' });
+    expect(action).toBeDisabled();
+    expect(action).toHaveAttribute('title', 'Go to selected song');
+    expect(action.querySelector('svg')).toHaveClass('lucide-target');
+    expect(action.closest('.builtin-pager-leading')).toContainElement(
+      screen.getByText('1–100 of 112 songs'),
+    );
+    const song = store.getState().library.pages.get(0)?.[1];
+    if (!song) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(song.song_id));
+    expect(action).toBeEnabled();
+    fireEvent.click(action);
+    expect(locateSelected).toHaveBeenCalledOnce();
+    expect(store.getState().library.selectedSongId).toBe(song.song_id);
+  });
 
   it.each([
     { total: 106, pages: 2, target: 2 },

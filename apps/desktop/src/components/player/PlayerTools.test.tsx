@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { PlayerTools } from './PlayerTools';
@@ -49,26 +49,6 @@ describe('PlayerTools playback modes and profile', () => {
     expect(within(dialog).getByLabelText('Base Hold')).toBeInTheDocument();
     expect(within(dialog).queryByRole('switch', { name: 'Auto Play' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Auto Play' })).not.toBeInTheDocument();
-  });
-
-  it('locates the selected built-in row from the dock without changing its selection', async () => {
-    const store = createDesktopStore(createMockBridge());
-    await act(async () => store.getState().initialize());
-    const row = store.getState().library.pages.get(0)?.[1];
-    if (!row) throw new Error('mock Library is too small');
-    const locateSelected = vi.fn(async () => {});
-    const locateSelectedRef = { current: { locateSelected } };
-    render(<PlayerTools useStore={store} locateSelectedRef={locateSelectedRef} />);
-
-    const locate = screen.getByRole('button', { name: 'Locate selected' });
-    expect(locate).toBeDisabled();
-    await act(async () => store.getState().selectSong(row.song_id));
-    expect(locate).toBeEnabled();
-    await act(async () => locate.click());
-    expect(locateSelected).toHaveBeenCalledOnce();
-    expect(store.getState().library.selectedSongId).toBe(row.song_id);
-    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
-    expect(locate).toBeDisabled();
   });
 
   it('explains and starts the existing dry-run action without physical input', async () => {

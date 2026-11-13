@@ -1,4 +1,4 @@
-import { Coffee, ExternalLink, Heart, Landmark, WalletCards } from 'lucide-react';
+import { Coffee, ExternalLink, HandHeart, Landmark, WalletCards } from 'lucide-react';
 import { useState, type MouseEvent } from 'react';
 import { openExternalUrl } from '../../platform/externalLinks';
 import { isTauriRuntime } from '../../platform/runtime';
@@ -29,7 +29,7 @@ export function DonateSettings() {
     <section className="settings-section donate-settings" aria-labelledby="donate-settings-title">
       <div className="donate-heading">
         <span className="donate-heading-icon" aria-hidden="true">
-          <Heart size={19} />
+          <HandHeart size={19} />
         </span>
         <div>
           <h3 id="donate-settings-title">Support Sky Auto Player</h3>

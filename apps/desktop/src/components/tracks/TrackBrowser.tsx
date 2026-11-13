@@ -1,6 +1,6 @@
 import { ArrowLeft } from 'lucide-react';
 import { Button } from 'react-aria-components';
-import { useState, type RefObject } from 'react';
+import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { PlaylistAddSongsMenu, type PlaylistImportFeedback } from './PlaylistAddSongsMenu';
 import { TrackTable, type TrackTableHandle } from './TrackTable';
@@ -9,23 +9,16 @@ import { formatSongCount } from './trackFormatting';
 
 interface TrackBrowserProps {
   useStore: DesktopStoreHook;
-  locateSelectedRef?: RefObject<TrackTableHandle | null> | undefined;
 }
 
-export function TrackBrowser({ useStore, locateSelectedRef }: TrackBrowserProps) {
+export function TrackBrowser({ useStore }: TrackBrowserProps) {
   const source = useStore((store: DesktopStore) => store.library.source);
   const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
   const modeKey = playlistAddMode?.playlistId === source.id ? 'add' : 'browse';
-  return (
-    <TrackBrowserContent
-      key={`${source.kind}:${source.id}:${modeKey}`}
-      useStore={useStore}
-      locateSelectedRef={locateSelectedRef}
-    />
-  );
+  return <TrackBrowserContent key={`${source.kind}:${source.id}:${modeKey}`} useStore={useStore} />;
 }
 
-function TrackBrowserContent({ useStore, locateSelectedRef }: TrackBrowserProps) {
+function TrackBrowserContent({ useStore }: TrackBrowserProps) {
   const source = useStore((store: DesktopStore) => store.library.source);
   const searchSource = useStore((store: DesktopStore) => store.library.searchSource);
   const navigationState = useStore((store: DesktopStore) => store.libraryNavigation.loadState);
@@ -48,6 +41,7 @@ function TrackBrowserContent({ useStore, locateSelectedRef }: TrackBrowserProps)
   const exitPlaylistAdd = useStore((store: DesktopStore) => store.exitPlaylistAdd);
   const search = useStore((store: DesktopStore) => store.search);
   const [importFeedback, setImportFeedback] = useState<PlaylistImportFeedback | null>(null);
+  const trackTableRef = useRef<TrackTableHandle>(null);
   const sourceName = useStore((store: DesktopStore) => {
     if (store.library.source.kind === 'playlist') {
       return store.libraryNavigation.playlistsById.get(store.library.source.id)?.name ?? 'Playlist';
@@ -287,8 +281,13 @@ function TrackBrowserContent({ useStore, locateSelectedRef }: TrackBrowserProps)
         </div>
       ) : (
         <>
-          <TrackTable useStore={useStore} {...(locateSelectedRef ? { locateSelectedRef } : {})} />
-          {isBuiltinSearch && <BuiltinPager useStore={useStore} />}
+          <TrackTable useStore={useStore} locateSelectedRef={trackTableRef} />
+          {isBuiltinSearch && (
+            <BuiltinPager
+              useStore={useStore}
+              onLocateSelected={() => void trackTableRef.current?.locateSelected()}
+            />
+          )}
         </>
       )}
     </section>
