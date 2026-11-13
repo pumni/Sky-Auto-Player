@@ -67,9 +67,7 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => locate.click());
     expect(locateSelected).toHaveBeenCalledOnce();
     expect(store.getState().library.selectedSongId).toBe(row.song_id);
-    await act(async () =>
-      store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }),
-    );
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
     expect(locate).toBeDisabled();
   });
 
