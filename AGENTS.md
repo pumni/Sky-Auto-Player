@@ -33,5 +33,6 @@ music-sheet player for Sky: Children of the Light.
   changes need authorization for the requested action.
 - Run focused checks and report what ran. The pre-review full local gate is
   `cargo xtask check all`; required CI must pass at the exact PR head before merge.
-- Maintained names describe responsibilities rather than past project phases;
-  genuine version/schema IDs and immutable historical names are exceptions.
+- Prefer names that describe current responsibilities. Historical labels remain
+  human review context; retain genuine version/schema IDs and live immutable
+  identifiers when their consumers require them.

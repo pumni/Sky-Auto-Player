@@ -354,6 +354,21 @@ mod tests {
     }
 
     #[test]
+    fn security_finding_scan_fails_closed_on_unreadable_rust_sources() {
+        let repo = TempRepo::new();
+        let source = repo.path().join("rust/crates/fixture/src/lib.rs");
+        fs::create_dir_all(source.parent().expect("fixture source has a parent"))
+            .expect("create fixture source directory");
+        fs::write(source, [0xff]).expect("write invalid UTF-8 source");
+
+        let error = security_findings(repo.path())
+            .expect_err("unreadable required Rust source must fail closed")
+            .to_string()
+            .to_ascii_lowercase();
+        assert!(error.contains("utf-8"), "unexpected read error: {error}");
+    }
+
+    #[test]
     fn security_finding_scan_ignores_comments_and_keeps_sendinput_available() {
         let repo = TempRepo::new();
         repo.write(
