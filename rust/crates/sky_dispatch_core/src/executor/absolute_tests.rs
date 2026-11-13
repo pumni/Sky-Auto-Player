@@ -334,3 +334,239 @@ fn absolute_scheduler_checked_overflow_does_not_mutate_slot_or_cursor() {
     assert_eq!(executor.chord_cursor(), 0);
     assert_eq!(executor.accounting().activated, 0);
 }
+
+#[test]
+fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
+    const HOLD_US: u64 = 17_167;
+    const GAP_US: u64 = 16_667;
+    const A_UP_US: u64 = 20_167;
+    const AB_DOWN_US: u64 = 34_334;
+    const C_DOWN_US: u64 = 35_000;
+    const FINAL_UP_US: u64 = 60_000;
+
+    let allowed = [0x15, 0x16, 0x17];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "A down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: A_UP_US,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "A up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: AB_DOWN_US,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "A+B down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Down,
+            scheduled_us: C_DOWN_US,
+            scan_codes: smallvec::smallvec![0x17],
+            reason: "C down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 4,
+            kind: ActionKind::Up,
+            scheduled_us: FINAL_UP_US,
+            scan_codes: smallvec::smallvec![0x15, 0x16, 0x17],
+            reason: "final releases".into(),
+        },
+    ];
+    let schedule = compile_actions(&actions, &allowed);
+
+    assert_eq!(schedule.down_chords.len(), 3);
+    assert_eq!(
+        schedule
+            .down_chords
+            .iter()
+            .map(|chord| chord.intents.len())
+            .sum::<usize>(),
+        4,
+        "A, A+B, C contain four physical Down intents"
+    );
+    assert_eq!(schedule.generation_count, 4);
+    assert_eq!(
+        schedule
+            .down_chords
+            .iter()
+            .map(|chord| chord.source_action_index)
+            .collect::<Vec<_>>(),
+        [0, 2, 3]
+    );
+
+    let run = |delayed_sender: bool| {
+        let mut executor = DispatchExecutor::new(
+            &schedule,
+            DurationTicks::from_raw(HOLD_US),
+            DurationTicks::from_raw(GAP_US),
+            test_ticks,
+        )
+        .expect("absolute scheduler");
+        let epoch = QpcTicks::ZERO;
+
+        let (a_mask, a_intents) = match executor
+            .evaluate_at(QpcTicks::ZERO, epoch)
+            .expect("A Down at authored onset")
+        {
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(chord),
+                ..
+            } => (chord.down_mask, chord.intents.len()),
+            decision => panic!("expected first authored chord A, got {decision:?}"),
+        };
+        assert_eq!((a_mask, a_intents), (0b001, 1));
+        let a_down_completion = if delayed_sender { 3_000 } else { 0 };
+        executor
+            .on_send_completed_at(0, a_mask, QpcTicks::from_raw(a_down_completion))
+            .expect("commit A generation once");
+        assert_eq!(executor.chord_cursor(), 1);
+        assert_eq!(executor.accounting().activated, 1);
+
+        let (a_up_mask, no_down) = match executor
+            .evaluate_at(QpcTicks::from_raw(A_UP_US), epoch)
+            .expect("A Up authored at 20,167 us")
+        {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                ..
+            } => (up_mask, down_chord.is_none()),
+            decision => panic!("expected A Up at 20,167 us, got {decision:?}"),
+        };
+        assert_eq!(a_up_mask, 0b001);
+        assert!(no_down);
+        assert!(A_UP_US >= a_down_completion + HOLD_US);
+        let a_up_completion = if delayed_sender { 20_267 } else { A_UP_US };
+        executor
+            .on_send_completed_at(a_up_mask, 0, QpcTicks::from_raw(a_up_completion))
+            .expect("commit A release once");
+        assert_eq!(
+            executor.chord_cursor(),
+            1,
+            "Up does not advance Down cursor"
+        );
+        assert_eq!(executor.accounting().released, 1);
+
+        let ab_eligible = if delayed_sender { 36_934 } else { 36_834 };
+        assert_eq!(A_UP_US + GAP_US, 36_834);
+        assert_eq!(a_up_completion + GAP_US, ab_eligible);
+        assert_eq!(
+            executor
+                .evaluate_at(QpcTicks::from_raw(AB_DOWN_US), epoch)
+                .expect("A+B must wait for authored onset and G floor"),
+            DispatchDecision::Wait {
+                deadline_qpc: QpcTicks::from_raw(ab_eligible)
+            }
+        );
+        assert_eq!(
+            executor
+                .evaluate_at(QpcTicks::from_raw(ab_eligible - 1), epoch)
+                .expect("A+B remains blocked before G"),
+            DispatchDecision::Wait {
+                deadline_qpc: QpcTicks::from_raw(ab_eligible)
+            }
+        );
+
+        let (ab_mask, ab_intents) = match executor
+            .evaluate_at(QpcTicks::from_raw(ab_eligible), epoch)
+            .expect("A+B at its eligible boundary")
+        {
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(chord),
+                ..
+            } => (chord.down_mask, chord.intents.len()),
+            decision => panic!("expected second authored chord A+B, got {decision:?}"),
+        };
+        assert_eq!((ab_mask, ab_intents), (0b011, 2));
+        assert_eq!(executor.chord_cursor(), 1);
+        let ab_completion = if delayed_sender { 37_034 } else { ab_eligible };
+        executor
+            .on_send_completed_at(0, ab_mask, QpcTicks::from_raw(ab_completion))
+            .expect("commit A+B generations once");
+        assert_eq!(executor.chord_cursor(), 2);
+        assert_eq!(executor.accounting().activated, 3);
+
+        let (c_mask, c_intents) = match executor
+            .evaluate_at(QpcTicks::from_raw(ab_completion), epoch)
+            .expect("independent C follows the cursor immediately")
+        {
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(chord),
+                ..
+            } => (chord.down_mask, chord.intents.len()),
+            decision => panic!("expected third authored chord C, got {decision:?}"),
+        };
+        assert_eq!((c_mask, c_intents), (0b100, 1));
+        assert_eq!(executor.chord_cursor(), 2);
+        let c_start = ab_completion;
+        let c_completion = c_start + 100;
+        executor
+            .on_send_completed_at(0, c_mask, QpcTicks::from_raw(c_completion))
+            .expect("commit C generation once");
+        assert_eq!(executor.chord_cursor(), 3);
+        assert_eq!(executor.accounting().activated, 4);
+
+        let (release_mask, no_down) = match executor
+            .evaluate_at(QpcTicks::from_raw(FINAL_UP_US), epoch)
+            .expect("all paired releases at final onset")
+        {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                ..
+            } => (up_mask, down_chord.is_none()),
+            decision => panic!("expected final releases, got {decision:?}"),
+        };
+        assert_eq!(release_mask, 0b111);
+        assert!(no_down);
+        let release_completion = if delayed_sender {
+            FINAL_UP_US + 100
+        } else {
+            FINAL_UP_US
+        };
+        executor
+            .on_send_completed_at(release_mask, 0, QpcTicks::from_raw(release_completion))
+            .expect("resolve all release obligations");
+
+        let accounting = executor.accounting();
+        assert_eq!(accounting.total, 4);
+        assert_eq!(accounting.activated, 4);
+        assert_eq!(accounting.released, 4);
+        assert_eq!(accounting.active, 0);
+        assert_eq!(accounting.scheduled, 0);
+        assert_eq!(executor.active_mask(), 0);
+        assert_eq!(executor.remaining_chords(), 0);
+        assert!(
+            executor
+                .is_finished_at(QpcTicks::from_raw(release_completion), epoch)
+                .expect("finish timestamp")
+        );
+        executor.check_invariants().expect("valid final lifecycle");
+
+        (ab_eligible, ab_completion, c_start, c_completion)
+    };
+
+    let control = run(false);
+    let delayed = run(true);
+    assert_eq!(control, (36_834, 36_834, 36_834, 36_934));
+    assert_eq!(delayed, (36_934, 37_034, 37_034, 37_134));
+    assert_eq!(delayed.3 - delayed.1, 100);
+    assert_eq!(
+        (C_DOWN_US - AB_DOWN_US) - (delayed.2 - delayed.0),
+        566,
+        "delayed completion compresses the authored 666 us gap to 100 us"
+    );
+}
