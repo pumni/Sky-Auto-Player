@@ -9,7 +9,7 @@ import { formatSongCount } from './trackFormatting';
 
 interface TrackBrowserProps {
   useStore: DesktopStoreHook;
-  locateSelectedRef?: RefObject<TrackTableHandle | null>;
+  locateSelectedRef?: RefObject<TrackTableHandle | null> | undefined;
 }
 
 export function TrackBrowser({ useStore, locateSelectedRef }: TrackBrowserProps) {
@@ -287,7 +287,7 @@ function TrackBrowserContent({ useStore, locateSelectedRef }: TrackBrowserProps)
         </div>
       ) : (
         <>
-          <TrackTable useStore={useStore} locateSelectedRef={locateSelectedRef} />
+          <TrackTable useStore={useStore} {...(locateSelectedRef ? { locateSelectedRef } : {})} />
           {isBuiltinSearch && <BuiltinPager useStore={useStore} />}
         </>
       )}

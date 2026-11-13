@@ -18,7 +18,11 @@ export function PlayerBar({ useStore, utilityTriggerRef, locateSelectedRef }: Pl
       <PlaybackAdmission useStore={useStore} />
       <PlayerTrackInfo useStore={useStore} />
       <PlayerTransport useStore={useStore} />
-      <PlayerTools useStore={useStore} utilityTriggerRef={utilityTriggerRef} locateSelectedRef={locateSelectedRef} />
+      <PlayerTools
+        useStore={useStore}
+        utilityTriggerRef={utilityTriggerRef}
+        locateSelectedRef={locateSelectedRef}
+      />
     </footer>
   );
 }
