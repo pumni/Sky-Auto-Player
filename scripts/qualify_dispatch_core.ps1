@@ -925,15 +925,17 @@ try {
         Invoke-PairedWorkloads $performanceWorkloads
         if ($script:exitCode -eq 0) {
             $finalSafetyCases = @(
-                foreach ($scenario in $scenarios) {
-                    [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-smoke'; margin = $TimingMarginUs; fps = 60 }
+                foreach ($load in @('Quiet', 'Contention')) {
+                    foreach ($scenario in $scenarios) {
+                        [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-' + $load.ToLowerInvariant(); load = $load; margin = $TimingMarginUs; fps = 60 }
+                    }
                 }
-                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; cell_id = 'boundary-safety'; margin = 0; fps = 60 }
-                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; cell_id = 'boundary-safety'; margin = 500; fps = 120 }
+                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 0; fps = 60 }
+                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 500; fps = 120 }
             )
             $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases -InvokeCase {
                 param($case)
-                Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId $case.cell_id -PairId '' -Order '' -Margin $case.margin -Fps $case.fps -Sample 0 -Historical $false
+                Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' -HarnessManifest $candidate -Load $case.load -CellId $case.cell_id -PairId '' -Order '' -Margin $case.margin -Fps $case.fps -Sample 0 -Historical $false
             }
             if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
         }

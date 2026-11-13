@@ -63,13 +63,16 @@ Vòng lặp cốt lõi:
 
 - **Chord batch liên tục** — tất cả nốt trong một hợp âm được gửi trong một lệnh `SendInput`
   duy nhất để giảm thiểu độ lệch phía sender giữa các phím trong cùng hợp âm.
-- **Ngữ nghĩa hold** — nốt dài được giữ suốt thời gian ký âm đầy đủ. Nốt hold không bị
-  cắt ngắn chỉ vì nốt tiếp theo đến sát.
+- **Hold và chẩn đoán tương thích** — planner có thể báo mất mát do chuyển đổi hoặc sustain;
+  sender áp dụng timing floor vật lý. Floor mô tả chính sách phía sender.
 - **Căn hold theo frame** — thời gian hold được biểu diễn dưới dạng 1,0; 1,25; hoặc 1,5
   frame game ở FPS bạn chọn. Mặc định là 1,0 frame.
-- **Bù độ trễ** — scheduler đo lỗi completion phía sender trên máy hiện tại và điều chỉnh
-  lead time cho phù hợp. Điều này giảm drift có hệ thống; không đảm bảo độ chính xác
-  timing về phía game — vốn còn phụ thuộc vào Windows và vòng lặp sampling của game.
+- **Timing QPC** — production sender dùng Frozen wake guard đã hiệu chuẩn và kiểm tra
+  deadline bằng QPC. Windows và game tự lấy mẫu input theo lịch riêng, vì vậy timing phía
+  sender không thể đảm bảo game đăng ký mọi nốt hoặc thời lượng sustain.
+
+Người dùng có thể xem compatibility/risk diagnostics trong bước chuẩn bị để kiểm tra giới
+hạn chuyển đổi hoặc sustain trước khi phát.
 
 ## Tổng quan kiến trúc
 

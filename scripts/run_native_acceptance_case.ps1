@@ -439,7 +439,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -633,7 +633,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }

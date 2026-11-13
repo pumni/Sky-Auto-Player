@@ -293,6 +293,53 @@ $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
 if ([regex]::Matches($runnerSource, 'Invoke-NativeCaseFailStopSequence').Count -lt 3) {
     throw 'Smoke and Final must both use the tested fail-stop sequence helper'
 }
+$finalSafetyBlock = [regex]::Match($runnerSource, '(?s)\$finalSafetyCases\s*=\s*@\((.*?)\n\s*\)\s*\n\s*\$sequenceResult', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $finalSafetyBlock.Success -or
+    $finalSafetyBlock.Groups[1].Value -notmatch "foreach \(\`$load in @\('Quiet', 'Contention'\)\)" -or
+    $finalSafetyBlock.Groups[1].Value -notmatch "load = \`$load" -or
+    $finalSafetyBlock.Groups[1].Value -notmatch "boundary-60fps-margin-0" -or
+    $finalSafetyBlock.Groups[1].Value -notmatch "boundary-120fps-margin-500" -or
+    $runnerSource -notmatch '-Load \$case\.load') {
+    throw 'Final safety case construction, loads, boundaries, or case-specific load dispatch changed'
+}
+$finalScenarioNames = @(
+    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+    'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
+    'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor',
+    'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
+    'lease-age-watchdog-delayed', 'noncanonical-profile'
+)
+$finalModel = @(
+    foreach ($load in @('Quiet', 'Contention')) {
+        foreach ($scenario in $finalScenarioNames) { [pscustomobject]@{ scenario = $scenario; load = $load } }
+    }
+    [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; load = 'Quiet'; margin = 0; fps = 60 }
+    [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; load = 'Quiet'; margin = 500; fps = 120 }
+)
+$safetyModel = @($finalModel | Where-Object { $_.scenario -ne 'timing-margin-sweep' })
+if ($finalModel.Count -ne 46 -or @($safetyModel | Where-Object load -eq 'Quiet').Count -ne 22 -or
+    @($safetyModel | Where-Object load -eq 'Contention').Count -ne 22 -or
+    @($safetyModel | Group-Object load | Where-Object { $_.Count -ne 22 -or @($_.Group.scenario | Select-Object -Unique).Count -ne 22 }).Count -ne 0 -or
+    $finalModel[44].workload -ne 'boundary-60fps-margin-0' -or $finalModel[44].margin -ne 0 -or $finalModel[44].fps -ne 60 -or
+    $finalModel[45].workload -ne 'boundary-120fps-margin-500' -or $finalModel[45].margin -ne 500 -or $finalModel[45].fps -ne 120) {
+    throw 'Final model must contain 22 unique scenarios per load and the two fixed boundaries'
+}
+$scenarioBlock = [regex]::Match($runnerSource, '(?s)\$scenarios\s*=\s*@\((.*?)\n\s*\)')
+$runnerScenarioNames = if ($scenarioBlock.Success) {
+    @([regex]::Matches($scenarioBlock.Groups[1].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+} else { @() }
+if ($runnerScenarioNames.Count -ne $finalScenarioNames.Count -or
+    (@(Compare-Object -ReferenceObject $finalScenarioNames -DifferenceObject $runnerScenarioNames -SyncWindow 0)).Count -ne 0) {
+    throw 'Final safety scenarios differ from the approved 22-scenario inventory'
+}
+$acceptanceSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
+foreach ($requiredSchedulerLabel in @('Scheduler-Baseline', 'Scheduler-Candidate')) {
+    if (-not $acceptanceSource.Contains($requiredSchedulerLabel)) { throw "Missing Scheduler metadata label: $requiredSchedulerLabel" }
+}
+if (-not $acceptanceSource.Contains("elseif (`$HistoricalSourceAllowed) { 'C0' } else { 'A' }")) {
+    throw 'DispatchCore or historical harness label fallback changed'
+}
 
 $schedulerBaseRevision = 'b9ed666e3ddddc4952831626f1654e1cc9071a10'
 $schedulerBaseTree = 'f554c41b23a3969d02ed29842d4178f6143c9d86'
@@ -368,6 +415,25 @@ if (-not $final.stopped_at_first_native_failure -or $finalRuns.Count -ne 2 -or
     $finalRuns[1] -ne 'boundary-60fps-margin-0' -or
     $final.attempted_rows.Count -ne 2) {
     throw 'Final boundary failure did not block every later safety/boundary case'
+}
+
+foreach ($failedLoad in @('Quiet', 'Contention')) {
+    $loadRuns = [System.Collections.Generic.List[string]]::new()
+    $loadCases = @(
+        [pscustomobject]@{ load = $failedLoad; scenario = 'first' }
+        [pscustomobject]@{ load = $failedLoad; scenario = 'middle' }
+        [pscustomobject]@{ load = $failedLoad; scenario = 'last' }
+        [pscustomobject]@{ load = 'Quiet'; scenario = 'boundary' }
+    )
+    $loadResult = Invoke-NativeCaseFailStopSequence -Cases $loadCases -InvokeCase {
+        param($case)
+        $loadRuns.Add($case.load + ':' + $case.scenario)
+        [pscustomobject]@{ case_exit_code = if ($case.scenario -eq 'middle') { 1 } else { 0 }; status = if ($case.scenario -eq 'middle') { 'FAIL' } else { 'PASS' } }
+    }
+    if (-not $loadResult.stopped_at_first_native_failure -or $loadRuns.Count -ne 2 -or
+        $loadRuns[1] -ne ($failedLoad + ':middle') -or $loadRuns.Contains('Quiet:boundary')) {
+        throw "Final $failedLoad failure did not stop later safety and boundary cases"
+    }
 }
 
 $timingRecord = [ordered]@{

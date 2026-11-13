@@ -10,10 +10,10 @@ invariants that must not be discarded because an implementation differs.
 - **Architecture and ownership:** [architecture](architecture.md) for repository-wide
   structure and module ownership; [playback engine](playback-engine.md) for
   the normative realtime playback architecture.
-- **Timing and playback qualification:** [playback engine](playback-engine.md)
-  (15-slot executor, $H$ and $G$ floors, final Down admission, Frozen production waiter);
-  [playback verification](playback-verification.md) (22 native safety scenarios,
-  interactive desktop foreground guard, noalloc qualification).
+- **Playback architecture:** [playback engine](playback-engine.md) (scheduler,
+  sender timing, admission, cleanup, and bounded observation).
+- **Playback qualification:** [playback verification](playback-verification.md)
+  (native sink, Scheduler profile, Final matrix, and evidence requirements).
 - **Desktop UI:** [workbench](desktop-workbench.md),
   [current UI image reference](ui/README.md) when visual inspection is needed,
   [React Aria type boundary](desktop-type-boundary.md),
@@ -39,8 +39,9 @@ invariants that must not be discarded because an implementation differs.
   [future Windows smoke feasibility](ci-windows-smoke-feasibility.md),
   [Rust toolchain](rust-toolchain-policy.md),
   [contributing](../CONTRIBUTING.md).
-- **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),
-  [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md).
+- **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md);
+  [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md) describes
+  the separate offline Prepare diagnostic.
 
 ## Revision-bound records
 
