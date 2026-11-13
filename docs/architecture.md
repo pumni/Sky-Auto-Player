@@ -111,10 +111,6 @@ owners under `native_runtime/tests/playback_integration/` are:
 
 The architecture audit keeps the root at or below 500 lines, each owner at or
 below 1,600 lines, and requires the exact direct `.rs` sibling inventory.
-The 69-test baseline inventory, feature gates, nested helper, and per-test
-body hashes are recorded in
-`docs/evidence/issue-540-native-playback-test-parity.json`.
-
 The `sky_player` engine suite remains entered through `engine.rs`'s
 `#[cfg(test)] mod tests;`. Its `engine/tests.rs` root contains the shared test
 imports and module declarations and stays at or below 750 lines. Shared fixtures
@@ -231,36 +227,13 @@ song file -> pure Rust parser/planner -> native playback adapter
           -> sky_player -> dispatch_core/dispatch_win32 -> SendInput
 ```
 
-The normative playback architecture is defined in [playback engine](playback-engine.md),
-and the qualification protocol is defined in [playback verification](playback-verification.md).
-The qualified realtime worker remains authoritative for QPC scheduling,
-MMCSS/priority, focus admission, supervisor lease, bounded queues, no-allocation
-hot-path behavior, and emergency release-all cleanup. Supervisor controls and
-diagnostics stay outside the realtime data path. Dry-run playback never reaches
-the physical input backend.
-
-### Physical target owner authority
-
-A physical require-focus session binds the selected HWND to its startup owner
-PID, process creation time, and full image path. The session retains one process
-handle opened with `PROCESS_QUERY_LIMITED_INFORMATION`; the desktop supervisor
-checks that process object and the HWND owner off the realtime thread. A target
-generation change invalidates the binding. Rebinding requires fresh
-control-plane validation and a new generation, including when Windows reuses
-the same numeric HWND.
-
-Before each Down-bearing send, the worker samples the foreground HWND once and
-queries the owner PID once for that exact HWND. It rejects a mismatch or failed
-query before the sender. UpOnly safety release and sessions with focus checks
-disabled do not query the foreground owner.
-
-If the supervisor observes process termination, HWND destruction, owner drift,
-or identity-query failure, it invalidates Down authority and requests terminal
-cleanup. A same-process window destroyed and recreated with the same numeric
-HWND entirely between supervisor checks can remain indistinguishable: the PID,
-creation time, image, and final owner query can all still match. The HWND APIs
-do not expose a stable window-lifetime identifier for that case, and the final
-owner check retains the existing query-to-`SendInput` race.
+Playback ownership and realtime behavior are specified in
+[playback-engine.md](playback-engine.md); native and gameplay qualification is
+specified in [playback-verification.md](playback-verification.md). This overview
+records only the repository boundary: `sky_player` owns playback lifecycle and
+orchestration, `sky_dispatch_core` owns musical scheduling policy, and
+`sky_dispatch_win32` owns physical Windows effects. Dry-run playback does not
+reach the physical input backend.
 
 ## Calibration and update boundaries
 

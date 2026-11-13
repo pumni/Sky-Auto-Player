@@ -95,6 +95,75 @@ fn prepared_down_one_tick_late_still_calls_emitter() {
 }
 
 #[test]
+fn deferred_packet_journal_survives_success_until_scheduler_commit() {
+    let packet = PhysicalPacket::new(0, 0b0101);
+    let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+        .expect("valid prepared chord");
+    let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(Arc::new(
+        AtomicUsize::new(0),
+    )));
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(state.active_mask, packet.down_mask);
+    assert_eq!(state.in_flight_mask, packet.down_mask);
+    assert_eq!(state.release_obligation_mask(), packet.down_mask);
+    assert!(state.commit_physical_packet(0b0001).is_err());
+    assert_eq!(state.in_flight_mask, packet.down_mask);
+    state
+        .commit_physical_packet(packet.down_mask)
+        .expect("matching scheduler commit clears the journal");
+    assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.release_obligation_mask(), packet.down_mask);
+}
+
+#[test]
+fn deferred_partial_packet_keeps_its_journal_for_cleanup() {
+    let packet = PhysicalPacket::new(0, 0b0011);
+    let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+        .expect("valid prepared chord");
+    let mut state = TrackedKeyState::with_packet_emitter(move |sent| SendTransactionOutcome {
+        status: SendTransactionStatus::PartialProgress,
+        evidence: SendEvidence {
+            requested_mask: sent.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 1,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::None,
+            first_win32_error: None,
+            last_win32_error: None,
+            started_ticks: None,
+            completed_ticks: None,
+            timing_error: None,
+        },
+    });
+    state.set_emitter(|scan_codes, _| super::super::outcome::PlatformSendResult {
+        requested: scan_codes.len() as u8,
+        inserted: scan_codes.len() as u8,
+        started_ticks: crate::clock::QpcTicks::ZERO,
+        completed_ticks: Some(crate::clock::QpcTicks::ZERO),
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(outcome.status, SendTransactionStatus::PartialProgress);
+    assert_eq!(state.in_flight_mask, packet.down_mask);
+    assert_eq!(state.possibly_active_mask, packet.down_mask);
+    assert_eq!(state.release_obligation_mask(), packet.down_mask);
+    let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+    assert_eq!(cleanup.attempted_mask, packet.down_mask);
+    assert!(cleanup.released_successfully);
+    assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
 fn prepared_sender_panic_retains_exact_packet_mask_until_cleanup() {
     let packets = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured_packets = Arc::clone(&packets);

@@ -505,7 +505,6 @@ pub(crate) fn apply_final_down_rejection(
         | FinalDownVerdict::LeaseExpired
         | FinalDownVerdict::LeaseUnproven => {
             runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
         }
         FinalDownVerdict::Allowed
         | FinalDownVerdict::ModifierHeld(_)
@@ -547,7 +546,6 @@ pub(crate) fn enter_focus_pause(
     focus_ticks: QpcTicks,
     progress_clock: &SharedProgressClock,
 ) -> Result<bool, String> {
-    runtime.invalidate_down_authorization();
     runtime.verified_target = None;
     runtime.focus_restore_started_ticks = None;
     if clock_state.has_pause_reason(PauseReason::Focus) {
@@ -645,6 +643,7 @@ pub(crate) fn verify_final_down_admission(
                 DispatchStep::TerminateStatic(err) => {
                     FinalDownAdmissionResult::Terminal(err.to_string())
                 }
+                #[cfg(any(test, feature = "test-support"))]
                 _ => FinalDownAdmissionResult::Replan,
             };
         }
@@ -661,6 +660,7 @@ pub(crate) fn verify_final_down_admission(
                     DispatchStep::TerminateStatic(err) => {
                         FinalDownAdmissionResult::Terminal(err.to_string())
                     }
+                    #[cfg(any(test, feature = "test-support"))]
                     _ => FinalDownAdmissionResult::Replan,
                 };
             }
@@ -690,6 +690,7 @@ pub(crate) fn verify_final_down_admission(
                         DispatchStep::TerminateStatic(err) => {
                             FinalDownAdmissionResult::Terminal(err.to_string())
                         }
+                        #[cfg(any(test, feature = "test-support"))]
                         _ => FinalDownAdmissionResult::Replan,
                     };
                 }

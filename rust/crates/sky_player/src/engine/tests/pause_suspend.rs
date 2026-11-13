@@ -625,7 +625,7 @@ fn authored_post_start_focus_loss_pauses_without_resumable_cleanup() {
     let seed_send_calls = calls.load(Ordering::SeqCst);
     let release_calls = harness.full_instrument_release_calls();
     let active_mask = harness.backend_active_mask();
-    let coordinator_active_mask = harness.resources.coordinator.active_mask;
+    let coordinator_active_mask = harness.legacy_coordinator_fixture.active_mask;
     assert_ne!(
         active_mask, 0,
         "seed Down must establish physical ownership"
@@ -642,7 +642,7 @@ fn authored_post_start_focus_loss_pauses_without_resumable_cleanup() {
     assert_eq!(harness.full_instrument_release_calls(), release_calls);
     assert_eq!(harness.backend_active_mask(), active_mask);
     assert_eq!(
-        harness.resources.coordinator.active_mask,
+        harness.legacy_coordinator_fixture.active_mask,
         coordinator_active_mask
     );
     assert!(
@@ -1351,7 +1351,7 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     let seed_send_calls = calls.load(Ordering::SeqCst);
     let release_calls = harness.full_instrument_release_calls();
     let active_mask = harness.backend_active_mask();
-    let coordinator_active_mask = harness.resources.coordinator.active_mask;
+    let coordinator_active_mask = harness.legacy_coordinator_fixture.active_mask;
     while harness.pop_observation().is_some() {}
     let plan = harness.plan_current_dispatch();
     harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _| {
@@ -1365,7 +1365,7 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     assert_eq!(harness.full_instrument_release_calls(), release_calls);
     assert_eq!(harness.backend_active_mask(), active_mask);
     assert_eq!(
-        harness.resources.coordinator.active_mask,
+        harness.legacy_coordinator_fixture.active_mask,
         coordinator_active_mask
     );
     assert!(

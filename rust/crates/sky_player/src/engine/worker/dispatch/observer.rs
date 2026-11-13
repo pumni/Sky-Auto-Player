@@ -1,6 +1,6 @@
 use super::super::super::{
-    DurationTicks, QpcClock, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
-    TimelineTicks, try_publish_observer_metrics,
+    DurationTicks, QpcClock, SharedMetrics, TelemetryCollector, TimelineTicks,
+    try_publish_observer_metrics,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::super::WorkerRuntime;
@@ -21,9 +21,8 @@ use super::authored::resolve_slo_terminal_step;
 #[cfg(any(test, feature = "test-support"))]
 use super::observation::DownTraceObservation;
 use super::observation::{
-    DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation,
-    down_effective_ticks, down_observer_evidence, record_down_recovery_metrics,
-    record_down_send_telemetry,
+    DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, down_effective_ticks,
+    down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::observer_wake::take_deadline_wake_qpc;
@@ -226,29 +225,6 @@ pub(crate) fn publisher_down_send_outcome(
         runtime,
     )
 }
-pub(crate) fn dispatch_stale_packet(
-    prepared: sky_dispatch_core::coordinator::PreparedStalePacket,
-    coordinator: &mut RuntimeDispatchCoordinator,
-    observer: Option<&PendingObservationQueue>,
-    dropped_samples: &mut u64,
-) -> DispatchStep {
-    if let Err(error) = coordinator.commit_stale_packet(prepared) {
-        return DispatchStep::Terminate(format!(
-            "coordinator stale-packet commit failure: {error}"
-        ));
-    }
-    if let Some(observer) = observer {
-        observer.push(
-            DispatchObservation::StaleMetadata(StaleMetadataObservation {
-                source_action_index: prepared.source_action_index,
-                effective_scheduled_ticks: prepared.effective_scheduled_ticks,
-                suppressed_intent_count: prepared.suppressed_intent_count,
-            }),
-            dropped_samples,
-        );
-    }
-    DispatchStep::Dispatched
-}
 #[derive(Clone, Debug)]
 pub struct PendingObservationQueue {
     queue: Arc<ArrayQueue<DispatchObservation>>,
@@ -429,6 +405,7 @@ impl ObserverRuntime {
                         }
                         #[cfg(any(test, feature = "test-support"))]
                         Err(DispatchStep::NoWork | DispatchStep::Continue) => {}
+                        #[cfg(any(test, feature = "test-support"))]
                         Err(DispatchStep::Dispatched) => {}
                     }
                 }
@@ -787,6 +764,7 @@ pub(crate) fn drain_one_observer(
             DispatchObservation::Wait(wait) => {
                 super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
             }
+            #[cfg(any(test, feature = "test-support"))]
             DispatchObservation::StaleMetadata(stale) => {
                 super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
             }
@@ -827,11 +805,6 @@ pub(crate) fn drain_one_observer(
             &mut health.observer_window,
             local_metrics,
         );
-        #[cfg(not(any(test, feature = "test-support")))]
-        let is_immediate_publish = matches!(
-            observation,
-            DispatchObservation::Wait(_) | DispatchObservation::StaleMetadata(_)
-        );
         #[cfg(any(test, feature = "test-support"))]
         let is_immediate_publish = matches!(
             observation,
@@ -840,6 +813,8 @@ pub(crate) fn drain_one_observer(
                 | DispatchObservation::DownMiss(_)
                 | DispatchObservation::BlockedUnfocused(_)
         );
+        #[cfg(not(any(test, feature = "test-support")))]
+        let is_immediate_publish = matches!(observation, DispatchObservation::Wait(_));
         if is_immediate_publish {
             try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
         }

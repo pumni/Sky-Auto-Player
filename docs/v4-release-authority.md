@@ -407,6 +407,3 @@ React          = presentation
    - The smoke scope routes application data and install output under an owned `RUNNER_TEMP` child, tracks child process trees, snapshots product shortcuts, attempts every cleanup stage, aggregates original and cleanup failures, and refuses recursive deletion without its exact ownership sentinel.
    - The updater fixture reuses the validated candidate and bridge bytes, serves only explicit loopback routes, verifies HTTP body length and SHA-256, checks rollback and N-to-N+1 state, and preserves a synthetic user-song sentinel through update and uninstall.
    - Local development must use synthetic isolated registry namespaces, fake files, and process fixtures; do not run NSIS on a maintainer workstation.
-
-The script retirement and retained caller evidence is recorded in
-[`powershell-dependency-ledger.md`](powershell-dependency-ledger.md).

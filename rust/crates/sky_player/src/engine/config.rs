@@ -251,9 +251,6 @@ pub(crate) struct AdmittedNativeSessionOptions {
 #[derive(Debug, Default)]
 pub struct StartupOrderingHook {
     sequence: AtomicU64,
-    pub(crate) stale_packet_committed: AtomicU64,
-    pub(crate) stale_packet_commit_count: AtomicU64,
-    pub(crate) stale_packet_committed_after_wake_count: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
     release_floor_control_enabled: AtomicBool,
@@ -270,13 +267,10 @@ pub struct StartupOrderingHook {
     down_sender_packet_not_before_qpc_ticks: AtomicU64,
     pub(crate) up_only_sender_attempt_qpc_ticks: std::sync::Mutex<Option<(Option<u64>, u64, u64)>>,
     down_sender_wake_qpc_ticks: AtomicU64,
-    down_sender_stale_commit_count: AtomicU64,
     down_sender_attempt_count: AtomicU64,
     interrupted_wait_count: AtomicU64,
     interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
-    pub(crate) metadata_only_wait_count: AtomicU64,
-    pub(crate) metadata_only_wait_target_qpc_ticks: AtomicU64,
-    pub(crate) metadata_only_wait_wake_qpc_ticks: AtomicU64,
+    pub(crate) unmatched_up_prepare_count: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
     startup_checkpoint: AtomicU8,
@@ -319,16 +313,20 @@ pub enum StartupCheckpoint {
     WakeCalibration = 12,
     #[cfg(any(test, feature = "test-support"))]
     WorkerCompletionPublished = 13,
-    #[cfg(any(test, feature = "test-support"))]
-    StaleMetadataChunk = 14,
-    #[cfg(any(test, feature = "test-support"))]
-    MetadataOnlyWait = 15,
+    PrepareDiagnosticChunk = 14,
     #[cfg(any(test, feature = "test-support"))]
     PhysicalWait = 16,
 }
 
 #[cfg(any(test, feature = "test-support"))]
 impl StartupOrderingHook {
+    pub(crate) fn record_unmatched_up_prepare(&self, intent_count: usize) {
+        self.unmatched_up_prepare_count.fetch_add(
+            u64::try_from(intent_count).unwrap_or(u64::MAX),
+            Ordering::AcqRel,
+        );
+    }
+
     #[cfg(test)]
     pub(crate) fn complete_startup_calibration_after_checkpoint(&self) {
         self.complete_startup_calibration_after_checkpoint
@@ -482,17 +480,6 @@ impl StartupOrderingHook {
         self.sequence.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    pub(crate) fn mark_stale_packet_committed(&self, attributed_wake_available: bool) {
-        self.stale_packet_committed
-            .store(self.next_sequence(), Ordering::SeqCst);
-        self.stale_packet_commit_count
-            .fetch_add(1, Ordering::SeqCst);
-        if attributed_wake_available {
-            self.stale_packet_committed_after_wake_count
-                .fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
     pub(crate) fn mark_first_physical_send_started(&self) {
         if self.first_physical_send_started.load(Ordering::SeqCst) == 0 {
             self.first_physical_send_started
@@ -543,7 +530,7 @@ impl StartupOrderingHook {
     #[cfg(test)]
     pub(crate) fn last_down_sender_qpc_evidence(
         &self,
-    ) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>, u64) {
+    ) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
         let pre_call = self.down_sender_start_qpc_ticks.load(Ordering::Acquire);
         let authored_target = self
             .down_sender_authored_target_qpc_ticks
@@ -552,13 +539,11 @@ impl StartupOrderingHook {
             .down_sender_packet_not_before_qpc_ticks
             .load(Ordering::Acquire);
         let wake = self.down_sender_wake_qpc_ticks.load(Ordering::Acquire);
-        let stale_commit_count = self.down_sender_stale_commit_count.load(Ordering::Acquire);
         (
             (pre_call != 0).then_some(pre_call),
             (authored_target != 0).then_some(authored_target),
             (packet_not_before != 0).then_some(packet_not_before),
             (wake != 0).then_some(wake),
-            stale_commit_count,
         )
     }
 
@@ -605,7 +590,6 @@ impl StartupOrderingHook {
         authored_target_qpc_ticks: u64,
         packet_not_before_qpc_ticks: u64,
         wake_qpc_ticks: Option<u64>,
-        stale_commit_count: u64,
     ) {
         self.down_sender_attempt_count
             .fetch_add(1, Ordering::AcqRel);
@@ -617,8 +601,6 @@ impl StartupOrderingHook {
             .store(packet_not_before_qpc_ticks, Ordering::Release);
         self.down_sender_wake_qpc_ticks
             .store(wake_qpc_ticks.unwrap_or(0), Ordering::Release);
-        self.down_sender_stale_commit_count
-            .store(stale_commit_count, Ordering::Release);
     }
 
     pub(crate) fn wait_after_successful_up(&self) {

@@ -79,11 +79,9 @@ pub(super) fn up_slot_trace(
         .as_u64()
         .checked_add(timing.authored_up_offset_ticks.as_u64())
         .ok_or(TimeArithmeticError::Overflow)?;
-    let floor = observation
-        .epoch_qpc
+    let floor = timing
+        .release_not_before_qpc
         .as_u64()
-        .checked_add(timing.release_not_before_ticks.as_u64())
-        .ok_or(TimeArithmeticError::Overflow)?
         .max(target)
         .max(observation.packet_not_before_qpc.as_u64());
     let residual = observation
@@ -99,7 +97,10 @@ pub(super) fn up_slot_trace(
         scan_code: timing.scan_code,
         source_action_index: timing.source_action_index,
         authored_offset_ticks: timing.authored_up_offset_ticks.as_u64(),
-        release_floor_offset_ticks: timing.release_not_before_ticks.as_u64(),
+        release_floor_offset_ticks: timing
+            .release_not_before_qpc
+            .as_u64()
+            .saturating_sub(observation.epoch_qpc.as_u64()),
         floor_displacement_ticks: floor - target,
         pre_call_qpc_ticks: observation.pre_call_qpc.map(|qpc| qpc.as_u64()),
         completion_qpc_ticks: observation.completion_qpc.as_u64(),
@@ -112,7 +113,7 @@ use crate::engine::{TRACE_KIND_DOWN, TRACE_KIND_MIXED};
 #[cfg(test)]
 use sky_dispatch_core::time::TimelineTicks;
 
-pub(super) fn drain_stale_metadata_observation(
+pub(crate) fn drain_stale_metadata_observation(
     observation: &StaleMetadataObservation,
     telemetry: &mut TelemetryCollector,
 ) -> Result<(), DispatchStep> {
@@ -581,7 +582,7 @@ mod tests {
                     scan_code: scan,
                     source_action_index: source,
                     authored_up_offset_ticks: TimelineTicks::from_raw(authored),
-                    release_not_before_ticks: TimelineTicks::from_raw(floor),
+                    release_not_before_qpc: QpcTicks::from_raw(1_000 + floor),
                 },
                 epoch_qpc: QpcTicks::from_raw(1_000),
                 pre_call_qpc: Some(QpcTicks::from_raw(1_150)),
@@ -637,7 +638,7 @@ mod tests {
                 scan_code: 21,
                 source_action_index: 7,
                 authored_up_offset_ticks: TimelineTicks::from_raw(100),
-                release_not_before_ticks: TimelineTicks::from_raw(120),
+                release_not_before_qpc: QpcTicks::from_raw(120),
             };
         observation.up_slots = Some(storage);
         observation.up_slot_count = 1;
@@ -703,14 +704,14 @@ mod tests {
                 scan_code: 21,
                 source_action_index: 7,
                 authored_up_offset_ticks: TimelineTicks::from_raw(100),
-                release_not_before_ticks: TimelineTicks::from_raw(120),
+                release_not_before_qpc: QpcTicks::from_raw(1_120),
             },
             sky_dispatch_core::executor::UpSlotTiming {
                 slot: 1,
                 scan_code: 22,
                 source_action_index: 8,
                 authored_up_offset_ticks: TimelineTicks::from_raw(110),
-                release_not_before_ticks: TimelineTicks::from_raw(145),
+                release_not_before_qpc: QpcTicks::from_raw(1_145),
             },
         ]);
         observation.epoch_qpc = QpcTicks::from_raw(1_000);

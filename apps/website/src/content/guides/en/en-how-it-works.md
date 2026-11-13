@@ -63,13 +63,16 @@ inside Sky. The core loop:
 
 - **Contiguous chord batches** — all notes in a chord are submitted in one `SendInput` call to
   minimise sender-side skew between keys in the same chord.
-- **Hold semantics** — long notes are held for their full notated duration. A hold note does
-  not get clipped short because the next note is close.
+- **Hold and compatibility diagnostics** — the planner can report conversion or sustain
+  loss, and the sender applies physical hold floors. These floors describe sender policy.
 - **Hold-frame alignment** — the hold duration is expressed as 1.0, 1.25, or 1.5 game frames
   at the FPS you select. The default is 1.0 frames.
-- **Latency adaptation** — the scheduler measures sender-side completion error on the current
-  machine and adjusts its lead time accordingly. This reduces systematic drift; it does not
-  guarantee game-side timing accuracy, which also depends on Windows and the game's sampling loop.
+- **QPC timing** — the production sender uses a calibrated Frozen wake guard and QPC deadline
+  checks. Windows and the game sample input independently, so sender timing cannot guarantee
+  that the game registers every note or sustain.
+
+Compatibility and risk diagnostics are available during preparation so users can review
+conversion or sustain limitations before playback.
 
 ## Architecture overview
 

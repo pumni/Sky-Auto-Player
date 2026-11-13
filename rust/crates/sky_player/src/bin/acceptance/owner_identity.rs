@@ -167,10 +167,10 @@ pub(super) fn failure_matches(
     process_termination_verified: bool,
 ) -> bool {
     expected_failure_reason(scenario)
-        .is_some_and(|expected| terminal_error == Some(expected))
+        .is_some_and(|expected| super::terminal_error_matches_reason(terminal_error, expected))
         || (scenario == Scenario::OwnerProcessTermination
             && process_termination_verified
-            && terminal_error == Some("focus_lost_during_preroll"))
+            && super::terminal_error_matches_reason(terminal_error, "focus_lost_during_preroll"))
 }
 
 pub(super) fn failure_qualified(
@@ -217,7 +217,7 @@ pub(super) fn failure_result(
         if qualified
             && scenario == Scenario::OwnerProcessTermination
             && process_termination_verified
-            && terminal_error == Some("focus_lost_during_preroll")
+            && super::terminal_error_matches_reason(terminal_error, "focus_lost_during_preroll")
         {
             "identity-verified ReceiveOnly owner process termination destroyed the foreground window; preroll failed closed before the sender"
         } else if qualified && scenario == Scenario::OwnerProcessTermination && process_termination_verified {
@@ -239,6 +239,26 @@ pub(super) fn failure_result(
 #[cfg(test)]
 mod tests {
     use super::{Scenario, failure_result};
+
+    #[test]
+    fn detailed_terminal_diagnostic_preserves_expected_owner_failure() {
+        let result = failure_result(
+            Scenario::OwnerMismatch,
+            Some("dispatch gate rejected before SendInput: source_action=0: prepared_down_owner_mismatch"),
+            true,
+            0,
+            false,
+            None,
+        );
+
+        assert!(matches!(
+            result,
+            Some((
+                super::super::Verdict::Pass,
+                "window-owner authority failure stopped before the prepared sender"
+            ))
+        ));
+    }
 
     #[test]
     fn synthetic_authority_revocation_does_not_claim_process_termination() {
@@ -284,7 +304,7 @@ mod tests {
     fn verified_receive_only_termination_that_destroys_foreground_fails_closed() {
         let result = failure_result(
             Scenario::OwnerProcessTermination,
-            Some("focus_lost_during_preroll"),
+            Some("dispatch gate rejected before SendInput: source_action=0: focus_lost_during_preroll"),
             true,
             0,
             true,

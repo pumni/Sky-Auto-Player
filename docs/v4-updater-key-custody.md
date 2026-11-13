@@ -7,9 +7,9 @@ recovery for the production v4 Tauri updater trust root.
 This runbook is governed by `SECURITY.md`, the current release topology in
 [`ADR-0007`](adr/ADR-0007-single-repository-v4-release-architecture.md), and
 the stable/beta channel policy in
-[`ADR-0009`](adr/ADR-0009-v4-github-latest-policy.md). `ADR-0006` remains the
-historical rationale for application identity and installation/user-data
-separation.
+[`ADR-0009`](adr/ADR-0009-v4-github-latest-policy.md). The
+[historical ADR-0006 rationale](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md)
+is retained only in Git history.
 
 ## 1. Trust Root Architecture and Inventory
 

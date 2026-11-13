@@ -31,11 +31,7 @@ music-sheet player for Sky: Children of the Light.
   behavior changes.
 - Local editing and testing are within scope. Remote branch/PR/issue/release
   changes need authorization for the requested action.
-- Run focused checks as appropriate. Pre-CI review is allowed; the required
-  `Sky Auto Player — required CI gate` must be green at the exact PR head before
-  merge. Signing and malware proof jobs are required when the classifier selects
-  their lanes.
-  The pre-review full local gate is `cargo xtask check all`. Report what actually
-  ran and what did not.
+- Run focused checks and report what ran. The pre-review full local gate is
+  `cargo xtask check all`; required CI must pass at the exact PR head before merge.
 - Maintained names describe responsibilities rather than past project phases;
   genuine version/schema IDs and immutable historical names are exceptions.

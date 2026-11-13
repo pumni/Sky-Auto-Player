@@ -4,8 +4,8 @@ Status: accepted
 
 Date: 2026-09-09
 
-Supersedes: [ADR-0006](ADR-0006-v4-distribution-installation-update.md) for the v4 release and
-update topology.
+Supersedes: [historical ADR-0006](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md)
+for the v4 release and update topology.
 
 ## Context
 

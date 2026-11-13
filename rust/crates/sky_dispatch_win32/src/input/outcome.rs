@@ -140,6 +140,20 @@ impl SendTransactionOutcome {
         matches!(self.status, SendTransactionStatus::Complete)
     }
 
+    /// A physical packet is complete only when the sender's masks and single
+    /// raw-call evidence account for every requested event.
+    pub fn has_complete_evidence_for(&self, packet: PhysicalPacket) -> bool {
+        let requested_mask = packet.up_mask | packet.down_mask;
+        let requested = packet.event_count();
+        self.status == SendTransactionStatus::Complete
+            && requested != 0
+            && self.evidence.requested_mask == requested_mask
+            && self.evidence.confirmed_mask == requested_mask
+            && self.evidence.skipped_mask == 0
+            && self.evidence.first_inserted == requested
+            && self.evidence.attempts == 1
+    }
+
     pub fn sent_scan_codes(&self) -> SmallVec<[u16; 15]> {
         scan_codes_from_mask(self.evidence.confirmed_mask)
     }

@@ -8,7 +8,10 @@ use smallvec::SmallVec;
 
 use crate::coordinator::{GenerationAccounting, GenerationCounters};
 use crate::model::{GenerationId, KeyRegistry, KeySlot, MAX_KEYS, RuntimeSchedule};
-use crate::time::{DurationTicks, TimelineTicks};
+use crate::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
+mod memory;
+pub use memory::MAX_EXECUTOR_BYTES;
+use memory::{checked_executor_storage_bytes, reserve_executor_chords};
 
 /// Per-slot musical ownership state for the 15 instrument keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,10 +20,10 @@ pub struct MusicalSlot {
     pub active_generation: Option<GenerationId>,
     /// Exact authored Up offset for this generation.
     pub authored_up_offset_ticks: TimelineTicks,
-    /// Physical hold floor: successful Down completion + H.
-    pub release_not_before_ticks: TimelineTicks,
-    /// Physical repress floor: previous Up completion + T.
-    pub next_down_not_before_ticks: TimelineTicks,
+    /// Physical hold floor: successful Down completion QPC + H.
+    pub release_not_before_qpc: QpcTicks,
+    /// Physical repress floor: previous Up completion QPC + T.
+    pub next_down_not_before_qpc: QpcTicks,
     /// Exact authored source action index of the paired Up.
     pub paired_up_source_action_index: u32,
 }
@@ -30,8 +33,8 @@ impl Default for MusicalSlot {
         Self {
             active_generation: None,
             authored_up_offset_ticks: TimelineTicks::ZERO,
-            release_not_before_ticks: TimelineTicks::ZERO,
-            next_down_not_before_ticks: TimelineTicks::ZERO,
+            release_not_before_qpc: QpcTicks::ZERO,
+            next_down_not_before_qpc: QpcTicks::ZERO,
             paired_up_source_action_index: 0,
         }
     }
@@ -62,18 +65,45 @@ pub struct DownChordTicks {
     pub intents: SmallVec<[DownIntentTicks; MAX_KEYS]>,
 }
 
-/// The next action decided by the 15-slot executor at time `now_ticks`.
+/// Absolute-QPC decision made by the production scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DispatchAction<'a> {
+pub enum DispatchDecision<'a> {
     /// Ready physical packet to stage and send.
     Send {
         up_mask: u16,
         down_chord: Option<&'a DownChordTicks>,
+        timing_window: DispatchTimingWindow,
     },
     /// No physical work ready; wait until the specified deadline.
-    Wait { deadline_ticks: TimelineTicks },
+    Wait { deadline_qpc: QpcTicks },
     /// All Down chords sent, all slots released, and timeline end offset reached.
     Finished,
+}
+
+/// Timeline-zero adapter retained for core unit fixtures that model an
+/// epoch at QPC zero. Production dispatch uses [`DispatchDecision`].
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchAction<'a> {
+    Send {
+        up_mask: u16,
+        down_chord: Option<&'a DownChordTicks>,
+    },
+    Wait {
+        deadline_ticks: TimelineTicks,
+    },
+    Finished,
+}
+
+/// Scheduler-owned absolute QPC eligibility evidence for one physical packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchTimingWindow {
+    pub authored_target_qpc: QpcTicks,
+    pub musical_up_not_before_qpc: QpcTicks,
+    pub down_not_before_qpc: QpcTicks,
+    pub packet_not_before_qpc: QpcTicks,
+    pub hold_floor_mask: u16,
+    pub release_floor_mask: u16,
 }
 
 /// Bounded 15-slot musical executor.
@@ -85,7 +115,7 @@ pub struct DispatchExecutor {
     key_registry: KeyRegistry,
     chord_cursor: usize,
     slots: [MusicalSlot; MAX_KEYS],
-    resume_barrier_ticks: TimelineTicks,
+    resume_barrier_qpc: Option<QpcTicks>,
     min_hold_ticks: DurationTicks,
     frame_ticks: DurationTicks,
     counters: GenerationCounters,
@@ -93,28 +123,6 @@ pub struct DispatchExecutor {
     activated_generations: u64,
 }
 
-pub const MAX_EXECUTOR_BYTES: usize = 512 * 1024 * 1024;
-
-fn checked_executor_storage_bytes(chord_count: usize) -> Result<usize, String> {
-    let estimated_bytes = chord_count
-        .checked_mul(std::mem::size_of::<DownChordTicks>())
-        .ok_or_else(|| "executor memory size overflow".to_string())?;
-    if estimated_bytes > MAX_EXECUTOR_BYTES {
-        return Err(format!(
-            "executor memory requirement ({estimated_bytes} bytes) exceeds budget of {MAX_EXECUTOR_BYTES} bytes"
-        ));
-    }
-    Ok(estimated_bytes)
-}
-
-fn reserve_executor_chords(
-    down_chords: &mut Vec<DownChordTicks>,
-    chord_count: usize,
-) -> Result<(), String> {
-    down_chords
-        .try_reserve_exact(chord_count)
-        .map_err(|error| format!("executor chord capacity allocation failed: {error}"))
-}
 pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
 
 /// Measured memory footprint of the `DispatchExecutor`.
@@ -134,7 +142,7 @@ pub struct UpSlotTiming {
     pub scan_code: u16,
     pub source_action_index: u32,
     pub authored_up_offset_ticks: TimelineTicks,
-    pub release_not_before_ticks: TimelineTicks,
+    pub release_not_before_qpc: QpcTicks,
 }
 
 impl UpSlotTiming {
@@ -143,7 +151,7 @@ impl UpSlotTiming {
         scan_code: 0,
         source_action_index: 0,
         authored_up_offset_ticks: TimelineTicks::ZERO,
-        release_not_before_ticks: TimelineTicks::ZERO,
+        release_not_before_qpc: QpcTicks::ZERO,
     };
 }
 
@@ -247,7 +255,7 @@ impl DispatchExecutor {
             key_registry: schedule.key_registry.clone(),
             chord_cursor: 0,
             slots: [MusicalSlot::default(); MAX_KEYS],
-            resume_barrier_ticks: TimelineTicks::ZERO,
+            resume_barrier_qpc: None,
             min_hold_ticks,
             frame_ticks,
             counters: GenerationCounters::default(),
@@ -288,7 +296,7 @@ impl DispatchExecutor {
                     scan_code,
                     source_action_index: slot.paired_up_source_action_index,
                     authored_up_offset_ticks: slot.authored_up_offset_ticks,
-                    release_not_before_ticks: slot.release_not_before_ticks,
+                    release_not_before_qpc: slot.release_not_before_qpc,
                 });
             }
         }
@@ -359,40 +367,78 @@ impl DispatchExecutor {
     }
 
     #[inline]
-    pub fn resume_barrier_ticks(&self) -> TimelineTicks {
-        self.resume_barrier_ticks
+    pub fn resume_barrier_qpc(&self) -> Option<QpcTicks> {
+        self.resume_barrier_qpc
     }
 
-    /// Evaluate the current state at `now_ticks` and decide the next dispatch action.
-    pub fn evaluate(&self, now_ticks: TimelineTicks) -> DispatchAction<'_> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn resume_barrier_ticks(&self) -> TimelineTicks {
+        TimelineTicks::from_raw(self.resume_barrier_qpc.unwrap_or(QpcTicks::ZERO).as_u64())
+    }
+
+    /// Evaluate the current state at an absolute QPC time and decide the next action.
+    /// Authored targets are offsets from the current playback epoch; physical
+    /// H/G and resume floors remain absolute across pause-driven epoch changes.
+    pub fn evaluate_at(
+        &self,
+        now_qpc: QpcTicks,
+        epoch_qpc: QpcTicks,
+    ) -> Result<DispatchDecision<'_>, TimeArithmeticError> {
         let mut up_ready_mask = 0u16;
-        let mut earliest_active_up_due: Option<TimelineTicks> = None;
+        let mut earliest_active_up_due_qpc: Option<QpcTicks> = None;
+        let mut up_packet_not_before_qpc: Option<QpcTicks> = None;
+        let mut up_authored_target_qpc: Option<QpcTicks> = None;
+        let mut up_hold_floor_mask = 0u16;
 
         for (slot_idx, slot) in self.slots.iter().enumerate() {
             if slot.active_generation.is_some() {
-                let due = slot
-                    .authored_up_offset_ticks
-                    .max(slot.release_not_before_ticks);
-                if now_ticks >= due {
+                let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
+                    slot.authored_up_offset_ticks.as_u64(),
+                ))?;
+                let due = authored_up_qpc.max(slot.release_not_before_qpc);
+                if now_qpc >= due {
                     up_ready_mask |= 1 << slot_idx;
+                    up_packet_not_before_qpc =
+                        Some(up_packet_not_before_qpc.map_or(due, |value| value.max(due)));
+                    up_authored_target_qpc = Some(
+                        up_authored_target_qpc
+                            .map_or(authored_up_qpc, |value| value.min(authored_up_qpc)),
+                    );
+                    if slot.release_not_before_qpc > authored_up_qpc {
+                        up_hold_floor_mask |= 1 << slot_idx;
+                    }
                 } else {
-                    earliest_active_up_due = Some(match earliest_active_up_due {
-                        Some(earliest) => earliest.min(due),
-                        None => due,
-                    });
+                    // A due Up is sent immediately. Until then, only the
+                    // earliest active release can wake the worker.
+                    earliest_active_up_due_qpc =
+                        Some(earliest_active_up_due_qpc.map_or(due, |value| value.min(due)));
                 }
             }
         }
 
         let chord_opt = self.down_chords.get(self.chord_cursor);
         let mut chord_eligible = false;
-        let mut chord_earliest_due = TimelineTicks::ZERO;
+        let mut chord_earliest_due_qpc = QpcTicks::ZERO;
+        let mut chord_authored_target_qpc = None;
+        let mut down_release_floor_mask = 0u16;
 
         if let Some(chord) = chord_opt {
+            let authored_down_qpc = epoch_qpc
+                .checked_add_duration(DurationTicks::from_raw(chord.scheduled_ticks.as_u64()))?;
+            chord_authored_target_qpc = Some(authored_down_qpc);
             chord_eligible = true;
-            chord_earliest_due = chord.scheduled_ticks;
-            if now_ticks < chord_earliest_due {
+            chord_earliest_due_qpc = authored_down_qpc;
+            if now_qpc < authored_down_qpc {
                 chord_eligible = false;
+            }
+            if let Some(resume_barrier) = self.resume_barrier_qpc
+                && resume_barrier > authored_down_qpc
+            {
+                chord_earliest_due_qpc = chord_earliest_due_qpc.max(resume_barrier);
+                down_release_floor_mask |= chord.down_mask;
+                if now_qpc < resume_barrier {
+                    chord_eligible = false;
+                }
             }
 
             for intent in &chord.intents {
@@ -400,86 +446,155 @@ impl DispatchExecutor {
                 let slot = &self.slots[k];
                 if slot.active_generation.is_some() {
                     chord_eligible = false;
-                    let key_release_due = slot
-                        .authored_up_offset_ticks
-                        .max(slot.release_not_before_ticks);
+                    let authored_up_qpc = epoch_qpc.checked_add_duration(
+                        DurationTicks::from_raw(slot.authored_up_offset_ticks.as_u64()),
+                    )?;
+                    let key_release_due = authored_up_qpc.max(slot.release_not_before_qpc);
                     let key_next_down_min =
-                        key_release_due.saturating_add_duration(self.frame_ticks);
-                    chord_earliest_due = chord_earliest_due.max(key_next_down_min);
-                } else if now_ticks < slot.next_down_not_before_ticks {
-                    chord_eligible = false;
-                    chord_earliest_due = chord_earliest_due.max(slot.next_down_not_before_ticks);
+                        key_release_due.checked_add_duration(self.frame_ticks)?;
+                    chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_next_down_min);
+                    if key_next_down_min > authored_down_qpc {
+                        down_release_floor_mask |= 1 << k;
+                    }
+                } else {
+                    chord_earliest_due_qpc =
+                        chord_earliest_due_qpc.max(slot.next_down_not_before_qpc);
+                    if slot.next_down_not_before_qpc > authored_down_qpc {
+                        down_release_floor_mask |= 1 << k;
+                    }
+                    if now_qpc < slot.next_down_not_before_qpc {
+                        chord_eligible = false;
+                    }
                 }
             }
         }
 
+        let up_ready_qpc = up_packet_not_before_qpc.filter(|_| up_ready_mask != 0);
+        let up_authored_qpc = up_authored_target_qpc.filter(|_| up_ready_mask != 0);
+        let down_ready_qpc = chord_eligible.then_some(chord_earliest_due_qpc);
+        let down_authored_qpc = chord_authored_target_qpc.filter(|_| chord_eligible);
         match (up_ready_mask != 0, chord_eligible) {
-            (true, true) => DispatchAction::Send {
-                up_mask: up_ready_mask,
-                down_chord: chord_opt,
-            },
-            (true, false) => DispatchAction::Send {
-                up_mask: up_ready_mask,
-                down_chord: None,
-            },
-            (false, true) => DispatchAction::Send {
-                up_mask: 0,
-                down_chord: chord_opt,
-            },
+            (true, true) | (true, false) | (false, true) => {
+                let authored_target_qpc = match (up_authored_qpc, down_authored_qpc) {
+                    (Some(up), Some(down)) => up.min(down),
+                    (Some(up), None) => up,
+                    (None, Some(down)) => down,
+                    (None, None) => unreachable!("a send action has a selected direction"),
+                };
+                let musical_up_not_before_qpc = up_ready_qpc.unwrap_or(authored_target_qpc);
+                let down_not_before_qpc = down_ready_qpc.unwrap_or(authored_target_qpc);
+                Ok(DispatchDecision::Send {
+                    up_mask: if up_ready_mask != 0 { up_ready_mask } else { 0 },
+                    down_chord: if chord_eligible { chord_opt } else { None },
+                    timing_window: DispatchTimingWindow {
+                        authored_target_qpc,
+                        musical_up_not_before_qpc,
+                        down_not_before_qpc,
+                        packet_not_before_qpc: musical_up_not_before_qpc.max(down_not_before_qpc),
+                        hold_floor_mask: up_hold_floor_mask,
+                        release_floor_mask: if chord_eligible {
+                            down_release_floor_mask
+                        } else {
+                            0
+                        },
+                    },
+                })
+            }
             (false, false) => {
-                let mut earliest_wake: Option<TimelineTicks> = earliest_active_up_due;
+                let mut earliest_wake = if up_ready_mask == 0 {
+                    earliest_active_up_due_qpc
+                } else {
+                    None
+                };
                 if chord_opt.is_some() {
-                    earliest_wake = Some(match earliest_wake {
-                        Some(earliest) => earliest.min(chord_earliest_due),
-                        None => chord_earliest_due,
-                    });
+                    earliest_wake =
+                        Some(earliest_wake.map_or(chord_earliest_due_qpc, |earliest| {
+                            earliest.min(chord_earliest_due_qpc)
+                        }));
                 }
 
                 if let Some(wake) = earliest_wake {
-                    DispatchAction::Wait {
-                        deadline_ticks: wake,
-                    }
-                } else if now_ticks < self.schedule_end_offset_ticks {
-                    DispatchAction::Wait {
-                        deadline_ticks: self.schedule_end_offset_ticks,
-                    }
+                    Ok(DispatchDecision::Wait { deadline_qpc: wake })
                 } else {
-                    DispatchAction::Finished
+                    let schedule_end_qpc = epoch_qpc.checked_add_duration(
+                        DurationTicks::from_raw(self.schedule_end_offset_ticks.as_u64()),
+                    )?;
+                    if now_qpc < schedule_end_qpc {
+                        Ok(DispatchDecision::Wait {
+                            deadline_qpc: schedule_end_qpc,
+                        })
+                    } else {
+                        Ok(DispatchDecision::Finished)
+                    }
                 }
             }
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn evaluate(&self, now_ticks: TimelineTicks) -> DispatchAction<'_> {
+        match self
+            .evaluate_at(QpcTicks::from_raw(now_ticks.as_u64()), QpcTicks::ZERO)
+            .expect("timeline-zero test scheduler timestamps must fit QPC")
+        {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                ..
+            } => DispatchAction::Send {
+                up_mask,
+                down_chord,
+            },
+            DispatchDecision::Wait { deadline_qpc } => DispatchAction::Wait {
+                deadline_ticks: TimelineTicks::from_raw(deadline_qpc.as_u64()),
+            },
+            DispatchDecision::Finished => DispatchAction::Finished,
+        }
+    }
+
     /// Commit the result of a successful or partial SendInput transaction.
-    pub fn on_send_completed(
+    pub fn on_send_completed_at(
         &mut self,
         confirmed_up_mask: u16,
         confirmed_down_mask: u16,
-        completion_ticks: TimelineTicks,
+        completion_qpc: QpcTicks,
     ) -> Result<(), String> {
-        let mut mask = confirmed_up_mask;
-        while mask != 0 {
-            let slot_idx = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            let slot = &mut self.slots[slot_idx];
-            if slot.active_generation.take().is_some() {
-                slot.next_down_not_before_ticks =
-                    completion_ticks.saturating_add_duration(self.frame_ticks);
-                self.counters.released = self
-                    .counters
-                    .released
-                    .checked_add(1)
-                    .ok_or("counter overflow")?;
-            } else {
+        if confirmed_up_mask & confirmed_down_mask != 0 {
+            return Err("confirmed packet has overlapping Up and Down masks".to_string());
+        }
+        let new_down_floor = if confirmed_up_mask != 0 {
+            Some(
+                completion_qpc
+                    .checked_add_duration(self.frame_ticks)
+                    .map_err(|error| format!("Up completion G floor overflow: {error}"))?,
+            )
+        } else {
+            None
+        };
+        let new_up_floor = if confirmed_down_mask != 0 {
+            Some(
+                completion_qpc
+                    .checked_add_duration(self.min_hold_ticks)
+                    .map_err(|error| format!("Down completion H floor overflow: {error}"))?,
+            )
+        } else {
+            None
+        };
+
+        let mut up_slots = confirmed_up_mask;
+        while up_slots != 0 {
+            let slot_idx = up_slots.trailing_zeros() as usize;
+            up_slots &= up_slots - 1;
+            if self.slots[slot_idx].active_generation.is_none() {
                 return Err(format!("confirmed Up on inactive slot {slot_idx}"));
             }
         }
 
-        if confirmed_down_mask != 0 {
-            if self.chord_cursor >= self.down_chords.len() {
-                return Err("confirmed Down chord when chord cursor is exhausted".to_string());
-            }
-            let chord = &self.down_chords[self.chord_cursor];
+        let chord = if confirmed_down_mask != 0 {
+            let chord = self
+                .down_chords
+                .get(self.chord_cursor)
+                .ok_or_else(|| "confirmed Down chord when chord cursor is exhausted".to_string())?;
             if chord.down_mask != confirmed_down_mask {
                 return Err(format!(
                     "confirmed Down mask 0x{:04x} does not match chord mask 0x{:04x}",
@@ -487,25 +602,79 @@ impl DispatchExecutor {
                 ));
             }
             for intent in &chord.intents {
-                let k = intent.key_slot as usize;
-                let slot = &mut self.slots[k];
-                if slot.active_generation.is_some() {
-                    return Err(format!("attempted to activate already active slot {k}"));
+                if self.slots[intent.key_slot as usize]
+                    .active_generation
+                    .is_some()
+                {
+                    return Err(format!(
+                        "attempted to activate already active slot {}",
+                        intent.key_slot
+                    ));
                 }
+            }
+            Some(chord)
+        } else {
+            None
+        };
+        if chord.is_some() && confirmed_down_mask & confirmed_up_mask != 0 {
+            return Err("confirmed packet releases and represses the same slot".to_string());
+        }
+        let next_released = self
+            .counters
+            .released
+            .checked_add(u64::from(confirmed_up_mask.count_ones()))
+            .ok_or("released counter overflow")?;
+        let activated_count = chord.map_or(0, |chord| chord.intents.len() as u64);
+        let next_activated = self
+            .activated_generations
+            .checked_add(activated_count)
+            .ok_or("activated counter overflow")?;
+        if next_activated > self.total_generations {
+            return Err("activated generation count exceeds compiled total".to_string());
+        }
+        let next_cursor = self
+            .chord_cursor
+            .checked_add(if chord.is_some() { 1 } else { 0 })
+            .ok_or("Down chord cursor overflow")?;
+
+        let mut up_slots = confirmed_up_mask;
+        while up_slots != 0 {
+            let slot_idx = up_slots.trailing_zeros() as usize;
+            up_slots &= up_slots - 1;
+            let slot = &mut self.slots[slot_idx];
+            slot.active_generation = None;
+            slot.release_not_before_qpc = QpcTicks::ZERO;
+            slot.next_down_not_before_qpc = new_down_floor.unwrap_or(QpcTicks::ZERO);
+        }
+        if let Some(chord) = chord {
+            for intent in &chord.intents {
+                let slot = &mut self.slots[intent.key_slot as usize];
                 slot.active_generation = Some(intent.generation_id);
                 slot.authored_up_offset_ticks = intent.paired_up_offset_ticks;
                 slot.paired_up_source_action_index = intent.paired_up_source_action_index;
-                slot.release_not_before_ticks =
-                    completion_ticks.saturating_add_duration(self.min_hold_ticks);
-                self.activated_generations = self
-                    .activated_generations
-                    .checked_add(1)
-                    .ok_or("counter overflow")?;
+                slot.release_not_before_qpc = new_up_floor.unwrap_or(QpcTicks::ZERO);
+                slot.next_down_not_before_qpc = QpcTicks::ZERO;
             }
-            self.chord_cursor += 1;
         }
+        self.counters.released = next_released;
+        self.activated_generations = next_activated;
+        self.chord_cursor = next_cursor;
 
         Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn on_send_completed(
+        &mut self,
+        confirmed_up_mask: u16,
+        confirmed_down_mask: u16,
+        completion_ticks: TimelineTicks,
+    ) -> Result<(), String> {
+        self.on_send_completed_at(
+            confirmed_up_mask,
+            confirmed_down_mask,
+            QpcTicks::from_raw(completion_ticks.as_u64()),
+        )
     }
 
     /// Check that cancelling all currently active generations would not overflow
@@ -528,23 +697,101 @@ impl DispatchExecutor {
     /// Clears active musical owners in all 15 slots without physical replay,
     /// marks cancelled generations in accounting, and sets the session-wide
     /// resume barrier to `completion_ticks + T`.
-    pub fn on_verified_cleanup(&mut self, completion_ticks: TimelineTicks) -> Result<u64, String> {
+    pub fn on_verified_cleanup_at(&mut self, completion_qpc: QpcTicks) -> Result<u64, String> {
         let active_count = self
             .slots
             .iter()
             .filter(|s| s.active_generation.is_some())
             .count() as u64;
-        self.counters.cancelled = self
+        let next_cancelled = self
             .counters
             .cancelled
             .checked_add(active_count)
             .ok_or("cancelled counter overflow")?;
+        let barrier = completion_qpc
+            .checked_add_duration(self.frame_ticks)
+            .map_err(|error| format!("resume barrier overflow: {error}"))?;
         for slot in &mut self.slots {
             slot.active_generation = None;
+            slot.release_not_before_qpc = QpcTicks::ZERO;
+            slot.next_down_not_before_qpc = QpcTicks::ZERO;
         }
-        let barrier = completion_ticks.saturating_add_duration(self.frame_ticks);
-        self.resume_barrier_ticks = self.resume_barrier_ticks.max(barrier);
+        self.counters.cancelled = next_cancelled;
+        self.resume_barrier_qpc = Some(
+            self.resume_barrier_qpc
+                .map_or(barrier, |current| current.max(barrier)),
+        );
         Ok(active_count)
+    }
+
+    /// Cancel every remaining generation after verified terminal cleanup.
+    /// Scheduled generations are included because the session will not resume.
+    pub fn on_verified_terminal_cleanup(&mut self) -> Result<u64, String> {
+        let accounting = self.accounting();
+        let cancelled_count = accounting
+            .active
+            .checked_add(accounting.scheduled)
+            .ok_or("terminal cancellation count overflow")?;
+        let next_cancelled = self
+            .counters
+            .cancelled
+            .checked_add(cancelled_count)
+            .ok_or("terminal cancelled counter overflow")?;
+        self.counters.cancelled = next_cancelled;
+        for slot in &mut self.slots {
+            slot.active_generation = None;
+            slot.release_not_before_qpc = QpcTicks::ZERO;
+            slot.next_down_not_before_qpc = QpcTicks::ZERO;
+        }
+        Ok(cancelled_count)
+    }
+
+    /// Check the bounded scheduler state and generation lifecycle partition.
+    pub fn check_invariants(&self) -> Result<(), String> {
+        if self.chord_cursor > self.down_chords.len() {
+            return Err("scheduler chord cursor exceeds the compiled chord count".into());
+        }
+        for (slot_index, slot) in self.slots.iter().enumerate() {
+            if slot
+                .active_generation
+                .is_some_and(|generation| generation >= self.total_generations)
+            {
+                return Err(format!(
+                    "scheduler slot {slot_index} owns an unknown generation"
+                ));
+            }
+            if let Some(generation) = slot.active_generation
+                && self.slots[..slot_index]
+                    .iter()
+                    .any(|other| other.active_generation == Some(generation))
+            {
+                return Err(format!(
+                    "scheduler generation {generation} owns multiple slots"
+                ));
+            }
+        }
+        let accounting = self.accounting();
+        let accounted = accounting
+            .scheduled
+            .checked_add(accounting.active)
+            .and_then(|count| count.checked_add(accounting.released))
+            .and_then(|count| count.checked_add(accounting.dropped_conflict))
+            .and_then(|count| count.checked_add(accounting.dropped_backend))
+            .and_then(|count| count.checked_add(accounting.dropped_expired))
+            .and_then(|count| count.checked_add(accounting.cancelled))
+            .ok_or("scheduler lifecycle accounting overflow")?;
+        if accounted != accounting.total {
+            return Err(format!(
+                "scheduler lifecycle accounting {accounted} does not match total {}",
+                accounting.total
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn on_verified_cleanup(&mut self, completion_ticks: TimelineTicks) -> Result<u64, String> {
+        self.on_verified_cleanup_at(QpcTicks::from_raw(completion_ticks.as_u64()))
     }
 
     /// True when all chords have been dispatched, all slots are empty, and
@@ -556,6 +803,22 @@ impl DispatchExecutor {
             && now_ticks >= self.schedule_end_offset_ticks
     }
 
+    pub fn is_finished_at(
+        &self,
+        now_qpc: QpcTicks,
+        epoch_qpc: QpcTicks,
+    ) -> Result<bool, TimeArithmeticError> {
+        let end_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
+            self.schedule_end_offset_ticks.as_u64(),
+        ))?;
+        Ok(self.chord_cursor >= self.down_chords.len()
+            && self
+                .slots
+                .iter()
+                .all(|slot| slot.active_generation.is_none())
+            && now_qpc >= end_qpc)
+    }
+
     /// Snapshot current generation accounting.
     pub fn accounting(&self) -> GenerationAccounting {
         let active_count = self
@@ -563,9 +826,12 @@ impl DispatchExecutor {
             .iter()
             .filter(|s| s.active_generation.is_some())
             .count() as u64;
+        let terminal = self.counters.terminal_total();
         let scheduled = self
             .total_generations
-            .saturating_sub(self.activated_generations);
+            .checked_sub(active_count)
+            .and_then(|count| count.checked_sub(terminal))
+            .expect("scheduler lifecycle counters must remain valid");
         GenerationAccounting {
             total: self.total_generations,
             activated: self.activated_generations,
@@ -577,6 +843,23 @@ impl DispatchExecutor {
             dropped_expired: self.counters.dropped_expired,
             cancelled: self.counters.cancelled,
         }
+    }
+
+    /// Return compact generation status counts for terminal telemetry.
+    pub fn generation_status_counts(&self) -> std::collections::HashMap<String, u64> {
+        let accounting = self.accounting();
+        [
+            ("scheduled", accounting.scheduled),
+            ("active", accounting.active),
+            ("released", accounting.released),
+            ("dropped_conflict", accounting.dropped_conflict),
+            ("dropped_backend", accounting.dropped_backend),
+            ("dropped_expired", accounting.dropped_expired),
+            ("cancelled", accounting.cancelled),
+        ]
+        .into_iter()
+        .map(|(status, count)| (status.to_string(), count))
+        .collect()
     }
 
     /// Return the authored source action index of the first released key in `up_mask`.
@@ -592,6 +875,9 @@ impl DispatchExecutor {
 
 #[cfg(test)]
 mod memory_tests;
+
+#[cfg(test)]
+mod absolute_tests;
 
 #[cfg(test)]
 #[path = "executor/metadata_tests.rs"]

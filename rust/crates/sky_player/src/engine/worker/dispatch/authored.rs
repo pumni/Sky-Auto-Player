@@ -37,6 +37,7 @@ pub(crate) fn dispatch_authored_packet(
     ctx: AuthoredPacketContext<'_>,
     config: &WorkerConfig,
     resources: &mut WorkerResources,
+    coordinator: &mut RuntimeDispatchCoordinator,
     health: &mut WorkerHealthState,
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
@@ -69,7 +70,6 @@ pub(crate) fn dispatch_authored_packet(
     let WorkerResources {
         clock: qpc_clock,
         backend,
-        coordinator,
         playback: clock_state,
         ..
     } = resources;

@@ -64,7 +64,7 @@ impl Worker<'_> {
         finalize_worker(FinalizeInput {
             resources: FinalizeResources {
                 backend: resources.backend,
-                coordinator: resources.coordinator,
+                scheduler: resources.scheduler,
                 telemetry: resources.telemetry,
                 playback: resources.playback,
                 qpc_clock: resources.clock,

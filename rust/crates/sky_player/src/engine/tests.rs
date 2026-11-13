@@ -40,9 +40,9 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU16, AtomicU64, Ordering}
 use std::time::{Duration, Instant};
 
 pub(super) use super::{
-    CoordinatorError, EngineProgressSnapshot, EngineSnapshot, NativeTelemetrySummary,
-    OUTCOME_ERROR, OUTCOME_QUIT, OUTCOME_SKIPPED, OUTCOME_SYSTEM_SUSPENDED, PlaybackClockState,
-    TestWaitPolicy, config, session, shared, target, telemetry, test_support, worker,
+    EngineProgressSnapshot, EngineSnapshot, NativeTelemetrySummary, OUTCOME_ERROR, OUTCOME_QUIT,
+    OUTCOME_SKIPPED, OUTCOME_SYSTEM_SUSPENDED, PlaybackClockState, TestWaitPolicy, config, session,
+    shared, target, telemetry, test_support, worker,
 };
 
 mod lease_supervision;

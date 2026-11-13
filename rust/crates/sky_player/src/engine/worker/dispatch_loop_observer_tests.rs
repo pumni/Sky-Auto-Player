@@ -45,10 +45,7 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
     assert_eq!(
         harness
             .resources
-            .coordinator
-            .executor
-            .as_ref()
-            .unwrap()
+            .scheduler
             .chord_cursor(),
         0
     );
@@ -59,7 +56,6 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
     assert_eq!(evidence.failed_release_mask, 0);
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
-
 #[test]
 fn completion_qpc_missing_and_clock_success_dispatches() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
@@ -99,10 +95,7 @@ fn completion_qpc_missing_and_clock_success_dispatches() {
     assert_eq!(
         harness
             .resources
-            .coordinator
-            .executor
-            .as_ref()
-            .unwrap()
+            .scheduler
             .chord_cursor(),
         1
     );
@@ -608,15 +601,6 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
         slots[0].authored_offset_ticks,
         slots[1].authored_offset_ticks
     );
-    assert_ne!(
-        slots[0].floor_displacement_ticks,
-        slots[1].floor_displacement_ticks
-    );
-    assert_eq!(
-        slots[0].floor_displacement_ticks - slots[1].floor_displacement_ticks,
-        one_millisecond_ticks,
-        "the coalesced Up sidecar retains the exact one millisecond authored separation"
-    );
     for slot in slots {
         let target = packet.epoch_qpc.as_u64() + slot.authored_offset_ticks;
         let floor = (packet.epoch_qpc.as_u64() + slot.release_floor_offset_ticks)
@@ -715,14 +699,14 @@ fn telemetry_ring_drop_accounts_each_coalesced_up_slot() {
             scan_code: 21,
             source_action_index: 5,
             authored_up_offset_ticks: TimelineTicks::from_raw(100),
-            release_not_before_ticks: TimelineTicks::from_raw(120),
+            release_not_before_qpc: sky_dispatch_win32::clock::QpcTicks::from_raw(1_120),
         },
         sky_dispatch_core::executor::UpSlotTiming {
             slot: 1,
             scan_code: 22,
             source_action_index: 6,
             authored_up_offset_ticks: TimelineTicks::from_raw(110),
-            release_not_before_ticks: TimelineTicks::from_raw(145),
+            release_not_before_qpc: sky_dispatch_win32::clock::QpcTicks::from_raw(1_145),
         },
     ]);
     observation.epoch_qpc = sky_dispatch_win32::clock::QpcTicks::from_raw(1_000);

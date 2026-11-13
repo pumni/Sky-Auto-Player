@@ -1,19 +1,8 @@
 # Documentation Context
 
-Use [INDEX.md](INDEX.md) when a task needs a current technical contract.
-
-Historical ADRs, release records, and measurements preserve the decisions,
-source revisions, and conditions they actually describe; they are not
-instructions for current HEAD. Current playback architecture and qualification
-contracts are defined in [playback-engine.md](playback-engine.md) and
-[playback-verification.md](playback-verification.md). Archived reports, traces,
-and retired ADRs may be retrieved via [HISTORY.md](HISTORY.md) at immutable Git
-commits instead of keeping copies in the active tree. For visual UI tasks,
-see [ui/README.md](ui/README.md).
-
-Keep one-off screenshots, traces, and run logs out of tracked docs by default;
-use ignored test-results or CI artifacts. Commit durable evidence only when a
-reproducible test, release qualification, or other explicit consumer requires it.
-
-For active contracts, resolve drift using current source, direct tests, and
-the applicable security, timing, or release requirements.
+Use [INDEX.md](INDEX.md) to find the single active contract for a topic. Active
+docs describe current behavior and link to owning source/tests. Historical ADRs,
+release records, and measurements remain revision-bound; retrieve removed
+material through immutable links in [HISTORY.md](HISTORY.md). Keep one-off logs,
+traces, and screenshots in ignored outputs or CI artifacts. Resolve active-doc
+drift against current source, tests, and applicable security/release contracts.

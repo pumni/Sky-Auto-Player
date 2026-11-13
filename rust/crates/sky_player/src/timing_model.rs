@@ -7,9 +7,16 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod dispatch_schedule;
+pub use dispatch_schedule::analyze_dispatch_schedule_cancellable;
+
+#[cfg(test)]
 pub const INSTRUMENT_SLOT_COUNT: usize = 15;
+#[cfg(not(test))]
+const INSTRUMENT_SLOT_COUNT: usize = 15;
 const INSTRUMENT_MASK: u16 = (1 << INSTRUMENT_SLOT_COUNT) - 1;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPacketKind {
@@ -17,6 +24,7 @@ pub enum ModelPacketKind {
     Metadata,
 }
 
+#[cfg(test)]
 /// One immutable, ordered schedule boundary. Times are relative authored QPC
 /// ticks; masks use the canonical fifteen instrument slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -27,7 +35,7 @@ pub struct ModelPacket {
     pub kind: ModelPacketKind,
 }
 
-/// Explicit assumptions used only by [`analyze_whole_stream`]. Durations are
+/// Explicit assumptions used by offline dispatch schedule estimates. Durations are
 /// estimates in microseconds and are rounded up into QPC ticks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct WholeStreamModelConfig {
@@ -133,6 +141,7 @@ impl std::error::Error for WholeStreamModelError {}
 /// from that packet's common sender-completion estimate. Every operation uses
 /// checked arithmetic. This is a risk estimate, never a production timing
 /// guarantee.
+#[cfg(test)]
 pub fn analyze_whole_stream(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
@@ -143,6 +152,7 @@ pub fn analyze_whole_stream(
 /// Cancellable form used by bounded Prepare-time analysis. The caller must
 /// bound `packets` before calling; cancellation is checked before allocation,
 /// during the fixed-work packet loop, and before percentile sorting.
+#[cfg(test)]
 pub fn analyze_whole_stream_cancellable(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
@@ -151,6 +161,7 @@ pub fn analyze_whole_stream_cancellable(
     analyze_whole_stream_inner(packets, config, Some(cancelled))
 }
 
+#[cfg(test)]
 fn analyze_whole_stream_inner(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
@@ -422,9 +433,11 @@ fn percentiles(values: &mut [i64]) -> TickPercentiles {
 mod tests {
     use super::{
         INSTRUMENT_SLOT_COUNT, ModelPacket, ModelPacketKind, SlackClass, TickPercentiles,
-        WholeStreamModelConfig, WholeStreamModelError, analyze_whole_stream,
-        analyze_whole_stream_cancellable,
+        WholeStreamModelConfig, WholeStreamModelError, analyze_dispatch_schedule_cancellable,
+        analyze_whole_stream, analyze_whole_stream_cancellable,
     };
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use std::sync::atomic::AtomicBool;
 
     fn config() -> WholeStreamModelConfig {
@@ -447,6 +460,108 @@ mod tests {
             down_mask,
             kind: ModelPacketKind::Physical,
         }
+    }
+
+    fn dispatch_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 10,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 12,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 30,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B up".into(),
+            },
+        ];
+        compile_runtime_intents(&actions, &[0x15, 0x16]).expect("compiled schedule")
+    }
+
+    #[test]
+    fn dispatch_schedule_advisory_uses_executor_order_and_coalesces_ready_directions() {
+        let schedule = dispatch_schedule();
+        let cancelled = AtomicBool::new(false);
+        let report = analyze_dispatch_schedule_cancellable(
+            &schedule,
+            WholeStreamModelConfig {
+                qpc_frequency_hz: 1_000_000,
+                effective_min_hold_us: 0,
+                physical_release_gap_us: 1,
+                estimated_sender_setup_us: 0,
+                estimated_per_input_us: 13,
+                estimated_post_send_us: 0,
+                estimated_metadata_cost_us: 1,
+                resume_down_barrier_ticks: None,
+            },
+            &cancelled,
+        )
+        .expect("scheduler-backed advisory");
+
+        assert_eq!(report.packet_count, 3);
+        assert_eq!(
+            report
+                .packets
+                .iter()
+                .map(|packet| packet.authored_target_ticks)
+                .collect::<Vec<_>>(),
+            [0, 10, 30],
+            "the delayed Up and next Down share the action selected by the executor"
+        );
+        assert_eq!(report.packets[1].modeled_ready_ticks, 13);
+        assert_eq!(report.packets[1].modeled_sender_completion_ticks, Some(39));
+    }
+
+    #[test]
+    fn dispatch_schedule_advisory_keeps_independent_down_ahead_of_held_up() {
+        let schedule = dispatch_schedule();
+        let cancelled = AtomicBool::new(false);
+        let report = analyze_dispatch_schedule_cancellable(
+            &schedule,
+            WholeStreamModelConfig {
+                qpc_frequency_hz: 1_000_000,
+                effective_min_hold_us: 16,
+                physical_release_gap_us: 1,
+                estimated_sender_setup_us: 0,
+                estimated_per_input_us: 1,
+                estimated_post_send_us: 0,
+                estimated_metadata_cost_us: 1,
+                resume_down_barrier_ticks: None,
+            },
+            &cancelled,
+        )
+        .expect("scheduler-backed advisory");
+
+        assert_eq!(
+            report
+                .packets
+                .iter()
+                .map(|packet| packet.authored_target_ticks)
+                .collect::<Vec<_>>(),
+            [0, 12, 10, 30]
+        );
+        assert_eq!(report.packets[1].authored_target_ticks, 12);
+        assert_eq!(report.packets[2].h_floor_displacement_ticks, 7);
+        assert_eq!(report.packets[2].modeled_ready_ticks, 17);
+        assert_eq!(report.negative_slack_count, 1);
     }
 
     #[test]

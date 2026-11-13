@@ -15,6 +15,7 @@ mod health;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod health;
 mod orchestration;
+#[cfg(any(test, feature = "test-support"))]
 mod physical_timing_guard;
 #[cfg(test)]
 pub(crate) use physical_timing_guard::PhysicalTimingGuard;
@@ -52,16 +53,19 @@ pub(crate) use cleanup::FinalizeTestObservation;
 pub(crate) use cleanup::record_termination_error;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::release_runtime_outcome;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use cleanup::suspend_live_input;
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, finalize_worker,
 };
-pub(crate) use cleanup::{describe_release_outcome, release_state_verified, suspend_live_input};
+pub(crate) use cleanup::{describe_release_outcome, release_state_verified};
 pub(crate) use control::TerminalTrigger;
 use control::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
     process_command_control,
 };
+pub(super) use dispatch::DispatchStep;
 pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use dispatch::PhysicalBoundaryStamp;
@@ -72,11 +76,10 @@ pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use dispatch::{AuthoredPacketContext, dispatch_authored_packet};
-pub(super) use dispatch::{
-    DispatchStep, DownBoundaryState, PendingUpRecovery, dispatch_stale_packet,
-};
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::apply_resumable_lifecycle_transition_for_test;
+pub(super) use dispatch::{DownBoundaryState, PendingUpRecovery};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 #[cfg(any(test, feature = "test-support"))]
@@ -139,8 +142,8 @@ pub(crate) use timing::{
 };
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals,
-    next_stale_metadata_deadline_qpc, record_wait_failure, wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
+    wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;
@@ -202,7 +205,7 @@ pub(crate) fn finalize_worker_for_test(
         finalize_worker(FinalizeInput {
             resources: FinalizeResources {
                 backend: resources.backend,
-                coordinator: resources.coordinator,
+                scheduler: resources.scheduler,
                 telemetry: resources.telemetry,
                 playback: resources.playback,
                 qpc_clock: resources.clock,
@@ -403,6 +406,7 @@ pub(crate) type FinalLeaseAgeHook =
 pub(crate) struct WorkerRuntime {
     pub(crate) preparation_probe: DispatchPreparationProbe,
     pub(crate) production_forensics: ProductionHoldForensics,
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) physical_timing_guard: Option<physical_timing_guard::PhysicalTimingGuard>,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
@@ -434,11 +438,11 @@ pub(crate) struct WorkerRuntime {
     pub(crate) last_physical_send_completion_qpc: Option<QpcTicks>,
     pub(crate) previous_sendinput_completion_qpc: Option<QpcTicks>,
     pub(crate) previous_sender_completion_known: bool,
-    /// Musical Down admission state. Up-only safety sends never mutate this
-    /// state; authorization is tied to the exact frozen authored boundary.
+    /// Legacy scheduler admission state retained for the test-only adapter.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) down_boundary_state: DownBoundaryState,
-    /// A missed mixed boundary whose prepared Up-prefix remains pending until
-    /// its physical hold floor. This does not authorize its discarded Down.
+    /// Legacy missed-boundary recovery retained for the test-only adapter.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) pending_up_recovery: Option<PendingUpRecovery>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) terminal_error: Option<String>,
@@ -537,6 +541,7 @@ impl WorkerRuntime {
     }
 
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn invalidate_down_authorization(&mut self) {
         self.down_boundary_state = DownBoundaryState::AwaitingFuture;
     }
@@ -645,7 +650,7 @@ pub(crate) struct WorkerResources {
     pub(super) clock: QpcClock,
     pub(super) waiter: HybridWaiter,
     pub(super) backend: TrackedKeyState,
-    pub(super) coordinator: RuntimeDispatchCoordinator,
+    pub(super) scheduler: sky_dispatch_core::executor::DispatchExecutor,
     pub(super) playback: PlaybackClockState,
     pub(super) telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
     pub(super) scheduling: WorkerSchedulingGuards,

@@ -217,7 +217,7 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
     for stale_count in [32usize, 33, 10_000] {
         let (session, hook, send_calls) = checkpointed_session(
             stale_metadata_race_schedule(stale_count),
-            StartupCheckpoint::StaleMetadataChunk,
+            StartupCheckpoint::PrepareDiagnosticChunk,
             1,
             false,
         );
@@ -226,8 +226,8 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
             hook.wait_for_startup_checkpoint(Duration::from_secs(5)),
             "stale packet count {stale_count}"
         );
-        assert_eq!(hook.stale_packet_commit_count.load(Ordering::SeqCst), 32);
-        assert_eq!(send_calls.load(Ordering::Acquire), 2);
+        assert_eq!(hook.unmatched_up_prepare_count.load(Ordering::SeqCst), 32);
+        assert_eq!(send_calls.load(Ordering::Acquire), 0);
 
         session.quit().expect("late quit accepted");
         hook.release_startup_checkpoint();
@@ -235,10 +235,10 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
         let snapshot = session.snapshot();
         assert_eq!(snapshot.status, EnginePollStatus::Quit.as_str());
         assert_eq!(snapshot.outcome.as_deref(), Some("quit"));
-        assert_eq!(hook.stale_packet_commit_count.load(Ordering::SeqCst), 32);
+        assert_eq!(hook.unmatched_up_prepare_count.load(Ordering::SeqCst), 32);
         assert_eq!(
             send_calls.load(Ordering::Acquire),
-            2,
+            0,
             "final Down must not send after late quit with {stale_count} stale packets"
         );
     }
@@ -246,9 +246,8 @@ fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
-fn actual_b_worker_waits_for_stale_metadata_before_the_next_physical_down() {
+fn actual_b_worker_records_stale_diagnostics_during_prepare_and_continues_dispatch() {
     let hook = Arc::new(StartupOrderingHook::default());
-    hook.arm_startup_checkpoint(StartupCheckpoint::MetadataOnlyWait, 1);
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -267,34 +266,14 @@ fn actual_b_worker_waits_for_stale_metadata_before_the_next_physical_down() {
     let session = NativeDispatchSession::new(options).expect("actual B worker session");
 
     session.arm(0).expect("worker arm");
-    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
-    assert_eq!(hook.stale_packet_commit_count.load(Ordering::Acquire), 0);
-    assert_eq!(hook.down_sender_attempt_count(), 2);
-    assert_eq!(send_calls.load(Ordering::Acquire), 4);
-
-    hook.release_startup_checkpoint();
-    let stale_wait = Instant::now();
-    while hook.stale_packet_commit_count.load(Ordering::Acquire) == 0
-        && stale_wait.elapsed() < Duration::from_secs(5)
-    {
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert_eq!(hook.stale_packet_commit_count.load(Ordering::Acquire), 1);
-    assert_eq!(send_calls.load(Ordering::Acquire), 4);
-    let (metadata_waits, metadata_target, _metadata_wake) = hook.metadata_only_wait_evidence();
-    assert_eq!(metadata_waits, 1);
-    assert!(metadata_target.is_some());
-    assert_eq!(hook.down_sender_attempt_count(), 2);
-
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+    assert_eq!(hook.unmatched_up_prepare_count.load(Ordering::Acquire), 1);
     assert_eq!(send_calls.load(Ordering::Acquire), 6);
     assert_eq!(hook.down_sender_attempt_count(), 3);
-    let (_, authored_target, packet_not_before, _, stale_at_final_down) =
-        hook.last_down_sender_qpc_evidence();
+    let (_, authored_target, packet_not_before, _) = hook.last_down_sender_qpc_evidence();
     assert!(authored_target.is_some());
     assert!(packet_not_before.is_some());
-    assert_eq!(stale_at_final_down, 1);
 }
 
 #[cfg(all(feature = "test-support", windows))]
@@ -561,7 +540,7 @@ fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct()
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
     assert_eq!(hook.down_sender_attempt_count(), 3);
-    let (sender_start, authored_target, packet_not_before, _, _) =
+    let (sender_start, authored_target, packet_not_before, _) =
         hook.last_down_sender_qpc_evidence();
     let sender_start = sender_start.expect("mixed Down sender pre-call QPC");
     let authored_target = authored_target.expect("mixed Down authored QPC");
@@ -633,209 +612,51 @@ fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
-fn actual_b_worker_reports_stale_dispatch_timing_matrix() {
-    use serde_json::{Value, json};
+fn actual_b_worker_prepare_diagnostic_matrix_has_no_runtime_stale_scan() {
+    use serde_json::json;
 
-    fn delta_us(later: u64, earlier: u64, frequency_hz: u64) -> (i64, i64) {
-        let ticks =
-            i64::try_from(i128::from(later) - i128::from(earlier)).expect("QPC delta fits i64");
-        let micros = i64::try_from((i128::from(ticks) * 1_000_000) / i128::from(frequency_hz))
-            .expect("QPC microsecond delta fits i64");
-        (ticks, micros)
-    }
-
-    fn nearest_rank(values: &[i64], percentile: usize) -> Option<i64> {
-        if values.is_empty() {
-            return None;
-        }
-        let mut ordered = values.to_vec();
-        ordered.sort_unstable();
-        let rank = (percentile * ordered.len()).div_ceil(100).max(1);
-        Some(ordered[rank - 1])
-    }
-
-    let mut matrix = Vec::new();
-    let mut qpc_frequency_hz = None;
-    for stale_count in [0usize, 1, 32, 33, 10_000] {
-        let repetitions = if stale_count == 10_000 { 20 } else { 100 };
-        let mut samples = Vec::with_capacity(repetitions);
-        let mut authored_to_pre_call_us = Vec::with_capacity(repetitions);
-        let mut eligibility_to_pre_call_us = Vec::with_capacity(repetitions);
-        let mut wake_to_pre_call_us = Vec::with_capacity(repetitions);
-        let mut metadata_only_wait_count = 0u64;
-        let mut physical_wait_sample_count = 0u64;
-        let mut idle_wake_count = 0u64;
-        let mut worker_cpu_time_us = 0u64;
-        let mut playback_wall_time_us = 0u64;
-        let mut spin_time_us = 0u64;
-        let mut spin_time_missing_count = 0u64;
-        let mut observer_dropped_samples = 0u64;
-
-        for repetition in 0..repetitions {
-            let hook = Arc::new(StartupOrderingHook::default());
-            let mut options = test_session_options(
-                post_wake_stale_metadata_schedule(stale_count),
-                1,
-                BackendConfig::Mock {
-                    latency_base_us: 0,
-                    latency_per_key_us: 0,
-                    fault_script: FaultInjectionScript::none(),
-                },
-            );
-            options.wait.test_spin_threshold_us = None;
-            options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
-            options.startup_ordering_hook = Some(Arc::clone(&hook));
-            let session = NativeDispatchSession::new(options).expect("actual B worker session");
-            session.arm(0).expect("worker arm");
-            assert!(session.join(Duration::from_secs(10)).expect("worker join"));
-            let snapshot = session.snapshot();
-            assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
-
-            let stale_committed = hook.stale_packet_commit_count.load(Ordering::Acquire);
-            let stale_after_wake = hook
-                .stale_packet_committed_after_wake_count
-                .load(Ordering::Acquire);
-            assert_eq!(stale_committed, stale_count as u64);
-            assert!(stale_after_wake <= stale_committed);
-
-            let telemetry: Value =
-                serde_json::from_str(&session.take_telemetry_json().expect("worker telemetry"))
-                    .expect("telemetry JSON");
-            let frequency = telemetry["qpc_frequency_hz"]
-                .as_u64()
-                .expect("QPC frequency");
-            if let Some(previous) = qpc_frequency_hz {
-                assert_eq!(frequency, previous, "QPC frequency must be stable");
-            } else {
-                qpc_frequency_hz = Some(frequency);
-            }
-            assert_eq!(hook.down_sender_attempt_count(), 3);
-            let (pre_call, authored_target, packet_not_before, wake, stale_at_final_send) =
-                hook.last_down_sender_qpc_evidence();
-            let pre_call = pre_call.expect("final Down sender-boundary pre-call QPC");
-            let authored_target = authored_target.expect("authored target QPC");
-            let packet_not_before = packet_not_before.expect("packet eligibility QPC");
-            assert_eq!(stale_at_final_send, stale_count as u64);
-            let authored_delta = delta_us(pre_call, authored_target, frequency);
-            let eligibility_delta = delta_us(pre_call, packet_not_before, frequency);
-            let wake_delta = wake.map(|wake| delta_us(pre_call, wake, frequency));
-            authored_to_pre_call_us.push(authored_delta.1);
-            eligibility_to_pre_call_us.push(eligibility_delta.1);
-            if let Some((_, micros)) = wake_delta {
-                wake_to_pre_call_us.push(micros);
-            }
-            let (metadata_waits, metadata_wait_target, metadata_wait_wake) =
-                hook.metadata_only_wait_evidence();
-            metadata_only_wait_count += metadata_waits;
-            physical_wait_sample_count += snapshot.wait_window_sample_count;
-            idle_wake_count += snapshot.idle_wake_count;
-            worker_cpu_time_us += snapshot.worker_cpu_time_us;
-            playback_wall_time_us += snapshot.playback_wall_time_us;
-            if let Some(value) = snapshot.spin_time_us {
-                spin_time_us += value;
-            } else {
-                spin_time_missing_count += 1;
-            }
-            observer_dropped_samples += snapshot.observer_dropped_samples;
-            samples.push(json!({
-                "repetition": repetition,
-                "stale_committed_before_final_send": stale_committed,
-                "stale_committed_at_final_down_sender_attempt": stale_at_final_send,
-                "stale_committed_after_attributed_wake": stale_after_wake,
-                "stale_committed_without_attributed_wake": stale_committed - stale_after_wake,
-                "wake_available": wake.is_some(),
-                "wake_qpc_ticks": wake,
-                "authored_target_qpc_ticks": authored_target,
-                "packet_not_before_qpc_ticks": packet_not_before,
-                "pre_call_qpc_ticks": pre_call,
-                "authored_to_pre_call_ticks": authored_delta.0,
-                "authored_to_pre_call_us": authored_delta.1,
-                "eligibility_to_pre_call_ticks": eligibility_delta.0,
-                "eligibility_to_pre_call_us": eligibility_delta.1,
-                "wake_to_pre_call_ticks": wake_delta.map(|delta| delta.0),
-                "wake_to_pre_call_us": wake_delta.map(|delta| delta.1),
-                "metadata_only_wait_count": metadata_waits,
-                "metadata_only_wait_target_qpc_ticks": metadata_wait_target,
-                "metadata_only_wait_wake_available": metadata_wait_wake.is_some(),
-                "metadata_only_wait_wake_qpc_ticks": metadata_wait_wake,
-                "worker_cpu_time_us": snapshot.worker_cpu_time_us,
-                "process_cpu_time_us": snapshot.process_cpu_time_us,
-                "playback_wall_time_us": snapshot.playback_wall_time_us,
-                "physical_wait_sample_count": snapshot.wait_window_sample_count,
-                "idle_wake_count": snapshot.idle_wake_count,
-                "wait_interrupted_count": snapshot.wait_interrupted_count,
-                "spin_time_us": snapshot.spin_time_us,
-                "spin_observation_expected_samples": snapshot.spin_observation_expected_samples,
-                "spin_observation_dropped_samples": snapshot.spin_observation_dropped_samples,
-                "spin_observation_missing_samples": snapshot.spin_observation_missing_samples,
-                "spin_observation_pending_samples": snapshot.spin_observation_pending_samples,
-                "observer_dropped_samples": snapshot.observer_dropped_samples,
-                "observer_queue_high_watermark": snapshot.observer_queue_high_watermark,
-                "wait_backend_failures": snapshot.wait_backend_failures,
-                "wait_clock_failures": snapshot.wait_clock_failures,
-            }));
-        }
-
-        matrix.push(json!({
-            "stale_metadata_count": stale_count,
-            "repetitions": repetitions,
-            "total_stale_scanned_per_final_send": stale_count,
-            "qpc_frequency_hz": qpc_frequency_hz.expect("QPC frequency"),
-            "authored_to_pre_call": {
-                "measured_count": authored_to_pre_call_us.len(),
-                "missing_count": repetitions - authored_to_pre_call_us.len(),
-                "p50_us": nearest_rank(&authored_to_pre_call_us, 50),
-                "p95_us": nearest_rank(&authored_to_pre_call_us, 95),
-                "p99_us": nearest_rank(&authored_to_pre_call_us, 99),
-                "max_us": authored_to_pre_call_us.iter().max(),
-                "estimator": "nearest_rank"
+    let mut scenarios = Vec::new();
+    for unmatched_up_count in [0usize, 1, 32, 33, 10_000] {
+        let hook = Arc::new(StartupOrderingHook::default());
+        let mut options = test_session_options(
+            post_wake_stale_metadata_schedule(unmatched_up_count),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
             },
-            "eligibility_to_pre_call": {
-                "measured_count": eligibility_to_pre_call_us.len(),
-                "missing_count": repetitions - eligibility_to_pre_call_us.len(),
-                "p50_us": nearest_rank(&eligibility_to_pre_call_us, 50),
-                "p95_us": nearest_rank(&eligibility_to_pre_call_us, 95),
-                "p99_us": nearest_rank(&eligibility_to_pre_call_us, 99),
-                "max_us": eligibility_to_pre_call_us.iter().max(),
-                "estimator": "nearest_rank"
-            },
-            "wake_to_pre_call": {
-                "measured_count": wake_to_pre_call_us.len(),
-                "missing_wake_count": repetitions - wake_to_pre_call_us.len(),
-                "p50_us": nearest_rank(&wake_to_pre_call_us, 50),
-                "p95_us": nearest_rank(&wake_to_pre_call_us, 95),
-                "p99_us": nearest_rank(&wake_to_pre_call_us, 99),
-                "max_us": wake_to_pre_call_us.iter().max(),
-                "estimator": "nearest_rank"
-            },
-            "worker_metrics_totals": {
-                "worker_cpu_time_us": worker_cpu_time_us,
-                "playback_wall_time_us": playback_wall_time_us,
-                "physical_wait_sample_count": physical_wait_sample_count,
-                "metadata_only_wait_count": metadata_only_wait_count,
-                "idle_wake_count": idle_wake_count,
-                "spin_time_us_measured_sum": spin_time_us,
-                "spin_time_missing_count": spin_time_missing_count,
-                "observer_dropped_samples": observer_dropped_samples
-            },
-            "samples": samples,
+        );
+        options.wait.test_spin_threshold_us = None;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        options.telemetry.capacity = 64;
+        let session = NativeDispatchSession::new(options).expect("actual B worker session");
+        session.arm(0).expect("worker arm");
+        assert!(session.join(Duration::from_secs(10)).expect("worker join"));
+        assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
+        assert_eq!(
+            hook.unmatched_up_prepare_count.load(Ordering::Acquire),
+            unmatched_up_count as u64
+        );
+        assert_eq!(hook.down_sender_attempt_count(), 3);
+        scenarios.push(json!({
+            "unmatched_up_count": unmatched_up_count,
+            "prepare_diagnostic_count": hook.unmatched_up_prepare_count.load(Ordering::Acquire),
+            "physical_down_attempt_count": hook.down_sender_attempt_count(),
         }));
     }
+
     eprintln!(
-        "stale_dispatch_timing_matrix_json={}",
+        "prepare_diagnostic_matrix_json={}",
         serde_json::to_string(&json!({
-            "evidence_scope": "actual_b_worker_test_support_mock_sender_production_calibrated_frozen_wait",
-            "sender_kind": "mock",
-            "wait_policy": "production_calibrated",
-            "wait_guard": "Frozen",
-            "qualification": false,
-            "scan_attribution": "actual B-worker test-support hook captures stale commits at the final Down sender attempt; physical wake and metadata-only wake are kept separate, and unavailable timestamps remain missing",
-            "scenarios": matrix,
+            "evidence_scope": "actual_b_worker_test_support_mock_sender",
+            "runtime_stale_scan": false,
+            "scenarios": scenarios,
         }))
-        .expect("stale matrix JSON")
+        .expect("prepare diagnostic matrix JSON")
     );
 }
-
 #[test]
 fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
     for (placement, guards_precede_calibration) in [
