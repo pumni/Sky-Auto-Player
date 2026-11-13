@@ -42,13 +42,6 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
   const search = useStore((store: DesktopStore) => store.search);
   const [importFeedback, setImportFeedback] = useState<PlaylistImportFeedback | null>(null);
   const trackTableRef = useRef<TrackTableHandle>(null);
-  const selectedSongId = useStore((store: DesktopStore) => store.library.selectedSongId);
-  const selectedSongIndex = useStore((store: DesktopStore) => store.library.selectedSongIndex);
-  const visibleRange = useStore((store: DesktopStore) => store.library.visibleRange);
-  const membershipCurrent = useStore(
-    (store: DesktopStore) =>
-      store.library.membershipRevision === store.library.indexMembershipRevision,
-  );
   const sourceName = useStore((store: DesktopStore) => {
     if (store.library.source.kind === 'playlist') {
       return store.libraryNavigation.playlistsById.get(store.library.source.id)?.name ?? 'Playlist';
@@ -75,16 +68,6 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
     resultTotal === 0 &&
     !hasSearch;
   const heading = isPlaylistAddMode ? `Add songs to ${sourceName}` : sourceName;
-  const canLocateSelected =
-    isBuiltin &&
-    !loading &&
-    selectedSongId !== null &&
-    selectedSongIndex !== null &&
-    membershipCurrent &&
-    selectedSongIndex >= 0 &&
-    selectedSongIndex < resultTotal &&
-    (selectedSongIndex < visibleRange.first || selectedSongIndex > visibleRange.last);
-
   const noResultsHeading = isBuiltinSearch
     ? builtinStatusPending
       ? 'Checking Built-in Songs'
@@ -184,16 +167,6 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
               </span>
             )}
         </div>
-        {canLocateSelected && (
-          <button
-            className="button track-browser-locate-button"
-            type="button"
-            title="Scroll to the selected song in Built-in Songs"
-            onClick={() => void trackTableRef.current?.locateSelected()}
-          >
-            Locate selected
-          </button>
-        )}
         {isPlaylist && !isPlaylistAddMode && (
           <div className="playlist-actions">
             <PlaylistAddSongsMenu
@@ -309,7 +282,12 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
       ) : (
         <>
           <TrackTable useStore={useStore} locateSelectedRef={trackTableRef} />
-          {isBuiltinSearch && <BuiltinPager useStore={useStore} />}
+          {isBuiltinSearch && (
+            <BuiltinPager
+              useStore={useStore}
+              onLocateSelected={() => void trackTableRef.current?.locateSelected()}
+            />
+          )}
         </>
       )}
     </section>

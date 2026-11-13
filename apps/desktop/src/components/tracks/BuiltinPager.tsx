@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, LocateFixed } from 'lucide-react';
 import {
   useEffect,
   useId,
@@ -237,12 +237,31 @@ function BuiltinPagerNavigation({
   );
 }
 
-export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
+interface BuiltinPagerProps {
+  useStore: DesktopStoreHook;
+  onLocateSelected?: () => void;
+}
+
+export function BuiltinPager({ useStore, onLocateSelected }: BuiltinPagerProps) {
   const total = useStore((store: DesktopStore) => store.library.resultTotal);
   const page = useStore((store: DesktopStore) => store.library.builtinPage.committedPage);
   const pendingPage = useStore((store: DesktopStore) => store.library.builtinPage.pendingPage);
   const failedPage = useStore((store: DesktopStore) => store.library.builtinPage.failedPage);
   const navigate = useStore((store: DesktopStore) => store.navigateBuiltinPage);
+  const canLocateSelected = useStore((store: DesktopStore) => {
+    const library = store.library;
+    return (
+      onLocateSelected !== undefined &&
+      library.source.kind === 'smart' &&
+      library.source.id === 'builtin' &&
+      !library.loading &&
+      library.selectedSongId !== null &&
+      library.selectedSongIndex !== null &&
+      library.selectedSongIndex >= 0 &&
+      library.selectedSongIndex < library.resultTotal &&
+      library.membershipRevision === library.indexMembershipRevision
+    );
+  });
   const pageCount = Math.ceil(total / LIBRARY_PAGE_SIZE);
   const previousPageCountRef = useRef(pageCount);
   const editorFocusIntentRef = useRef(false);
@@ -274,9 +293,23 @@ export function BuiltinPager({ useStore }: { useStore: DesktopStoreHook }) {
 
   return (
     <div className="builtin-pager-wrap">
-      <span className="builtin-pager-range" aria-hidden="true">
-        {rangeText}
-      </span>
+      <div className="builtin-pager-leading">
+        <span className="builtin-pager-range" aria-hidden="true">
+          {rangeText}
+        </span>
+        {onLocateSelected && (
+          <button
+            className="builtin-pager-locate"
+            type="button"
+            aria-label="Locate selected"
+            title="Go to selected song"
+            disabled={!canLocateSelected}
+            onClick={onLocateSelected}
+          >
+            <LocateFixed size={16} aria-hidden="true" />
+          </button>
+        )}
+      </div>
       {pageCount > 1 && (
         <BuiltinPagerNavigation
           key={pageCount}

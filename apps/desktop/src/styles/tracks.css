@@ -167,34 +167,6 @@
   justify-content: center;
 }
 
-.track-metadata-status {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  max-width: 100%;
-  padding: 2px 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  color: var(--text-secondary);
-  background: var(--surface-panel);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.track-metadata-status:is(.is-physical_risk, .is-requires_confirmation) {
-  color: var(--warning-fg);
-  border-color: var(--warning-border);
-  background: var(--warning-bg);
-}
-
-.track-metadata-status:is(.is-error, .is-malformed, .is-unsupported, .is-unplayable) {
-  color: var(--danger-fg);
-  border-color: var(--danger-border);
-  background: var(--danger-bg);
-}
-
 .track-like-button {
   display: grid;
   place-items: center;
@@ -325,7 +297,43 @@
   color: var(--text-secondary);
 }
 
+.builtin-pager-leading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.builtin-pager-locate {
+  display: grid;
+  flex: 0 0 32px;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.builtin-pager-locate:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+
+.builtin-pager-locate:disabled {
+  opacity: 0.48;
+}
+
+.builtin-pager-locate:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .builtin-pager-range {
+  /* Fill the leading grid cell instead of resizing to each page-range string. */
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--text-tertiary);

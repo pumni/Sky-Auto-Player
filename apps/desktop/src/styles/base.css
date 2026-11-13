@@ -182,6 +182,60 @@ h3 {
   color: var(--danger-fg);
   font-size: var(--type-metadata);
 }
+/* One theme-aware badge language for library metadata and Player Dock. */
+.status-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  box-sizing: border-box;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 18px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  font-size: var(--type-metadata);
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.status-badge:is([data-tone='warning'], [data-tone='danger'])::before {
+  content: '';
+  flex: 0 0 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warning-fg);
+}
+
+.status-badge[data-tone='danger']::before {
+  background: var(--danger-fg);
+}
+
+.status-badge[data-appearance='plain'] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  font-weight: 400;
+}
+
+@media (forced-colors: active) {
+  .status-badge:not([data-appearance='plain']) {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+
+  .status-badge:is([data-tone='warning'], [data-tone='danger'])::before {
+    background: CanvasText;
+  }
+}
+
 .risk-low {
   --risk-color: var(--success-fg);
 }

@@ -46,6 +46,7 @@ async function readBuiltinPagerGeometry(page: Page) {
       toolbar: rect(required('.builtin-pager')),
       wrap: rect(required('.builtin-pager-wrap')),
       range: rect(required('.builtin-pager-range')),
+      locate: rect(required('.builtin-pager-locate')),
       table: rect(required('.track-table')),
       player: rect(required('.player-bar')),
     };
@@ -434,9 +435,11 @@ function expectBuiltinPagerGeometryStable(
   expectBoxStable('toolbar', before.toolbar, after.toolbar);
   expectBoxStable('pager wrapper', before.wrap, after.wrap);
   expectBoxStable('range', before.range, after.range);
+  expectBoxStable('locate selected', before.locate, after.locate);
   expectBoxStable('track table', before.table, after.table);
   expectBoxStable('player dock', before.player, after.player);
-  expect(after.range.x + after.range.width).toBeLessThanOrEqual(after.toolbar.x + 1);
+  expect(after.range.x + after.range.width).toBeLessThanOrEqual(after.locate.x - 7);
+  expect(after.locate.x + after.locate.width).toBeLessThanOrEqual(after.toolbar.x + 1);
   expect(Math.abs(after.range.centerY - after.toolbar.centerY)).toBeLessThanOrEqual(1);
 
   if (

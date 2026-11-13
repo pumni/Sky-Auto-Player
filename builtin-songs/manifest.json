@@ -236,10 +236,10 @@
       "sha256": "a5c0d2b398e3eaa8bb3b243de63b53bbc3bc2ee089b8525ca3ba9ff886804b1f"
     },
     {
-      "id": "7708eb28b904c4baac308ce0d51da3d4",
+      "id": "45fb5c2dbb63c4e3b2b8899523b73e09",
       "path": "sheets/Kiss The Rain.json",
       "title": "Kiss The Rain",
-      "sha256": "e2cadf258f12a72fae8437e55c3b7e172082971a89260df6fc1f82d10118fcc9"
+      "sha256": "a3bf9efc4e1fc1cf1ec335ddf3306b8e8c8fd43c0517726730f92f2a424d1391"
     },
     {
       "id": "e3c0fcd965beca7f7df8d7e23d22f745",
@@ -674,5 +674,10 @@
       "sha256": "70003c40df8678ce34a85370ee43d8b1cf1c3e0655f36510b764a67e8c91c1f4"
     }
   ],
-  "retired_songs": []
+  "retired_songs": [
+    {
+      "id": "7708eb28b904c4baac308ce0d51da3d4",
+      "last_title": "Kiss The Rain"
+    }
+  ]
 }

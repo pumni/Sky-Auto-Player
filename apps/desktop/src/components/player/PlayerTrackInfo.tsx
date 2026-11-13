@@ -5,6 +5,7 @@ import {
   selectNowPlayingIndex,
   selectSongById,
 } from '../../state/store';
+import { StatusBadge } from '../ui/StatusBadge';
 import { playerStateLabel } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -74,10 +75,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       : playbackMode === 'live'
         ? '. Normal playback may send physical input.'
         : '');
-  const modeDescription =
-    playbackMode === 'test'
-      ? 'Dry run: no physical keyboard input is sent.'
-      : 'Normal playback: physical keyboard input may be sent only when the session and target permit it.';
+  const testModeDescription = 'Dry run: no physical keyboard input is sent.';
 
   return (
     <div className="player-track-info" role="group" aria-label={`Playback for ${title}`}>
@@ -96,14 +94,15 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           >
             {baseStatus}
           </span>
-          {playbackMode && (
-            <span
-              className={`player-mode-badge is-${playbackMode}`}
-              aria-label={modeDescription}
-              title={modeDescription}
+          {playbackMode === 'test' && (
+            <StatusBadge
+              className="player-test-mode"
+              appearance="plain"
+              aria-label={testModeDescription}
+              title={testModeDescription}
             >
-              {playbackMode === 'test' ? 'TEST · No keys' : 'LIVE · Physical mode'}
-            </span>
+              Test<span className="player-test-mode-detail"> · no keys</span>
+            </StatusBadge>
           )}
         </div>
       </div>
@@ -131,12 +130,14 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         </button>
       )}
       {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
-        <span
-          className={`player-risk risk-${preparedRisk.level}`}
+        <StatusBadge
+          className="player-risk"
+          tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
           aria-label={preparedRisk.headline}
+          title={preparedRisk.headline}
         >
-          {preparedRisk.level}
-        </span>
+          {preparedRisk.level === 'high' ? 'High risk' : 'Medium risk'}
+        </StatusBadge>
       )}
     </div>
   );

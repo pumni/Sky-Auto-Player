@@ -9,6 +9,7 @@ describe('DonateSettings', () => {
   it('shows Ko-fi, PayPal and the offline MBBank VietQR without outdated wallet data', () => {
     render(<DonateSettings />);
     expect(screen.getByRole('region', { name: 'Support Sky Auto Player' })).toBeInTheDocument();
+    expect(document.querySelector('.donate-heading-icon svg')).toHaveClass('lucide-hand-heart');
     expect(screen.getByRole('link', { name: 'Open Ko-fi in browser' })).toHaveAttribute(
       'href',
       DONATION_CONFIG.koFiUrl,

@@ -3,6 +3,7 @@ import { Heart, Music2 } from 'lucide-react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectNowPlayingSongId, selectRowAtIndex } from '../../state/store';
+import { StatusBadge, type StatusBadgeTone } from '../ui/StatusBadge';
 import { TrackActionsMenu } from './TrackActionsMenu';
 
 interface TrackRowProps {
@@ -27,24 +28,25 @@ export function formatDuration(durationUs: number | null): string {
 function metadataStatus(state: SongRow['metadata_state']): {
   label: string;
   value: string;
+  tone: StatusBadgeTone;
 } {
   switch (state) {
     case 'pending':
-      return { label: 'Metadata loading', value: 'Loading' };
+      return { label: 'Metadata loading', value: 'Loading', tone: 'neutral' };
     case 'unsupported':
-      return { label: 'Unsupported sheet format', value: 'Unsupported' };
+      return { label: 'Unsupported sheet format', value: 'Unsupported', tone: 'danger' };
     case 'malformed':
-      return { label: 'Malformed sheet', value: 'Invalid' };
+      return { label: 'Malformed sheet', value: 'Invalid', tone: 'danger' };
     case 'unplayable':
-      return { label: 'No playable Piano notes', value: 'Unplayable' };
+      return { label: 'No playable Piano notes', value: 'Unplayable', tone: 'danger' };
     case 'requires_confirmation':
-      return { label: 'Conversion review required', value: 'Review' };
+      return { label: 'Conversion review required', value: 'Review', tone: 'warning' };
     case 'physical_risk':
-      return { label: 'Physical timing risk', value: 'Risk' };
+      return { label: 'Physical timing risk', value: 'Risk', tone: 'warning' };
     case 'error':
-      return { label: 'Metadata unavailable', value: 'Unavailable' };
+      return { label: 'Metadata unavailable', value: 'Unavailable', tone: 'danger' };
     case 'ready':
-      return { label: 'Sheet ready', value: 'Ready' };
+      return { label: 'Sheet ready', value: 'Ready', tone: 'neutral' };
   }
 }
 
@@ -92,13 +94,14 @@ export const TrackRow = memo(function TrackRow({
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         <span className="track-title-text">{row.title}</span>
         {metadata && (
-          <span
-            className={`track-metadata-status is-${row.metadata_state}`}
+          <StatusBadge
+            className="track-metadata-status"
+            tone={metadata.tone}
             aria-label={metadata.label}
             title={metadata.label}
           >
             {metadata.value}
-          </span>
+          </StatusBadge>
         )}
         {selected && <span className="visually-hidden">Selected for inspection</span>}
         {playing && <span className="visually-hidden">Now Playing</span>}
