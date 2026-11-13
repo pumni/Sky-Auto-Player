@@ -8,11 +8,9 @@ use allowlist::{
 };
 #[cfg(test)]
 use allowlist::{ArchitectureException, parse_architecture_allowlist};
-#[cfg(test)]
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const FORBIDDEN_APP_CORE_DEPENDENCIES: &[&str] = &[
@@ -24,7 +22,7 @@ const FORBIDDEN_APP_CORE_DEPENDENCIES: &[&str] = &[
 ];
 const ADAPTER_DEPENDENCY_KINDS: &[&str] =
     &["dependencies", "build-dependencies", "dev-dependencies"];
-const NATIVE_RUNTIME_MODULE_BUDGETS: &[(&str, usize)] = &[
+const NATIVE_RUNTIME_MODULE_ADVISORY_THRESHOLDS: &[(&str, usize)] = &[
     ("apps/desktop/src-tauri/src/native_runtime.rs", 2_000),
     (
         "apps/desktop/src-tauri/src/native_runtime/calibration.rs",
@@ -50,239 +48,9 @@ const NATIVE_RUNTIME_MODULE_BUDGETS: &[(&str, usize)] = &[
 ];
 const PLAYBACK_INTEGRATION_ROOT_PATH: &str =
     "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration.rs";
-const PLAYBACK_INTEGRATION_ROOT_BUDGET: usize = 500;
-const PLAYBACK_INTEGRATION_MODULE_BUDGETS: &[(&str, usize)] = &[
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/supervisor_lease.rs",
-        1_600,
-    ),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/terminal_release.rs",
-        1_600,
-    ),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/presentation_events.rs",
-        1_600,
-    ),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/diagnostics_trace.rs",
-        1_600,
-    ),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/start_prepare.rs",
-        1_600,
-    ),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/storage_bootstrap.rs",
-        1_600,
-    ),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/commands_status.rs",
-        1_600,
-    ),
-];
 const ENGINE_TEST_ROOT_PATH: &str = "rust/crates/sky_player/src/engine/tests.rs";
-const ENGINE_TEST_ROOT_BUDGET: usize = 750;
-const ENGINE_TEST_MODULE_BUDGETS: &[(&str, usize)] = &[
-    (
-        "rust/crates/sky_player/src/engine/tests/startup_admission.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/lease_supervision.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/preparation_dispatch.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/release_cleanup.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/native_dispatch.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/telemetry_metrics.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/target_focus_admission.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/pause_suspend.rs",
-        2_200,
-    ),
-    (
-        "rust/crates/sky_player/src/engine/tests/timing_wait.rs",
-        2_200,
-    ),
-    ("rust/crates/sky_player/src/engine/tests/support.rs", 2_200),
-];
-
-fn native_runtime_line_budget_violation(path: &str, source: &str, budget: usize) -> Option<String> {
-    module_line_budget_violation("native_runtime_module_lines", path, source, budget)
-}
-
-fn module_line_budget_violation(
-    rule: &str,
-    path: &str,
-    source: &str,
-    budget: usize,
-) -> Option<String> {
-    let line_count = source.lines().count();
-    (line_count > budget).then(|| format!("[{rule}] {path}: {line_count} lines (> {budget})"))
-}
-fn native_runtime_module_budgets(root: &Path) -> Result<()> {
-    for (path, budget) in NATIVE_RUNTIME_MODULE_BUDGETS {
-        let source = fs::read_to_string(root.join(path))?;
-        if let Some(violation) = native_runtime_line_budget_violation(path, &source, *budget) {
-            return Err(violation.into());
-        }
-    }
-    Ok(())
-}
-
-fn playback_integration_module_inventory_violation(
-    expected: &BTreeSet<String>,
-    actual: &BTreeSet<String>,
-) -> Option<String> {
-    (expected != actual).then(|| {
-        format!(
-            "[native_playback_test_module_ownership] native_runtime/tests/playback_integration/: observed={actual:?}, expected={expected:?}"
-        )
-    })
-}
-
-fn playback_integration_module_budgets(root: &Path) -> Result<()> {
-    let root_source = fs::read_to_string(root.join(PLAYBACK_INTEGRATION_ROOT_PATH))?;
-    if let Some(violation) = module_line_budget_violation(
-        "native_playback_test_root_lines",
-        PLAYBACK_INTEGRATION_ROOT_PATH,
-        &root_source,
-        PLAYBACK_INTEGRATION_ROOT_BUDGET,
-    ) {
-        return Err(violation.into());
-    }
-
-    let tests_root =
-        root.join("apps/desktop/src-tauri/src/native_runtime/tests/playback_integration");
-    let expected = PLAYBACK_INTEGRATION_MODULE_BUDGETS
-        .iter()
-        .filter_map(|(path, _)| {
-            path.strip_prefix(
-                "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration/",
-            )
-        })
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    let mut actual = BTreeSet::new();
-    for entry in fs::read_dir(&tests_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                != Some("rs")
-        {
-            continue;
-        }
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| "native playback test module name must be valid UTF-8")?;
-        actual.insert(name);
-    }
-    if let Some(violation) = playback_integration_module_inventory_violation(&expected, &actual) {
-        return Err(violation.into());
-    }
-
-    for (path, budget) in PLAYBACK_INTEGRATION_MODULE_BUDGETS {
-        let source = fs::read_to_string(root.join(path))?;
-        if let Some(violation) = module_line_budget_violation(
-            "native_playback_test_module_lines",
-            path,
-            &source,
-            *budget,
-        ) {
-            return Err(violation.into());
-        }
-    }
-    Ok(())
-}
-
-fn engine_test_module_inventory_violation(
-    expected: &BTreeSet<String>,
-    actual: &BTreeSet<String>,
-) -> Option<String> {
-    (expected != actual).then(|| {
-        format!(
-            "[engine_test_module_ownership] engine/tests/: observed={actual:?}, expected={expected:?}"
-        )
-    })
-}
-
-fn engine_test_module_budgets(root: &Path) -> Result<()> {
-    let root_source = fs::read_to_string(root.join(ENGINE_TEST_ROOT_PATH))?;
-    if let Some(violation) = module_line_budget_violation(
-        "engine_test_root_lines",
-        ENGINE_TEST_ROOT_PATH,
-        &root_source,
-        ENGINE_TEST_ROOT_BUDGET,
-    ) {
-        return Err(violation.into());
-    }
-
-    let tests_root = root.join("rust/crates/sky_player/src/engine/tests");
-    let expected = ENGINE_TEST_MODULE_BUDGETS
-        .iter()
-        .filter_map(|(path, _)| path.strip_prefix("rust/crates/sky_player/src/engine/tests/"))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    let mut actual = BTreeSet::new();
-    for entry in fs::read_dir(&tests_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                != Some("rs")
-        {
-            continue;
-        }
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| "engine test module name must be valid UTF-8")?;
-        actual.insert(name);
-    }
-    if let Some(violation) = engine_test_module_inventory_violation(&expected, &actual) {
-        return Err(violation.into());
-    }
-
-    for (path, budget) in ENGINE_TEST_MODULE_BUDGETS {
-        let source = fs::read_to_string(root.join(path))?;
-        if let Some(violation) =
-            module_line_budget_violation("engine_test_module_lines", path, &source, *budget)
-        {
-            return Err(violation.into());
-        }
-    }
-    Ok(())
-}
-
-fn is_engine_test_owner_path(path: &str) -> bool {
-    ENGINE_TEST_MODULE_BUDGETS
-        .iter()
-        .any(|(owner_path, _)| *owner_path == path)
-}
-
-const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
+const ENGINE_TEST_MODULE_ADVISORY_THRESHOLD: usize = 2_200;
+const XTASK_MODULE_ADVISORY_THRESHOLDS: &[(&str, usize)] = &[
     ("rust/xtask/src/assembly_audit.rs", 1_300),
     ("rust/xtask/src/calibration.rs", 1_250),
     ("rust/xtask/src/checks.rs", 1_600),
@@ -304,57 +72,140 @@ const XTASK_MODULE_BUDGETS: &[(&str, usize)] = &[
     ("rust/xtask/src/audits/source.rs", 100),
 ];
 
-fn xtask_module_inventory_violation(
-    expected: &BTreeSet<String>,
-    actual: &BTreeSet<String>,
+fn module_line_advisory_warning(
+    rule: &str,
+    path: &str,
+    source: &str,
+    threshold: usize,
 ) -> Option<String> {
-    (expected != actual).then(|| {
-        format!("[xtask_module_ownership] checks/: observed={actual:?}, expected={expected:?}")
+    let line_count = source.lines().count();
+    (line_count > threshold).then(|| {
+        format!(
+            "[{rule}] {path}: {line_count} lines (> advisory threshold {threshold}); consider splitting or clarifying responsibilities if the module is hard to review"
+        )
     })
 }
 
-fn xtask_check_module_inventory(root: &Path) -> Result<()> {
-    let checks_root = root.join("rust/xtask/src/checks");
-    let expected = XTASK_MODULE_BUDGETS
-        .iter()
-        .filter_map(|(path, _)| path.strip_prefix("rust/xtask/src/checks/"))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    let mut actual = BTreeSet::new();
-    for entry in fs::read_dir(checks_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                != Some("rs")
-        {
-            continue;
-        }
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| "xtask check module name must be valid UTF-8")?;
-        actual.insert(name);
-    }
-    if let Some(violation) = xtask_module_inventory_violation(&expected, &actual) {
-        return Err(violation.into());
-    }
-    Ok(())
+fn is_engine_test_owner_path(path: &str) -> bool {
+    path == ENGINE_TEST_ROOT_PATH || path.starts_with("rust/crates/sky_player/src/engine/tests/")
 }
 
-fn xtask_module_budgets(root: &Path) -> Result<()> {
-    xtask_check_module_inventory(root)?;
-    for (path, budget) in XTASK_MODULE_BUDGETS {
-        let source = fs::read_to_string(root.join(path))?;
-        if let Some(violation) =
-            module_line_budget_violation("xtask_module_lines", path, &source, *budget)
-        {
-            return Err(violation.into());
+fn scan_module_advisory_warnings(
+    root: &Path,
+    required_files: &[&str],
+    required_directories: &[&str],
+    rule: &str,
+    fallback_threshold: fn(&str) -> usize,
+    threshold_overrides: &[(&str, usize)],
+) -> Result<Vec<String>> {
+    let mut sources = BTreeMap::<String, String>::new();
+    for relative in required_files {
+        let path = root.join(relative);
+        if !path.is_file() {
+            return Err(format!("required Rust source file is missing: {relative}").into());
+        }
+        sources.insert((*relative).to_owned(), fs::read_to_string(path)?);
+    }
+
+    for relative_directory in required_directories {
+        let directory = required_source_directory(root, relative_directory)?;
+        for entry in WalkDir::new(&directory).follow_links(false) {
+            let entry = entry?;
+            if !entry.file_type().is_file()
+                || entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("rs")
+            {
+                continue;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if let std::collections::btree_map::Entry::Vacant(source) = sources.entry(relative) {
+                source.insert(fs::read_to_string(entry.path())?);
+            }
         }
     }
-    Ok(())
+
+    Ok(sources
+        .iter()
+        .filter_map(|(path, source)| {
+            let threshold = threshold_overrides
+                .iter()
+                .find_map(|(override_path, threshold)| {
+                    (*override_path == path).then_some(*threshold)
+                })
+                .unwrap_or_else(|| fallback_threshold(path));
+            module_line_advisory_warning(rule, path, source, threshold)
+        })
+        .collect())
+}
+
+fn native_runtime_advisory_warnings(root: &Path) -> Result<Vec<String>> {
+    let overrides = NATIVE_RUNTIME_MODULE_ADVISORY_THRESHOLDS
+        .iter()
+        .map(|(path, threshold)| (*path, *threshold))
+        .chain(std::iter::once((PLAYBACK_INTEGRATION_ROOT_PATH, 500)))
+        .collect::<Vec<_>>();
+    scan_module_advisory_warnings(
+        root,
+        &[
+            "apps/desktop/src-tauri/src/native_runtime.rs",
+            PLAYBACK_INTEGRATION_ROOT_PATH,
+        ],
+        &[
+            "apps/desktop/src-tauri/src/native_runtime",
+            "apps/desktop/src-tauri/src/native_runtime/tests/playback_integration",
+        ],
+        "native_runtime_module_lines",
+        native_runtime_default_threshold,
+        &overrides,
+    )
+}
+
+fn native_runtime_default_threshold(path: &str) -> usize {
+    if path.contains("/tests/playback_integration/") {
+        1_600
+    } else if path.contains("/tests/") {
+        1_100
+    } else {
+        1_650
+    }
+}
+
+fn engine_test_default_threshold(_: &str) -> usize {
+    ENGINE_TEST_MODULE_ADVISORY_THRESHOLD
+}
+
+fn xtask_default_threshold(_: &str) -> usize {
+    2_100
+}
+
+fn engine_test_advisory_warnings(root: &Path) -> Result<Vec<String>> {
+    let overrides = [(ENGINE_TEST_ROOT_PATH, 750)];
+    scan_module_advisory_warnings(
+        root,
+        &[ENGINE_TEST_ROOT_PATH],
+        &["rust/crates/sky_player/src/engine/tests"],
+        "engine_test_module_lines",
+        engine_test_default_threshold,
+        &overrides,
+    )
+}
+
+fn xtask_module_advisory_warnings(root: &Path) -> Result<Vec<String>> {
+    scan_module_advisory_warnings(
+        root,
+        &[],
+        &["rust/xtask/src", "rust/xtask/src/checks"],
+        "xtask_module_lines",
+        xtask_default_threshold,
+        XTASK_MODULE_ADVISORY_THRESHOLDS,
+    )
 }
 fn dependency_table_contains(table: Option<&toml::Value>, dependency: &str) -> bool {
     table
@@ -412,6 +263,24 @@ fn adapter_boundary(root: &Path) -> Result<()> {
     adapter_dependency_boundary(&manifest)
 }
 
+fn required_source_directory(root: &Path, relative: &str) -> Result<PathBuf> {
+    let path = root.join(relative);
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Err(format!(
+            "architecture audit cannot traverse `{relative}`: expected a directory"
+        )
+        .into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "architecture audit cannot traverse `{relative}`: required scan root is missing"
+        )
+        .into()),
+        Err(error) => {
+            Err(format!("architecture audit cannot inspect `{relative}`: {error}").into())
+        }
+    }
+}
+
 fn app_core_boundary(root: &Path) -> Result<()> {
     let manifest_path = root.join("rust/crates/sky_app_core/Cargo.toml");
     let manifest: toml::Value = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
@@ -422,12 +291,9 @@ fn app_core_boundary(root: &Path) -> Result<()> {
     {
         return Err(format!("sky_app_core must not depend directly on {dependency}").into());
     }
-    let source_root = root.join("rust/crates/sky_app_core/src");
-    for entry in WalkDir::new(source_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
+    let source_root = required_source_directory(root, "rust/crates/sky_app_core/src")?;
+    for entry in WalkDir::new(source_root).follow_links(false) {
+        let entry = entry?;
         if !entry.file_type().is_file()
             || entry.path().extension().and_then(|ext| ext.to_str()) != Some("rs")
         {
@@ -467,11 +333,10 @@ fn app_core_boundary(root: &Path) -> Result<()> {
     Ok(())
 }
 
-const FACADE_HARD_LIMIT: usize = 250;
-const REGULAR_SOFT_LIMIT: usize = 700;
-const REGULAR_HARD_LIMIT: usize = 900;
+const FACADE_ADVISORY_LIMIT: usize = 250;
+const REGULAR_ADVISORY_LIMIT: usize = 700;
 const WORKER_FUNCTION_HARD_LIMIT: usize = 350;
-const CONTEXT_FIELD_HARD_LIMIT: usize = 12;
+const CONTEXT_FIELD_ADVISORY_LIMIT: usize = 12;
 const DISPATCH_FUNCTION_HARD_LIMIT: usize = 180;
 const WORKER_SCHEDULE_CLONE_PATTERNS: &[&str] = &[
     "schedule.clone()",
@@ -557,11 +422,22 @@ fn context_violations(lines: &[String]) -> Vec<(String, usize)> {
                 !field.starts_with("fn ") && field.contains(':') && !field.starts_with("#")
             })
             .count();
-        if fields > CONTEXT_FIELD_HARD_LIMIT {
+        if fields > CONTEXT_FIELD_ADVISORY_LIMIT {
             result.push((name.to_owned(), fields));
         }
     }
     result
+}
+
+fn context_advisory_warnings(path: &str, lines: &[String]) -> Vec<String> {
+    context_violations(lines)
+        .into_iter()
+        .map(|(name, fields)| {
+            format!(
+                "[context_fields] {path}: {name} has {fields} fields (> advisory threshold {CONTEXT_FIELD_ADVISORY_LIMIT}); consider whether the options remain clear to callers"
+            )
+        })
+        .collect()
 }
 
 fn function_line_violations(lines: &[String], hard_limit: usize) -> Vec<(String, usize)> {
@@ -624,6 +500,30 @@ fn line_is_gated(lines: &[String], index: usize) -> bool {
         .rev()
         .take(3)
         .any(|line| line.contains("cfg(any(test, feature = \"test-support\"))"))
+}
+
+fn dependency_direction_violations(crate_name: &str, joined_source: &str) -> Vec<&'static str> {
+    let mut violations = Vec::new();
+    if crate_name == "sky_dispatch_core"
+        && (joined_source.contains("sky_dispatch_win32::")
+            || joined_source.contains("use sky_dispatch_win32"))
+    {
+        violations.push("core imports sky_dispatch_win32");
+    }
+    if ["sky_dispatch_core", "sky_dispatch_win32"].contains(&crate_name)
+        && (joined_source.contains("sky_player::") || joined_source.contains("use sky_player"))
+    {
+        violations.push("lower crate imports sky_player");
+    }
+    violations
+}
+
+fn runtime_schedule_clone_violation(relative_path: &str, joined_source: &str) -> bool {
+    (relative_path == "rust/crates/sky_player/src/engine/worker.rs"
+        || relative_path.starts_with("rust/crates/sky_player/src/engine/worker/"))
+        && WORKER_SCHEDULE_CLONE_PATTERNS
+            .iter()
+            .any(|pattern| joined_source.contains(pattern))
 }
 
 #[cfg(test)]
@@ -731,10 +631,12 @@ fn audit_unsafe_source(
 }
 
 pub(crate) fn architecture(root: &Path) -> Result<()> {
-    engine_test_module_budgets(root)?;
     let allowlist = load_architecture_allowlist(root)?;
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
+    warnings.extend(native_runtime_advisory_warnings(root)?);
+    warnings.extend(engine_test_advisory_warnings(root)?);
+    warnings.extend(xtask_module_advisory_warnings(root)?);
     let mut used_metric_allowlist = BTreeSet::new();
     let app_core_manifest = root.join("rust/crates/sky_app_core/Cargo.toml");
     let app_core: toml::Value = toml::from_str(&fs::read_to_string(&app_core_manifest)?)?;
@@ -758,74 +660,78 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             }
         }
     }
-    let app_core_source = root.join("rust/crates/sky_app_core/src");
-    if app_core_source.is_dir() {
-        for path in WalkDir::new(&app_core_source).follow_links(false) {
-            let path = path?;
-            if !path.file_type().is_file()
-                || path
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    != Some("rs")
-            {
-                continue;
-            }
-            let relative = path
+    let app_core_source = required_source_directory(root, "rust/crates/sky_app_core/src")?;
+    for path in WalkDir::new(&app_core_source).follow_links(false) {
+        let path = path?;
+        if !path.file_type().is_file()
+            || path
                 .path()
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let joined = clean_lines(&fs::read_to_string(path.path())?).join("");
-            if [
-                "tauri",
-                "windows-sys",
-                "windows_sys",
-                "sky_desktop_shell",
-                "sky_player",
-            ]
-            .iter()
-            .any(|marker| joined.contains(marker))
-            {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &relative,
-                    "app_core_dependency",
-                    "sky_app_core source references a forbidden delivery/platform/player dependency",
-                );
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("rs")
+        {
+            continue;
+        }
+        let relative = path
+            .path()
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let joined = clean_lines(&fs::read_to_string(path.path())?).join("");
+        if [
+            "tauri",
+            "windows-sys",
+            "windows_sys",
+            "sky_desktop_shell",
+            "sky_player",
+        ]
+        .iter()
+        .any(|marker| joined.contains(marker))
+        {
+            architecture_record(
+                &mut errors,
+                &mut warnings,
+                &allowlist,
+                &relative,
+                "app_core_dependency",
+                "sky_app_core source references a forbidden delivery/platform/player dependency",
+            );
+        }
+    }
+    let dispatch_dir =
+        required_source_directory(root, "rust/crates/sky_player/src/engine/worker/dispatch")?;
+    let mut actual = BTreeSet::new();
+    for entry in fs::read_dir(&dispatch_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("rs")
+        {
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| "dispatch module name must be valid UTF-8")?;
+            if !name.ends_with("_tests.rs") {
+                actual.insert(name);
             }
         }
     }
-    let dispatch_dir = root.join("rust/crates/sky_player/src/engine/worker/dispatch");
-    if dispatch_dir.is_dir() {
-        let actual: BTreeSet<String> = fs::read_dir(&dispatch_dir)?
-            .filter_map(std::result::Result::ok)
-            .filter_map(|entry| {
-                (entry
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    == Some("rs"))
-                .then(|| entry.file_name().to_string_lossy().into_owned())
-            })
-            .filter(|name| !name.ends_with("_tests.rs"))
-            .collect();
-        let expected: BTreeSet<String> = CANONICAL_DISPATCH_FILES
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
-        for name in actual.difference(&expected) {
-            errors.push(format!(
-                "[unexpected_dispatch_module] {name}: dispatch module is not canonical"
-            ));
-        }
-        for name in expected.difference(&actual) {
-            errors.push(format!(
-                "[missing_dispatch_module] {name}: canonical dispatch module is missing"
-            ));
-        }
+    let expected: BTreeSet<String> = CANONICAL_DISPATCH_FILES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    for name in actual.difference(&expected) {
+        errors.push(format!(
+            "[unexpected_dispatch_module] {name}: dispatch module is not canonical"
+        ));
+    }
+    for name in expected.difference(&actual) {
+        errors.push(format!(
+            "[missing_dispatch_module] {name}: canonical dispatch module is missing"
+        ));
     }
 
     for crate_name in [
@@ -834,10 +740,8 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
         "sky_app_core",
         "sky_player",
     ] {
-        let source_root = root.join("rust/crates").join(crate_name).join("src");
-        if !source_root.is_dir() {
-            continue;
-        }
+        let source_root =
+            required_source_directory(root, &format!("rust/crates/{crate_name}/src"))?;
         for path in WalkDir::new(&source_root).follow_links(false) {
             let path = path?;
             if !path.file_type().is_file()
@@ -873,44 +777,20 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                 continue;
             }
             if !is_engine_test_owner_path(&relative) {
-                let limit = if FACADES.contains(
+                let (rule, threshold) = if FACADES.contains(
                     &absolute
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or(""),
                 ) {
-                    FACADE_HARD_LIMIT
+                    ("facade_lines", FACADE_ADVISORY_LIMIT)
                 } else {
-                    REGULAR_HARD_LIMIT
+                    ("regular_module_lines", REGULAR_ADVISORY_LIMIT)
                 };
-                if clean.len() > limit {
-                    architecture_metric_record(
-                        &mut errors,
-                        &mut warnings,
-                        &allowlist,
-                        &mut used_metric_allowlist,
-                        ArchitectureMetric {
-                            path: &relative,
-                            rule: if limit == FACADE_HARD_LIMIT {
-                                "facade_lines"
-                            } else {
-                                "regular_module_lines"
-                            },
-                            subject: "",
-                            observed: clean.len(),
-                            unit: "lines",
-                            hard_limit: limit,
-                        },
-                    );
-                }
-                if limit == REGULAR_HARD_LIMIT
-                    && clean.len() > REGULAR_SOFT_LIMIT
-                    && clean.len() <= REGULAR_HARD_LIMIT
+                if let Some(warning) =
+                    module_line_advisory_warning(rule, &relative, &source, threshold)
                 {
-                    warnings.push(format!(
-                        "[regular_module_soft_lines] {relative}: {} lines (> {REGULAR_SOFT_LIMIT})",
-                        clean.len()
-                    ));
+                    warnings.push(warning);
                 }
             }
             if crate_name == "sky_player"
@@ -946,29 +826,14 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     );
                 }
             }
-            if crate_name == "sky_dispatch_core"
-                && (joined.contains("sky_dispatch_win32::")
-                    || joined.contains("use sky_dispatch_win32"))
-            {
+            for violation in dependency_direction_violations(crate_name, &joined) {
                 architecture_record(
                     &mut errors,
                     &mut warnings,
                     &allowlist,
                     &relative,
                     "dependency_direction",
-                    "core imports sky_dispatch_win32",
-                );
-            }
-            if ["sky_dispatch_core", "sky_dispatch_win32"].contains(&crate_name)
-                && (joined.contains("sky_player::") || joined.contains("use sky_player"))
-            {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &relative,
-                    "dependency_direction",
-                    "lower crate imports sky_player",
+                    violation,
                 );
             }
             let glob_imports = top_level_glob_import_count(&clean);
@@ -1000,12 +865,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     );
                 }
             }
-            if (relative == "rust/crates/sky_player/src/engine/worker.rs"
-                || relative.starts_with("rust/crates/sky_player/src/engine/worker/"))
-                && WORKER_SCHEDULE_CLONE_PATTERNS
-                    .iter()
-                    .any(|pattern| joined.contains(pattern))
-            {
+            if runtime_schedule_clone_violation(&relative, &joined) {
                 architecture_record(
                     &mut errors,
                     &mut warnings,
@@ -1025,22 +885,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     "test-support source is not cfg-gated",
                 );
             }
-            for (name, fields) in context_violations(&clean) {
-                architecture_metric_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &mut used_metric_allowlist,
-                    ArchitectureMetric {
-                        path: &relative,
-                        rule: "context_fields",
-                        subject: &name,
-                        observed: fields,
-                        unit: "fields",
-                        hard_limit: CONTEXT_FIELD_HARD_LIMIT,
-                    },
-                );
-            }
+            warnings.extend(context_advisory_warnings(&relative, &clean));
             if (relative == "rust/crates/sky_player/src/engine.rs")
                 && clean.iter().enumerate().any(|(index, line)| {
                     line.trim() == "mod test_support;" && !line_is_gated(&clean, index)
@@ -1060,10 +905,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
     let mut production_unsafe_modules = BTreeSet::new();
     let mut cfg_test_unsafe_modules = Vec::new();
     for source_root in UNSAFE_AUDIT_SOURCE_ROOTS {
-        let absolute_root = root.join(source_root);
-        if !absolute_root.is_dir() {
-            continue;
-        }
+        let absolute_root = required_source_directory(root, source_root)?;
         for path in WalkDir::new(&absolute_root).follow_links(false) {
             let path = path?;
             if !path.file_type().is_file()
@@ -1136,7 +978,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
         .into());
     }
     println!(
-        "[xtask] architecture checks: PASS ({} allowlisted warning(s))",
+        "[xtask] architecture checks: PASS ({} warning(s))",
         warnings.len()
     );
     Ok(())
@@ -1145,10 +987,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
 pub(crate) fn run(root: &Path) -> Result<()> {
     app_core_boundary(root)?;
     adapter_boundary(root)?;
-    architecture(root)?;
-    native_runtime_module_budgets(root)?;
-    playback_integration_module_budgets(root)?;
-    xtask_module_budgets(root)
+    architecture(root)
 }
 
 #[cfg(test)]

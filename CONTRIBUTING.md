@@ -17,16 +17,12 @@ records. Update the owning contract when behavior changes and preserve earlier e
 recorded revision. For playback contracts, see [`docs/playback-engine.md`](docs/playback-engine.md)
 and [`docs/playback-verification.md`](docs/playback-verification.md).
 
-## Required naming rule
+## Names and historical identifiers
 
-Give maintained paths, Rust and TypeScript identifiers, tests, scripts, CLI arguments, environment
-variables, and configuration fields names that describe their continuing behavior or responsibility.
-Do not use phase, sprint, work-order, or earlier optimization-wave numbers as implementation names
-(for example `r3_*`, `p4_*`, `phase8_*`, `wo04_*`, or `h4_*`). Keep such a marker only for a genuine
-version/schema identifier or immutable historical or external contract, and record the narrow reason
-in the relevant documentation. Do not preserve an old alias without evidence of an external caller.
-The durable-name audit in `cargo xtask check static` is required for changes to active source or
-configuration.
+Prefer names that describe current behavior or responsibility. Treat old phase, sprint, work-order,
+and optimization-wave labels as historical context rather than a naming scheme for new work. Keep
+genuine version/schema identifiers and immutable external identifiers stable when they have live
+consumers. Review names in context; no automated historical-vocabulary rule replaces that judgment.
 
 ## Contributions we welcome
 
@@ -63,10 +59,12 @@ direct tests, active docs, and repository checks as the evidence system.
    implementation work.
 2. During editing, run focused tests for the changed boundary. Avoid running every broad group after
    each edit.
-3. Before review, run `cargo xtask check all` once against the final relevant source state. It
-   includes the static, Rust, desktop, and native desktop groups; do not automatically run those
-   groups individually and then repeat them through `check all`. Repeat a passed gate only if a
-   later change invalidates its inputs or coverage.
+3. Before each intermediate review, run focused checks for the changed boundary and report them.
+   Before final merge readiness, run `cargo xtask check all` once against the final relevant source
+   state and ensure applicable required CI has passed at the exact PR HEAD. It includes the static,
+   Rust, desktop, and native desktop groups; do not automatically run those groups individually and
+   then repeat them through `check all`. Repeat a passed gate only if a later change invalidates its
+   inputs or coverage.
 4. Do not repeat full cold/warm performance baselines or native acceptance without a new behavior or
    performance change. Run specialized package, updater, release, Windows timing, or benchmark
    evidence when the changed boundary requires it.

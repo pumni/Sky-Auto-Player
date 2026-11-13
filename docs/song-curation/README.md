@@ -2,7 +2,11 @@
 
 This directory records a reproducible structural audit of every active song
 in `builtin-songs/manifest.json`. It does not rank songs or establish musical
-fidelity. A high structural match is a listening lead only.
+fidelity. A high structural match is a listening lead only. The normative
+catalog identity and membership rules are in the
+[Library V1 contract](../library-v1-contract.md); package resource validation
+and fresh-install qualification are specified in
+[Tauri packaging](../v4-tauri-packaging.md).
 
 ## Rebuild the inventory
 
@@ -21,6 +25,11 @@ entry. It rewrites `inventory.json`, `inventory.csv`, and
 
 To write the three files elsewhere, use
 `cargo xtask song-audit inventory --output-dir <directory>`.
+
+Before packaging, `cargo xtask builtin-catalog verify` validates the committed
+manifest and source tree. Installed-resource verification and the fresh
+AppData qualification run against the exact NSIS candidate are part of the
+[packaged qualification procedure](../v4-tauri-packaging.md).
 
 ## Metric definitions
 

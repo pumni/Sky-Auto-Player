@@ -550,6 +550,10 @@ jobs:
 
       - name: Set up canonical Rust toolchain
         uses: ./.github/actions/setup-rust-pinned
+      - name: Verify published Latest policy with read-only token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release-v4 verify-latest-before-metadata-token --state-root "$V4_RELEASE_STATE_ROOT" --workflow-sha "$GITHUB_SHA"
       - name: Mint contents-scoped metadata App token
         id: metadata-app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0

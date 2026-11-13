@@ -9,9 +9,10 @@ checked-out SHA; security and release requirements also come from their
 respective contracts. Measurements and historical decisions are evidence
 only for the revisions and conditions they name.
 
-[ADRs](adr/), [release records](releases/), and the
-[historical evidence archive](HISTORY.md) remain retrievable without being
-loaded as routine agent context. The small `evidence/` directory retains only
-reproduction data that has live consumers.
+[HISTORY.md](HISTORY.md) provides pinned historical decision and evidence
+snapshots without treating them as current qualification.
+Published release notes are listed in [GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
+Each release candidate keeps its source-tagged notes at `docs/releases/{tag}.md`
+before preflight.
 Documentation changes follow [AGENTS.md](AGENTS.md). The public Astro
 site is maintained in [apps/website/](../apps/website/).

@@ -5,6 +5,13 @@ for executing music sheets as timed Windows keyboard events. It is implemented
 in Rust (`sky_player`, `sky_dispatch_core`, `sky_dispatch_win32`) and runs on
 a dedicated worker thread with MMCSS scheduling.
 
+The SendInput boundary, single-owner dispatch, Up-before-Down ordering, H/G
+floors, final focus/admission checks, and verified cleanup are required behavior.
+The executor, waiter, observation schema, and implementation map below describe
+the current Rust design and may evolve with source and test coverage while those
+contracts remain intact. Sender-side timing floors do not promise which frame
+the game samples.
+
 ## Core Boundaries and Invariants
 
 - **SendInput only:** All physical gameplay input uses the public Win32

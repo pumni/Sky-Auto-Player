@@ -187,35 +187,26 @@ for representative multi-path and unknown-path inputs.
 Rust owns deterministic CI classification, candidate and bridge schemas,
 artifact inventory and digest checks, PE inspection, native calibration, and
 the isolated NSIS/updater fixture lifecycle. PowerShell remains for Windows
-tool installation, Authenticode provider/tool invocation, and release
-transaction orchestration where those are still active adapters.
+tool installation, Authenticode provider/tool invocation, release transaction
+orchestration, Defender evidence capture, and the exact Defender artifact scan.
 
-| PowerShell responsibility before Wave A | Rust owner after Wave A | Remaining consumer or adapter |
+| Rust owner | Current contract | Active caller or adapter |
 | --- | --- | --- |
-| `ci_classify.ps1` and `test_ci_classify.ps1` | `rust/xtask/src/ci_classifier.rs` plus unit tests | `changes` job calls `cargo xtask ci classify`; event base/head SHAs and manual full dispatch are explicit. |
-| `ci_validate_candidate.ps1` and its self-test | `ci_candidate.rs` and shared `ci_artifacts.rs`; schema v2 and its exact four-file inventory are preserved | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
-| `ci_validate_bridge.ps1` and its self-test | `ci_bridge.rs` and `ci_artifacts.rs`; bridge schema v1 and its exact two-file inventory are preserved | `cargo xtask ci bridge build-fixture` builds a detached source worktree, then creates and validates the bridge contract; updater consumers call Rust validate. |
-| `build_native_calibration.ps1` | `calibration.rs` builds the locked x86_64 MSVC `dist` binary and stages it with rollback | Tauri `beforeBuildCommand` and Windows CI call `cargo xtask calibration build`. |
-| `verify_installed_calibration.ps1` and its self-test | `calibration.rs` checks size, SHA-256, x64 PE machine, and bounded `--help`; evidence schema v1 is preserved | Packaged CI and production release orchestration call `cargo xtask calibration verify-installed`. |
-| Candidate source identity and fixture-source preparation in the updater scripts | `ci.rs` owns exact-commit source identity; `updater_fixture.rs` owns detached historical bridge construction and source isolation | The canonical repository's Cargo manifest, lockfile, Tauri config, and catalog are never temporarily rewritten. |
+| `rust/xtask/src/ci_classifier.rs` and unit tests | Classifies event base/head SHAs and manual full dispatch; unknown or invalid changes fail closed to full validation. | The `changes` job calls `cargo xtask ci classify`. |
+| `ci_candidate.rs` and shared `ci_artifacts.rs` | Candidate schema v2 preserves its exact four-file inventory. | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
+| `ci_bridge.rs` and `ci_artifacts.rs` | Bridge schema v1 preserves its exact two-file inventory and detached source worktree. | `cargo xtask ci bridge build-fixture` builds and validates the bridge; updater consumers call Rust validation. |
+| `calibration.rs` build | Builds the locked x86_64 MSVC `dist` binary and stages it with rollback. | Tauri `beforeBuildCommand` and Windows CI call `cargo xtask calibration build`. |
+| `calibration.rs` installed verification | Checks size, SHA-256, x64 PE machine, and bounded `--help`; evidence schema v1 is preserved. | Packaged CI and production release orchestration call `cargo xtask calibration verify-installed`. |
+| `ci.rs` and `updater_fixture.rs` | Verify exact-commit source identity and prepare detached fixture sources without rewriting the canonical Cargo manifest, lockfile, Tauri config, or catalog. | Updater fixture callers use the Rust-owned source preparation and validation. |
 
-Wave C adds `sky_windows_security::registry` and the `xtask` NSIS/updater
-owners. `nsis_harness.rs` scopes product HKCU keys, install/AppData roots,
-shortcuts, child processes, and cleanup to a unique runner-temp root;
-`updater_fixture.rs` verifies exact candidate/bridge bytes, loopback HTTP,
-rollback, N-to-N+1 migration, old-root rejection, and user-song preservation.
-The Windows workflow jobs call these Rust commands directly. The remaining
-PowerShell entrypoints are maintained only where Windows-specific orchestration
-or evidence handling still requires them.
+`sky_windows_security::registry` and the `xtask` NSIS/updater owners enforce the
+Windows fixture boundary. `nsis_harness.rs` scopes product HKCU keys,
+install/AppData roots, shortcuts, child processes, and cleanup to a unique
+runner-temp root. `updater_fixture.rs` verifies exact candidate/bridge bytes,
+loopback HTTP, rollback, N-to-N+1 migration, old-root rejection, and user-song
+preservation. Windows workflow jobs call these Rust commands directly.
 
-The migrated CI and Wave C fixture scripts and their script self-tests are
-retired after the workflow, release, documentation, and test consumers were
-migrated. `scripts/capture_defender_evidence.ps1` remains as separate Windows
-evidence tooling, and `scripts/scan_v4_defender_exact.ps1` keeps the release's
-exact artifact scan. No migrated command changes gameplay input behavior;
-calibration verification runs only its bounded `--help` probe.
-
-## Wave C execution and teardown bounds
+## Hosted execution and teardown bounds
 
 The `updater_bridge`, `updater_e2e`, and `packaged` jobs in
 `.github/workflows/ci.yml` each have a 90-minute job timeout. The hosted
@@ -223,8 +214,7 @@ The `updater_bridge`, `updater_e2e`, and `packaged` jobs in
 sign/qualification at 180 minutes, attestation at 45 minutes, publication at
 60 minutes, and final verification at 20 minutes. Its preflight and metadata
 jobs do not set `timeout-minutes` and therefore use GitHub Actions' documented
-360-minute job default. The retired `rehearse-v4.yml` production rebuild no
-longer exists.
+360-minute job default.
 
 The fixture owners also bound individual work: bridge dependency installation
 has a 45-minute deadline and bridge compilation has a 75-minute deadline;
@@ -243,7 +233,7 @@ respond.
 The documented GitHub Actions job default is described in the
 [workflow syntax reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).
 
-## Wave E deterministic evidence tools
+## Deterministic evidence tools
 
 `rust/xtask/src/assembly_audit.rs` now owns the deterministic parsing and
 assertions for the dispatch, prepared-normal, and modifier-guard optimized
@@ -259,8 +249,5 @@ sanitized paired-run report; its projection helper delegates to Rust. The
 existing self-test checks that adapter against LF/CRLF fixtures and Git
 checkout behavior with `core.autocrlf=true`.
 
-Wave E did not change the native acceptance runner, WinForms ReceiveOnly sink,
-startup qualification orchestration, Defender evidence capture, or GitHub
-evidence publisher. It ran no physical input acceptance. The full startup
-report builder remains PowerShell until a complete golden export fixture can
-prove output parity.
+The complete startup report builder remains PowerShell while a golden export
+fixture for Rust output parity is unavailable.

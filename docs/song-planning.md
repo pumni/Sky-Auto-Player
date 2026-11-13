@@ -99,6 +99,37 @@ to avoid conflicts: impossible_same_key_repeats, physical timing conflicts,
 and RiskReport come from the existing scheduler and analyzer. Conversion
 status does not override a downstream preparation or physical-risk gate.
 
+### Numeric compatibility and checked scheduling
+
+The flat legacy `songNotes` compatibility parser accepts Boolean timestamps,
+JSON integers, finite floating-point values truncated toward zero, and trimmed
+integer strings. It rejects timestamps whose parsed integer milliseconds are
+negative. Schedule construction then checks conversion to source microseconds
+and rejects unrepresentable values. Versioned planning scales each source
+onset once and rounds to the nearest microsecond with nearest-even ties; unit
+scaling preserves the source integer exactly. A nonfinite, negative, or
+out-of-range scaled onset is rejected.
+
+Before publishing a schedule, the scheduler checks every key-release addition
+and the resulting source duration. It does not publish saturating timestamps.
+The versioned planner also rejects an onset whose minimum physical hold would
+overflow. Optional risk gaps use checked subtraction and millisecond-to-
+microsecond multiplication; an unrepresentable gap is omitted. Tempo advice is
+rounded to hundredths with nearest-even ties, then bounded to 0.1–1.0 where
+that recommendation applies. Nonfinite or unrepresentable advice is omitted
+with a diagnostic.
+
+`rust/crates/sky_app_core/src/song.rs::tests::legacy_timestamp_coercion_preserves_documented_json_values`
+covers legacy timestamp forms. `rust/crates/sky_app_core/src/song/numeric.rs`
+tests `checked_nearest_even_timestamp_rounding_covers_ties_edges_and_u64_bound`,
+`legacy_schedule_rejects_invalid_source_and_release_time_overflow`,
+`risk_gap_overflow_is_omitted_and_nonfinite_suggestions_are_diagnosed`, and
+`unrepresentable_tempo_advice_is_omitted_with_a_schedule_warning`. In
+`rust/crates/sky_app_core/tests/piano_planner.rs`,
+`tiny_positive_tempo_scale_rejects_out_of_range_scaled_onset` and
+`scaled_onset_must_leave_room_for_the_minimum_physical_hold` cover planner
+boundaries.
+
 ## Regression evidence
 
 rust/crates/sky_app_core/tests/piano_planner.rs covers C and D target pitch,

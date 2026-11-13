@@ -276,6 +276,9 @@ fn rust_release_state_machine_contract(
         "actions/download-artifact@",
         "Mint write-capable metadata App token before publication",
         "Mint contents-scoped metadata App token",
+        "Verify published Latest policy with read-only token",
+        "GH_TOKEN: ${{ github.token }}",
+        "release-v4 verify-latest-before-metadata-token --state-root",
         "Probe release-metadata App write capability without mutation",
         "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write",
         "permission-contents: write",
@@ -533,6 +536,92 @@ fn rust_release_state_machine_contract(
         || has_permission(job("metadata_promote")?, "contents: write")
     {
         return Err("metadata App tokens must be explicitly write-scoped for the pre-publication probe and separately minted for Rust promotion, while Actions permissions stay read-only".into());
+    }
+    let metadata_promote = job("metadata_promote")?;
+    if !has_permission(metadata_promote, "contents: read")
+        || has_permission(metadata_promote, "contents: write")
+    {
+        return Err("metadata promotion must retain only read-scoped Actions permissions".into());
+    }
+    let metadata_steps = workflow_step_blocks(metadata_promote);
+    let step_position = |name: &str| {
+        let matches = metadata_steps
+            .iter()
+            .enumerate()
+            .filter(|(_, (candidate, _))| candidate == name)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            Ok(matches[0])
+        } else {
+            Err(format!(
+                "metadata_promote must contain exactly one `{name}` step"
+            ))
+        }
+    };
+    let download_position = step_position("Download exact-run published release state")?;
+    let setup_position = step_position("Set up canonical Rust toolchain")?;
+    let guard_position = step_position("Verify published Latest policy with read-only token")?;
+    let token_position = step_position("Mint contents-scoped metadata App token")?;
+    let promote_position =
+        step_position("Promote channel metadata after immutable release publication")?;
+    if !(download_position < setup_position
+        && setup_position < guard_position
+        && guard_position < token_position
+        && token_position < promote_position)
+    {
+        return Err("read-only published Latest guard must run after exact state/toolchain setup and before the metadata App token is minted".into());
+    }
+    let guard_step = metadata_steps
+        .iter()
+        .find(|(name, _)| name == "Verify published Latest policy with read-only token")
+        .map(|(_, block)| block.as_str())
+        .ok_or("metadata_promote is missing the read-only published Latest guard")?;
+    if guard_step.matches("GH_TOKEN: ${{ github.token }}").count() != 1
+        || !guard_step
+            .contains("cargo xtask release-v4 verify-latest-before-metadata-token --state-root")
+        || guard_step.contains("steps.metadata-app-token.outputs.token")
+        || guard_step.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
+    {
+        return Err(
+            "pre-token Latest guard must use only the ordinary read-scoped GitHub token".into(),
+        );
+    }
+    for marker in [
+        "verify-latest-before-metadata-token",
+        "\"verify-latest-before-metadata-token\" | \"promote-metadata\" => Some(\"metadata_promote\")",
+        "struct ReadOnlyTransport<'a>",
+        "fn verify_latest_before_metadata_token_with_state(",
+        "mock_pre_token_latest_guard_stable_and_beta",
+        "mock_pre_token_latest_guard_rejects_invalid_state_and_identity",
+        "mock_pre_token_read_only_transport_rejects_mutations",
+    ] {
+        if !rust.contains(marker) {
+            return Err(format!(
+                "Rust release pipeline is missing pre-token guard contract `{marker}`"
+            ));
+        }
+    }
+    let promotion = rust
+        .split_once("fn promote_metadata(")
+        .and_then(|(_, body)| body.split_once("\nfn validate_latest_for_metadata_promotion("))
+        .map(|(body, _)| body)
+        .ok_or("Rust metadata promotion function is not bounded")?;
+    let latest_recheck = promotion
+        .find("validate_latest_for_metadata_promotion(")
+        .ok_or("metadata promotion lost its write-boundary Latest recheck")?;
+    let metadata_put = promotion
+        .find("transport.request(\"PUT\"")
+        .ok_or("metadata promotion lost its Contents API write")?;
+    if latest_recheck >= metadata_put
+        || promotion
+            .matches("validate_latest_for_metadata_promotion(")
+            .count()
+            != 1
+    {
+        return Err(
+            "metadata promotion must retain one Latest recheck before the Contents API PUT".into(),
+        );
     }
     if job("publish")?.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
         || job("publish")?.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
@@ -1103,6 +1192,70 @@ mod tests {
         );
         assert!(
             rust_release_state_machine_contract(&workflow, "", &stale_help, &main, &ci).is_err()
+        );
+    }
+
+    #[test]
+    fn metadata_latest_guard_must_be_read_only_and_before_token_mint() {
+        let (workflow, rust, main, ci) = current_sources();
+        let swapped_names = replace_fixture_once(
+            &workflow,
+            "Verify published Latest policy with read-only token",
+            "TEMPORARY METADATA TOKEN STEP NAME",
+        );
+        let swapped_names = replace_fixture_once(
+            &swapped_names,
+            "Mint contents-scoped metadata App token",
+            "Verify published Latest policy with read-only token",
+        );
+        let swapped_names = replace_fixture_once(
+            &swapped_names,
+            "TEMPORARY METADATA TOKEN STEP NAME",
+            "Mint contents-scoped metadata App token",
+        );
+        assert!(
+            rust_release_state_machine_contract(&swapped_names, "", &rust, &main, &ci).is_err()
+        );
+
+        let metadata_suffix = workflow
+            .split_once("  metadata_promote:")
+            .expect("metadata promotion job")
+            .1;
+        let bad_permissions = replace_fixture_once(
+            metadata_suffix,
+            "      contents: read",
+            "      contents: write",
+        );
+        let bad_permissions = format!(
+            "{}  metadata_promote:{}",
+            workflow.split_once("  metadata_promote:").unwrap().0,
+            bad_permissions
+        );
+        assert!(
+            rust_release_state_machine_contract(&bad_permissions, "", &rust, &main, &ci).is_err()
+        );
+
+        let wrong_token = replace_fixture_once(
+            &workflow,
+            "Verify published Latest policy with read-only token\n        env:\n          GH_TOKEN: ${{ github.token }}",
+            "Verify published Latest policy with read-only token\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
+        );
+        assert!(rust_release_state_machine_contract(&wrong_token, "", &rust, &main, &ci).is_err());
+
+        let missing_write_boundary_recheck = replace_fixture_once(
+            &rust,
+            "validate_latest_for_metadata_promotion(options, &context, &state, &published, transport)?;",
+            "Ok(())",
+        );
+        assert!(
+            rust_release_state_machine_contract(
+                &workflow,
+                "",
+                &missing_write_boundary_recheck,
+                &main,
+                &ci
+            )
+            .is_err()
         );
     }
 

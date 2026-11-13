@@ -215,8 +215,55 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::collections::BTreeSet;
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_REPO_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new() -> Self {
+            for _ in 0..100 {
+                let id = TEMP_REPO_ID.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "sky-xtask-security-audit-{}-{id}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => {
+                        fs::create_dir_all(path.join("rust/crates"))
+                            .expect("create Rust workspace source root");
+                        fs::create_dir_all(path.join("apps/desktop/src-tauri"))
+                            .expect("create native desktop source root");
+                        return Self(path);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create isolated audit fixture: {error}"),
+                }
+            }
+            panic!("could not allocate isolated audit fixture directory");
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn write(&self, relative: &str, source: &str) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().expect("fixture file has a parent"))
+                .expect("create fixture parent");
+            fs::write(path, source).expect("write isolated audit fixture");
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn security_ignores_comments_but_flags_the_complete_forbidden_set() {
@@ -281,6 +328,62 @@ mod tests {
             findings
                 .iter()
                 .any(|finding| finding.rule == "forbidden-dll-load")
+        );
+    }
+
+    #[test]
+    fn security_finding_scan_covers_rust_workspace_and_native_desktop_sources() {
+        let repo = TempRepo::new();
+        for path in [
+            "rust/crates/fixture/src/lib.rs",
+            "apps/desktop/src-tauri/src/native.rs",
+        ] {
+            repo.write(path, "unsafe { NtReadVirtualMemory(); }\n");
+        }
+
+        let findings = security_findings(repo.path()).expect("active Rust roots are traversable");
+        for path in [
+            "rust/crates/fixture/src/lib.rs",
+            "apps/desktop/src-tauri/src/native.rs",
+        ] {
+            assert!(
+                findings.iter().any(|finding| finding.path == path),
+                "security scanner omitted {path}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_finding_scan_fails_closed_on_unreadable_rust_sources() {
+        let repo = TempRepo::new();
+        let source = repo.path().join("rust/crates/fixture/src/lib.rs");
+        fs::create_dir_all(source.parent().expect("fixture source has a parent"))
+            .expect("create fixture source directory");
+        fs::write(source, [0xff]).expect("write invalid UTF-8 source");
+
+        let error = security_findings(repo.path())
+            .expect_err("unreadable required Rust source must fail closed")
+            .to_string()
+            .to_ascii_lowercase();
+        assert!(error.contains("utf-8"), "unexpected read error: {error}");
+    }
+
+    #[test]
+    fn security_finding_scan_ignores_comments_and_keeps_sendinput_available() {
+        let repo = TempRepo::new();
+        repo.write(
+            "rust/crates/fixture/src/lib.rs",
+            "// NtReadVirtualMemory is documentation only\nunsafe { SendInput(1, inputs, size); }\n",
+        );
+        repo.write(
+            "apps/desktop/src-tauri/src/native.rs",
+            "use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\n",
+        );
+
+        assert!(
+            security_findings(repo.path())
+                .expect("active Rust roots are traversable")
+                .is_empty()
         );
     }
 }

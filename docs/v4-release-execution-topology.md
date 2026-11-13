@@ -4,14 +4,15 @@ This document specifies the release execution topology, runner trust boundary,
 candidate qualification lifecycle, and provenance model for production v4 releases
 of Sky Auto Player.
 
-Governed by:
-- [docs/adr/ADR-0007-single-repository-v4-release-architecture.md](adr/ADR-0007-single-repository-v4-release-architecture.md)
-- [Historical ADR-0006 rationale](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md)
-- [v4-tauri-packaging.md](v4-tauri-packaging.md)
+Current contracts:
 - [v4-release-authority.md](v4-release-authority.md)
+- [distribution-and-update.md](distribution-and-update.md)
+- [v4-tauri-packaging.md](v4-tauri-packaging.md)
 - [v4-updater-key-custody.md](v4-updater-key-custody.md)
 - [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md)
 - [../SECURITY.md](../SECURITY.md)
+
+Historical design rationale: [ADR-0006 at its recorded revision](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md).
 
 ---
 
@@ -53,8 +54,8 @@ protected job, and passed to qualification, attestation, and publication without
   Test-key artifacts cannot pass the production verifier.
 - The published release contains exactly the canonical NSIS `.exe` and its `.sig`. Qualification
   evidence, SBOM, and manifests remain internal workflow artifacts.
-- The deployed v4.2.0 client contract remains unchanged: identifier
-  `io.github.pumni.skyautoplayer`, NSIS x64/currentUser package, stable metadata endpoint
+- The client contract uses identifier `io.github.pumni.skyautoplayer`, an NSIS
+  x64/currentUser package, stable metadata endpoint
   `https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json`,
   existing JSON/signature contract, and public key.
 - Any failed, incomplete, mismatched, or ambiguous boundary stops the transaction. No second
@@ -300,36 +301,12 @@ containment outside these paths requires its own authorization.
 
 ### 2.5 Credential Manager Is Not a Production Release Requirement
 
-The production hosted path does not use Windows Credential Manager, a runner-local key path, a
-persistent self-hosted runner, or a pre-publication rehearsal workflow. The prior rehearsal workflow
-was retired when the exact-head CI readiness gate and single build/sign/qualify/attest/publish
-transaction were introduced.
+The production hosted path does not use Windows Credential Manager, a runner-local key path,
+persistent self-hosted runners, or a pre-publication rehearsal workflow.
 
 The Rust credential CLI and Windows Credential Manager implementation remain in the repository for
-independent local maintenance consumers. Their existence does not grant the production release
-workflow a credential-manager path or alter the protected environment secret boundary. The local
-credential tools are not removed in this wave.
-
-### 2.6 Deployed v4.2.0 Compatibility Evidence
-
-Read-only verification of the current public release found immutable release ID `419433937`, tag
-`v4.2.0`, source SHA `9b4baddea9639e5c00212234c26a6b133657240d`, and exactly two public assets. The
-installer is 4,459,233 bytes with SHA-256
-`a6048bd8dc8691798ed2ec7078dd66abe57a5cedfd4d086eedb10cd185751105`; its 448-byte `.sig` has
-SHA-256 `2f1603eb7448339a4a3bd43ec892298a1d82421a38d5bf72ceb0bc4984d678ce`. Both local hashes
-matched the GitHub asset digests. Rust verified the downloaded installer signature for version
-`4.2.0` using public Key ID `19AABD2E7838818C`. Stable metadata was read on 2026-10-26, names
-version `4.2.0` and `pub_date=2026-10-21T10:39:42Z`, and its signature field exactly matches the
-public `.sig` asset. Stable metadata remains at the canonical
-`channels/stable/latest.json` endpoint with a valid `windows-x86_64` record and immutable release
-URL; its downloaded JSON SHA-256 is
-`cff4eb46c40a39ae912c53ba9f9264bbf0d1b0d008ced17025aee2868cfd6477`. The source still declares
-identifier `io.github.pumni.skyautoplayer`, NSIS x64/current-user installation, the same stable
-endpoint, and the existing compiled public key. A same-version `4.2.0 -> 4.2.0` metadata promotion
-is rejected by the strict monotonic validator. The existing Windows updater fixture exercises
-`4.1.3 -> 4.2.0`; a `4.2.0 -> newer` Windows fixture is not possible on this source version without
-creating an unauthorized next-version candidate. Synthetic-key regressions separately reject
-wrong-root, wrong-version, and tampered-byte cases.
+independent local maintenance consumers. Their presence does not add a Credential Manager path to
+the production workflow or change the protected environment secret boundary.
 
 ---
 

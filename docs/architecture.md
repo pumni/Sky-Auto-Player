@@ -89,135 +89,43 @@ control-plane work while using the same runtime state:
   publisher, and fail-closed behavior are unchanged.
 
 V4 update operations remain owned by the Rust `UpdateService`, which invokes
-the official Tauri updater. The native test suites are grouped under
-`native_runtime/tests/` by catalog, calibration, event delivery, and playback
-integration. Playback integration keeps the existing `#[path]` entrypoint and
-the `playback_integration.rs` root as a thin module declaration file. Its test
-owners under `native_runtime/tests/playback_integration/` are:
+the official Tauri updater. Native runtime tests cover catalog and library
+behavior, calibration, event delivery, and playback integration. The
+`sky_player` engine tests cover startup and readiness, lease supervision,
+preparation and dispatch, release and cleanup, native send paths, telemetry,
+target and focus admission, pause and suspend, and timing.
 
-- `supervisor_lease.rs`: monitor progress, stalls, supervisor startup, and
-  lease expiry.
-- `terminal_release.rs`: worker retirement and join, cleanup, release proof,
-  quarantine, and physical reservation.
-- `presentation_events.rs`: lifecycle event ordering, queue behavior, and
-  critical presentation.
-- `diagnostics_trace.rs`: diagnostics status and gates, sender trace, and
-  health projection.
-- `start_prepare.rs`: startup admission, validation, prepare, IDs, fingerprints,
-  and cancellation.
-- `storage_bootstrap.rs`: install and app-data roots, cache, settings, and
-  source mutation.
-- `commands_status.rs`: status DTOs and stop, skip, pause, and command behavior.
+Rust module declarations and Cargo test discovery determine which modules are
+compiled and exercised; the directory layout is an organizational choice. The
+architecture audit reports module size and context-field counts as advisory
+warnings. Timing-sensitive worker and dispatch limits, dependency direction,
+dispatch topology, and safety boundaries remain enforced.
 
-The architecture audit keeps the root at or below 500 lines, each owner at or
-below 1,600 lines, and requires the exact direct `.rs` sibling inventory.
-The `sky_player` engine suite remains entered through `engine.rs`'s
-`#[cfg(test)] mod tests;`. Its `engine/tests.rs` root contains the shared test
-imports and module declarations and stays at or below 750 lines. Shared fixtures
-and builders belong to `engine/tests/support.rs`. The semantic test owners are:
+### Desktop frontend state and UI ownership
 
-- `startup_admission.rs`: startup ordering, readiness and armed publication,
-  pre-roll, and startup failure handling.
-- `lease_supervision.rs`: supervisor lease progress, expiry, and terminal ownership.
-- `preparation_dispatch.rs`: schedule preparation, preparation checkpoints,
-  stale packets, and dispatch admission.
-- `release_cleanup.rs`: terminal outcomes, scoped release, and failure cleanup.
-- `native_dispatch.rs`: native session send paths, packet faults, and dispatch
-  contracts.
-- `telemetry_metrics.rs`: telemetry records, traces, metrics, and mixed-packet
-  event cardinality.
-- `target_focus_admission.rs`: target identity and focus validation, plus final
-  down admission.
-- `pause_suspend.rs`: pause, resume, suspend, and transition races.
-- `timing_wait.rs`: timing policies, deadlines, wait paths, and join behavior.
+The desktop keeps one canonical Zustand store behind the typed bridge. Feature
+state and controllers compose through that store; they do not maintain duplicate
+Library or Playback state. Settings writes and update handoff requests cross the
+existing bridge, while Rust `UpdateService` remains the authority for update
+policy and native update state.
 
-The architecture audit enforces the exact direct `.rs` owner inventory and a
-2,200-line ceiling for each owner.
+Native settings own `appearance_mode` and its legacy migration. System appearance
+uses one platform source at a time (Tauri window events when packaged, browser
+media query otherwise), is applied before normal startup reveal, and is not
+stored in browser storage. A bounded 2.5-second fail-open may reveal the
+OS-media startup screen while native bootstrap is delayed.
 
-### Desktop frontend state ownership
+Library state preserves bounded paging, selection versus playing identity,
+latest-intent playlist and Like mutations, and generation-aware cache
+reconciliation. Playback state preserves session identity and retirement,
+operation fencing, native status recovery, frozen-source traversal, and the
+natural Auto Play handoff. Workbench layout and drag state remain transient;
+only completed preference changes are persisted. Settings retain their modal
+focus lifecycle, and diagnostics present native measurements without fabricating
+unavailable or dry-run data.
 
-The desktop keeps one canonical Zustand store. `DesktopStore` in
-`apps/desktop/src/state/types.ts` is its state and action contract, and
-`createDesktopStore(bridge)` in `apps/desktop/src/state/store.ts` is the composition
-root. The typed bridge remains the frontend boundary; feature controllers do
-not create separate stores or synchronize state through effects.
-
-- `settingsSlice.ts` owns settings patching and serialized settings updates.
-  `updateSlice.ts` owns update check and install handoff request state, dialog
-  state, and frontend transport errors. Rust `UpdateService` remains the
-  authority for update policy and native update state.
-- Native settings own `appearance_mode` and its legacy migration alongside the
-  dark palette. `App.tsx` resolves System from one platform source at a time
-  (Tauri window theme/events when packaged, browser media query otherwise) and
-  applies it before the normal startup reveal; the bounded 2.5-second fail-open
-  can reveal the OS-media startup screen before native settings arrive when
-  bootstrap is delayed. The effective mode is not stored in browser storage.
-  The final A–C integration audit, qualification matrix, and complete changed-path
-  inventory are recorded in
-  [issue-565 Package D evidence](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-d/README.md).
-- `librarySlice.ts` owns Library query intent, bounded page caching,
-  virtualization hydration, and paging. `librarySelectionActions.ts` owns
-  selected-song/detail requests and browser navigation.
-  `libraryMutationActions.ts` owns playlist and Like mutations, their
-  latest-intent behavior, and navigation request fencing. Its mutation ledger
-  is shared with query/cache reconciliation so optimistic Likes and membership
-  revisions remain consistent with cached pages.
-- `libraryCatalog.ts` owns catalog-generation reset and bounded catalog
-  reconciliation. `libraryPlaybackCoordinator.ts` is the composition seam for
-  cross-feature state changes: catalog invalidation, membership invalidation,
-  browser-navigation projection, and playing-song Like projection. It stores
-  no second Library or Playback copy.
-- `playbackSlice.ts` composes Playback state transitions and typed playback
-  event projection. `playbackPreparation.ts` owns playback-context row
-  resolution and native prepare requests. `playbackSessionLedger.ts` owns
-  pending start identities, start epochs, retirement history, and retirement
-  waiters. `playbackReconciliation.ts` owns transport-operation epochs,
-  timeouts, and native status recovery. `playbackTransport.ts` owns transport
-  actions, while `playbackSourceTraversal.ts` owns frozen-source traversal and
-  the natural Auto Play handoff.
-
-The controllers mutate the same store through the composition root. Library
-paging limits, selection versus playing identity, Playback session retirement,
-and native updater authority remain feature invariants.
-
-### Desktop UI composition and verification ownership
-
-The frontend view tree composes the state owners; it does not introduce a
-second domain store or take authority from `DesktopBridge`:
-
-- `apps/desktop/src/components/workbench/Workbench.tsx` composes the Navigator, Track Browser,
-  Inspector, and their resize separators only. `apps/desktop/src/app/App.tsx` owns the
-  `.app-shell` view composition and renders `<Workbench />` and `<PlayerBar />` as sibling
-  children. `apps/desktop/src/components/player/PlayerBar.tsx` owns the fixed 92 px Player Dock,
-  outside the Workbench subtree. `apps/desktop/src/components/workbench/workbenchGeometry.ts`
-  owns the pure geometry calculation and the shared 420 px Track Browser minimum.
-  `apps/desktop/src/components/workbench/useWorkbenchLayout.ts` applies measured viewport geometry and input state;
-  `apps/desktop/src/components/workbench/workbenchDragPolicy.ts` owns transient drag/topology rebasing.
-  `apps/desktop/src/components/workbench/useWorkbenchPreferences.ts` coordinates UI preference updates,
-  while `apps/desktop/src/state/workbenchPreferences.ts` owns v5 validation, normalization, and
-  persistence. Only explicit completed preference changes are persisted;
-  resize-derived overlay/collapse state remains transient.
-- `apps/desktop/src/components/settings/SettingsPanel.tsx` owns the modal, category navigation,
-  and focus lifecycle. `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` owns the
-  category content and palette choices. Settings writes continue through the existing store and
-  typed bridge; the split does not change the settings schema or native owner.
-- `apps/desktop/src/components/utility/DiagnosticsView.tsx` composes the Diagnostics view.
-  `apps/desktop/src/components/utility/diagnosticsPresentation.ts` owns pure presentation mapping, and the playback
-  summary, readout, event, timing, and performance components own their bounded
-  render surfaces. Reported session, sender, and timing facts remain sourced
-  from native state; unavailable and dry-run measurements are not fabricated.
-
-Regression ownership follows those boundaries. `apps/desktop/src/state/store.test.ts` covers
-request fencing, generation-aware bounded Library caches, selection versus
-playing identity, page hydration, and Playback preparation/session lifecycles.
-`apps/desktop/tests/e2e/library.spec.ts` and `apps/desktop/tests/e2e/playback.spec.ts` cover visible paging,
-full-source traversal, and cross-page selection/playback behavior.
-`apps/desktop/src/components/workbench` unit tests plus
-`apps/desktop/tests/e2e/workbench-layout.spec.ts`, `workbench-resize.spec.ts`, and
-`workbench-state-regression.spec.ts` cover geometry, drag, keyboard/ARIA state, and
-v5 persistence. Settings, Diagnostics, palette, and Graphite appearance suites
-cover modal/accessibility behavior and all palette consumers. Browser bridge
-tests establish frontend behavior only; they do not replace packaged Tauri,
+Frontend unit and browser tests cover store behavior and visible workflows.
+They establish browser-side behavior only; they do not replace packaged Tauri,
 Windows focus, or physical-input qualification.
 
 ## Playback boundary
@@ -251,9 +159,10 @@ metadata or missing/invalid v4 updater trust material fails closed. Production
 Authenticode uses the governed `unsigned-zero-budget` policy; no provider
 credentials are required, and qualification rejects signed or unexpected PE state.
 The packaged previous-v4 to candidate-v4 fixture is test-only and consumes the
-exact installer/signature bytes re-downloaded from a release draft. The retired
-v3 transaction/recovery implementation is preserved in Git history and the
-`v3-maintenance` line; it is not part of the current workspace or product graph.
+exact installer/signature bytes re-downloaded from a release draft.
+The retired v3 transaction/recovery implementation is preserved in Git history
+and the `v3-maintenance` line; it is not part of the current workspace or
+product graph.
 
 ## Unsafe boundary and test seams
 
@@ -279,36 +188,16 @@ Test seams are feature-gated or test-gated and never activated by environment va
 
 ## Evidence and repository tooling
 
-Production parity is proven by direct Rust/TypeScript tests and committed
-fixtures. Historical words and frozen fixture data may remain as evidence, but
-they are not executable tooling. The canonical release/check tooling is
-`cargo xtask` and Bun.
+Production behavior is established by checked-out source, direct Rust and
+TypeScript tests, and committed fixtures. Historical records and frozen data
+preserve evidence for their recorded revisions; they do not set current
+architecture by themselves. Rust and Bun are the canonical product and
+development toolchains.
 
-The xtask ownership root in `rust/xtask/src/checks.rs` keeps the check-group
-dispatch order, check-session verification memoization, supply-chain skip
-policy, and apps/desktop/native orchestration. Focused owners contain the validators:
-
-- `audits/security.rs` owns the forbidden API, DLL, and Windows module scanner
-  and its baseline behavior.
-- `audits/architecture.rs` owns dependency direction, architecture allowlist,
-  module sizing, unsafe inventory, and module budget checks.
-- `audits/source.rs` owns shared Rust comment stripping and the shared source
-  walker used by audit and release-metadata validation.
-- `checks/tauri_metadata.rs` owns Tauri feature/build freshness, release
-  metadata, and legacy topology contracts.
-- `checks/release_runner.rs` owns protected runner, release workflow, and
-  metadata-token scope contracts.
-- `checks/release_pipeline.rs` owns release-state ordering and production
-  qualification contracts; `checks/workflow.rs` owns shared workflow parsing
-  and state-invocation validation.
-- `checks/ci_contracts.rs` owns active CI wiring and packaged-CI contracts;
-  `checks/trust.rs` owns production calibration and v4 trust-material guards.
-- `checks/bindings.rs` owns TypeScript and IPC binding generation and checks.
-
-The architecture audit budgets each owner module and requires the root
-`checks.rs` to remain at or below 1,600 lines. It also enforces the `sky_player`
-engine test root and owner budgets, plus their exact sibling inventory, and the
-native playback integration root, owner budgets, and exact sibling inventory.
+`cargo xtask` dispatches verification groups and hosts architecture, security,
+desktop-boundary, documentation, supply-chain, packaging, and release/trust
+checks. These checks enforce behavioral and security contracts; module-size
+and context-field diagnostics are advisory.
 
 Use the Rust repository tool for current verification groups:
 
