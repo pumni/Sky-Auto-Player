@@ -5,6 +5,7 @@ import {
   selectNowPlayingIndex,
   selectSongById,
 } from '../../state/store';
+import { StatusBadge } from '../ui/StatusBadge';
 import { playerStateLabel } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -94,13 +95,14 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
             {baseStatus}
           </span>
           {playbackMode === 'test' && (
-            <span
+            <StatusBadge
               className="player-test-mode"
+              appearance="plain"
               aria-label={testModeDescription}
               title={testModeDescription}
             >
               Test<span className="player-test-mode-detail"> · no keys</span>
-            </span>
+            </StatusBadge>
           )}
         </div>
       </div>
@@ -128,12 +130,14 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         </button>
       )}
       {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
-        <span
-          className={`player-risk risk-${preparedRisk.level}`}
+        <StatusBadge
+          className="player-risk"
+          tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
           aria-label={preparedRisk.headline}
+          title={preparedRisk.headline}
         >
-          {preparedRisk.level}
-        </span>
+          {preparedRisk.level === 'high' ? 'High risk' : 'Medium risk'}
+        </StatusBadge>
       )}
     </div>
   );

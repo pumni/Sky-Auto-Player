@@ -75,12 +75,6 @@
   flex: 0 1 auto;
 }
 
-.player-track-copy .player-test-mode {
-  flex: 0 0 auto;
-  color: var(--text-tertiary);
-  font-size: var(--type-metadata);
-}
-
 .player-track-copy .player-test-mode .player-test-mode-detail {
   font-size: inherit;
 }
@@ -125,14 +119,6 @@
 .player-like-button:hover,
 .player-like-button:focus-visible {
   background: var(--control-hover);
-}
-
-.player-risk {
-  flex: 0 0 auto;
-  color: var(--risk-color);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
 }
 
 .player-transport {
