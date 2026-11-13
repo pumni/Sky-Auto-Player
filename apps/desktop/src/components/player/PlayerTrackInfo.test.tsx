@@ -333,16 +333,19 @@ describe('PlayerTrackInfo', () => {
     await act(async () => store.getState().selectSong(row.song_id));
     await act(async () => store.getState().prepareSelectedPlayback());
     const playback = store.getState().playback;
-    if (!playback.prepared) throw new Error('expected prepared mock playback');
-    act(() => store.setState({
-      playback: {
-        ...playback,
-        prepared: {
-          ...playback.prepared,
-          risk: { ...playback.prepared.risk, level, headline: 'Timing review required' },
+    const prepared = playback.prepared;
+    if (!prepared) throw new Error('expected prepared mock playback');
+    act(() =>
+      store.setState({
+        playback: {
+          ...playback,
+          prepared: {
+            ...prepared,
+            risk: { ...prepared.risk, level, headline: 'Timing review required' },
+          },
         },
-      },
-    }));
+      }),
+    );
 
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     const badge = container.querySelector<HTMLElement>('.player-risk');
