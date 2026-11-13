@@ -19,7 +19,9 @@ test('song title tooltip appears only for clipped text at narrow and wide layout
     await title.evaluate((element) => {
       (element as HTMLElement).style.maxWidth = '';
     });
-    expect(await title.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await title.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
     await title.hover();
     expect(await title.getAttribute('title')).toBeNull();
     expect(await cell.getAttribute('title')).toBeNull();
