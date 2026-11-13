@@ -1356,9 +1356,7 @@ test('Built-in pager control centers stay fixed across 9→10 and 99→100', asy
   }
 });
 
-test('Locate selected follows the selected row without replacing Now Playing', async ({
-  page,
-}) => {
+test('Locate selected follows the selected row without replacing Now Playing', async ({ page }) => {
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: /Built-in Songs/ }).click();
