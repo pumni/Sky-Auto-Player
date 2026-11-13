@@ -13,9 +13,10 @@ a dedicated worker thread with MMCSS scheduling.
 - **Single 15-slot executor:** Musical playback is driven by a single
   15-slot executor ([`DispatchExecutor`](../rust/crates/sky_dispatch_core/src/executor.rs)).
   There are no independent dual cursors for Down and Up events.
-- **Physical timing guard:** [`PhysicalTimingGuard`](../rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs)
-  retains sender evidence for physical packets and validates the executor's
-  musical owner. It is not a second musical ownership source or alternate floor.
+- **Musical timing owner:** `DispatchExecutor` owns all 15 musical slots and
+  production Up/Down eligibility. `PhysicalTimingGuard` and its worker integration
+  are compiled only for tests and `test-support`; they do not participate in the
+  default production worker or own production floors.
 - **Pairing at compilation:** Each musical Down chord is compiled with
   paired authored Up offsets for its constituent keys. Up obligations are
   instantiated strictly upon successful Down completion.
@@ -174,8 +175,15 @@ summaries do not provide per-key p95/p99.
 
 The healthy real-time dispatch path is checked for zero heap allocations by
 [`rt_dispatch_no_alloc.rs`](../rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs).
-The offline Prepare advisory is a separate bounded estimate; it cannot control
-realtime dispatch. See [the advisory contract](prepare-whole-stream-timing-advisory.md).
+The Prepare UI also shows an offline, read-only estimate from the authored song,
+timing policy, compiled schedule, and bounded simulator. It cannot block admission,
+change note timing, or control realtime dispatch. Computation is capped at 50,000
+actions and 64 MiB; exceeding either bound returns `unavailable`. Its illustrative
+sender model assumes 10 µs setup, 3 µs per input, and 5 µs post-send; these values
+are diagnostic assumptions, not measurements or promises. The game does not
+acknowledge the estimate. The desktop consumer is
+[`TimingAdvisory.tsx`](../apps/desktop/src/components/player/TimingAdvisory.tsx);
+the simulator is in `apps/desktop/src-tauri/src/native_runtime/playback/timing_advisory.rs`.
 
 The bounded observation producer does not sample queue occupancy; the observer
 consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
@@ -186,7 +194,7 @@ accounting remain off the real-time producer suffix.
 combined schedule, coordinator and executor admission bound using calculated
 capacities and startup overlap. It is not a process-RSS or full-application peak
 limit. The one-million-action single-key case is rejected at its combined
-741,502,832-byte estimate; see the [FINAL-RT-R5 evidence](../evidence/dispatch-core-646/final-rt-r5.md).
+741,502,832-byte estimate; see the [pinned historical FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md).
 Allocation failures are not universally recoverable: in particular, constructing
 shared reason strings still uses infallible allocation.
 
@@ -197,7 +205,7 @@ shared reason strings still uses infallible allocation.
 - [`rust/crates/sky_player/src/engine/worker/dispatch_loop.rs`](../rust/crates/sky_player/src/engine/worker/dispatch_loop.rs):
   Realtime worker loop, event interleaving, and admission control.
 - [`rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs`](../rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs):
-  Realtime enforcement of hold floors ($H$) and release gaps ($G$).
+  test-support sender-floor model; not compiled into the default production worker.
 - [`rust/crates/sky_dispatch_win32/src/wait/hybrid.rs`](../rust/crates/sky_dispatch_win32/src/wait/hybrid.rs):
   High-resolution timer and QPC spin hybrid waiter.
 - [`rust/crates/sky_dispatch_win32/src/input/packet.rs`](../rust/crates/sky_dispatch_win32/src/input/packet.rs):

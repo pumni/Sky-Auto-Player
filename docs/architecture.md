@@ -111,10 +111,6 @@ owners under `native_runtime/tests/playback_integration/` are:
 
 The architecture audit keeps the root at or below 500 lines, each owner at or
 below 1,600 lines, and requires the exact direct `.rs` sibling inventory.
-The 69-test baseline inventory, feature gates, nested helper, and per-test
-body hashes are recorded in
-`docs/evidence/issue-540-native-playback-test-parity.json`.
-
 The `sky_player` engine suite remains entered through `engine.rs`'s
 `#[cfg(test)] mod tests;`. Its `engine/tests.rs` root contains the shared test
 imports and module declarations and stays at or below 750 lines. Shared fixtures

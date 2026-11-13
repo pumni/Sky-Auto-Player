@@ -521,11 +521,35 @@ pub struct StagedCandidate {
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(crate) authored_target_ticks: TimelineTicks,
     pub(crate) authored_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+    pub(crate) down_authored_target_ticks: Option<TimelineTicks>,
+    pub(crate) down_authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     pub(crate) timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     pub(crate) preflight_target: Option<TargetStamp>,
     pub(crate) source_action_index: u32,
     pub(crate) trace_kind: u8,
     pub(crate) up_slot_timings: SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>,
+}
+
+fn down_authored_target(
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+    down_chord: Option<&sky_dispatch_core::executor::DownChordTicks>,
+) -> Result<Option<(TimelineTicks, sky_dispatch_win32::clock::QpcTicks)>, String> {
+    down_chord
+        .map(|chord| {
+            let target_qpc = epoch_qpc
+                .checked_add_duration(DurationTicks::from_raw(chord.scheduled_ticks.as_u64()))
+                .map_err(|error| format!("Down authored target QPC overflow: {error}"))?;
+            Ok((chord.scheduled_ticks, target_qpc))
+        })
+        .transpose()
+}
+
+fn source_action_target(
+    packet_ticks: TimelineTicks,
+    packet_qpc: sky_dispatch_win32::clock::QpcTicks,
+    down_target: Option<(TimelineTicks, sky_dispatch_win32::clock::QpcTicks)>,
+) -> (TimelineTicks, sky_dispatch_win32::clock::QpcTicks) {
+    down_target.unwrap_or((packet_ticks, packet_qpc))
 }
 
 include!("dispatch_loop_scheduler.rs");
@@ -606,6 +630,7 @@ pub(crate) fn stage_candidate(
         .map_err(|error| format!("authored target precedes current playback epoch: {error}"))?
         .as_u64();
     let authored_target_ticks = TimelineTicks::from_raw(authored_target_ticks);
+    let down_target = down_authored_target(resources.playback.epoch, down_chord.as_ref())?;
 
     let prepared_packet =
         match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
@@ -637,6 +662,8 @@ pub(crate) fn stage_candidate(
         prepared_packet,
         authored_target_ticks,
         authored_target_qpc,
+        down_authored_target_ticks: down_target.map(|target| target.0),
+        down_authored_target_qpc: down_target.map(|target| target.1),
         timing_window,
         preflight_target,
         source_action_index,
@@ -893,9 +920,16 @@ pub(crate) fn dispatch_staged_candidate(
             },
         );
     }
+    let (source_action_target_ticks, source_action_target_qpc) = source_action_target(
+        candidate.authored_target_ticks,
+        candidate.authored_target_qpc,
+        candidate
+            .down_authored_target_ticks
+            .zip(candidate.down_authored_target_qpc),
+    );
     if let Some(started_qpc) = send_result.evidence.started_ticks {
         let _ = super::health::record_sendinput_pre_call_lateness(
-            candidate.authored_target_qpc,
+            source_action_target_qpc,
             started_qpc,
             timing,
             local_metrics,
@@ -928,11 +962,10 @@ pub(crate) fn dispatch_staged_candidate(
     }
 
     let pre_call_qpc = send_result.evidence.started_ticks;
-
     runtime.production_forensics.observe_packet_result(
         candidate.packet_masks,
         candidate.source_action_index,
-        candidate.authored_target_qpc,
+        source_action_target_qpc,
         pre_call_qpc,
         completion_qpc,
         send_result.status,
@@ -996,8 +1029,8 @@ pub(crate) fn dispatch_staged_candidate(
                 retry_reason: send_result.evidence.retry_reason,
                 chord_integrity_lost: false,
                 last_win32_error: send_result.evidence.last_win32_error.unwrap_or(0),
-                authored_ticks: candidate.authored_target_ticks,
-                effective_deadline_ticks: candidate.authored_target_ticks,
+                authored_ticks: source_action_target_ticks,
+                effective_deadline_ticks: source_action_target_ticks,
             },
         };
         publish_down_observation(
@@ -1856,9 +1889,9 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        SchedulerAction, evaluate_scheduler_action, physical_target_qpc_for_work,
-        physical_wait_target_for_plan, pre_wait_candidate_admission,
-        publish_live_metrics_after_dispatch, stage_scheduler_action,
+        SchedulerAction, down_authored_target, evaluate_scheduler_action,
+        physical_target_qpc_for_work, physical_wait_target_for_plan, pre_wait_candidate_admission,
+        publish_live_metrics_after_dispatch, source_action_target, stage_scheduler_action,
         stage_scheduler_action_preserving_due_up, stage_up_only_for_stale_mixed_candidate,
         wait_after_unstable_target,
     };
@@ -1878,6 +1911,46 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     type MockPacketCapture = std::sync::Arc<std::sync::Mutex<Vec<(PhysicalPacket, SendEvidence)>>>;
+
+    #[test]
+    fn mixed_packet_down_lateness_uses_down_target_and_keeps_packet_target() {
+        use sky_dispatch_core::executor::DownChordTicks;
+        use smallvec::SmallVec;
+
+        let epoch = QpcTicks::from_raw(0);
+        let chord = DownChordTicks {
+            chord_index: 1,
+            scheduled_ticks: TimelineTicks::from_raw(20_000),
+            scheduled_us: 20_000,
+            down_mask: 0b10,
+            source_action_index: 1,
+            reason_id: 0,
+            intents: SmallVec::new(),
+        };
+        let down_target = down_authored_target(epoch, Some(&chord))
+            .expect("checked Down target")
+            .expect("Down target exists");
+        let packet_authored_qpc = QpcTicks::from_raw(17_167);
+        let packet_authored_ticks = TimelineTicks::from_raw(17_167);
+        let (source_ticks, source_qpc) = source_action_target(
+            packet_authored_ticks,
+            packet_authored_qpc,
+            Some(down_target),
+        );
+        let pre_call_qpc = QpcTicks::from_raw(20_005);
+
+        assert_eq!(down_target.0.as_u64(), 20_000);
+        assert_eq!(pre_call_qpc.as_u64() - source_qpc.as_u64(), 5);
+        assert_eq!(source_ticks.as_u64(), 20_000);
+        assert_eq!(packet_authored_qpc.as_u64(), 17_167);
+        assert_eq!(packet_authored_ticks.as_u64(), 17_167);
+
+        let mixed = PhysicalPacket::new(0b01, chord.down_mask);
+        assert_eq!(mixed.up_mask.count_ones(), 1);
+        assert_eq!(mixed.down_mask.count_ones(), 1);
+        assert_eq!(mixed.up_mask & mixed.down_mask, 0);
+        assert_eq!(mixed.event_count(), 2);
+    }
 
     fn mixed_scheduler_after_accepted_a_down() -> (ProductionDispatchTestHarness, MockPacketCapture)
     {
