@@ -9,8 +9,8 @@ checked-out SHA; security and release requirements also come from their
 respective contracts. Measurements and historical decisions are evidence
 only for the revisions and conditions they name.
 
-[ADRs](adr/) and the [historical evidence archive](HISTORY.md) provide
-revision-bound records without treating them as current qualification.
+[HISTORY.md](HISTORY.md) provides pinned historical decision and evidence
+snapshots without treating them as current qualification.
 Published release notes are listed in [GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
 Each release candidate keeps its source-tagged notes at `docs/releases/{tag}.md`
 before preflight.

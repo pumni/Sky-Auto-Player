@@ -1,6 +1,6 @@
 //! Application directory and path authority for the v4 desktop runtime.
 //!
-//! This module enforces the clean application-data boundary recorded by ADR-0007:
+//! This module enforces the v4 application-data boundary:
 //! - The installer owns the complete installation root (`install_root`), which
 //!   contains only immutable application payload (executables, DLLs, resources).
 //! - The application owns its mutable state in OS-appropriate application-data
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-/// The permanent canonical v4 application identifier per ADR-0007.
+/// The permanent canonical v4 application identifier used by the package contract.
 pub const V4_APP_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
 
 /// Name of the native calibration worker binary in the install payload.
@@ -105,7 +105,7 @@ impl AppPaths {
     /// Construct an `AppPaths` instance from an install payload root and a base
     /// application-data directory.
     ///
-    /// Per ADR-0007 target Windows layout:
+    /// Target Windows application-data layout:
     /// - `config_root`: `app_data_root`
     /// - `data_root`: `app_data_root`
     /// - `cache_root`: `app_data_root/cache` (deterministic canonical v4 cache)

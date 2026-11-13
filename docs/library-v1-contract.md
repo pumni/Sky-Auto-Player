@@ -81,6 +81,35 @@ navigator sources remain unchanged. Built-in IDs come from the committed V4
 resource manifest and user/imported IDs retain the existing canonical-path
 policy. The composer does not content-dedupe or remap either ownership class.
 
+## Built-in catalog identity and ownership
+
+The committed `builtin-songs/manifest.json` defines the active packaged
+catalog. Its songs are immutable package resources resolved through the native
+resource boundary. User songs remain in the mutable AppData `songs/` directory;
+installation and updates do not seed, copy, overwrite, or delete built-in songs
+there. Native composition keeps packaged resources separate from mutable user
+paths.
+
+Each built-in arrangement has a stable ID of exactly 32 lowercase hexadecimal
+characters. Its ID is independent of source path and bytes: path renames,
+metadata corrections, and source-byte corrections preserve membership under
+the same ID, while SHA-256 verifies the bytes and does not define identity.
+Retired IDs remain reserved in the manifest ledger; active and retired IDs are
+disjoint, and restoring an arrangement reuses its retired ID.
+
+Manifest validation rejects malformed identities and paths, active/retired ID
+overlap, undeclared or missing source files, hash mismatches, and unparseable
+active songs. Source/build qualification runs
+`cargo xtask builtin-catalog verify`; release qualification verifies the
+installed resources and a fresh AppData install as specified in
+[Tauri packaging](v4-tauri-packaging.md). `CatalogIndex` may collapse repeated
+entries only when both canonical path and ID match. It rejects one path
+assigned different IDs and one ID assigned different paths; callers must not
+discard conflicts before validation. Built-in and user memberships compose for
+All Songs, while import-only items do not expand that source. At runtime,
+malformed or missing built-in resources are not trusted; valid user and
+imported sources remain available for library and playlist use.
+
 Deleting a playlist removes only its membership and native playlist record; it
 never deletes songs or local files. Playlist mutations return summaries, not
 full membership arrays, so the navigator remains bounded independently of

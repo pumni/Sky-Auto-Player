@@ -4,6 +4,14 @@ Archived records are revision-bound and are not qualification evidence for
 current source. Browse the pinned trees when an original report or dataset is
 needed.
 
+- **Retired release and built-in catalog ADR sources at Checkpoint F:**
+  [ADR-0007](https://github.com/pumni/Sky-Auto-Player/blob/0421b5e2d81b1a89e95c43706385cee77a7c0b12/docs/adr/ADR-0007-single-repository-v4-release-architecture.md),
+  [ADR-0008](https://github.com/pumni/Sky-Auto-Player/blob/0421b5e2d81b1a89e95c43706385cee77a7c0b12/docs/adr/ADR-0008-v4-builtin-song-catalog.md),
+  and [ADR-0009](https://github.com/pumni/Sky-Auto-Player/blob/0421b5e2d81b1a89e95c43706385cee77a7c0b12/docs/adr/ADR-0009-v4-github-latest-policy.md).
+  Current release requirements are in [release authority](v4-release-authority.md);
+  current catalog identity and membership requirements are in the
+  [Library V1 contract](library-v1-contract.md).
+
 - [Earlier docs and issue evidence](https://github.com/pumni/Sky-Auto-Player/tree/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs)
 - [Issue #646 qualification, including FINAL-RT-R5](https://github.com/pumni/Sky-Auto-Player/tree/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646)
 - [Issue #646 pinned baseline qualification snapshot](https://github.com/pumni/Sky-Auto-Player/tree/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/evidence/dispatch-core-646)

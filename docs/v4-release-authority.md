@@ -165,6 +165,20 @@ The ordering is security-critical:
 8. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
    `raw.githubusercontent.com` endpoint used by the client.
 
+### GitHub Latest publication policy
+
+Draft creation always sets `make_latest = "false"`. The irreversible publication
+PATCH sets `draft = false` and uses `make_latest = "true"` for stable releases
+and `make_latest = "false"` for beta releases. After immutable publication and
+before minting the contents-write GitHub App token for metadata promotion, the
+pipeline must read GitHub Latest without write credentials. Stable promotion
+requires Latest to identify the just-published release ID and tag, with that
+tag resolving to the exact transaction source SHA. Beta promotion requires the
+stable Latest identity to remain unchanged from preflight. The pipeline must
+recheck this identity at the metadata write boundary and final verification.
+An unavailable, malformed, ambiguous, or changed Latest state fails closed
+before metadata credentials or mutation.
+
 Published release assets, tags, and release records are never repaired in place. A failed
 unpublished draft is automatically cleaned up or recreated. A valid immutable stable release may
 advance only `channels/stable/latest.json` through the explicit metadata-only recovery procedure

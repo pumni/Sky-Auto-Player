@@ -1,5 +1,4 @@
 use crate::Result;
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
@@ -18,64 +17,6 @@ pub(crate) fn check_core_files(root: &Path) -> Result<()> {
             .into());
         }
     }
-    Ok(())
-}
-
-pub(crate) fn check_adr_uniqueness(root: &Path) -> Result<()> {
-    let adr_dir = root.join("docs/adr");
-    if !adr_dir.is_dir() {
-        return Err(format!("ADR directory missing: {}", adr_dir.display()).into());
-    }
-
-    let mut id_map: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    let entries = fs::read_dir(&adr_dir)?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-
-        let file_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(name) => name,
-            None => continue,
-        };
-
-        if let Some(rest) = file_name.strip_prefix("ADR-") {
-            let id = match rest.split('-').next() {
-                Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => id,
-                _ => {
-                    return Err(format!(
-                        "ADR filename does not follow `ADR-####-<name>.md` convention: {}",
-                        file_name
-                    )
-                    .into());
-                }
-            };
-            id_map.entry(id.to_string()).or_default().push(path);
-        }
-    }
-
-    let mut duplicates = Vec::new();
-    for (id, files) in &id_map {
-        if files.len() > 1 {
-            let names: Vec<_> = files
-                .iter()
-                .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-                .collect();
-            duplicates.push(format!("ADR ID {id}: {}", names.join(", ")));
-        }
-    }
-
-    if !duplicates.is_empty() {
-        return Err(format!(
-            "Duplicate ADR IDs detected in docs/adr:\n  - {}",
-            duplicates.join("\n  - ")
-        )
-        .into());
-    }
-
     Ok(())
 }
 
@@ -336,7 +277,7 @@ fn display_source_path(root: &Path, source: &Path) -> String {
 
 fn is_historical_retired_application_link(root: &Path, source: &Path, target: &Path) -> bool {
     let source = display_source_path(root, source);
-    let historical_source = ["docs/adr/", "docs/evidence/", "docs/releases/"]
+    let historical_source = ["docs/evidence/", "docs/releases/"]
         .iter()
         .any(|prefix| source.starts_with(prefix));
     if !historical_source {
@@ -392,7 +333,6 @@ pub(crate) fn check_markdown_links(root: &Path) -> Result<()> {
 
 pub(crate) fn run(root: &Path) -> Result<()> {
     check_core_files(root)?;
-    check_adr_uniqueness(root)?;
     check_markdown_links(root)?;
     println!("[xtask] documentation integrity checks: PASS");
     Ok(())
@@ -482,22 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn adr_uniqueness_detects_duplicates() {
-        let temp = std::env::temp_dir().join("sap_docs_integrity_test_adr_dup");
-        let _ = fs::remove_dir_all(&temp);
-        let adr_dir = temp.join("docs/adr");
-        fs::create_dir_all(&adr_dir).unwrap();
-        fs::write(adr_dir.join("ADR-0001-first.md"), "# ADR 1").unwrap();
-        fs::write(adr_dir.join("ADR-0001-duplicate.md"), "# ADR 1 duplicate").unwrap();
-        let result = check_adr_uniqueness(&temp);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Duplicate ADR IDs detected"));
-        assert!(err_msg.contains("0001"));
-        let _ = fs::remove_dir_all(&temp);
-    }
-
-    #[test]
     fn markdown_links_detects_broken_target_with_file_and_line() {
         let temp = std::env::temp_dir().join("sap_docs_integrity_test_broken_markdown_link");
         let _ = fs::remove_dir_all(&temp);
@@ -515,6 +439,26 @@ mod tests {
         assert!(err_msg.contains("Broken local Markdown links detected"));
         assert!(err_msg.contains("docs/guide/guide.md:3"));
         assert!(err_msg.contains("does_not_exist.md"));
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn run_rejects_broken_live_links_without_an_adr_directory() {
+        let temp = std::env::temp_dir().join("sap_docs_integrity_broken_link_without_adr");
+        let _ = fs::remove_dir_all(&temp);
+        let docs_dir = temp.join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+        fs::write(docs_dir.join("INDEX.md"), "[broken](missing.md)\n").unwrap();
+        fs::write(temp.join("SECURITY.md"), "# Security\n").unwrap();
+        fs::write(temp.join("AGENTS.md"), "# Agents\n").unwrap();
+
+        assert!(!docs_dir.join("adr").exists());
+        let result = run(&temp);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Broken local Markdown links detected"));
+        assert!(err_msg.contains("docs/INDEX.md:1"));
+        assert!(err_msg.contains("missing.md"));
         let _ = fs::remove_dir_all(&temp);
     }
 

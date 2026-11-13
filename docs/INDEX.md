@@ -44,9 +44,9 @@ These are useful when tracing a decision or reproducing an earlier result,
 not as instructions for current code. Keep recorded SHAs, hardware,
 measurements, and limitations intact.
 
-- **Decisions:** [ADRs](adr/) (retired ADR-0001, ADR-0002, ADR-0003, ADR-0005,
-  and ADR-0010 through ADR-0018 remain available through immutable links in
-  [HISTORY.md](HISTORY.md)).
+- **Historical decisions:** Retired ADR source snapshots are available through
+  immutable links in [HISTORY.md](HISTORY.md); use the current contracts above
+  for active requirements.
 - **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
   (original reports, run logs, binary traces and screenshot provenance are
   retrievable at pinned commit URLs; not current qualification).

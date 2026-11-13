@@ -4,14 +4,15 @@ This document specifies the release execution topology, runner trust boundary,
 candidate qualification lifecycle, and provenance model for production v4 releases
 of Sky Auto Player.
 
-Governed by:
-- [docs/adr/ADR-0007-single-repository-v4-release-architecture.md](adr/ADR-0007-single-repository-v4-release-architecture.md)
-- [Historical ADR-0006 rationale](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md)
-- [v4-tauri-packaging.md](v4-tauri-packaging.md)
+Current contracts:
 - [v4-release-authority.md](v4-release-authority.md)
+- [distribution-and-update.md](distribution-and-update.md)
+- [v4-tauri-packaging.md](v4-tauri-packaging.md)
 - [v4-updater-key-custody.md](v4-updater-key-custody.md)
 - [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md)
 - [../SECURITY.md](../SECURITY.md)
+
+Historical design rationale: [ADR-0006 at its recorded revision](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md).
 
 ---
 

@@ -494,7 +494,7 @@ test('natural Auto Play continues its frozen context after browsing a search', a
 test('natural Auto Play keeps a newly browsed Library source during its handoff', async ({
   page,
 }) => {
-  await page.goto('/?mockPlaybackDurationMs=3000&mockStartDelayMs=10');
+  await page.goto('/?mockPlaybackDurationMs=3000,120000&mockStartDelayMs=10');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
