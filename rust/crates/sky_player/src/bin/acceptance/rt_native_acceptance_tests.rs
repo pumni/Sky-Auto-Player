@@ -171,6 +171,82 @@ fn schema_v3_rejects_v2_and_requires_bound_header() {
         .is_err()
     );
 }
+
+#[test]
+fn scheduler_v2_schema4_evidence_is_rejected_by_pinned_native_schema3_reader() {
+    let schema_v3_ready = ready(RECEIVE_ONLY_ROLE);
+    let schema_v3_header = event(0, "stream_start", 0);
+    let schema_v3_keyboard = event(1, "key_press", 0x15);
+    assert!(
+        validate_ready_record(&schema_v3_ready, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_ok()
+    );
+    assert!(validate_event_stream(
+        &[schema_v3_header.clone(), schema_v3_keyboard],
+        &schema_v3_ready,
+        RECEIVE_ONLY_ROLE
+    )
+    .is_ok());
+
+    // Scheduler ReceiveOnly v2 keeps the ready envelope at schema 3 while
+    // advertising its schema 4 event stream and v2 observer provenance.
+    // Serde intentionally ignores those v2 extension fields here, so the
+    // rejection proves it is the version check—not JSON shape—that fails.
+    let scheduler_v2_ready: ReadyRecord = serde_json::from_value(serde_json::json!({
+        "schema_version": 3,
+        "run_id": "test-run",
+        "role": RECEIVE_ONLY_ROLE,
+        "sink_kind": SINK_KIND,
+        "pid": 7,
+        "hwnd": 66,
+        "title": SINK_TITLE,
+        "process": SCRIPT_MARKER,
+        "input_policy": INPUT_POLICY,
+        "event_log_id": "event-stream-test",
+        "event_schema_version": 4,
+        "process_start_time_filetime": 123,
+        "observer_version": "scheduler-receiveonly-queue-v2",
+        "observer_protocol": "scheduler-receiveonly-queue-v2"
+    }))
+    .expect("v2 ready record has all schema-3 required fields");
+    assert_eq!(
+        validate_ready_record(&scheduler_v2_ready, "test-run", 0x42, RECEIVE_ONLY_ROLE)
+            .expect_err("pinned schema-3 reader must reject v2 event schema 4"),
+        "ready-file schema/event schema version must be 3"
+    );
+
+    // A v3 binding header followed by a v2 schema-4 keyboard record isolates
+    // the per-event check from the ready-file check above.
+    let scheduler_v2_keyboard: EventRecord = serde_json::from_value(serde_json::json!({
+        "schema_version": 4,
+        "run_id": "test-run",
+        "role": RECEIVE_ONLY_ROLE,
+        "event_log_id": "event-stream-test",
+        "sequence": 1,
+        "kind": "key_press",
+        "scan_code": 0x15,
+        "extended": false,
+        "virtual_key": 0x59,
+        "message": 0x0100,
+        "observed_utc": "2026-01-01T00:00:00Z",
+        "observed_qpc": 123456,
+        "target_hwnd": 66,
+        "target_pid": 7,
+        "foreground_hwnd": 66,
+        "foreground_pid": 7,
+        "observer_version": "scheduler-receiveonly-queue-v2"
+    }))
+    .expect("v2 keyboard record has all schema-3 required fields");
+    assert_eq!(
+        validate_event_stream(
+            &[schema_v3_header, scheduler_v2_keyboard],
+            &schema_v3_ready,
+            RECEIVE_ONLY_ROLE
+        )
+        .expect_err("pinned schema-3 reader must reject schema-4 keyboard record"),
+        "event log is not bound to the ready-file process stream"
+    );
+}
+
 #[test]
 fn canonical_and_noncanonical_expectations_are_physical() {
     assert_eq!(
