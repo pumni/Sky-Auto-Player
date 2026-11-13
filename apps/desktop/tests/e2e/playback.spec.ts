@@ -501,23 +501,195 @@ test('natural Auto Play keeps a newly browsed Library source during its handoff'
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   const transition = player.getByRole('status');
   await expect(transition).toHaveText('Starting next song', { timeout: 10_000 });
-  const handoffStartedAt = await page.evaluate(() => performance.now());
 
   const likedSongs = page.locator('.library-navigator').getByRole('button', {
     name: 'Liked Songs',
   });
-  await likedSongs.click();
-  await expect(page.getByRole('heading', { name: 'Liked Songs' })).toBeVisible();
-  const browseElapsedMs = await page.evaluate(
-    (startedAt) => performance.now() - startedAt,
-    handoffStartedAt,
-  );
-  expect(browseElapsedMs).toBeLessThan(450);
+  const likedSongsButton = await likedSongs.elementHandle();
+  if (!likedSongsButton) throw new Error('Liked Songs button was not attached');
+
+  await page.evaluate((button) => {
+    type HandoffTimingState = {
+      clickAtMs: number | null;
+      clickTrusted: boolean | null;
+      clickDetail: number | null;
+      completedAtMs: number | null;
+      durationMs: number | null;
+      headingText: string | null;
+      mutationCount: number;
+      framePending: boolean;
+      cleanup: () => void;
+    };
+    const timingWindow = window as Window & { __sapHandoffTiming?: HandoffTimingState };
+    const state: HandoffTimingState = {
+      clickAtMs: null,
+      clickTrusted: null,
+      clickDetail: null,
+      completedAtMs: null,
+      durationMs: null,
+      headingText: null,
+      mutationCount: 0,
+      framePending: false,
+      cleanup: () => undefined,
+    };
+    let observer: MutationObserver | undefined;
+    let pendingFrame: number | undefined;
+    let headingAtClick: Element | null = null;
+
+    const isVisible = (element: Element) => {
+      const style = window.getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        bounds.width > 0 &&
+        bounds.height > 0
+      );
+    };
+    const findVisibleHeading = () =>
+      Array.from(document.querySelectorAll('h1')).find(
+        (heading) => heading.textContent?.trim() === 'Liked Songs' && isVisible(heading),
+      );
+    const cleanup = () => {
+      observer?.disconnect();
+      document.removeEventListener('click', onClick, true);
+      if (pendingFrame !== undefined) window.cancelAnimationFrame(pendingFrame);
+    };
+    const inspectHeading = () => {
+      state.mutationCount += 1;
+      if (state.clickAtMs === null || state.completedAtMs !== null || state.framePending) return;
+      const visibleHeading = findVisibleHeading();
+      if (!visibleHeading || visibleHeading === headingAtClick) return;
+
+      state.framePending = true;
+      pendingFrame = window.requestAnimationFrame(() => {
+        pendingFrame = undefined;
+        state.framePending = false;
+        const heading = findVisibleHeading();
+        if (
+          !heading ||
+          heading === headingAtClick ||
+          state.clickAtMs === null ||
+          state.completedAtMs !== null
+        ) {
+          return;
+        }
+        state.headingText = heading.textContent?.trim() ?? null;
+        state.completedAtMs = performance.now();
+        state.durationMs = state.completedAtMs - state.clickAtMs;
+        cleanup();
+      });
+    };
+    const onClick = (event: MouseEvent) => {
+      if (
+        state.clickAtMs !== null ||
+        !(event.target instanceof Node) ||
+        !button.contains(event.target)
+      ) {
+        return;
+      }
+      state.clickAtMs = performance.now();
+      headingAtClick = findVisibleHeading() ?? null;
+      state.clickTrusted = event.isTrusted;
+      state.clickDetail = event.detail;
+    };
+
+    observer = new MutationObserver(inspectHeading);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    state.cleanup = cleanup;
+    timingWindow.__sapHandoffTiming = state;
+    document.addEventListener('click', onClick, true);
+  }, likedSongsButton);
+
+  const likedSongsHeading = page.getByRole('heading', { name: 'Liked Songs' });
+  try {
+    await likedSongs.click();
+    await expect(likedSongsHeading).toBeVisible();
+    const browserTiming = await page.evaluate(() => {
+      type HandoffTimingState = {
+        clickAtMs: number | null;
+        clickTrusted: boolean | null;
+        clickDetail: number | null;
+        completedAtMs: number | null;
+        durationMs: number | null;
+        headingText: string | null;
+        mutationCount: number;
+      };
+      const timingWindow = window as Window & { __sapHandoffTiming?: HandoffTimingState };
+      const state = timingWindow.__sapHandoffTiming;
+      return {
+        clickObserved: state?.clickAtMs !== null && state?.clickAtMs !== undefined,
+        clickTrusted: state?.clickTrusted ?? null,
+        clickDetail: state?.clickDetail ?? null,
+        completed: state?.completedAtMs !== null && state?.completedAtMs !== undefined,
+        durationMs: state?.durationMs ?? null,
+        headingText: state?.headingText ?? null,
+        mutationCount: state?.mutationCount ?? 0,
+      };
+    });
+    console.info(`[handoff browser timing] ${JSON.stringify(browserTiming)}`);
+    expect(browserTiming.clickObserved).toBe(true);
+    expect(browserTiming.clickTrusted).toBe(true);
+    expect(browserTiming.completed).toBe(true);
+    expect(browserTiming.headingText).toBe('Liked Songs');
+    expect(browserTiming.durationMs).not.toBeNull();
+    expect(browserTiming.durationMs!).toBeLessThan(450);
+  } catch (error) {
+    const diagnostics = await page.evaluate(() => {
+      type HandoffTimingState = {
+        clickAtMs: number | null;
+        clickTrusted: boolean | null;
+        clickDetail: number | null;
+        completedAtMs: number | null;
+        durationMs: number | null;
+        headingText: string | null;
+        mutationCount: number;
+      };
+      const timingWindow = window as Window & { __sapHandoffTiming?: HandoffTimingState };
+      const state = timingWindow.__sapHandoffTiming;
+      const headings = Array.from(document.querySelectorAll('h1')).map((heading) => {
+        const style = window.getComputedStyle(heading);
+        const bounds = heading.getBoundingClientRect();
+        return {
+          text: heading.textContent?.trim() ?? '',
+          visible:
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            bounds.width > 0 &&
+            bounds.height > 0,
+        };
+      });
+      return {
+        clickObserved: state?.clickAtMs !== null && state?.clickAtMs !== undefined,
+        clickTrusted: state?.clickTrusted ?? null,
+        clickDetail: state?.clickDetail ?? null,
+        completed: state?.completedAtMs !== null && state?.completedAtMs !== undefined,
+        durationMs: state?.durationMs ?? null,
+        headingText: state?.headingText ?? null,
+        mutationCount: state?.mutationCount ?? 0,
+        headings,
+      };
+    });
+    console.info(`[handoff browser timing failure] ${JSON.stringify(diagnostics)}`);
+    throw error;
+  } finally {
+    await page.evaluate(() => {
+      type HandoffTimingState = { cleanup: () => void };
+      const timingWindow = window as Window & { __sapHandoffTiming?: HandoffTimingState };
+      timingWindow.__sapHandoffTiming?.cleanup();
+      delete timingWindow.__sapHandoffTiming;
+    });
+  }
 
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
     timeout: 10_000,
   });
-  await expect(page.getByRole('heading', { name: 'Liked Songs' })).toBeVisible();
+  await expect(likedSongsHeading).toBeVisible();
 });
 
 test('browsing and liking another Library row keeps Player Bar identity on Now Playing', async ({

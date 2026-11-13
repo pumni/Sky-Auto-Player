@@ -258,6 +258,36 @@ trait Transport {
     fn raw_get(&mut self, endpoint: &str) -> Result<Option<Vec<u8>>>;
 }
 
+struct ReadOnlyTransport<'a> {
+    inner: &'a mut dyn Transport,
+}
+
+impl Transport for ReadOnlyTransport<'_> {
+    fn request(
+        &mut self,
+        method: &str,
+        endpoint: &str,
+        body: Option<&Value>,
+    ) -> Result<Option<Value>> {
+        if method != "GET" || body.is_some() {
+            return Err(format!("read-only release guard refused {method} {endpoint}").into());
+        }
+        self.inner.request(method, endpoint, None)
+    }
+
+    fn upload(&mut self, endpoint: &str, name: &str, _path: &Path) -> Result<()> {
+        Err(format!("read-only release guard refused upload {name} to {endpoint}").into())
+    }
+
+    fn download(&mut self, endpoint: &str, _destination: &Path) -> Result<()> {
+        Err(format!("read-only release guard refused download from {endpoint}").into())
+    }
+
+    fn raw_get(&mut self, endpoint: &str) -> Result<Option<Vec<u8>>> {
+        Err(format!("read-only release guard refused raw request to {endpoint}").into())
+    }
+}
+
 const METADATA_WRITE_TOKEN_ENV: &str = "V4_METADATA_WRITE_TOKEN";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -964,6 +994,9 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         "verify-malware-scan" => malware::verify_scan(root, &options).map(|_| ()),
         "verify-attestations" => verify_attestations(root, &options),
         "publish-release" => publish_release(root, &options, &mut transport),
+        "verify-latest-before-metadata-token" => {
+            verify_latest_before_metadata_token(root, &options, &mut transport)
+        }
         "promote-metadata" => promote_metadata(root, &options, &mut transport),
         "final-verify" => final_verify(root, &options, &mut transport),
         "cleanup" => cleanup_local_state(root, &options),
@@ -978,7 +1011,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage:\n  cargo xtask release-v4 preflight --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 <build-unsigned|sign-candidate|qualify-candidate|verify-candidate|verify-malware-scan|probe-verify-candidate|verify-attestations|probe-metadata-token|publish-release|promote-metadata|final-verify> --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 cleanup --state-root <dir>\n  cargo xtask release-v4 cleanup-signing-material\n  cargo xtask release-v4 doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]\n  cargo xtask release-v4 self-test\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan <path> --plan-run-id <id> --plan-sha256 <sha256> --confirm-metadata-only-recovery\nRecovery is operator-gated by .github/workflows/v4-metadata-recovery.yml; plan is read-only and apply writes stable channel metadata only."
+    "Usage:\n  cargo xtask release-v4 preflight --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 <build-unsigned|sign-candidate|qualify-candidate|verify-candidate|verify-malware-scan|probe-verify-candidate|verify-attestations|probe-metadata-token|publish-release|verify-latest-before-metadata-token|promote-metadata|final-verify> --state-root <dir> --workflow-sha <sha>\n  cargo xtask release-v4 cleanup --state-root <dir>\n  cargo xtask release-v4 cleanup-signing-material\n  cargo xtask release-v4 doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]\n  cargo xtask release-v4 self-test\n  cargo xtask release-v4 metadata-recovery-plan --tag <v4.x.y> --output <path>\n  cargo xtask release-v4 metadata-recovery-apply --tag <v4.x.y> --plan <path> --plan-run-id <id> --plan-sha256 <sha256> --confirm-metadata-only-recovery\nRecovery is operator-gated by .github/workflows/v4-metadata-recovery.yml; plan is read-only and apply writes stable channel metadata only."
 }
 
 fn expected_job_for_command(command: &str) -> Option<&'static str> {
@@ -988,7 +1021,7 @@ fn expected_job_for_command(command: &str) -> Option<&'static str> {
         "verify-candidate" | "verify-malware-scan" => Some("attest"),
         "probe-verify-candidate" | "probe-metadata-token" => Some("metadata_probe"),
         "verify-attestations" | "publish-release" => Some("publish"),
-        "promote-metadata" => Some("metadata_promote"),
+        "verify-latest-before-metadata-token" | "promote-metadata" => Some("metadata_promote"),
         "final-verify" => Some("final_verify"),
         _ => None,
     }
@@ -3551,6 +3584,33 @@ fn published_release_for_state(
     Ok(release)
 }
 
+fn verify_latest_before_metadata_token(
+    root: &Path,
+    options: &Options,
+    transport: &mut dyn Transport,
+) -> Result<()> {
+    let context = read_context(root, options)?;
+    let state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
+    verify_latest_before_metadata_token_with_state(options, &context, &state, transport)?;
+    println!(
+        "V4 read-only Latest guard: PASS (channel={}, tag={})",
+        context.channel, context.tag
+    );
+    Ok(())
+}
+
+fn verify_latest_before_metadata_token_with_state(
+    options: &Options,
+    context: &Context,
+    state: &ReleaseState,
+    transport: &mut dyn Transport,
+) -> Result<()> {
+    validate_state(state, context)?;
+    let mut read_only = ReadOnlyTransport { inner: transport };
+    let published = published_release_for_state(&mut read_only, context, state)?;
+    validate_latest_for_metadata_promotion(options, context, state, &published, &mut read_only)
+}
+
 fn promote_metadata(root: &Path, options: &Options, transport: &mut dyn Transport) -> Result<()> {
     let context = read_context(root, options)?;
     let mut state: ReleaseState = read_json(&options.state_root.join("release-state.json"))?;
@@ -4722,6 +4782,10 @@ fn valid_workflow_run(run: &Value, sha: Option<&str>, repository: &str) -> bool 
 
 fn self_test() -> Result<()> {
     let outcomes = [
+        mock_pre_token_latest_guard_stable_and_beta(),
+        mock_pre_token_latest_guard_rejects_invalid_state_and_identity(),
+        mock_pre_token_read_only_transport_rejects_mutations(),
+        mock_pre_token_latest_guard_job_authorization(),
         mock_publish_succeeds(),
         mock_draft_readback_failures_never_patch(),
         mock_non_monotonic_candidate_never_mutates(),
@@ -4762,6 +4826,294 @@ fn self_test() -> Result<()> {
         scenario_count
     );
     Ok(())
+}
+
+fn mock_pre_token_latest_guard_stable_and_beta() -> Result<()> {
+    let (_root, options, base_context, _) = fixture()?;
+    let stable_context = latest_guard_context(&base_context, "99.0.0", "stable");
+    let stable_state = latest_guard_published_state(&stable_context, 12);
+    let stable_release = fake_release(
+        12,
+        &stable_context.tag,
+        &stable_context.source_sha,
+        false,
+        false,
+        true,
+    );
+    let mut stable_github = FakeTransport::new();
+    stable_github.latest = stable_release.clone();
+    stable_github.releases.insert(12, stable_release);
+    verify_latest_before_metadata_token_with_state(
+        &options,
+        &stable_context,
+        &stable_state,
+        &mut stable_github,
+    )?;
+    assert_eq!(
+        stable_github.events,
+        [
+            "GET repos/pumni/Sky-Auto-Player/releases/12",
+            "GET repos/pumni/Sky-Auto-Player/releases/latest"
+        ]
+    );
+
+    let beta_context = latest_guard_context(&base_context, "99.0.0-beta.1", "beta");
+    let beta_state = latest_guard_published_state(&beta_context, 12);
+    let beta_release = fake_release(
+        12,
+        &beta_context.tag,
+        &beta_context.source_sha,
+        false,
+        true,
+        true,
+    );
+    let stable_latest = fake_release(11, "v98.0.0", "b".repeat(40), false, false, true);
+    write_json_atomic(
+        &options.state_root.join("preflight-evidence.json"),
+        &json!({"pre_publication_latest":stable_latest}),
+    )?;
+    let mut beta_github = FakeTransport::new();
+    beta_github.latest = stable_latest;
+    beta_github.releases.insert(12, beta_release);
+    verify_latest_before_metadata_token_with_state(
+        &options,
+        &beta_context,
+        &beta_state,
+        &mut beta_github,
+    )?;
+    assert_eq!(
+        beta_github.events,
+        [
+            "GET repos/pumni/Sky-Auto-Player/releases/12",
+            "GET repos/pumni/Sky-Auto-Player/releases/latest"
+        ]
+    );
+    Ok(())
+}
+
+fn mock_pre_token_latest_guard_rejects_invalid_state_and_identity() -> Result<()> {
+    let (_root, options, base_context, _) = fixture()?;
+    let stable_context = latest_guard_context(&base_context, "99.0.0", "stable");
+    let state = latest_guard_published_state(&stable_context, 12);
+    let latest = fake_release(
+        12,
+        &stable_context.tag,
+        &stable_context.source_sha,
+        false,
+        false,
+        true,
+    );
+    let wrong_source = if stable_context.source_sha == "a".repeat(40) {
+        "b".repeat(40)
+    } else {
+        "a".repeat(40)
+    };
+    for (label, published) in [
+        (
+            "replayed tag",
+            fake_release(
+                12,
+                "v98.0.0",
+                &stable_context.source_sha,
+                false,
+                false,
+                true,
+            ),
+        ),
+        (
+            "replayed source SHA",
+            fake_release(12, &stable_context.tag, wrong_source, false, false, true),
+        ),
+        (
+            "wrong release ID",
+            fake_release(
+                13,
+                &stable_context.tag,
+                &stable_context.source_sha,
+                false,
+                false,
+                true,
+            ),
+        ),
+    ] {
+        let mut github = FakeTransport::new();
+        github.latest = latest.clone();
+        github.releases.insert(12, published);
+        if verify_latest_before_metadata_token_with_state(
+            &options,
+            &stable_context,
+            &state,
+            &mut github,
+        )
+        .is_ok()
+        {
+            return Err(format!("pre-token guard accepted {label}").into());
+        }
+        if github.events.iter().any(|event| !event.starts_with("GET ")) {
+            return Err(format!("pre-token guard mutated GitHub after {label}").into());
+        }
+    }
+
+    let mut missing_state = fixture_state(&stable_context);
+    missing_state.release_id = None;
+    let mut missing_github = FakeTransport::new();
+    if verify_latest_before_metadata_token_with_state(
+        &options,
+        &stable_context,
+        &missing_state,
+        &mut missing_github,
+    )
+    .is_ok()
+        || !missing_github.events.is_empty()
+    {
+        return Err(
+            "pre-token guard did not reject missing published state before GitHub access".into(),
+        );
+    }
+
+    let mut changed_stable = FakeTransport::new();
+    changed_stable.releases.insert(12, latest.clone());
+    changed_stable.latest = fake_release(11, "v98.0.0", "b".repeat(40), false, false, true);
+    if verify_latest_before_metadata_token_with_state(
+        &options,
+        &stable_context,
+        &state,
+        &mut changed_stable,
+    )
+    .is_ok()
+    {
+        return Err("pre-token guard accepted changed stable Latest".into());
+    }
+    if changed_stable
+        .events
+        .iter()
+        .any(|event| !event.starts_with("GET "))
+    {
+        return Err("pre-token guard mutated GitHub after changed stable Latest".into());
+    }
+
+    let beta_context = latest_guard_context(&base_context, "99.0.0-beta.1", "beta");
+    let beta_state = latest_guard_published_state(&beta_context, 12);
+    let beta_release = fake_release(
+        12,
+        &beta_context.tag,
+        &beta_context.source_sha,
+        false,
+        true,
+        true,
+    );
+    let preflight_latest = fake_release(11, "v98.0.0", "b".repeat(40), false, false, true);
+    write_json_atomic(
+        &options.state_root.join("preflight-evidence.json"),
+        &json!({"pre_publication_latest":preflight_latest}),
+    )?;
+    let mut changed_beta = FakeTransport::new();
+    changed_beta.releases.insert(12, beta_release);
+    changed_beta.latest = fake_release(10, "v97.0.0", "c".repeat(40), false, false, true);
+    if verify_latest_before_metadata_token_with_state(
+        &options,
+        &beta_context,
+        &beta_state,
+        &mut changed_beta,
+    )
+    .is_ok()
+    {
+        return Err("pre-token guard accepted changed beta Latest".into());
+    }
+    if changed_beta
+        .events
+        .iter()
+        .any(|event| !event.starts_with("GET "))
+    {
+        return Err("pre-token guard mutated GitHub after changed beta Latest".into());
+    }
+    Ok(())
+}
+
+fn mock_pre_token_read_only_transport_rejects_mutations() -> Result<()> {
+    let mut github = FakeTransport::new();
+    {
+        let mut read_only = ReadOnlyTransport { inner: &mut github };
+        let body = json!({"mutation":true});
+        for method in ["POST", "PATCH", "PUT", "DELETE"] {
+            if read_only
+                .request(
+                    method,
+                    "repos/pumni/Sky-Auto-Player/releases/12",
+                    Some(&body),
+                )
+                .is_ok()
+            {
+                return Err(format!("read-only transport accepted {method}").into());
+            }
+        }
+        if read_only
+            .request(
+                "GET",
+                "repos/pumni/Sky-Auto-Player/releases/latest",
+                Some(&body),
+            )
+            .is_ok()
+            || read_only
+                .upload(
+                    "uploads/release/12",
+                    "installer.exe",
+                    Path::new("installer.exe"),
+                )
+                .is_ok()
+            || read_only
+                .download(
+                    "repos/pumni/Sky-Auto-Player/releases/12/assets/1",
+                    Path::new("installer.exe"),
+                )
+                .is_ok()
+            || read_only
+                .raw_get("https://raw.githubusercontent.com/example/latest.json")
+                .is_ok()
+        {
+            return Err(
+                "read-only transport accepted a body, upload, download, or raw request".into(),
+            );
+        }
+    }
+    if !github.events.is_empty() {
+        return Err("read-only transport forwarded a rejected operation".into());
+    }
+    Ok(())
+}
+
+fn mock_pre_token_latest_guard_job_authorization() -> Result<()> {
+    let command = "verify-latest-before-metadata-token";
+    if expected_job_for_command(command) != Some("metadata_promote")
+        || validate_dispatch_job(command, "metadata_promote")? != "metadata_promote"
+    {
+        return Err("pre-token Latest guard is not bound to metadata_promote".into());
+    }
+    for other_job in ["metadata_probe", "publish", "final_verify", "prepare"] {
+        if validate_dispatch_job(command, other_job).is_ok() {
+            return Err(
+                format!("pre-token Latest guard accepted noncanonical job {other_job}").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn latest_guard_context(base: &Context, version: &str, channel: &str) -> Context {
+    let mut context = base.clone();
+    context.version = version.to_owned();
+    context.channel = channel.to_owned();
+    context.tag = format!("v{version}");
+    context.release_notes_path = format!("docs/releases/{}.md", context.tag);
+    context
+}
+
+fn latest_guard_published_state(context: &Context, release_id: u64) -> ReleaseState {
+    let mut state = fixture_state(context);
+    state.phase = Phase::PublishedPendingMetadata;
+    state.release_id = Some(release_id);
+    state.published_at = Some("2026-01-01T00:00:00Z".to_owned());
+    state
 }
 
 fn mock_publish_succeeds() -> Result<()> {
