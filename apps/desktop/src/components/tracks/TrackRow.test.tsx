@@ -75,7 +75,7 @@ describe('Track Browser primitives', () => {
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
-  it('shows the native title tooltip only when text is truncated and clears it on reuse', () => {
+  it('uses the project tooltip only for truncated text and clears it on virtual row reuse', async () => {
     const { rerender } = render(
       <TrackRow row={row} index={6} selected={false} start={276} onSelect={vi.fn()} />,
     );
@@ -89,26 +89,28 @@ describe('Track Browser primitives', () => {
       scrollWidth: { configurable: true, value: 160 },
       clientWidth: { configurable: true, value: 160 },
     });
-    fireEvent.pointerEnter(title);
-    expect(title).not.toHaveAttribute('title');
+    fireEvent.pointerEnter(title, { pointerType: 'mouse' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
 
     Object.defineProperty(title, 'clientWidth', { configurable: true, value: 60 });
-    fireEvent.pointerLeave(title);
-    fireEvent.pointerEnter(title);
-    expect(title).toHaveAttribute('title', row.title);
+    fireEvent.pointerLeave(title, { pointerType: 'mouse' });
+    fireEvent.pointerEnter(title, { pointerType: 'mouse' });
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(row.title));
+    expect(title).not.toHaveAttribute('title');
     expect(titleCell).not.toHaveAttribute('title');
 
-    fireEvent.pointerLeave(title);
-    expect(title).not.toHaveAttribute('title');
+    fireEvent.pointerLeave(title, { pointerType: 'mouse' });
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
 
-    fireEvent.pointerEnter(title);
-    expect(title).toHaveAttribute('title', row.title);
+    fireEvent.pointerEnter(title, { pointerType: 'mouse' });
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(row.title));
     const replacement = { ...row, song_id: 'b'.repeat(32), title: 'A different song' };
     rerender(
       <TrackRow row={replacement} index={6} selected={false} start={276} onSelect={vi.fn()} />,
     );
     const replacementTitle = screen.getByText(replacement.title, { selector: '.track-title-text' });
     expect(replacementTitle).not.toHaveAttribute('title');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
     expect(screen.getByRole('row', { name: /A different song/ })).toBeInTheDocument();
   });
 

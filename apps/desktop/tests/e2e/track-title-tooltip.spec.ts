@@ -24,6 +24,7 @@ test('song title tooltip appears only for clipped text at narrow and wide layout
       true,
     );
     await title.hover();
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
     expect(await title.getAttribute('title')).toBeNull();
     expect(await cell.getAttribute('title')).toBeNull();
 
@@ -33,10 +34,11 @@ test('song title tooltip appears only for clipped text at narrow and wide layout
     });
     expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
     await title.hover();
-    await expect(title).toHaveAttribute('title', 'Aurora Landing');
+    await expect(page.getByRole('tooltip')).toHaveText('Aurora Landing');
+    expect(await title.getAttribute('title')).toBeNull();
     expect(await cell.getAttribute('title')).toBeNull();
 
     await page.mouse.move(0, 0);
-    expect(await title.getAttribute('title')).toBeNull();
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
   }
 });
