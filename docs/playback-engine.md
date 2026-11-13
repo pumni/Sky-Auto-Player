@@ -13,6 +13,10 @@ a dedicated worker thread with MMCSS scheduling.
 - **Single 15-slot executor:** Musical playback is driven by a single
   15-slot executor ([`DispatchExecutor`](../rust/crates/sky_dispatch_core/src/executor.rs)).
   There are no independent dual cursors for Down and Up events.
+- **Musical timing owner:** `DispatchExecutor` owns all 15 musical slots and
+  production Up/Down eligibility. `PhysicalTimingGuard` and its worker integration
+  are compiled only for tests and `test-support`; they do not participate in the
+  default production worker or own production floors.
 - **Pairing at compilation:** Each musical Down chord is compiled with
   paired authored Up offsets for its constituent keys. Up obligations are
   instantiated strictly upon successful Down completion.
@@ -37,7 +41,7 @@ Compiled Down Chord Stream
 |                                                       |
 |  - Current Down chord pending dispatch                |
 |  - 15 Active Slots (release_due, next_down_due)       |
-|  - Session Resume Barrier (Q + T)                     |
+|  - Session Resume Barrier (cleanup completion + G)     |
 +-------------------------------------------------------+
         |
         v
@@ -51,16 +55,20 @@ Win32 SendInput (single syscall, Up-before-Down within batch)
 
 1. **Down Completion:** When a Down chord completes transport successfully:
    ```text
-   release_due[key]    = max(epoch + paired_up_offset[key], down_completion + H)
-   next_down_due[key]  = up_completion + T
+   authored_up[key]    = epoch + paired_up_offset[key]
+   release_due[key]    = max(authored_up[key], down_completion + H)
+   next_down_due[key]  = up_completion + G
    ```
 2. **Release Execution:** When the current QPC ticks reach or exceed `release_due[key]`,
    the key slot becomes Up-ready.
 3. **Down Admission:** A pending Down chord can only proceed when all its member keys
    have completed their previous Up releases and satisfied `now >= next_down_due[key]`.
-4. **Coalesced Transport:** If disjoint Up-ready keys and a Down-ready chord mature at
-   the same boundary, they are dispatched in a single `SendInput` call with Up events
-   ordered before Down events.
+4. **Independent Up selection:** Each slot's Up is considered independently. A
+   pending Down chord retains authored cursor order; an Up for one slot does not
+   block a different chord unless their physical masks conflict. Mixed packet Up
+   and Down masks are disjoint.
+5. **Coalesced Transport:** Eligible disjoint Up keys and a ready Down chord may
+   share one packet with Up events first. A packet contains at most 15 `INPUT` records.
 
 ## Timing Floors: H and G
 
@@ -75,10 +83,14 @@ game frame rate and user-configured timing margin:
 | Authored Gap | Authored spacing between notes | $T + \text{margin}\ \mu\text{s}$ |
 | Structural Cycle Floor | Minimum same-key cycle | $H + G$ |
 
-- **Hold floor ($H$):** Guarantees the game client samples the key-down state
-  across at least the configured number of frame boundaries.
-- **Release floor ($G$):** Guarantees the game client registers a key-up frame
-  before re-triggering the same key.
+Here $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$ microseconds and
+$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$.
+
+- **Hold floor ($H$):** Sender policy: Up is not eligible before the later of
+  authored Up time and successful Down completion plus $H$.
+- **Release floor ($G$):** Sender policy: same-key Down is not eligible before
+  successful Up completion plus $G$. These floors do not guarantee which frame
+  the game samples; Windows and game sampling are independent.
 - **Timing margin:** Protects against host scheduling jitter and Windows timer
   granularity variations.
 
@@ -99,11 +111,18 @@ Worker Loop -> Wait Deadline Reached
     -> Reject: Defer, Replan, or Terminate
 ```
 
-Unmatched-Up metadata has no physical dispatch boundary. When its bounded
-coordinator lookahead finds an authored metadata deadline before the next
-physical packet eligibility deadline, the worker waits to that metadata deadline
-with zero spin, commits only metadata that is due, then re-evaluates the physical
-candidate. This metadata-only wait is not recorded as a physical packet wait.
+The physical path stages a bounded packet, waits to its deadline, checks the
+final focus/identity/modifier/lease/control gates, then calls the prepared
+`SendInput` sender. Healthy dispatch uses fixed buffers and does not allocate.
+Packets contain no more than 15 inputs, with Up before Down. Full Down ownership
+commits only after complete insertion and valid completion QPC. Zero, partial,
+or invalid-QPC outcomes preserve possibly-active release obligations for cleanup.
+Cleanup succeeds only after physical state is verified resolved; pause/focus
+resume then observes the absolute cleanup-completion plus $G$ barrier.
+
+Unmatched-Up diagnostic metadata is committed by the normal authored-frame
+Prepare path. Test-only metadata wake instrumentation is not a production path.
+Metadata has no physical dispatch boundary and does not issue `SendInput`.
 
 ### Focus and Process Identity
 - The target window must be the exact foreground window (`GetForegroundWindow() == target_hwnd`).
@@ -112,11 +131,11 @@ candidate. This metadata-only wait is not recorded as a physical packet wait.
 - If focus is lost, Down transmission halts immediately, and any active keys are
   safely released.
 
-### Resume Barrier ($Q + T$)
-When resuming from pause, focus recovery, or emergency cleanup at time $Q$:
+### Resume Barrier (cleanup completion + $G$)
+After verified pause or focus cleanup completes at QPC $Q$:
 - All active key obligations are cleared or verified released.
-- A mandatory delay barrier of $Q + T$ is imposed before any subsequent Down chord
-  may be transmitted, ensuring the game processes the release state cleanly.
+- A mandatory delay barrier of $Q + G$ is imposed before any subsequent Down chord
+  may be transmitted. This sender-side barrier does not control game sampling.
 
 ## Production Waiter: Frozen Guard Mode
 
@@ -154,6 +173,18 @@ of the authored target, slot release floor and packet not-before floor to the
 sampled pre-call QPC; it is unavailable when that sample is missing. Packet-level
 summaries do not provide per-key p95/p99.
 
+The healthy real-time dispatch path is checked for zero heap allocations by
+[`rt_dispatch_no_alloc.rs`](../rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs).
+The Prepare UI also shows an offline, read-only estimate from the authored song,
+timing policy, compiled schedule, and bounded simulator. It cannot block admission,
+change note timing, or control realtime dispatch. Computation is capped at 50,000
+actions and 64 MiB; exceeding either bound returns `unavailable`. Its illustrative
+sender model assumes 10 µs setup, 3 µs per input, and 5 µs post-send; these values
+are diagnostic assumptions, not measurements or promises. The game does not
+acknowledge the estimate. The desktop consumer is
+[`TimingAdvisory.tsx`](../apps/desktop/src/components/player/TimingAdvisory.tsx);
+the simulator is in `apps/desktop/src-tauri/src/native_runtime/playback/timing_advisory.rs`.
+
 The bounded observation producer does not sample queue occupancy; the observer
 consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
 accounting remain off the real-time producer suffix.
@@ -163,7 +194,7 @@ accounting remain off the real-time producer suffix.
 combined schedule, coordinator and executor admission bound using calculated
 capacities and startup overlap. It is not a process-RSS or full-application peak
 limit. The one-million-action single-key case is rejected at its combined
-741,502,832-byte estimate; see the [FINAL-RT-R5 evidence](../evidence/dispatch-core-646/final-rt-r5.md).
+741,502,832-byte estimate; see the [pinned historical FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md).
 Allocation failures are not universally recoverable: in particular, constructing
 shared reason strings still uses infallible allocation.
 
@@ -174,7 +205,7 @@ shared reason strings still uses infallible allocation.
 - [`rust/crates/sky_player/src/engine/worker/dispatch_loop.rs`](../rust/crates/sky_player/src/engine/worker/dispatch_loop.rs):
   Realtime worker loop, event interleaving, and admission control.
 - [`rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs`](../rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs):
-  Realtime enforcement of hold floors ($H$) and release gaps ($G$).
+  test-support sender-floor model; not compiled into the default production worker.
 - [`rust/crates/sky_dispatch_win32/src/wait/hybrid.rs`](../rust/crates/sky_dispatch_win32/src/wait/hybrid.rs):
   High-resolution timer and QPC spin hybrid waiter.
 - [`rust/crates/sky_dispatch_win32/src/input/packet.rs`](../rust/crates/sky_dispatch_win32/src/input/packet.rs):

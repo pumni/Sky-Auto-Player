@@ -171,6 +171,7 @@ fn schema_v3_rejects_v2_and_requires_bound_header() {
         .is_err()
     );
 }
+
 #[test]
 fn canonical_and_noncanonical_expectations_are_physical() {
     assert_eq!(

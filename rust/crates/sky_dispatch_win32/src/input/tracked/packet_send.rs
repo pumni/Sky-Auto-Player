@@ -63,6 +63,14 @@ impl TrackedKeyState {
         &mut self,
         prepared: PreparedPacketView<'_>,
     ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_view_with_commit_policy(prepared, false)
+    }
+
+    fn send_prepared_physical_packet_view_with_commit_policy(
+        &mut self,
+        prepared: PreparedPacketView<'_>,
+        defer_journal_commit: bool,
+    ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         #[cfg(any(test, feature = "test-support"))]
         if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -98,7 +106,8 @@ impl TrackedKeyState {
             }
             #[cfg(any(test, feature = "test-support"))]
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
-            let outcome = self.apply_packet_outcome(packet, outcome);
+            let outcome =
+                self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
             return outcome;
@@ -136,7 +145,8 @@ impl TrackedKeyState {
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
         #[cfg(any(test, feature = "test-support"))]
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
-        let outcome = self.apply_packet_outcome(packet, outcome);
+        let outcome =
+            self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
@@ -622,11 +632,55 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet(prepared)
     }
 
+    /// Production scheduler path: retain the in-flight transport journal until
+    /// the scheduler has committed the matching physical packet.
+    pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+    ) -> SendTransactionOutcome {
+        #[cfg(any(test, feature = "test-support"))]
+        if prepared.packet().down_mask != 0
+            && let Some(hook) = self.physical_study_hook.as_ref()
+        {
+            hook(prepared.packet().down_mask);
+        }
+        self.send_prepared_physical_packet_view_with_commit_policy(prepared.as_view(), true)
+    }
+
+    /// Complete the transport half of a packet transaction after the
+    /// scheduler state commit has succeeded.
+    pub fn commit_physical_packet(&mut self, packet_mask: u16) -> Result<(), String> {
+        if packet_mask == 0 || self.in_flight_mask != packet_mask {
+            return Err(format!(
+                "physical packet journal commit does not match in-flight mask: requested={packet_mask:#06x}, in_flight={:#06x}",
+                self.in_flight_mask
+            ));
+        }
+        self.in_flight_mask = 0;
+        Ok(())
+    }
+
     pub(crate) fn apply_packet_outcome(
         &mut self,
         packet: PhysicalPacket,
         outcome: SendTransactionOutcome,
     ) -> SendTransactionOutcome {
+        self.apply_packet_outcome_with_commit_policy(packet, outcome, false)
+    }
+
+    fn apply_packet_outcome_with_commit_policy(
+        &mut self,
+        packet: PhysicalPacket,
+        mut outcome: SendTransactionOutcome,
+        defer_journal_commit: bool,
+    ) -> SendTransactionOutcome {
+        if outcome.is_success() && !outcome.has_complete_evidence_for(packet) {
+            // The raw packet has a single-send contract. Treat contradictory
+            // Complete evidence as an integrity failure and keep the whole
+            // packet uncertain until terminal cleanup reconciles it.
+            outcome.status = SendTransactionStatus::IntegrityLost;
+            outcome.evidence.confirmed_mask = 0;
+        }
         let confirmed_mask = outcome.evidence.confirmed_mask;
         match outcome.status {
             SendTransactionStatus::Complete => {
@@ -700,7 +754,9 @@ impl TrackedKeyState {
             self.failed_release_mask &= !confirmed_mask;
             self.failed_release_mask |= packet.up_mask & !confirmed_mask;
         }
-        self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
+        if !defer_journal_commit {
+            self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
+        }
         outcome
     }
 

@@ -570,17 +570,17 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
     let backend = TrackedKeyState::with_qpc_clock(qpc_clock);
     let schedule = startup_boundary_schedule();
     let min_hold_ticks = qpc_clock.duration_from_us(10_000).expect("min hold ticks");
-    let coordinator = sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
-        schedule,
-        10_000,
+    let scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
+        &schedule,
         min_hold_ticks,
+        qpc_clock.duration_from_us(16_667).expect("frame ticks"),
         |us| {
             qpc_clock
                 .timeline_from_us(us)
-                .map_err(|e| super::CoordinatorError::TimeConversion(format!("{e:?}")))
+                .map_err(|error| format!("{error:?}"))
         },
     )
-    .expect("coordinator");
+    .expect("scheduler");
     let playback =
         super::PlaybackClockState::new(qpc_clock.now().expect("qpc now"), DurationTicks::ZERO)
             .expect("playback");
@@ -591,7 +591,7 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
         clock: qpc_clock,
         waiter,
         backend,
-        coordinator,
+        scheduler,
         playback,
         telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
         scheduling: guards,

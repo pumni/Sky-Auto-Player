@@ -51,6 +51,14 @@ use snapshot_report::{
 use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+fn terminal_error_matches_reason(terminal_error: Option<&str>, expected: &str) -> bool {
+    terminal_error.is_some_and(|error| {
+        error == expected
+            || error
+                .strip_suffix(expected)
+                .is_some_and(|prefix| prefix.ends_with(": "))
+    })
+}
 use sky_dispatch_win32::focus::{
     WindowIdentity, focus_window_and_verify, foreground_window_matches, inspect_window_identity,
 };
@@ -879,6 +887,9 @@ mod suspend_terminal_tests;
 #[cfg(test)]
 #[path = "rt_native_acceptance_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "observer_protocol_tests.rs"]
+mod observer_protocol_tests;
 }
 
 fn main() {

@@ -1,4 +1,6 @@
 ﻿param(
+    [ValidateSet('DispatchCore', 'Scheduler')]
+    [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
 [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
     [string]$Scenario,
@@ -27,6 +29,11 @@ $PSNativeCommandUseErrorActionPreference = $false
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
+$receiveOnlyObserverVersion = if ($QualificationProfile -eq 'Scheduler') {
+    'scheduler-receiveonly-queue-v3-compat3'
+} else {
+    $null
+}
 $pwshPath = (Get-Command pwsh.exe).Source
 $pwshExecutablePath = (Get-Process -Id $PID).Path
 $runId = 'native-case-' + (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -39,6 +46,7 @@ $runDir = Join-Path $evidenceRoot $runId
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $readyPath = Join-Path $runDir 'sink-ready.json'
 $eventsPath = Join-Path $runDir 'sink-events.jsonl'
+$sinkObserverSummaryPath = Join-Path $runDir 'sink-observer-summary.json'
 $stdoutPath = Join-Path $runDir 'harness-output.log'
 $reportPath = Join-Path $runDir 'rt-native-acceptance.jsonl'
 $runConfigPath = Join-Path $runDir 'run-config.json'
@@ -62,6 +70,9 @@ $report = $null
 $windowIntegrity = $false
 $resultCode = 2
 $head = $null
+$schedulerBaseRevision = 'b9ed666e3ddddc4952831626f1654e1cc9071a10'
+$schedulerBaseTree = 'f554c41b23a3969d02ed29842d4178f6143c9d86'
+$schedulerBranch = 'refactor/scheduler-single-owner-20261112'
 
 Add-Type -TypeDefinition @"
 using System.Runtime.InteropServices;
@@ -85,7 +96,7 @@ function Wait-ReadyRecord {
 }
 
 function Assert-SinkIdentity {
-    param($Record, [int]$SessionId)
+    param($Record, [int]$SessionId, [string]$ExpectedObserverVersion)
     if ($Record.schema_version -ne 3 -or $Record.event_schema_version -ne 3 -or $Record.run_id -ne $runId -or $Record.role -ne 'ReceiveOnly') {
         throw 'receive-only sink ready record schema, role, or run ID mismatch'
     }
@@ -94,6 +105,17 @@ function Assert-SinkIdentity {
     }
     if ($Record.pid -le 0 -or $Record.hwnd -le 0 -or $Record.event_log_id.Length -eq 0 -or $Record.process_start_time_filetime -le 0) {
         throw 'sink ready record omitted process, HWND, event-log, or start-time identity'
+    }
+    if ($ExpectedObserverVersion) {
+        if ($ExpectedObserverVersion -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+            $Record.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+            $Record.observer_version -ne $ExpectedObserverVersion -or
+            $Record.observer_queue_capacity -ne 32768 -or
+            $Record.observer_qpc_frequency_hz -le 0) {
+            throw 'Scheduler ReceiveOnly V3 Compat3 observer mode, version, or queue provenance mismatch'
+        }
+    } elseif ($Record.PSObject.Properties['observer_version'] -or $Record.PSObject.Properties['observer_mode']) {
+        throw 'DispatchCore must retain the legacy ReceiveOnly observer protocol'
     }
     $owner = Get-Process -Id ([int]$Record.pid)
     $deadline = (Get-Date).AddSeconds(3)
@@ -112,9 +134,124 @@ function Assert-SinkIdentity {
     }
     for ($index = 0; $index -lt $records.Count; $index++) {
         $event = $records[$index]
-        if ($event.schema_version -ne 3 -or $event.run_id -ne $runId -or $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Record.event_log_id -or $event.sequence -ne $index -or ($index -gt 0 -and $event.kind -eq 'stream_start')) {
+        $expectedEventSchemaVersion = 3
+        if ($event.schema_version -ne $expectedEventSchemaVersion -or $event.run_id -ne $runId -or $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Record.event_log_id -or $event.sequence -ne $index -or ($index -gt 0 -and $event.kind -eq 'stream_start')) {
             throw ('pre-arm sink stream identity or sequence mismatch at record ' + $index)
         }
+        if ($ExpectedObserverVersion -and
+            ($event.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+                $event.observer_version -ne $ExpectedObserverVersion)) {
+            throw ('pre-arm Scheduler observer mode or version mismatch at record ' + $index)
+        }
+        if (-not $ExpectedObserverVersion -and
+            ($event.PSObject.Properties['observer_mode'] -or $event.PSObject.Properties['observer_version'])) {
+            throw ('pre-arm DispatchCore stream must retain the legacy observer protocol at record ' + $index)
+        }
+    }
+}
+
+function Assert-SchedulerObserverEvidence {
+    param($Ready, $Summary, [object[]]$Records, [string]$ExpectedObserverVersion)
+    if ($ExpectedObserverVersion -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+        $Ready.schema_version -ne 3 -or $Ready.event_schema_version -ne 3 -or
+        $Ready.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+        $Ready.observer_version -ne $ExpectedObserverVersion -or
+        $Summary.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+        $Summary.observer_version -ne $ExpectedObserverVersion) {
+        throw 'ReceiveOnly observer identity is not the authorized SchedulerQueuedV3Compat3 protocol'
+    }
+    if ($Summary.schema_version -ne 1 -or $Summary.run_id -ne $runId -or
+        $Summary.role -ne 'ReceiveOnly' -or $Summary.event_log_id -ne $Ready.event_log_id -or
+        [long]$Summary.target_hwnd -ne [long]$Ready.hwnd -or
+        [int]$Summary.target_pid -ne [int]$Ready.pid -or
+        [long]$Summary.qpc_frequency_hz -ne [long]$Ready.observer_qpc_frequency_hz -or
+        [int]$Summary.queue_capacity -ne 32768 -or
+        -not [bool]$Summary.stream_header_flushed -or
+        -not [bool]$Summary.events_flushed -or
+        [long]$Summary.observer_startup_failures -ne 0 -or
+        -not [bool]$Summary.consumer_stopped -or -not [bool]$Summary.queue_drained) {
+        throw 'Scheduler observer summary identity, version, or drain evidence is invalid'
+    }
+    if ([bool]$Summary.queue_overflow -or [long]$Summary.queue_dropped -ne 0 -or
+        [long]$Summary.writer_failures -ne 0 -or
+        [long]$Summary.observer_internal_failures -ne 0 -or
+        [long]$Summary.handler_latency_sample_dropped -ne 0 -or
+        [long]$Summary.events_seen -ne [long]$Summary.events_enqueued -or
+        [long]$Summary.events_enqueued -ne [long]$Summary.events_written -or
+        [long]$Summary.queue_high_water -gt [long]$Summary.queue_capacity -or
+        [long]$Summary.queue_high_water -lt 0) {
+        throw 'Scheduler observer overflow, loss, or incomplete counters fail closed'
+    }
+    $events = @($Records | Where-Object { $_.kind -ne 'stream_start' })
+    if ([long]$Summary.events_seen -ne $events.Count -or
+        [long]$Summary.handler_latency_count -ne $events.Count -or
+        [long]$Summary.handler_latency_sample_count -ne $events.Count) {
+        throw 'Scheduler observer event and handler-latency counts do not reconcile'
+    }
+    if ($Records.Count -lt 1 -or $Records[0].kind -ne 'stream_start') {
+        throw 'Scheduler observer stream header is missing'
+    }
+    $previousQpc = -1L
+    foreach ($index in 0..($Records.Count - 1)) {
+        $event = $Records[$index]
+        if ($event.schema_version -ne 3 -or $event.run_id -ne $Ready.run_id -or
+            $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Ready.event_log_id -or
+            $event.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+            $event.observer_version -ne $ExpectedObserverVersion -or
+            [long]$event.sequence -ne $index) {
+            throw ('Scheduler observer identity or sequence mismatch at record ' + $index)
+        }
+        if ($index -eq 0) {
+            if ($event.kind -ne 'stream_start' -or
+                $null -eq $event.PSObject.Properties['observed_qpc_ticks'] -or
+                [long]$event.observed_qpc_ticks -le 0 -or
+                [long]$event.target_hwnd -ne [long]$Ready.hwnd -or
+                [int]$event.target_pid -ne [int]$Ready.pid -or
+                $null -eq $event.PSObject.Properties['foreground_hwnd'] -or
+                $null -eq $event.PSObject.Properties['foreground_pid']) {
+                throw 'Scheduler observer header is missing schema-3-compatible provenance'
+            }
+            $previousQpc = [long]$event.observed_qpc_ticks
+            continue
+        }
+        if ($event.kind -notin @('key_press', 'key_release') -or
+            $null -eq $event.PSObject.Properties['scan_code'] -or
+            [int]$event.scan_code -le 0 -or [int]$event.scan_code -gt 0xff -or
+            $null -eq $event.PSObject.Properties['extended'] -or
+            [long]$event.target_hwnd -ne [long]$Ready.hwnd -or
+            [int]$event.target_pid -ne [int]$Ready.pid -or
+            [long]$event.foreground_hwnd -ne [long]$Ready.hwnd -or
+            [int]$event.foreground_pid -ne [int]$Ready.pid) {
+            throw ('Scheduler event arrived at a wrong target or foreground at record ' + $index)
+        }
+        if ($null -eq $event.PSObject.Properties['virtual_key'] -or
+            $null -eq $event.PSObject.Properties['message'] -or
+            $null -eq $event.PSObject.Properties['observed_qpc_ticks'] -or
+            [long]$event.observed_qpc_ticks -le 0 -or
+            [int]$event.virtual_key -le 0 -or [int]$event.virtual_key -gt 0xffff) {
+            throw ('Scheduler key metadata is missing or invalid at record ' + $index)
+        }
+        $expectedKind = switch ([int]$event.message) {
+            { $_ -in @(0x0100, 0x0104) } { 'key_press'; break }
+            { $_ -in @(0x0101, 0x0105) } { 'key_release'; break }
+            default { $null }
+        }
+        if (-not $expectedKind -or $event.kind -ne $expectedKind) {
+            throw ('Scheduler message, VK, and direction are inconsistent at record ' + $index)
+        }
+        $qpc = [long]$event.observed_qpc_ticks
+        if ($qpc -lt $previousQpc) { throw ('Scheduler observer event order moved backward at record ' + $index) }
+        $previousQpc = $qpc
+    }
+    if ($events.Count -gt 0 -and
+        ($null -eq $Summary.handler_latency_p50_us -or
+            $null -eq $Summary.handler_latency_p95_us -or
+            $null -eq $Summary.handler_latency_p99_us -or
+            $null -eq $Summary.handler_latency_max_us -or
+            [long]$Summary.handler_latency_p50_us -gt [long]$Summary.handler_latency_p95_us -or
+            [long]$Summary.handler_latency_p95_us -gt [long]$Summary.handler_latency_p99_us -or
+            [long]$Summary.handler_latency_p99_us -gt [long]$Summary.handler_latency_max_us)) {
+        throw 'Scheduler observer handler-latency distribution is missing or unordered'
     }
 }
 
@@ -171,7 +308,43 @@ try {
     if ($HarnessManifestPath) {
         if (-not $sourceTreeClean) { throw 'immutable harness acceptance requires a clean source checkout' }
         $harnessManifest = (Get-Content -LiteralPath $HarnessManifestPath -Raw) | ConvertFrom-Json
-        $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $harnessManifest -RepositoryRoot $root -Role 'case-runner' -AllowHistoricalControl:$HistoricalSourceAllowed
+        if ($QualificationProfile -eq 'Scheduler') {
+            $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
+            if ($harnessManifest.qualification_profile -ne 'Scheduler' -or
+                $harnessManifest.source_role -notin @('Baseline', 'Candidate') -or
+                -not [bool]$harnessManifest.source_tree_clean -or
+                $harnessManifest.base_source_revision -ne $schedulerBaseRevision -or
+                $harnessManifest.base_source_tree_sha -ne $schedulerBaseTree -or
+                -not (Test-Path -LiteralPath (Join-Path $manifestSourceRoot 'rust\Cargo.toml') -PathType Leaf)) {
+                throw 'Scheduler manifest role, pinned base, source cleanliness, or source root is invalid'
+            }
+            $manifestSourceRevision = (& git -C $manifestSourceRoot rev-parse HEAD).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source root is not a Git checkout' }
+            $manifestSourceTree = (& git -C $manifestSourceRoot rev-parse 'HEAD^{tree}').Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source tree could not be resolved' }
+            $manifestSourceBranch = ((& git -C $manifestSourceRoot branch --show-current) -join '').Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source branch could not be resolved' }
+            $manifestSourceChanges = (& git -C $manifestSourceRoot status --porcelain --untracked-files=all) -join ''
+            if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($manifestSourceChanges) -or
+                $manifestSourceRevision -ne $harnessManifest.source_revision -or
+                $manifestSourceTree -ne $harnessManifest.source_tree_sha) {
+                throw 'Scheduler manifest SHA/tree does not match a clean source checkout'
+            }
+            if ($harnessManifest.source_role -eq 'Candidate') {
+                if ($manifestSourceRoot -ne $root -or $manifestSourceRevision -ne $head -or
+                    $manifestSourceTree -ne $sourceTree -or $manifestSourceBranch -ne $schedulerBranch) {
+                    throw 'Scheduler candidate manifest must match the current clean scheduler branch'
+                }
+                & git -C $manifestSourceRoot merge-base --is-ancestor $schedulerBaseRevision HEAD
+                if ($LASTEXITCODE -ne 0) { throw 'Scheduler candidate does not descend from the pinned base' }
+            } elseif ($manifestSourceRevision -ne $schedulerBaseRevision -or
+                $manifestSourceTree -ne $schedulerBaseTree -or
+                -not [string]::IsNullOrWhiteSpace($manifestSourceBranch)) {
+                throw 'Scheduler baseline must be a detached clean checkout at the pinned base SHA/tree'
+            }
+        } else {
+            $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $harnessManifest -RepositoryRoot $root -Role 'case-runner' -AllowHistoricalControl:$HistoricalSourceAllowed
+        }
         $harnessManifestHash = Get-Sha256 $HarnessManifestPath
         $manifestFeatures = @($harnessManifest.cargo_features)
         $expectedManifestFeatures = if ($QpcReadCountingEvidenceOnly) { @('real-input-acceptance', 'qpc-read-counting') } else { @('real-input-acceptance') }
@@ -183,11 +356,18 @@ try {
         if ($harnessManifest.guard_mode -eq 'adaptive') {
             throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
         }
+        $expectedSourceBranch = if ($QualificationProfile -eq 'Scheduler' -and $harnessManifest.source_role -eq 'Baseline') { '' } elseif ($QualificationProfile -eq 'Scheduler') { $schedulerBranch } else { 'perf/dispatch-core-20261109' }
+        $expectedWorkloadVersion = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+        $sourceIdentityAllowed = if ($QualificationProfile -eq 'Scheduler') {
+            $harnessManifest.source_role -eq 'Baseline' -or $sourceRevisionMatches
+        } else {
+            $HistoricalSourceAllowed -or $sourceRevisionMatches
+        }
         if ($harnessManifest.schema_version -ne 1 -or
-            (-not $HistoricalSourceAllowed -and -not $sourceRevisionMatches) -or
+            -not $sourceIdentityAllowed -or
             $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
-            $harnessManifest.source_branch -ne 'perf/dispatch-core-20261109' -or
+            $harnessManifest.source_branch -ne $expectedSourceBranch -or
             ([bool]$harnessManifest.source_tree_clean -ne (-not $c1TimedVerified)) -or
             -not [bool]$harnessManifest.clean_build -or
             $harnessManifest.cargo_profile -ne 'dist' -or
@@ -195,7 +375,7 @@ try {
             ([bool]$harnessManifest.qpc_read_counting -ne [bool]$QpcReadCountingEvidenceOnly) -or
             $harnessManifest.observer_mode -ne $expectedObserverMode -or
             $harnessManifest.guard_mode -ne 'frozen' -or
-            $harnessManifest.workload_version -ne 'dispatch-core-646-a1' -or
+            $harnessManifest.workload_version -ne $expectedWorkloadVersion -or
             $harnessManifest.target -ne 'x86_64-pc-windows-msvc' -or
             $harnessManifest.rustc_version -ne $rustcVersion.Trim() -or
             -not [string]::Equals($manifestBinaryPath, $harness, [System.StringComparison]::OrdinalIgnoreCase) -or
@@ -206,9 +386,12 @@ try {
     }
     $sessionId = (Get-Process -Id $PID).SessionId
     $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
+    if ($receiveOnlyObserverVersion) {
+        $sinkArgv += @('-ObserverMode', 'SchedulerQueuedV3Compat3', '-ObserverSummaryFile', $sinkObserverSummaryPath)
+    }
     $sinkProcess = Start-Process -FilePath $pwshPath -ArgumentList $sinkArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'sink.stdout.log') -RedirectStandardError (Join-Path $runDir 'sink.stderr.log')
     $sink = Wait-ReadyRecord $readyPath $sinkProcess
-    Assert-SinkIdentity $sink $sessionId
+    Assert-SinkIdentity $sink $sessionId $receiveOnlyObserverVersion
     $foregroundPermissionGranted = [NativeAcceptanceForegroundPermission]::AllowSetForegroundWindow([uint32]$sink.pid)
 
     if ($Scenario -eq 'focus-loss') {
@@ -256,7 +439,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -290,6 +473,9 @@ try {
         power_scheme = (& powercfg /getactivescheme | Out-String).Trim()
         sink_ready_path = 'sink-ready.json'
         sink_event_path = 'sink-events.jsonl'
+        sink_observer_summary_path = if ($receiveOnlyObserverVersion) { 'sink-observer-summary.json' } else { $null }
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
+        receiveonly_observer_version = $receiveOnlyObserverVersion
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
         sink_event_log_id = $sink.event_log_id
@@ -333,6 +519,23 @@ try {
     $capturedText = ($captured | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
     Set-Content -LiteralPath $stdoutPath -Value $capturedText -Encoding UTF8
 
+    if ($receiveOnlyObserverVersion -and $Scenario -ne 'owner-process-termination') {
+        $sinkProcess.Refresh()
+        if (-not $sinkProcess.HasExited) {
+            [void]$sinkProcess.CloseMainWindow()
+            if (-not $sinkProcess.WaitForExit(30000)) {
+                throw 'Scheduler ReceiveOnly observer did not stop and flush within 30 seconds after native report completion'
+            }
+        }
+        $sinkProcess.Refresh()
+        if ($sinkProcess.HasExited -and $sinkProcess.ExitCode -ne 0) {
+            throw ('Scheduler ReceiveOnly observer exited fail-closed with code ' + $sinkProcess.ExitCode)
+        }
+        if (-not (Test-Path -LiteralPath $sinkObserverSummaryPath -PathType Leaf)) {
+            throw 'Scheduler ReceiveOnly observer summary was not written after consumer shutdown'
+        }
+    }
+
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
@@ -360,6 +563,11 @@ try {
     }
 
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $observerSummary = $null
+    if ($receiveOnlyObserverVersion) {
+        $observerSummary = Get-Content -LiteralPath $sinkObserverSummaryPath -Raw | ConvertFrom-Json
+        Assert-SchedulerObserverEvidence -Ready $sink -Summary $observerSummary -Records $sinkRecords -ExpectedObserverVersion $receiveOnlyObserverVersion
+    }
     for ($index = 0; $index -lt $sinkRecords.Count; $index++) {
         $record = $sinkRecords[$index]
         if ($record.run_id -ne $runId -or $record.event_log_id -ne $sink.event_log_id -or $record.sequence -ne $index) {
@@ -396,6 +604,24 @@ try {
         harness_observed_event_count = [long]$details.observed_sink_event_count
         sequence_contiguous = $true
         report_window_match = $windowIntegrity
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
+        receiveonly_observer_version = $receiveOnlyObserverVersion
+        observer_events_seen = if ($observerSummary) { [long]$observerSummary.events_seen } else { $null }
+        observer_events_enqueued = if ($observerSummary) { [long]$observerSummary.events_enqueued } else { $null }
+        observer_events_written = if ($observerSummary) { [long]$observerSummary.events_written } else { $null }
+        observer_queue_capacity = if ($observerSummary) { [long]$observerSummary.queue_capacity } else { $null }
+        observer_queue_high_water = if ($observerSummary) { [long]$observerSummary.queue_high_water } else { $null }
+        observer_queue_dropped = if ($observerSummary) { [long]$observerSummary.queue_dropped } else { $null }
+        observer_queue_overflow = if ($observerSummary) { [bool]$observerSummary.queue_overflow } else { $null }
+        observer_handler_latency_count = if ($observerSummary) { [long]$observerSummary.handler_latency_count } else { $null }
+        observer_handler_latency_sample_count = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_count } else { $null }
+        observer_handler_latency_sample_dropped = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_dropped } else { $null }
+        observer_handler_latency_p50_us = if ($observerSummary) { $observerSummary.handler_latency_p50_us } else { $null }
+        observer_handler_latency_p95_us = if ($observerSummary) { $observerSummary.handler_latency_p95_us } else { $null }
+        observer_handler_latency_p99_us = if ($observerSummary) { $observerSummary.handler_latency_p99_us } else { $null }
+        observer_handler_latency_max_us = if ($observerSummary) { $observerSummary.handler_latency_max_us } else { $null }
+        observer_writer_failures = if ($observerSummary) { [long]$observerSummary.writer_failures } else { $null }
+        observer_internal_failures = if ($observerSummary) { [long]$observerSummary.observer_internal_failures } else { $null }
         raw_events = $observedWindow
     }
     $window | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $windowPath -Encoding UTF8
@@ -407,7 +633,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -440,6 +666,24 @@ try {
         expected_event_count = [long]$details.expected_sink_event_count
         observed_event_count = $observedWindow.Count
         report_window_match = $windowIntegrity
+        receiveonly_observer_mode = if ($receiveOnlyObserverVersion) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
+        receiveonly_observer_version = $receiveOnlyObserverVersion
+        observer_events_seen = if ($observerSummary) { [long]$observerSummary.events_seen } else { $null }
+        observer_events_enqueued = if ($observerSummary) { [long]$observerSummary.events_enqueued } else { $null }
+        observer_events_written = if ($observerSummary) { [long]$observerSummary.events_written } else { $null }
+        observer_queue_capacity = if ($observerSummary) { [long]$observerSummary.queue_capacity } else { $null }
+        observer_queue_high_water = if ($observerSummary) { [long]$observerSummary.queue_high_water } else { $null }
+        observer_queue_dropped = if ($observerSummary) { [long]$observerSummary.queue_dropped } else { $null }
+        observer_queue_overflow = if ($observerSummary) { [bool]$observerSummary.queue_overflow } else { $null }
+        observer_handler_latency_count = if ($observerSummary) { [long]$observerSummary.handler_latency_count } else { $null }
+        observer_handler_latency_sample_count = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_count } else { $null }
+        observer_handler_latency_sample_dropped = if ($observerSummary) { [long]$observerSummary.handler_latency_sample_dropped } else { $null }
+        observer_handler_latency_p50_us = if ($observerSummary) { $observerSummary.handler_latency_p50_us } else { $null }
+        observer_handler_latency_p95_us = if ($observerSummary) { $observerSummary.handler_latency_p95_us } else { $null }
+        observer_handler_latency_p99_us = if ($observerSummary) { $observerSummary.handler_latency_p99_us } else { $null }
+        observer_handler_latency_max_us = if ($observerSummary) { $observerSummary.handler_latency_max_us } else { $null }
+        observer_writer_failures = if ($observerSummary) { [long]$observerSummary.writer_failures } else { $null }
+        observer_internal_failures = if ($observerSummary) { [long]$observerSummary.observer_internal_failures } else { $null }
         owner_process_termination_verified = $ownerProcessTerminationVerified
         report_path = 'rt-native-acceptance.jsonl'
     }

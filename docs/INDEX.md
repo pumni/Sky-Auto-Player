@@ -10,10 +10,10 @@ invariants that must not be discarded because an implementation differs.
 - **Architecture and ownership:** [architecture](architecture.md) for repository-wide
   structure and module ownership; [playback engine](playback-engine.md) for
   the normative realtime playback architecture.
-- **Timing and playback qualification:** [playback engine](playback-engine.md)
-  (15-slot executor, $H$ and $G$ floors, final Down admission, Frozen production waiter);
-  [playback verification](playback-verification.md) (22 native safety scenarios,
-  interactive desktop foreground guard, noalloc qualification).
+- **Playback architecture:** [playback engine](playback-engine.md) (scheduler,
+  sender timing, admission, cleanup, and bounded observation).
+- **Playback qualification:** [playback verification](playback-verification.md)
+  (native sink, Scheduler profile, Final matrix, and evidence requirements).
 - **Desktop UI:** [workbench](desktop-workbench.md),
   [current UI image reference](ui/README.md) when visual inspection is needed,
   [React Aria type boundary](desktop-type-boundary.md),
@@ -35,12 +35,10 @@ invariants that must not be discarded because an implementation differs.
   [updater key custody](v4-updater-key-custody.md),
   [Authenticode](v4-authenticode-provider-seam.md).
 - **CI and development:** [CI topology](ci-validation-topology.md),
-  [CI performance baseline](ci-performance-baseline.md),
-  [future Windows smoke feasibility](ci-windows-smoke-feasibility.md),
   [Rust toolchain](rust-toolchain-policy.md),
   [contributing](../CONTRIBUTING.md).
-- **When measuring or investigating:** [startup benchmark](desktop-startup-benchmark.md),
-  [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md).
+- **When measuring or investigating:** use the focused contracts above;
+  archived measurements are available through [HISTORY.md](HISTORY.md).
 
 ## Revision-bound records
 
@@ -53,10 +51,8 @@ measurements, and limitations intact.
 - **Archived qualification and issue evidence:** [historical archive index](HISTORY.md)
   (original reports, run logs, binary traces and screenshot provenance are
   retrievable at pinned commit URLs; not current qualification).
-- **Retained reproduction datasets:** [native test parity baseline](evidence/issue-540-native-playback-test-parity.json)
-  and [wake-calibration checksum-backed projection](evidence/wake-calibration-qualification-20261018.json).
-- **Legacy PowerShell audit:** [migration ledger](powershell-dependency-ledger.md)
-  (dated migration record; current release/CI owners are the Rust sources).
+- The wake-calibration export fixture and checksum remain because
+  `scripts/test_startup_calibration_evidence_export.ps1` reads them.
 - **Release-specific records:** [releases](releases/).
 - Use [HISTORY.md](HISTORY.md) to retrieve removed issue/phase reports by full
   source SHA; do not mistake those archived results for current behavior.

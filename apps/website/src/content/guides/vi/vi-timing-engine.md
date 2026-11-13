@@ -8,8 +8,8 @@ description: >-
   bù độ trễ máy và ý nghĩa thực sự của "độ chính xác timing" trong ngữ cảnh này.
 summary: >-
   Timing engine của Sky Auto Player lên lịch nốt theo timeline căn theo frame, gửi hợp âm
-  trong một lệnh SendInput duy nhất, giữ nốt hold đủ thời gian và đo độ trễ phía sender để
-  giảm drift có hệ thống. Độ chính xác phía game phụ thuộc vào Windows và vòng lặp sampling của game.
+  trong một lệnh SendInput duy nhất, áp dụng timing floor phía sender và dùng Frozen QPC waiter.
+  Độ chính xác phía game phụ thuộc vào Windows và vòng lặp sampling của game.
 category: playback-timing
 order: 1
 published: '2026-08-08'
@@ -55,7 +55,7 @@ các phím trong hợp âm đó. Khi các sự kiện nhả phím và nhấn h�
 
 ## Ngữ nghĩa hold và timing floor
 
-Nốt hold (phím được giữ) được giữ tối thiểu theo sàn hold $H$:
+Thời điểm Up của nốt hold được kiểm soát bởi sàn hold phía sender $H$:
 $$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$$
 với $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$. Việc nhấn lại cùng một phím phải tuân
 thủ khoảng cách nhả phím $G = T$ trước khi phát Down tiếp theo.
@@ -70,15 +70,15 @@ Thời gian hold được biểu diễn theo bội số của một frame game �
 | 1,25 frame           | ~20,8 ms           |
 | 1,5 frame            | ~25,0 ms           |
 
-Chọn 1,25 hoặc 1,5 nếu nốt hold ngắn không đăng ký ổn định trên máy của bạn. Cài đặt
-FPS phải khớp với FPS cấu hình trong Sky để timing hold chính xác.
+FPS cấu hình dùng để tính floor phía sender. Nó không đảm bảo frame nào của game sẽ lấy mẫu
+trạng thái phím.
 
 ## Hiệu chuẩn và robust wake guard
 
 Sky Auto Player đo lường sai số thức giấc của Windows kernel timer trong quá trình khởi động
 hiệu chuẩn host, xác định robust wake guard ($\text{median} + 6 \times \text{MAD}$). Trong quá
 trình phát nhạc, production waiter sử dụng wake guard đóng băng (Frozen) này để kết hợp giấc ngủ
-timer hiệu quả với vòng lặp spin QPC chính xác tới microsecond mà không gây jitter bất định.
+timer với vòng lặp spin QPC. Nó không điều chỉnh lead time liên tục để loại bỏ drift.
 
 Đây là **timing phía sender mà thôi**. Nó giảm trễ hệ thống do OS scheduling jitter trên máy.
 Nó không điều chỉnh cho network latency hay frame pacing của game. Telemetry hiển thị trong

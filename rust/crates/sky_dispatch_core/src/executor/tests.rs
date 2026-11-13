@@ -700,30 +700,35 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
         TimelineTicks::from_raw(41_000)
     );
 
-    // At 30 ms (the original authored Up time):
-    // No physical Up should be replayed!
-    // Next event is second Down scheduled at 35 ms.
+    // At 30 ms (the original authored Up time), no physical Up is replayed.
+    // The scheduler itself holds the next Down until cleanup + G at 41 ms.
     let step30 = executor.evaluate(TimelineTicks::from_raw(30_000));
     assert_eq!(
         step30,
         DispatchAction::Wait {
-            deadline_ticks: TimelineTicks::from_raw(35_000)
+            deadline_ticks: TimelineTicks::from_raw(41_000)
         },
-        "No stale Up replay; next authored event is Down at 35 ms"
+        "No stale Up replay; resume barrier is the next physical deadline"
     );
 
-    // At 35 ms: second Down is dispatched at its authored time (physical timing guard
-    // holds SendInput physical transmission until barrier Q + T = 41 ms).
+    // The authored second Down at 35 ms remains held until the exact barrier.
     let step35 = executor.evaluate(TimelineTicks::from_raw(35_000));
+    assert_eq!(
+        step35,
+        DispatchAction::Wait {
+            deadline_ticks: TimelineTicks::from_raw(41_000)
+        }
+    );
+    let step41 = executor.evaluate(TimelineTicks::from_raw(41_000));
     assert!(
         matches!(
-            step35,
+            step41,
             DispatchAction::Send {
                 up_mask: 0,
                 down_chord: Some(chord)
             } if chord.down_mask == 0x01
         ),
-        "Second Down dispatched at authored schedule time"
+        "Second Down dispatched at the resume barrier"
     );
 }
 

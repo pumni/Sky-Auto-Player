@@ -90,7 +90,7 @@ unselected proof job to report `skipped`.
 | Changed path | Intended major lanes |
 | --- | --- |
 | `README.md` or general `docs/**` | No specialized lane; aggregate status only |
-| `docs/releases/**` | Static validation only; no release contract |
+| `docs/releases/**` (`{tag}.md`) | Release assembly consumes the matching notes file; documentation-only CI classification |
 | `apps/website/**`, `.github/actions/site-validate/**`, `pages.yml` | Site validation and exact Pages artifact packaging, including website dependency changes |
 | `.bun-version`, Rust setup action, shared toolchain resolver | Full validation across all lanes |
 | `apps/desktop/src/**`, React styles/tests on a PR | Desktop web/browser and E2E; no Windows jobs by default, except the Windows integration paths below |
@@ -204,9 +204,9 @@ owners. `nsis_harness.rs` scopes product HKCU keys, install/AppData roots,
 shortcuts, child processes, and cleanup to a unique runner-temp root;
 `updater_fixture.rs` verifies exact candidate/bridge bytes, loopback HTTP,
 rollback, N-to-N+1 migration, old-root rejection, and user-song preservation.
-The Windows workflow jobs call these Rust commands directly. The migrated
-PowerShell scripts and current remaining entrypoints are tracked in
-[`powershell-dependency-ledger.md`](powershell-dependency-ledger.md).
+The Windows workflow jobs call these Rust commands directly. The remaining
+PowerShell entrypoints are maintained only where Windows-specific orchestration
+or evidence handling still requires them.
 
 The migrated CI and Wave C fixture scripts and their script self-tests are
 retired after the workflow, release, documentation, and test consumers were

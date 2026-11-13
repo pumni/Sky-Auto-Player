@@ -72,7 +72,7 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         return Err("Tauri productName does not match the v4 package contract".into());
     }
     if string_field(config, "identifier")? != V4_IDENTIFIER {
-        return Err("Tauri identifier does not match ADR-0006".into());
+        return Err("Tauri identifier does not match ADR-0007".into());
     }
     let build = object(config, "build")?;
     if build.get("beforeBuildCommand").and_then(Value::as_str) != Some(CALIBRATION_BUILD_COMMAND) {

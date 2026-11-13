@@ -8,8 +8,8 @@ description: >-
   adapts to machine latency, and what "timing accuracy" actually means in this context.
 summary: >-
   Sky Auto Player's timing engine schedules notes against a frame-aligned timeline, submits
-  chords in one SendInput batch, holds notes for their full duration, and measures
-  sender-side latency to reduce systematic drift. Game-side accuracy depends on Windows
+  chords in one SendInput batch, applies sender-side hold floors, and uses a Frozen QPC
+  waiter. Game-side accuracy depends on Windows
   and the game's own sampling loop.
 category: playback-timing
 order: 1
@@ -57,7 +57,7 @@ sender-side skew.
 
 ## Hold semantics and timing floors
 
-A hold note (sustained key) is held for at least the minimum hold floor $H$:
+A hold note's sender-side Up is gated by the minimum hold floor $H$:
 $$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$$
 where $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$. Retriggering the same key respects
 the release gap floor $G = T$ before sending the next Down.
@@ -72,15 +72,15 @@ The hold duration is expressed as a multiple of one game frame at the configured
 | 1.25 frames          | ~20.8 ms           |
 | 1.5 frames           | ~25.0 ms           |
 
-Choose 1.25 or 1.5 if short holds are not registering reliably on your machine.
-The FPS setting must match the FPS configured inside Sky for hold timing to be correct.
+The FPS setting controls the sender's floor calculation. It does not guarantee which
+game frame samples a key state.
 
 ## Calibration and robust wake guard
 
 Sky Auto Player measures Windows kernel timer wake errors during startup host calibration,
 deriving a robust wake guard ($\text{median} + 6 \times \text{MAD}$). During playback, the
-production waiter uses this frozen wake guard to combine efficient kernel-timer sleep
-with a microsecond-accurate QPC spin loop, eliminating drift without uncalibrated runtime jitter.
+production waiter uses this frozen wake guard to combine kernel-timer sleep
+with a QPC spin loop. It does not adjust lead time continuously to eliminate drift.
 
 This is **sender-side timing only**. It reduces systematic delay caused by OS scheduling
 jitter on your machine. It does not correct for network latency or game frame pacing.

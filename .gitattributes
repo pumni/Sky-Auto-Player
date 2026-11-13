@@ -13,6 +13,3 @@ rust/supply-chain/*.lock text eol=lf
 Cargo.toml text eol=lf
 # Historical byte-identical song fixtures must not gain CRLF on Windows checkouts.
 tests/fixtures/song_planning/historical_sources/*.json text eol=lf
-# FINAL-RT-R6 captures are hash-addressed raw bytes; preserve them exactly across Windows checkouts.
-evidence/dispatch-core-646/final-rt-r6/benchmarks/*.raw.json -text -diff
-evidence/dispatch-core-646/final-rt-r6/logs/*.log -text -diff

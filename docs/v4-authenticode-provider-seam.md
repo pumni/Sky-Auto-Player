@@ -4,7 +4,7 @@ This document defines the Windows Authenticode boundary for the canonical v4 Tau
 The current security and release contracts are [`SECURITY.md`](../SECURITY.md),
 [`distribution-and-update.md`](distribution-and-update.md), and
 [`v4-release-authority.md`](v4-release-authority.md). The original
-[`ADR-0006`](adr/ADR-0006-v4-distribution-installation-update.md) records design rationale; it is
+[`Historical ADR-0006`](https://github.com/pumni/Sky-Auto-Player/blob/536f7fb2a7f1e180684e0211c26bef22d6ee1b77/docs/adr/ADR-0006-v4-distribution-installation-update.md) records design rationale; it is
 not the sole authority for current policy.
 
 ## Current pre-provider policy

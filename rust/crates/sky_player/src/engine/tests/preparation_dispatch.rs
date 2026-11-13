@@ -128,7 +128,7 @@ fn zero_requested_pre_roll_uses_production_floor() {
 }
 
 #[test]
-fn stale_metadata_commits_before_first_physical_send() {
+fn unmatched_up_diagnostics_are_recorded_during_prepare_before_dispatch() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
     let schedule = compile_runtime_intents(
@@ -185,17 +185,14 @@ fn stale_metadata_commits_before_first_physical_send() {
     assert_eq!(snapshot.outcome, Some("finished".to_string()));
     assert_eq!(snapshot.terminal_error, None);
     assert_eq!(
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         2,
         "ordering hook values stale={} physical={}",
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         hook.first_physical_send_started.load(Ordering::SeqCst),
     );
     assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
-    assert!(
-        hook.stale_packet_committed.load(Ordering::SeqCst)
-            <= hook.first_physical_send_started.load(Ordering::SeqCst)
-    );
+    assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
             .expect("valid telemetry JSON");
@@ -214,7 +211,7 @@ fn stale_metadata_commits_before_first_physical_send() {
 }
 
 #[test]
-fn many_leading_stale_packets_are_drained_before_precision_handoff() {
+fn many_leading_unmatched_ups_are_diagnosed_during_prepare() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
     let stale_count = 32usize;
@@ -262,10 +259,66 @@ fn many_leading_stale_packets_are_drained_before_precision_handoff() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     assert_eq!(session.snapshot().terminal_error, None);
     assert_eq!(
-        hook.stale_packet_committed.load(Ordering::SeqCst),
+        hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
         stale_count as u64
     );
     assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
+fn unmatched_up_prepare_diagnostics_are_chunked_and_dispatch_continues() {
+    use sky_dispatch_core::compile::compile_runtime_intents;
+
+    for stale_count in [0usize, 1, 32, 33, 10_000] {
+        let mut actions = Vec::with_capacity(stale_count + 2);
+        for index in 0..stale_count {
+            actions.push(KeyActionInput {
+                source_action_index: index as u32,
+                kind: ActionKind::Up,
+                scheduled_us: index as u64,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "stale-backlog".into(),
+            });
+        }
+        actions.push(KeyActionInput {
+            source_action_index: stale_count as u32,
+            kind: ActionKind::Down,
+            scheduled_us: 500_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "physical-after-stale-backlog".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: (stale_count + 1) as u32,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "stale-backlog-cleanup".into(),
+        });
+        let schedule =
+            compile_runtime_intents(&actions, &[0x15]).expect("valid stale-backlog schedule");
+        let hook = Arc::new(StartupOrderingHook::default());
+        let mut options = test_session_options(
+            schedule,
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        options.telemetry.capacity = 32;
+        let session = NativeDispatchSession::new(options).expect("session admission");
+        start_with_test_wall_clock_slack(&session);
+        assert!(session.join(Duration::from_secs(10)).expect("worker join"));
+        assert_eq!(session.snapshot().terminal_error, None);
+        assert_eq!(
+            hook.unmatched_up_prepare_count.load(Ordering::SeqCst),
+            stale_count as u64,
+            "all stale packets must retain accounting for backlog={stale_count}"
+        );
+        assert!(hook.first_physical_send_started.load(Ordering::SeqCst) > 0);
+    }
 }
 
 #[test]
@@ -318,17 +371,16 @@ fn same_timestamp_stale_leading_up_packet_is_suppressed_atomically() {
     let records = telemetry["records"].as_array().expect("records array");
     let stale = records
         .iter()
-        .find(|record| record["event_index"].as_u64() == Some(0))
-        .expect("same-timestamp stale packet record");
-    assert_eq!(stale["kind"].as_u64(), Some(1));
-    assert_eq!(stale["requested_count"].as_u64(), Some(0));
-    assert_eq!(stale["send_attempts"].as_u64(), Some(0));
-    assert!(
-        records
-            .iter()
-            .all(|record| record["event_index"].as_u64() != Some(1)),
-        "same packet must produce one stale telemetry record"
-    );
+        .filter(|record| record["outcome"].as_u64() == Some(4))
+        .collect::<Vec<_>>();
+    assert_eq!(stale.len(), 2);
+    assert_eq!(stale[0]["event_index"].as_u64(), Some(0));
+    assert_eq!(stale[1]["event_index"].as_u64(), Some(1));
+    assert!(stale.iter().all(|record| {
+        record["kind"].as_u64() == Some(1)
+            && record["requested_count"].as_u64() == Some(0)
+            && record["send_attempts"].as_u64() == Some(0)
+    }));
     let down = records
         .iter()
         .find(|record| record["event_index"].as_u64() == Some(2))
@@ -678,7 +730,7 @@ fn prepared_late_down_keeps_following_up_accounting() {
         assert_eq!(captured[0].confirmed_mask, 1);
         assert_eq!(captured[0].attempts, 1);
     }
-    let after_down = harness.resources.coordinator.generation_accounting();
+    let after_down = harness.legacy_coordinator_fixture.generation_accounting();
     assert_eq!(after_down.activated, 1);
     assert_eq!(after_down.active, 1);
     assert_eq!(after_down.released, 0);
@@ -704,7 +756,7 @@ fn prepared_late_down_keeps_following_up_accounting() {
     }
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
     assert_eq!(harness.backend_active_mask(), 0);
-    let after_up = harness.resources.coordinator.generation_accounting();
+    let after_up = harness.legacy_coordinator_fixture.generation_accounting();
     assert_eq!(after_up.activated, 1);
     assert_eq!(after_up.active, 0);
     assert_eq!(after_up.released, 1);
@@ -772,7 +824,7 @@ fn prepared_mixed_transport_failure_is_fail_closed_without_retry() {
         super::worker::DispatchStep::Terminate(_) | super::worker::DispatchStep::TerminateStatic(_)
     ));
     assert_eq!(evidence.lock().expect("transport evidence").len(), 1);
-    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
     assert_eq!(harness.backend_active_mask(), 0);
 }
 
@@ -817,14 +869,14 @@ fn prepared_transport_fault_matrix_is_fail_closed_without_retry() {
             assert!(matches!(step, super::worker::DispatchStep::Dispatched));
             let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
             assert!(matches!(step, super::worker::DispatchStep::Dispatched));
-            assert_eq!(harness.resources.coordinator.cursor, 3);
+            assert_eq!(harness.legacy_coordinator_fixture.cursor, 3);
         } else {
             assert!(matches!(
                 step,
                 super::worker::DispatchStep::Terminate(_)
                     | super::worker::DispatchStep::TerminateStatic(_)
             ));
-            assert_eq!(harness.resources.coordinator.cursor, 0);
+            assert_eq!(harness.legacy_coordinator_fixture.cursor, 0);
         }
         assert_eq!(
             evidence.lock().expect("transport evidence").len(),
@@ -874,7 +926,7 @@ fn prepared_full_packet_transport_outcome_matrix_is_fail_closed() {
         assert_eq!(captured[0].requested_mask, 0b001);
         assert_eq!(captured[0].attempts, expected_attempts);
         assert_eq!(
-            harness.resources.coordinator.cursor,
+            harness.legacy_coordinator_fixture.cursor,
             u16::from(status == SendTransactionStatus::Complete) as usize
         );
         assert_eq!(
@@ -1067,7 +1119,7 @@ fn prepared_normal_down_lateness_matrix_keeps_one_transport_attempt() {
             assert_eq!(captured[0].attempts, 1, "{label}: boundary A send attempts");
         }
 
-        let accounting = harness.resources.coordinator.generation_accounting();
+        let accounting = harness.legacy_coordinator_fixture.generation_accounting();
         assert_eq!(accounting.activated, 1, "{label}: activated");
         assert_eq!(accounting.active, 1, "{label}: active");
         assert_eq!(accounting.released, 0, "{label}: released");
