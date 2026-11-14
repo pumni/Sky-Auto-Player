@@ -676,18 +676,9 @@ pub(crate) struct WorkerConfig {
 }
 
 impl WorkerConfig {
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn observer_enabled(&self) -> bool {
-        let qualification_observer = {
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                self.timing_observer_for_qualification
-            }
-            #[cfg(not(any(test, feature = "test-support")))]
-            {
-                false
-            }
-        };
+        let qualification_observer = self.timing_observer_for_qualification;
         effective_policy::observer_enabled_from_inputs(self.profile, qualification_observer)
     }
 }

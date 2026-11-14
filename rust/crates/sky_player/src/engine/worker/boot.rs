@@ -202,7 +202,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         return admission_failure(&mut backend, metrics, error);
     }
     if config.focus.require_focus && schedule_has_down {
-        core.runtime.preparation_probe.record_preflight();
         let Some(target_stamp) = load_target_stamp(target) else {
             return admission_failure(
                 &mut backend,

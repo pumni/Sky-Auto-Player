@@ -350,16 +350,13 @@ const LEGACY_DISPATCH_PATHS: &[&str] = &[
     "rust/crates/sky_player/src/engine/worker/releases.rs",
 ];
 const CANONICAL_DISPATCH_FILES: &[&str] = &[
-    "authored.rs",
+    "hold_forensics.rs",
     "mod.rs",
     "observation.rs",
     "observer.rs",
-    "recovery.rs",
-    "timing.rs",
-    "hold_forensics.rs",
-    "observer_wake.rs",
     "observer_trace.rs",
-    "prepared.rs",
+    "observer_wake.rs",
+    "timing.rs",
 ];
 const UNSAFE_AUDIT_SOURCE_ROOTS: &[&str] = &[
     "rust/crates/sky_dispatch_core/src",

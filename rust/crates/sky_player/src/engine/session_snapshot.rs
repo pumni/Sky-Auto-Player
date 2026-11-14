@@ -345,29 +345,4 @@ impl NativeDispatchSession {
         &self.shared
     }
 
-    #[cfg(test)]
-    pub(super) fn join_state_for_test(&self) -> JoinStateForTest {
-        let completion_signaled = self
-            .shared
-            .lifecycle
-            .completed
-            .0
-            .lock()
-            .ok()
-            .map(|done| *done);
-        let worker_handle = self.thread_handle.lock();
-        let worker_handle_present = worker_handle.is_some();
-        let worker_handle_finished = worker_handle.as_ref().map(|handle| handle.is_finished());
-        drop(worker_handle);
-        let watchdog_handle = self.watchdog_handle.lock();
-        let watchdog_handle_present = watchdog_handle.is_some();
-        let watchdog_handle_finished = watchdog_handle.as_ref().map(|handle| handle.is_finished());
-        JoinStateForTest {
-            completion_signaled,
-            worker_handle_present,
-            worker_handle_finished,
-            watchdog_handle_present,
-            watchdog_handle_finished,
-        }
-    }
 }

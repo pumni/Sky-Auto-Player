@@ -1,14 +1,15 @@
-//! Fake clock and deterministic authored-packet simulation harness.
+//! Fake-clock driver for the production dispatch executor.
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::coordinator::*;
-use crate::model::*;
+use crate::executor::{DispatchDecision, DispatchExecutor};
+use crate::model::{KeyActionInput, MAX_KEYS};
+use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
 
 #[cfg(any(test, feature = "test-support"))]
-pub fn assert_clean_generation_completion(accounting: GenerationAccounting) {
+pub fn assert_clean_generation_completion(accounting: crate::accounting::GenerationAccounting) {
     assert_eq!(accounting.total, accounting.activated);
     assert_eq!(accounting.activated, accounting.released);
     assert_eq!(accounting.scheduled, 0);
@@ -64,6 +65,9 @@ pub struct SimulationResult {
     pub is_finished: bool,
 }
 
+/// Drive `DispatchExecutor` with a deterministic sender completion latency.
+/// This is an offline executor simulation; worker admission and Win32 delivery
+/// are covered by `sky_player`'s production-worker tests.
 pub fn simulate_schedule(
     actions: &[KeyActionInput],
     allowed_scan_codes: &[u16],
@@ -71,28 +75,21 @@ pub fn simulate_schedule(
     send_latency_us: u64,
 ) -> Result<SimulationResult, crate::compile::CompileError> {
     let schedule = crate::compile::compile_runtime_intents(actions, allowed_scan_codes)?;
-    // Mirror the native session admission boundary.  Invalid authored holds
-    // must be rejected before the simulation can produce a physical event.
     crate::validation::validate_min_hold_feasibility(&schedule, min_hold_us)
         .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-    let mut coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-        schedule,
-        min_hold_us,
-        crate::time::DurationTicks::from_raw(min_hold_us),
-        |microseconds| Ok(crate::time::TimelineTicks::from_raw(microseconds)),
-    )
-    .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
+
+    let min_hold = DurationTicks::from_raw(min_hold_us);
+    let mut executor = DispatchExecutor::new(&schedule, min_hold, min_hold, |microseconds| {
+        Ok::<_, std::convert::Infallible>(TimelineTicks::from_raw(microseconds))
+    })
+    .map_err(crate::compile::CompileError::Simulation)?;
 
     let mut events = Vec::new();
     let mut step = 0u32;
+    let mut now_us = 0u64;
     let mut iterations = 0u32;
-    let mut now_us = coordinator
-        .schedule
-        .batches
-        .first()
-        .map_or(0, |batch| batch.scheduled_us);
 
-    while !coordinator.is_finished() {
+    loop {
         iterations = iterations.saturating_add(1);
         if iterations > 20_000 {
             return Err(crate::compile::CompileError::Simulation(
@@ -100,240 +97,130 @@ pub fn simulate_schedule(
             ));
         }
 
-        let pending_target = coordinator.earliest_pending_release_ticks();
-        if let Some(prepared) = coordinator
-            .prepare_current_stale_packet()
+        match executor
+            .evaluate_at(QpcTicks::from_raw(now_us), QpcTicks::ZERO)
             .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?
-            .filter(|prepared| {
-                pending_target.is_none_or(|pending| prepared.effective_scheduled_ticks <= pending)
-            })
         {
-            let packet = coordinator
-                .schedule
-                .view_packet_ticks(prepared.packet_index, prepared.effective_scheduled_ticks)
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-            let scan_codes = packet
-                .up_intents
-                .iter()
-                .map(|intent| {
-                    packet
-                        .registry
-                        .scan_code_for(intent.key_slot())
-                        .expect("compiled stale key slot must belong to key registry")
-                })
-                .collect();
-            let generation_ids = packet
-                .up_intents
-                .iter()
-                .map(|intent| {
-                    (intent.generation_id() != NO_GENERATION_ID).then_some(intent.generation_id())
-                })
-                .collect();
-            coordinator
-                .commit_stale_packet(prepared)
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-            events.push(TraceEvent {
-                step,
-                kind: "up".to_string(),
-                scheduled_us: prepared.effective_scheduled_ticks.as_u64(),
-                actual_us: now_us,
-                completed_us: now_us,
-                scan_codes,
-                generation_ids,
-                outcome: "suppressed_stale_up".to_string(),
-            });
-            step += 1;
-            continue;
-        }
+            DispatchDecision::Finished => break,
+            DispatchDecision::Wait { deadline_qpc } => {
+                let deadline_us = deadline_qpc.as_u64();
+                if deadline_us <= now_us {
+                    return Err(crate::compile::CompileError::Simulation(
+                        "executor returned a non-advancing wait deadline".to_string(),
+                    ));
+                }
+                now_us = deadline_us;
+            }
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => {
+                let scheduled_us = timing_window.authored_target_qpc.as_u64();
+                let actual_us = now_us.max(scheduled_us);
+                let completed_us = actual_us.checked_add(send_latency_us).ok_or_else(|| {
+                    crate::compile::CompileError::Simulation(
+                        "simulation timestamp overflow".to_string(),
+                    )
+                })?;
+                let down_mask = down_chord.map_or(0, |chord| chord.down_mask);
+                if up_mask == 0 && down_mask == 0 {
+                    return Err(crate::compile::CompileError::Simulation(
+                        "executor produced an empty send decision".to_string(),
+                    ));
+                }
 
-        let authored = coordinator
-            .prepare_current_authored_frame()
-            .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-        let authored_target = authored.map(|frame| frame.authored_ticks);
-        let target = match (pending_target, authored_target) {
-            (Some(pending), Some(authored)) => pending.min(authored),
-            (Some(pending), None) => pending,
-            (None, Some(authored)) => authored,
-            (None, None) => break,
-        };
-        now_us = now_us.max(target.as_u64());
-        let pending_mask = if pending_target == Some(target) {
-            coordinator.pending_release_mask_due_at(target)
-        } else {
-            0
-        };
-
-        let authored_frame = authored.filter(|frame| frame.authored_ticks == target);
-        let (up_mask, down_mask, scan_codes, generation_ids, authored_commit) = if let Some(frame) =
-            authored_frame
-        {
-            let commit = coordinator
-                .prepare_authored_commit(frame)
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-            let packet_data = {
-                let packet = coordinator
-                    .schedule
-                    .view_packet_ticks(frame.packet_index, frame.authored_ticks)
-                    .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-                let up_mask = frame.immediate_up_mask | pending_mask;
-                let down_mask = frame.down_mask;
-                let mut scan_codes =
-                    Vec::with_capacity((up_mask.count_ones() + down_mask.count_ones()) as usize);
-                let mut generation_ids = Vec::with_capacity(scan_codes.capacity());
+                let mut scan_codes = Vec::with_capacity(MAX_KEYS);
+                let mut generation_ids = Vec::with_capacity(MAX_KEYS);
                 for slot in 0..MAX_KEYS {
                     let bit = 1u16 << slot;
                     if up_mask & bit == 0 {
                         continue;
                     }
-                    let authored_intent = packet
-                        .up_intents
-                        .iter()
-                        .find(|intent| intent.key_slot() == slot as KeySlot)
-                        .copied();
-                    let (scan_code, generation_id) = authored_intent
-                        .map(|intent| {
-                            (
-                                packet
-                                    .registry
-                                    .scan_code_for(intent.key_slot())
-                                    .expect("compiled key slot must belong to key registry"),
-                                (intent.generation_id() != NO_GENERATION_ID)
-                                    .then_some(intent.generation_id()),
-                            )
-                        })
-                        .or_else(|| {
-                            coordinator
-                                .pending_release_for_slot(slot as KeySlot)
-                                .map(|pending| {
-                                    (
-                                        packet
-                                            .registry
-                                            .scan_code_for(pending.key_slot)
-                                            .expect("pending key slot must belong to registry"),
-                                        Some(pending.generation_id),
-                                    )
-                                })
-                        })
+                    let musical_slot = &executor.slots()[slot];
+                    let generation_id = musical_slot.active_generation.ok_or_else(|| {
+                        crate::compile::CompileError::Simulation(format!(
+                            "selected Up for inactive slot {slot}"
+                        ))
+                    })?;
+                    let scan_code = executor
+                        .key_registry()
+                        .scan_code_for(slot as u8)
                         .ok_or_else(|| {
-                            crate::compile::CompileError::Simulation(
-                                "selected Up has no frozen generation evidence".to_string(),
-                            )
+                            crate::compile::CompileError::Simulation(format!(
+                                "selected Up slot {slot} has no scan code"
+                            ))
                         })?;
                     scan_codes.push(scan_code);
-                    generation_ids.push(generation_id);
+                    generation_ids.push(Some(generation_id));
                 }
-                for intent in packet.down_intents.iter().copied() {
-                    if down_mask & (1u16 << intent.key_slot()) == 0 {
-                        continue;
+                if let Some(chord) = down_chord {
+                    for intent in chord.intents {
+                        scan_codes.push(intent.scan_code);
+                        generation_ids.push(Some(intent.generation_id));
                     }
-                    scan_codes.push(
-                        packet
-                            .registry
-                            .scan_code_for(intent.key_slot())
-                            .expect("compiled key slot must belong to key registry"),
-                    );
-                    generation_ids.push(
-                        (intent.generation_id() != NO_GENERATION_ID)
-                            .then_some(intent.generation_id()),
-                    );
                 }
-                (up_mask, down_mask, scan_codes, generation_ids)
-            };
-            (
-                packet_data.0,
-                packet_data.1,
-                packet_data.2,
-                packet_data.3,
-                Some(commit),
-            )
-        } else {
-            let mut scan_codes = Vec::with_capacity(pending_mask.count_ones() as usize);
-            let mut generation_ids = Vec::with_capacity(scan_codes.capacity());
-            for slot in 0..MAX_KEYS {
-                let bit = 1u16 << slot;
-                if pending_mask & bit == 0 {
-                    continue;
-                }
-                let pending = coordinator
-                    .pending_release_for_slot(slot as KeySlot)
-                    .ok_or_else(|| {
-                        crate::compile::CompileError::Simulation(
-                            "pending release mask has no generation evidence".to_string(),
-                        )
-                    })?;
-                scan_codes.push(
-                    coordinator
-                        .schedule
-                        .key_registry
-                        .scan_code_for(pending.key_slot)
-                        .expect("pending key slot must belong to registry"),
-                );
-                generation_ids.push(Some(pending.generation_id));
+
+                executor
+                    .on_send_completed_at(up_mask, down_mask, QpcTicks::from_raw(completed_us))
+                    .map_err(crate::compile::CompileError::Simulation)?;
+
+                events.push(TraceEvent {
+                    step,
+                    kind: match (up_mask != 0, down_mask != 0) {
+                        (true, true) => "mixed",
+                        (true, false) => "up",
+                        (false, true) => "down",
+                        (false, false) => unreachable!("empty send decisions are rejected above"),
+                    }
+                    .to_string(),
+                    scheduled_us,
+                    actual_us,
+                    completed_us,
+                    scan_codes,
+                    generation_ids,
+                    outcome: "sent".to_string(),
+                });
+                step = step.checked_add(1).ok_or_else(|| {
+                    crate::compile::CompileError::Simulation(
+                        "simulation event count overflow".to_string(),
+                    )
+                })?;
+                now_us = completed_us;
             }
-            (pending_mask, 0, scan_codes, generation_ids, None)
-        };
-        if up_mask == 0 && down_mask == 0 {
-            let commit = authored_commit.ok_or_else(|| {
-                crate::compile::CompileError::Simulation(
-                    "empty authored boundary has no metadata token".to_string(),
-                )
-            })?;
-            coordinator
-                .commit_prepared_authored_frame_metadata_frozen(&commit)
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-            continue;
         }
-        let completed_us = now_us.checked_add(send_latency_us).ok_or_else(|| {
-            crate::compile::CompileError::Simulation("simulation timestamp overflow".to_string())
-        })?;
-        if pending_mask != 0 {
-            coordinator
-                .commit_pending_release_success(
-                    pending_mask,
-                    crate::time::TimelineTicks::from_raw(now_us),
-                )
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-        }
-        if let Some(commit) = authored_commit {
-            coordinator
-                .commit_prepared_authored_frame_success_frozen(
-                    &commit,
-                    crate::time::TimelineTicks::from_raw(now_us),
-                    crate::time::TimelineTicks::from_raw(completed_us),
-                )
-                .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
-        }
-        let kind = match (up_mask != 0, down_mask != 0) {
-            (true, true) => "mixed",
-            (true, false) => "up",
-            (false, true) => "down",
-            (false, false) => unreachable!("empty physical packet handled above"),
-        };
-        events.push(TraceEvent {
-            step,
-            kind: kind.to_string(),
-            scheduled_us: target.as_u64(),
-            actual_us: now_us,
-            completed_us,
-            scan_codes,
-            generation_ids,
-            outcome: "sent".to_string(),
-        });
-        step += 1;
-        now_us = completed_us;
     }
+
+    let accounting = executor.accounting();
+    let status_counts = [
+        ("active", accounting.active),
+        ("cancelled", accounting.cancelled),
+        ("dropped_backend", accounting.dropped_backend),
+        ("dropped_conflict", accounting.dropped_conflict),
+        ("dropped_expired", accounting.dropped_expired),
+        ("released", accounting.released),
+        ("scheduled", accounting.scheduled),
+    ]
+    .into_iter()
+    .map(|(name, count)| (name.to_string(), count))
+    .collect();
+
+    let is_finished = executor
+        .is_finished_at(QpcTicks::from_raw(now_us), QpcTicks::ZERO)
+        .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
 
     Ok(SimulationResult {
         events,
-        status_counts: coordinator.generation_status_counts(),
-        total_generations: coordinator.schedule.generation_count,
-        is_finished: coordinator.is_finished(),
+        status_counts,
+        total_generations: accounting.total,
+        is_finished,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ActionKind;
 
     #[test]
     fn test_simple_simulation() {
@@ -342,14 +229,14 @@ mod tests {
             KeyActionInput {
                 source_action_index: 0,
                 kind: ActionKind::Down,
-                scheduled_us: 1000,
+                scheduled_us: 1_000,
                 scan_codes: vec![1].into(),
                 reason: "note".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
-                scheduled_us: 1100,
+                scheduled_us: 1_100,
                 scan_codes: vec![1].into(),
                 reason: "note".into(),
             },

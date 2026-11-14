@@ -3079,48 +3079,41 @@ mod preparation_cancellation_tests {
             .memory_metrics()
             .expect("compiled schedule capacity")
             .heap_payload_bytes;
-        let mut coordinator =
-            sky_player::adapter_support::RuntimeDispatchCoordinator::try_new_ticks(
-                compiled,
-                0,
-                sky_player::adapter_support::DurationTicks::ZERO,
-                |microseconds| {
-                    Ok::<_, sky_player::adapter_support::CoordinatorError>(
-                        sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
-                    )
-                },
-            )
-            .expect("compact schedule and projected executor fit the combined budget");
-        coordinator
-            .attach_executor_with_cancellation(
-                sky_player::adapter_support::DurationTicks::ZERO,
-                sky_player::adapter_support::DurationTicks::ZERO,
-                |microseconds| {
-                    Ok::<_, std::convert::Infallible>(
-                        sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
-                    )
-                },
-                || Ok(()),
-            )
-            .expect("materialized executor remains within the combined budget");
-        let dispatch_memory = coordinator
-            .memory_metrics()
-            .expect("combined dispatch memory metrics");
+        let executor = sky_player::adapter_support::DispatchExecutor::new(
+            &compiled,
+            sky_player::adapter_support::DurationTicks::ZERO,
+            sky_player::adapter_support::DurationTicks::ZERO,
+            |microseconds| {
+                Ok::<_, std::convert::Infallible>(
+                    sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
+                )
+            },
+        )
+        .expect("production executor construction");
+        let executor_memory = executor
+            .try_memory_metrics()
+            .expect("production executor capacity metrics");
+        let retained_capacity_bytes = compile_memory
+            .caller_retained_capacity_bytes
+            .checked_add(schedule_heap_bytes)
+            .and_then(|bytes| bytes.checked_add(executor_memory.total_bytes))
+            .expect("source schedule, compiled schedule and executor capacity");
+        let startup_peak_capacity_bytes = compile_memory
+            .phase_peak_capacity_bytes
+            .max(retained_capacity_bytes);
         let budget_bytes = sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES;
-        assert!(dispatch_memory.executor_heap_bytes > 0);
-        assert!(dispatch_memory.retained_capacity_bytes <= budget_bytes);
-        assert!(dispatch_memory.startup_peak_capacity_bytes <= budget_bytes);
+        assert!(executor_memory.chord_heap_bytes > 0);
+        assert!(retained_capacity_bytes <= budget_bytes);
+        assert!(startup_peak_capacity_bytes <= budget_bytes);
         eprintln!(
-            "dispatch_memory workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_heap_bytes} coordinator_heap_bytes={} executor_heap_bytes={} retained_capacity_bytes={} compiler_phase_peak_capacity_bytes={} coordinator_materialization_peak_capacity_bytes={} startup_peak_capacity_bytes={} policy_bytes={budget_bytes} disposition=admitted_within_combined_budget memory_basis=calculated_size_and_capacity lifetime_model=source_schedule_overlaps_compile_input_output_and_coordinator_materialization;compiler_input_and_temp_drop_before_coordinator_materialization complete_application_process_peak=not_measured windows_process_memory=not_measured",
+            "dispatch_memory workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_heap_bytes} executor_heap_bytes={} executor_struct_bytes={} executor_total_bytes={} schedule_and_executor_retained_capacity_bytes={retained_capacity_bytes} compiler_phase_peak_capacity_bytes={} startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} disposition=admitted_within_combined_budget memory_basis=calculated_size_and_capacity lifetime_model=source_schedule_overlaps_compile_input_output_and_live_executor_construction;compiler_input_and_temp_drop_after_compile complete_application_process_peak=not_measured windows_process_memory=not_measured",
             compile_memory.caller_retained_capacity_bytes,
             compile_memory.input_capacity_bytes,
             compile_memory.temporary_capacity_bytes,
-            dispatch_memory.coordinator_heap_bytes,
-            dispatch_memory.executor_heap_bytes,
-            dispatch_memory.retained_capacity_bytes,
-            dispatch_memory.compiler_phase_peak_capacity_bytes,
-            dispatch_memory.coordinator_materialization_peak_capacity_bytes,
-            dispatch_memory.startup_peak_capacity_bytes,
+            executor_memory.chord_heap_bytes,
+            executor_memory.struct_bytes,
+            executor_memory.total_bytes,
+            compile_memory.phase_peak_capacity_bytes,
         );
     }
 

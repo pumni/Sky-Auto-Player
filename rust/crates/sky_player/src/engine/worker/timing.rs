@@ -68,53 +68,6 @@ pub(crate) fn signed_ticks_to_us(qpc_clock: QpcClock, delta_ticks: i64) -> Resul
     i64::try_from(signed).map_err(|_| "signed timing delta exceeds i64 range".to_string())
 }
 
-/// Preserve the distinction between a logical operation and one SendInput
-/// syscall. The operation spans the first call entry through the final call
-/// return; a single-call duration is only valid for exactly one non-rollback
-/// call.
-#[cfg(test)]
-pub(crate) fn exact_sender_durations(
-    qpc_clock: QpcClock,
-    started_ticks: Option<QpcTicks>,
-    completed_ticks: Option<QpcTicks>,
-    send_attempts: u8,
-    rollback_call: bool,
-) -> Result<(Option<u64>, Option<u64>), QpcError> {
-    if send_attempts == 0 {
-        return Ok((None, None));
-    }
-    let started = started_ticks.ok_or(QpcError::CounterUnavailable)?;
-    let completed = completed_ticks.ok_or(QpcError::CounterUnavailable)?;
-    let duration = completed
-        .checked_duration_since(started)
-        .map_err(|_| QpcError::CounterUnavailable)
-        .and_then(|ticks| {
-            qpc_clock
-                .duration_to_us(ticks)
-                .map_err(|_| QpcError::ConversionOverflow)
-        })?;
-    let single_call = (send_attempts == 1 && !rollback_call).then_some(duration);
-    Ok((Some(duration), single_call))
-}
-
-#[cfg(test)]
-pub(crate) fn anchored_dispatch_target_ticks_typed(
-    _now_ticks: QpcTicks,
-    anchor_ticks: QpcTicks,
-    scheduled_ticks: TimelineTicks,
-    lead_ticks: DurationTicks,
-) -> Result<QpcTicks, QpcError> {
-    let authored_target = anchor_ticks
-        .checked_add_duration(DurationTicks::from_raw(scheduled_ticks.as_u64()))
-        .map_err(|_| QpcError::DeadlineOverflow)?;
-    let target = authored_target
-        .as_u64()
-        .checked_sub(lead_ticks.as_u64())
-        .map(QpcTicks::from_raw)
-        .ok_or(QpcError::DeadlineOverflow)?;
-    Ok(target)
-}
-
 /// Map an authored timestamp minus lead to its exact absolute QPC boundary.
 #[cfg(test)]
 #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]

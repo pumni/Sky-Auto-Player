@@ -24,7 +24,6 @@ pub(crate) use command_timing::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use dispatch_harness::{
-    CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PhysicalFloorEvidence,
-    PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,
+    CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PacketCapture,
     ProductionDispatchTestHarness,
 };

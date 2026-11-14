@@ -1039,9 +1039,6 @@ mod memory_tests;
 mod absolute_tests;
 
 #[cfg(test)]
-#[path = "executor/metadata_tests.rs"]
-mod metadata_tests;
-#[cfg(test)]
 mod scale_tests;
 #[cfg(test)]
 mod tests;

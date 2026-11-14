@@ -1,5 +1,5 @@
-//! Allocation-free generation accounting shared by production dispatch and
-//! the test-support legacy coordinator.
+//! Allocation-free generation accounting shared by the production executor
+//! and its deterministic test-support driver.
 
 use serde::{Deserialize, Serialize};
 

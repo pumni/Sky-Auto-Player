@@ -21,9 +21,8 @@ the game samples.
   15-slot executor ([`DispatchExecutor`](../rust/crates/sky_dispatch_core/src/executor.rs)).
   There are no independent dual cursors for Down and Up events.
 - **Musical timing owner:** `DispatchExecutor` owns all 15 musical slots and
-  production Up/Down eligibility. `PhysicalTimingGuard` and its worker integration
-  are compiled only for tests and `test-support`; they do not participate in the
-  default production worker or own production floors.
+  production Up/Down eligibility. The worker stages candidates from that
+  executor and commits only confirmed packet completions back to the same owner.
 - **Pairing at compilation:** Each musical Down chord is compiled with
   paired authored Up offsets for its constituent keys. Up obligations are
   instantiated strictly upon successful Down completion.
@@ -205,31 +204,26 @@ accounting remain off the real-time producer suffix.
 
 The live `DispatchExecutor` stores compact chord headers and their intents in a
 contiguous arena. `MAX_EXECUTOR_BYTES` bounds the calculated capacities of
-those two executor vectors; it does not bound a `DownChordTicks` fixture's
-owned `SmallVec`. Production reads a borrowed `DownChordView` and retains only
-`DownChordMetadata` while staging; the owned chord form remains for
-test-support/compatibility fixtures. Schedule compilation has a separate
-phase-capacity check. The legacy `RuntimeDispatchCoordinator` and simulator
-are compiled only for core unit tests or with `test-support`; production boot
-does not link them.
-`MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated-capacity bound used by
-the compiler's phase-capacity checks. The legacy coordinator also uses the
-same constant for its calculated overlapping schedule/coordinator/executor
-capacity. Neither use measures process RSS or the full-application peak.
+those two executor vectors. Production reads a borrowed `DownChordView` and
+retains only `DownChordMetadata` while staging. `DownChordTicks` is a
+self-contained fixture type with an owned `SmallVec`; it has no production
+caller. Schedule compilation has its own phase-capacity checks. There is one
+scheduler implementation in the crate: `DispatchExecutor`, including when
+`test-support` is enabled.
 
-Production worker boot constructs `DispatchExecutor` directly from the compiled
-schedule; it does not materialize a `RuntimeDispatchCoordinator`. The test
-`terminal_release_precedes_million_generation_scheduler_audit_and_publication`
-sets `generation_count` to one million on an otherwise empty `RuntimeSchedule`.
-It verifies terminal cleanup and scheduler accounting at that ledger size; it
-does not compile or dispatch one million actions and does not measure worker
-peak memory. There is currently no production-worker peak-memory qualification
-for a million-action song. The historical [FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md)
-reports an earlier coordinator fixture rejected at 741,502,832 estimated
-bytes; that result describes only its pinned revision and fixture. Neither
-result establishes the current worker's million-action memory use. Allocation
-failures are not universally recoverable: in particular, constructing shared
-reason strings still uses infallible allocation.
+`MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated-capacity limit used by
+the compiler's phase checks and the desktop million-action construction test.
+That test, `valid_one_million_single_key_actions_fit_compact_executor_budget`,
+builds and compiles one million single-key actions, constructs the production
+executor, and sums the measured source, compiled-schedule, and executor
+capacities across the overlapping construction phases. It does not run a
+million-action playback or measure process RSS, Windows memory peak, or
+real-time dispatch. The historical
+[FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md)
+describes a coordinator fixture at its pinned revision only; it is not evidence
+for the current executor. Allocation failures are not universally recoverable:
+in particular, constructing shared reason strings still uses infallible
+allocation.
 
 ## Implementation Map
 
@@ -237,8 +231,8 @@ reason strings still uses infallible allocation.
   15-slot dispatch executor, chord stream compilation, and slot state management.
 - [`rust/crates/sky_player/src/engine/worker/dispatch_loop.rs`](../rust/crates/sky_player/src/engine/worker/dispatch_loop.rs):
   Realtime worker loop, event interleaving, and admission control.
-- [`rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs`](../rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs):
-  test-support sender-floor model; not compiled into the default production worker.
+- [`rust/crates/sky_player/src/engine/worker/dispatch_loop_scheduler.rs`](../rust/crates/sky_player/src/engine/worker/dispatch_loop_scheduler.rs):
+  Production executor evaluation, candidate staging, and completion-bound timing floors.
 - [`rust/crates/sky_dispatch_win32/src/wait/hybrid.rs`](../rust/crates/sky_dispatch_win32/src/wait/hybrid.rs):
   High-resolution timer and QPC spin hybrid waiter.
 - [`rust/crates/sky_dispatch_win32/src/input/packet.rs`](../rust/crates/sky_dispatch_win32/src/input/packet.rs):

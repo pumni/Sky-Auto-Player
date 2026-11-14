@@ -1,6 +1,7 @@
 use super::{
     SYSTEM_POWER_PENDING_MASK, SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING,
-    SharedProgressClock, SystemPowerEndpoint, SystemPowerState,
+    SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseState, SystemPowerEndpoint,
+    SystemPowerState,
 };
 use sky_dispatch_core::clock::{PauseReason, PlaybackClockState};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks};
@@ -30,6 +31,28 @@ fn progress_projection_advances_without_worker_publication() {
         anchor.elapsed_us(QpcTicks::from_raw(3_000), qpc_clock),
         2_000
     );
+}
+
+#[test]
+fn final_down_lease_proof_rechecks_a_cas_race_once_and_fails_closed() {
+    let lease = SupervisorLeaseState::new(QpcTicks::from_raw(100));
+    let now = QpcTicks::from_raw(200);
+    let timeout = DurationTicks::from_raw(50);
+
+    lease.force_down_proof_cas_failure_for_test(Some(QpcTicks::from_raw(175)), false);
+    let refreshed = lease.prove_down_age(now, timeout);
+    assert_eq!(refreshed.admission, SupervisorLeaseAdmission::Fresh);
+    assert_eq!(refreshed.state_loads, 2);
+    assert_eq!(refreshed.compare_exchanges, 1);
+    assert!(!lease.is_expired());
+
+    lease.reset(QpcTicks::from_raw(100));
+    lease.force_down_proof_cas_failure_for_test(None, true);
+    let expired = lease.prove_down_age(now, timeout);
+    assert_eq!(expired.admission, SupervisorLeaseAdmission::Expired);
+    assert_eq!(expired.state_loads, 2);
+    assert_eq!(expired.compare_exchanges, 1);
+    assert!(lease.is_expired());
 }
 
 #[test]

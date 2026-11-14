@@ -5,8 +5,6 @@ use super::super::super::{
     TelemetryCollector, TraceContext, TraceDelivery, UpSlotLossReason, trace_outcome_code,
     trace_send_status_code,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::super::release_runtime_outcome;
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, wake_lateness_ticks,
@@ -20,6 +18,26 @@ use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransacti
 use sky_dispatch_win32::wait::WaitOutcome;
 
 pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn release_outcome(
+    deferred_by_us: u64,
+    sent_count: usize,
+    requested_count: usize,
+) -> &'static str {
+    match (
+        sent_count == requested_count,
+        sent_count > 0,
+        deferred_by_us > 0,
+    ) {
+        (true, _, true) => "deferred_release",
+        (true, _, false) => "sent",
+        (false, true, true) => "deferred_partial_note_off",
+        (false, true, false) => "partial_note_off",
+        (false, false, true) => "deferred_failed_note_off",
+        (false, false, false) => "failed_note_off",
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitGapClass {
@@ -47,14 +65,10 @@ pub enum ObserverLifecycle {
 pub enum DispatchObservation {
     Down(DownObservation),
     #[cfg(any(test, feature = "test-support"))]
-    DownMiss(DownMissObservation),
-    #[cfg(any(test, feature = "test-support"))]
     Up(UpObservation),
     Wait(WaitObservation),
     #[cfg(any(test, feature = "test-support"))]
     StaleMetadata(StaleMetadataObservation),
-    #[cfg(any(test, feature = "test-support"))]
-    BlockedUnfocused(BlockedUnfocusedObservation),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,77 +86,6 @@ pub struct StaleMetadataObservation {
     pub source_action_index: u32,
     pub effective_scheduled_ticks: TimelineTicks,
     pub suppressed_intent_count: usize,
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, Copy, Debug)]
-pub struct BlockedUnfocusedObservation {
-    pub event_index: u32,
-    pub compiled_packet_index: Option<u64>,
-    pub authored_ticks: TimelineTicks,
-    pub effective_deadline_ticks: TimelineTicks,
-    pub physical_target_qpc: QpcTicks,
-    pub observed_qpc: QpcTicks,
-    pub polyphony: usize,
-    pub up_mask: u16,
-    pub down_mask: u16,
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DownMissKind {
-    UnobservedBacklog,
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum DownMissTimingEvidence {
-    Physical(PhysicalTimingWindow),
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, Copy, Debug)]
-pub struct DownMissObservation {
-    pub source_action_index: u32,
-    pub compiled_packet_index: Option<u64>,
-    pub authored_ticks: TimelineTicks,
-    pub effective_deadline_ticks: TimelineTicks,
-    pub(crate) timing_evidence: DownMissTimingEvidence,
-    pub observed_qpc: QpcTicks,
-    pub up_mask: u16,
-    pub down_mask: u16,
-    pub kind: DownMissKind,
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl DownMissObservation {
-    pub fn physical_authored_target_qpc(&self) -> QpcTicks {
-        match self.timing_evidence {
-            DownMissTimingEvidence::Physical(window) => window.authored_target_qpc,
-        }
-    }
-
-    pub fn test_fixture(n: u64) -> Self {
-        let authored_target_qpc = QpcTicks::from_raw(n);
-        Self {
-            source_action_index: n as u32,
-            compiled_packet_index: None,
-            authored_ticks: TimelineTicks::from_raw(n),
-            effective_deadline_ticks: TimelineTicks::from_raw(n),
-            timing_evidence: DownMissTimingEvidence::Physical(PhysicalTimingWindow {
-                authored_target_qpc,
-                musical_up_not_before_qpc: authored_target_qpc,
-                down_not_before_qpc: authored_target_qpc,
-                packet_not_before_qpc: authored_target_qpc,
-                hold_floor_mask: 0,
-                release_floor_mask: 0,
-            }),
-            observed_qpc: authored_target_qpc,
-            up_mask: 0,
-            down_mask: 1,
-            kind: DownMissKind::UnobservedBacklog,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -555,12 +498,7 @@ pub(super) fn record_release_telemetry(
             DispatchStep::Terminate(format!("note-off deferral conversion failure: {error:?}"))
         })?;
     let (scan_count, sent_count, skipped_count) = up_transport_counts(observation);
-    let release_outcome = release_runtime_outcome(
-        deferred_by_us,
-        sent_count,
-        scan_count,
-        trace.recovery_required,
-    );
+    let release_outcome = release_outcome(deferred_by_us, sent_count, scan_count);
     let mut trace_flags = 0u8;
     if sent_count == scan_count {
         trace_flags |= TRACE_FLAG_SENT_FULL;

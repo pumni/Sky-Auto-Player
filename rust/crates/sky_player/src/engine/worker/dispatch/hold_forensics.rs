@@ -164,6 +164,7 @@ impl ProductionHoldForensics {
     /// must never create an optimistic physical anchor.
     #[allow(clippy::too_many_arguments)]
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn observe_recovery_up(
         &mut self,
         up_mask: u16,

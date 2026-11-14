@@ -404,6 +404,7 @@ pub(super) const SYSTEM_POWER_OS_SUSPENDED: u8 = 1 << 0;
 pub(super) const SYSTEM_POWER_SUSPEND_PENDING: u8 = 1 << 2;
 pub(super) const SYSTEM_POWER_RESUME_PENDING: u8 = 1 << 3;
 #[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 const SYSTEM_POWER_PENDING_MASK: u8 = SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWER_RESUME_PENDING;
 const SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS: usize = 8;
 
@@ -746,7 +747,7 @@ impl SystemPowerState {
         let _ = interrupt.try_take();
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(super) fn take_pending(&self) -> u8 {
         let state = self.state.load(Ordering::Acquire);
         if state & SYSTEM_POWER_PENDING_MASK == 0 {
@@ -772,7 +773,7 @@ impl SystemPowerState {
 
     /// Report whether a transient resume notification can be acknowledged.
     /// An accepted suspend is session-terminal and always rejects this path.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(super) fn complete_resume(&self) -> bool {
         if self.startup_state.system_suspend_terminal() {
             return false;

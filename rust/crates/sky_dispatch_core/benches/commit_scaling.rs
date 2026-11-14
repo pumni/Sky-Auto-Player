@@ -1,16 +1,14 @@
-//! Scaling evidence for the successful coordinator commit.
+//! Scaling evidence for the successful production executor commit.
 //!
-//! Each sample measures only the bounded successful commit.  Schedule
-//! construction, coordinator allocation, packet preparation, and intent
-//! copying happen before the timer so the result answers the specific
-//! question: does a fixed packet get slower as the unrelated generation
-//! ledger grows?
+//! Schedule compilation and executor construction happen before the timer.
+//! The measured commit activates one fixed chord while the compiled schedule
+//! grows, verifying the live executor commit remains bounded by the 15 slots.
 
 use serde_json::json;
 use sky_dispatch_core::compile::compile_runtime_intents;
-use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+use sky_dispatch_core::executor::{DispatchDecision, DispatchExecutor};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;
@@ -80,30 +78,29 @@ fn measure(generation_count: usize, polyphony: usize, samples: usize) -> serde_j
     let mut timings = Vec::with_capacity(samples);
 
     for _ in 0..samples {
-        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-            schedule.clone(),
-            0,
+        let mut executor = DispatchExecutor::new(
+            &schedule,
             DurationTicks::ZERO,
-            |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+            DurationTicks::ZERO,
+            |microseconds| Ok::<_, String>(TimelineTicks::from_raw(microseconds)),
         )
-        .expect("coordinator construction");
-        let mut coordinator = coordinator;
-        let prepared = coordinator
-            .prepare_current_authored_frame()
-            .expect("current packet preparation")
-            .expect("first packet");
-        let commit = coordinator
-            .prepare_authored_commit(prepared)
-            .expect("freeze authored commit");
+        .expect("production executor construction");
+        let down_mask = match executor
+            .evaluate_at(QpcTicks::ZERO, QpcTicks::ZERO)
+            .expect("first production dispatch decision")
+        {
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(chord),
+                ..
+            } => chord.down_mask,
+            decision => panic!("expected first chord Down, got {decision:?}"),
+        };
         let started = Instant::now();
-        coordinator
-            .commit_prepared_authored_frame_success_frozen(
-                &commit,
-                TimelineTicks::ZERO,
-                TimelineTicks::ZERO,
-            )
+        executor
+            .on_send_completed_at(0, down_mask, QpcTicks::ZERO)
             .expect("successful packet commit");
-        black_box((coordinator.cursor, coordinator.active_mask));
+        black_box((executor.chord_cursor(), executor.active_mask()));
         timings.push(started.elapsed().as_nanos());
     }
 
@@ -123,20 +120,16 @@ fn measure_scan_code_representation(samples: usize) -> serde_json::Value {
     let actions = build_actions(100, 15);
     let schedule =
         compile_runtime_intents(&actions, SCAN_CODES).expect("valid representation schedule");
-    let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-        schedule,
-        0,
+    let executor = DispatchExecutor::new(
+        &schedule,
         DurationTicks::ZERO,
-        |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+        DurationTicks::ZERO,
+        |microseconds| Ok::<_, String>(TimelineTicks::from_raw(microseconds)),
     )
-    .expect("coordinator construction");
-    let prepared = coordinator
-        .prepare_current_authored_frame()
-        .expect("current packet preparation")
-        .expect("first packet");
-    let commit = coordinator
-        .prepare_authored_commit(prepared)
-        .expect("freeze authored commit");
+    .expect("production executor construction");
+    let chord = executor
+        .current_chord()
+        .expect("first production Down chord");
 
     let mut frozen_timings = Vec::with_capacity(samples);
     let mut lookup_timings = Vec::with_capacity(samples);
@@ -144,8 +137,8 @@ fn measure_scan_code_representation(samples: usize) -> serde_json::Value {
         let started = Instant::now();
         let mut checksum = 0u16;
         for _ in 0..REPRESENTATION_INNER_ITERATIONS {
-            for down in &commit.down_intents {
-                checksum = checksum.wrapping_add(black_box(down.scan_code()));
+            for down in chord.intents {
+                checksum = checksum.wrapping_add(black_box(down.scan_code));
             }
         }
         black_box(checksum);
@@ -154,11 +147,10 @@ fn measure_scan_code_representation(samples: usize) -> serde_json::Value {
         let started = Instant::now();
         let mut checksum = 0u16;
         for _ in 0..REPRESENTATION_INNER_ITERATIONS {
-            for down in &commit.down_intents {
-                let slot = black_box(down.key_slot());
-                let scan_code = coordinator
-                    .schedule
-                    .key_registry
+            for down in chord.intents {
+                let slot = black_box(down.key_slot);
+                let scan_code = executor
+                    .key_registry()
                     .scan_code_for(slot)
                     .expect("prepared slot belongs to registry");
                 checksum = checksum.wrapping_add(black_box(scan_code));
@@ -198,7 +190,8 @@ fn main() {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "benchmark": "coordinator_commit_scaling",
+            "benchmark": "dispatch_executor_commit_scaling",
+            "scheduler_owner": "DispatchExecutor",
             "samples_per_case": samples,
             "cases": cases,
             "scan_code_representation": measure_scan_code_representation(samples),

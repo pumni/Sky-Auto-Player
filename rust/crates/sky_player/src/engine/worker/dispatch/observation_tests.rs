@@ -119,14 +119,13 @@ fn interrupted_wait_is_excluded_from_deadline_gap_population() {
 }
 #[test]
 fn report_observation_layout_sizes() {
-    use super::{DispatchObservation, DownMissObservation, DownObservation, UpObservation};
+    use super::{DispatchObservation, DownObservation, UpObservation};
     use crate::engine::worker::wait::WaitObservation;
     use sky_dispatch_core::executor::UpSlotTiming;
     eprintln!(
-        "DispatchObservation={} DownObservation={} DownMissObservation={} UpObservation={} WaitObservation={} UpSlotTiming={}",
+        "DispatchObservation={} DownObservation={} UpObservation={} WaitObservation={} UpSlotTiming={}",
         std::mem::size_of::<DispatchObservation>(),
         std::mem::size_of::<DownObservation>(),
-        std::mem::size_of::<DownMissObservation>(),
         std::mem::size_of::<UpObservation>(),
         std::mem::size_of::<WaitObservation>(),
         std::mem::size_of::<UpSlotTiming>()

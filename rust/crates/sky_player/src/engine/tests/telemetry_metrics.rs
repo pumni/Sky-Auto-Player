@@ -1047,50 +1047,52 @@ fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
 }
 
 #[test]
-fn module_line_limits_strictly_respected() {
-    let dispatch = [
-        ("worker/dispatch/mod.rs", 250),
-        ("worker/dispatch/authored.rs", 900),
-        ("worker/dispatch/observer.rs", 900),
-        ("worker/dispatch/timing.rs", 700),
-    ];
-    for (relative, hard_limit) in dispatch {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/engine")
-            .join(relative);
-        let text = std::fs::read_to_string(&path).expect("dispatch source is present");
-        let line_count = text.lines().count();
-        assert!(line_count > 0, "{relative} is empty");
-        assert!(
-            line_count <= hard_limit,
-            "{relative} has {line_count} lines (dispatch hard limit {hard_limit})"
-        );
-    }
+fn only_live_dispatch_executor_sources_remain() {
+    let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine");
     for legacy in [
-        "worker/downs.rs",
-        "worker/releases.rs",
-        "worker/down_outcome.rs",
+        "worker/dispatch/authored.rs",
+        "worker/dispatch/prepared.rs",
+        "worker/dispatch/recovery.rs",
+        "worker/planning.rs",
+        "worker/prepared.rs",
+        "worker/physical_timing_guard.rs",
     ] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/engine")
-            .join(legacy);
         assert!(
-            !path.exists(),
-            "legacy dispatch module must not exist: {legacy}"
+            !engine.join(legacy).exists(),
+            "legacy dispatch source must not remain: {legacy}"
         );
     }
+    let dispatch_core =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sky_dispatch_core/src");
+    assert!(dispatch_core.join("executor.rs").exists());
+    assert!(
+        !dispatch_core.join("coordinator").exists(),
+        "the old coordinator scheduler must not be present in source"
+    );
+    let lib = std::fs::read_to_string(dispatch_core.join("lib.rs"))
+        .expect("dispatch core crate root is present");
+    assert!(
+        !lib.contains("pub mod coordinator"),
+        "all-features builds must not expose the old scheduler"
+    );
 }
 
 #[test]
 fn failed_release_outcome_and_completion_metrics_are_distinguishable() {
-    assert_eq!(release_runtime_outcome(0, 1, 1, false), "sent");
     assert_eq!(
-        release_runtime_outcome(100, 1, 2, false),
+        crate::engine::worker::dispatch::observation::release_outcome(0, 1, 1),
+        "sent"
+    );
+    assert_eq!(
+        crate::engine::worker::dispatch::observation::release_outcome(100, 1, 2),
         "deferred_partial_note_off"
     );
-    assert_eq!(release_runtime_outcome(0, 0, 1, true), "failed_note_off");
     assert_eq!(
-        release_runtime_outcome(100, 0, 1, true),
+        crate::engine::worker::dispatch::observation::release_outcome(0, 0, 1),
+        "failed_note_off"
+    );
+    assert_eq!(
+        crate::engine::worker::dispatch::observation::release_outcome(100, 0, 1),
         "deferred_failed_note_off"
     );
 }

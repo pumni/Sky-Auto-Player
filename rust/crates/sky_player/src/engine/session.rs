@@ -162,15 +162,6 @@ fn wait_for_watchdog_release_or_completion(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn validate_native_schedule_timing(
-    schedule: &sky_dispatch_core::model::RuntimeSchedule,
-    effective_min_hold_us: u64,
-    qpc_clock: QpcClock,
-) -> Result<(), String> {
-    validate_native_schedule_timing_with_release_gap(schedule, effective_min_hold_us, 0, qpc_clock)
-}
-
 pub(crate) fn validate_native_schedule_timing_with_release_gap(
     schedule: &sky_dispatch_core::model::RuntimeSchedule,
     effective_min_hold_us: u64,
@@ -242,16 +233,6 @@ pub struct NativeDispatchSession {
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     window_identity_authority:
         Mutex<Option<(sky_dispatch_win32::focus::WindowIdentityAuthority, u64)>>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(super) struct JoinStateForTest {
-    pub(super) completion_signaled: Option<bool>,
-    pub(super) worker_handle_present: bool,
-    pub(super) worker_handle_finished: Option<bool>,
-    pub(super) watchdog_handle_present: bool,
-    pub(super) watchdog_handle_finished: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -740,16 +721,6 @@ impl NativeDispatchSession {
             return 0;
         }
         self.shared.publication.pre_roll_us.load(Ordering::Acquire)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn supervisor_heartbeat_qpc_for_test(&self) -> QpcTicks {
-        QpcTicks::from_raw(
-            self.shared
-                .commands
-                .supervisor_expired
-                .last_progress_ticks(),
-        )
     }
 
     #[cfg(test)]

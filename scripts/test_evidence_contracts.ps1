@@ -26,9 +26,7 @@ foreach ($case in $runnerCases) {
 }
 
 $runnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -Raw
-Assert-Contract ($runnerSource -match '\$runnerStage = \$evidenceModeContract\.RunnerStage') 'the runner must consume its validated semantic stage'
-Assert-Contract ($runnerSource -notmatch '\$Stage\b') 'the runner retained a call site for the removed Stage parameter'
-Assert-Contract ($runnerSource -notmatch 'production_changes_permitted_by_phase') 'the runner retained a phase-specific output identifier'
+Assert-Contract ($runnerSource.Contains('BLOCKED-LEGACY-DISPATCH-EVIDENCE')) 'retired dispatch evidence must fail closed until the production report contract is reviewed'
 
 $legacyStages = @(('phase' + '1'), ('phase' + '2'), ('phase' + '-1'), ('r' + '3-final'))
 foreach ($legacyStage in $legacyStages) {
@@ -80,6 +78,20 @@ $runnerOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -Fil
 $runnerExitCode = $LASTEXITCODE
 Assert-Contract ($runnerExitCode -ne 0) 'the evidence runner accepted a legacy phase argument'
 Assert-Contract (($runnerOutput -join "`n").Contains('unsupported evidence mode')) 'legacy runner rejection did not report the evidence mode contract'
+
+$blockedRunnerOutputRoot = Join-Path ([IO.Path]::GetTempPath()) ('sky-retired-dispatch-evidence-' + [guid]::NewGuid().ToString('N'))
+$blockedRunnerOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -EvidenceMode 'release-barrier' -OutputRoot $blockedRunnerOutputRoot 2>&1)
+$blockedRunnerExitCode = $LASTEXITCODE
+Assert-Contract ($blockedRunnerExitCode -ne 0) 'the old dispatch-evidence report contract ran after its coordinator probe was retired'
+Assert-Contract (($blockedRunnerOutput -join "`n").Contains('BLOCKED-LEGACY-DISPATCH-EVIDENCE')) 'retired report contract did not explain the production-path blocker'
+Assert-Contract (-not (Test-Path -LiteralPath $blockedRunnerOutputRoot)) 'blocked dispatch evidence created a partial run directory'
+
+$blockedPhysicalStudyOutput = Join-Path ([IO.Path]::GetTempPath()) ('sky-retired-physical-study-' + [guid]::NewGuid().ToString('N'))
+$blockedPhysicalStudy = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'qualify_physical_key_study.ps1') -OutputDirectory $blockedPhysicalStudyOutput 2>&1)
+$blockedPhysicalStudyExitCode = $LASTEXITCODE
+Assert-Contract ($blockedPhysicalStudyExitCode -ne 0) 'the physical study ran with the retired coordinator benchmark'
+Assert-Contract (($blockedPhysicalStudy -join "`n").Contains('BLOCKED-LEGACY-PHYSICAL-STUDY')) 'retired physical study did not explain its evidence boundary'
+Assert-Contract (-not (Test-Path -LiteralPath $blockedPhysicalStudyOutput)) 'blocked physical study created a partial output directory'
 
 $publisherOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish_rt_dispatch_evidence.ps1') -EvidenceKind 'P0' -HeadSha ('0' * 40) -EvidenceRoot $invalidRunnerOutputRoot 2>&1)
 $publisherExitCode = $LASTEXITCODE

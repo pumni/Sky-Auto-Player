@@ -20,8 +20,8 @@ fn action(
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Legacy simulator characterization for generation accounting and the
-    /// authored hold floor; pure compiler properties remain in `properties`.
+    /// Production executor simulation properties for generation accounting
+    /// and the authored hold floor; pure compiler properties remain in `properties`.
     #[test]
     fn authored_lifecycle_preserves_generation_and_min_hold_invariants(
         mut scan_codes in prop::collection::vec(2_u16..=16, 1..=15),

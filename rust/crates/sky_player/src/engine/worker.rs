@@ -2,12 +2,6 @@ mod admission;
 mod boot;
 mod cleanup;
 mod control;
-#[cfg(not(any(test, feature = "test-support")))]
-mod dispatch;
-// `pub(crate)` under test / test-support so the deterministic harness can
-// exercise diagnostic observer primitives and slow-observer hooks without
-// exposing those test seams in production builds.
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod dispatch;
 mod dispatch_loop;
 #[cfg(not(any(test, feature = "test-support")))]
@@ -15,46 +9,19 @@ mod health;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod health;
 mod orchestration;
-#[cfg(any(test, feature = "test-support"))]
-mod physical_timing_guard;
-#[cfg(test)]
-pub(crate) use physical_timing_guard::PhysicalTimingGuard;
-#[cfg(any(test, feature = "test-support"))]
-mod planning;
-#[cfg(any(test, feature = "test-support"))]
-mod prepared;
 mod startup;
 mod timing;
 mod wait;
 
-#[cfg(test)]
-pub(crate) use admission::final_down_target_admission;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use admission::invoke_final_gate_race_hook;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use admission::{
-    FinalControlAdmission, FinalDownVerdict, FinalGateRejection, FinalTargetSignals,
-    apply_final_down_rejection, final_control_precheck, final_down_control_verdict,
-    final_down_fresh_target_admission, final_down_modifier_verdict,
-    final_down_post_modifier_verdict, final_down_target_hint, handle_final_focus_loss,
-    modifier_guard_rejection_step, owner_rejection_reason, record_final_gate_rejection,
-    trace_kind_for_packet_kind,
-};
 pub(crate) use admission::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
     target_stamp_still_current, verify_final_down_admission,
 };
-#[cfg(test)]
-pub(crate) use admission::{OwnerAdmissionFailure, final_down_lease_age_proof};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
 #[cfg(test)]
 pub(crate) use cleanup::record_termination_error;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use cleanup::release_runtime_outcome;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use cleanup::suspend_live_input;
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, finalize_worker,
@@ -67,37 +34,15 @@ use control::{
 };
 pub(super) use dispatch::DispatchStep;
 pub(crate) use dispatch::ObserverRuntime;
-#[cfg(any(test, feature = "test-support"))]
-pub(super) use dispatch::PhysicalBoundaryStamp;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch::dispatch_prepared_normal_frame;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 #[cfg(any(test, feature = "test-support"))]
-pub(super) use dispatch::{AuthoredPacketContext, dispatch_authored_packet};
-#[cfg(any(test, feature = "test-support"))]
-pub(super) use dispatch::{DownBoundaryState, PendingUpRecovery};
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::dispatch_due_from_plan;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::physical_wait_target_for_plan;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::preflight_prepared_plan;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::publish_live_metrics_after_dispatch;
 #[cfg(any(test, feature = "test-support"))]
 pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::{
     StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate, stage_candidate,
 };
-#[cfg(test)]
-pub(crate) use dispatch_loop::{preroll_manual_pause_cancels, startup_focus_loss_is_terminal};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use health::record_sendinput_pre_call_lateness;
 
 #[cfg(any(test, feature = "test-support"))]
 #[cfg(test)]
@@ -109,20 +54,6 @@ pub(crate) use health::{
     HealthWindow, focus_gate_matches, observe_dispatch_health, observe_wait_health,
     publish_backend_counters, publish_backend_metrics, record_lateness,
 };
-#[cfg(any(test, feature = "test-support"))]
-pub use planning::NextDispatchPlan;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use planning::TargetProof;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use planning::plan_next_dispatch;
-#[cfg(test)]
-pub(crate) use planning::plan_structure_is_valid;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use prepared::{PreparedDispatchEntry, PreparedDispatchFrame, PreparedDispatchStream};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
 #[cfg(any(test, feature = "test-support"))]
@@ -133,8 +64,7 @@ pub(crate) use timing::derive_spin_threshold_us;
 pub(crate) use timing::signed_ticks_to_us;
 #[cfg(test)]
 pub(crate) use timing::{
-    adjust_spin_threshold, anchored_dispatch_target_ticks, anchored_dispatch_target_ticks_typed,
-    deadline_target_ticks, exact_sender_durations,
+    adjust_spin_threshold, anchored_dispatch_target_ticks, deadline_target_ticks,
 };
 pub(crate) use timing::{
     signed_delta, signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
@@ -147,15 +77,11 @@ pub(crate) use wait::{
 
 use super::shared::SessionShared;
 use super::*;
-#[cfg(any(test, feature = "test-support"))]
-use sky_dispatch_core::coordinator::AuthoredPreparationEvidence;
 use sky_dispatch_core::model::RuntimeSchedule;
 #[cfg(any(test, feature = "test-support"))]
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicU64, Ordering};
-
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn process_command_control_for_test(
@@ -253,160 +179,14 @@ pub(crate) fn finalize_worker_for_test(
     }
 }
 
-/// Test-only accounting for the immutable preparation boundary.
-///
-/// In production this is a zero-sized no-op, so the proof instrumentation
-/// cannot add atomics or branches to the real-time path.
-#[derive(Default)]
-pub(crate) struct DispatchPreparationProbe {
-    #[cfg(any(test, feature = "test-support"))]
-    packet_header_reads: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    expected_up_intents: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    expected_down_intents: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    up_intent_visits: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    down_intent_visits: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    secondary_batch_visits: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    secondary_batch_visit_bound: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    registry_lookups: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    view_packet_calls: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    commit_freeze_calls: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    conflict_calls: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    input_build_calls: AtomicU64,
-    #[cfg(any(test, feature = "test-support"))]
-    preflight_calls: AtomicU64,
-}
-
-impl DispatchPreparationProbe {
-    #[inline]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn record_authored_preparation(&self, evidence: AuthoredPreparationEvidence) {
-        self.packet_header_reads
-            .fetch_add(evidence.packet_header_reads, Ordering::Relaxed);
-        self.expected_up_intents
-            .fetch_add(evidence.expected_up_intents, Ordering::Relaxed);
-        self.expected_down_intents
-            .fetch_add(evidence.expected_down_intents, Ordering::Relaxed);
-        self.up_intent_visits
-            .fetch_add(evidence.up_intent_visits, Ordering::Relaxed);
-        self.down_intent_visits
-            .fetch_add(evidence.down_intent_visits, Ordering::Relaxed);
-        self.secondary_batch_visits
-            .fetch_add(evidence.secondary_batch_visits, Ordering::Relaxed);
-        self.secondary_batch_visit_bound
-            .fetch_add(evidence.secondary_batch_visit_bound, Ordering::Relaxed);
-        self.registry_lookups
-            .fetch_add(evidence.registry_lookups, Ordering::Relaxed);
-        self.view_packet_calls
-            .fetch_add(evidence.view_packet_calls, Ordering::Relaxed);
-        self.commit_freeze_calls
-            .fetch_add(evidence.commit_freeze_calls, Ordering::Relaxed);
-    }
-
-    #[inline]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn record_packet_view(&self) {
-        self.view_packet_calls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn record_conflict(&self) {
-        self.conflict_calls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub(crate) fn record_input_build(&self) {
-        #[cfg(any(test, feature = "test-support"))]
-        self.input_build_calls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub(crate) fn record_preflight(&self) {
-        #[cfg(any(test, feature = "test-support"))]
-        self.preflight_calls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn counts(&self) -> PreparationCounts {
-        PreparationCounts {
-            packet_header_reads: self.packet_header_reads.load(Ordering::Relaxed),
-            expected_up_intents: self.expected_up_intents.load(Ordering::Relaxed),
-            expected_down_intents: self.expected_down_intents.load(Ordering::Relaxed),
-            up_intent_visits: self.up_intent_visits.load(Ordering::Relaxed),
-            down_intent_visits: self.down_intent_visits.load(Ordering::Relaxed),
-            secondary_batch_visits: self.secondary_batch_visits.load(Ordering::Relaxed),
-            secondary_batch_visit_bound: self.secondary_batch_visit_bound.load(Ordering::Relaxed),
-            registry_lookups: self.registry_lookups.load(Ordering::Relaxed),
-            view_packet_calls: self.view_packet_calls.load(Ordering::Relaxed),
-            commit_freeze_calls: self.commit_freeze_calls.load(Ordering::Relaxed),
-            conflict_calls: self.conflict_calls.load(Ordering::Relaxed),
-            input_build_calls: self.input_build_calls.load(Ordering::Relaxed),
-            preflight_calls: self.preflight_calls.load(Ordering::Relaxed),
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn reset(&self) {
-        self.packet_header_reads.store(0, Ordering::Relaxed);
-        self.expected_up_intents.store(0, Ordering::Relaxed);
-        self.expected_down_intents.store(0, Ordering::Relaxed);
-        self.up_intent_visits.store(0, Ordering::Relaxed);
-        self.down_intent_visits.store(0, Ordering::Relaxed);
-        self.secondary_batch_visits.store(0, Ordering::Relaxed);
-        self.secondary_batch_visit_bound.store(0, Ordering::Relaxed);
-        self.registry_lookups.store(0, Ordering::Relaxed);
-        self.view_packet_calls.store(0, Ordering::Relaxed);
-        self.commit_freeze_calls.store(0, Ordering::Relaxed);
-        self.conflict_calls.store(0, Ordering::Relaxed);
-        self.input_build_calls.store(0, Ordering::Relaxed);
-        self.preflight_calls.store(0, Ordering::Relaxed);
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PreparationCounts {
-    pub packet_header_reads: u64,
-    pub expected_up_intents: u64,
-    pub expected_down_intents: u64,
-    pub up_intent_visits: u64,
-    pub down_intent_visits: u64,
-    pub secondary_batch_visits: u64,
-    pub secondary_batch_visit_bound: u64,
-    pub registry_lookups: u64,
-    pub view_packet_calls: u64,
-    pub commit_freeze_calls: u64,
-    pub conflict_calls: u64,
-    pub input_build_calls: u64,
-    pub preflight_calls: u64,
-}
-
 /// Mutable state owned exclusively by the worker thread.
 ///
 /// This state deliberately lives outside the panic boundary so the worker's
-/// backend, coordinator, and telemetry can still be finalized after an
+/// backend, scheduler, and telemetry can still be finalized after an
 /// injected or unexpected panic.
-#[cfg(test)]
-pub(crate) type FinalLeaseAgeHook =
-    Arc<dyn Fn(&crate::engine::shared::SupervisorLeaseState) + Send + Sync>;
-
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
-    pub(crate) preparation_probe: DispatchPreparationProbe,
     pub(crate) production_forensics: ProductionHoldForensics,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) physical_timing_guard: Option<physical_timing_guard::PhysicalTimingGuard>,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
@@ -415,11 +195,7 @@ pub(crate) struct WorkerRuntime {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) focus_pause_hook: Option<super::config::FocusPauseHook>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) final_gate_race_hook: Option<super::config::FinalGateRaceHook>,
-    #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) final_gate_post_modifier_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(test)]
@@ -427,8 +203,6 @@ pub(crate) struct WorkerRuntime {
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_override_for_test:
         Option<Result<QpcTicks, sky_dispatch_win32::clock::QpcError>>,
-    #[cfg(test)]
-    pub(crate) final_lease_age_hook_for_test: Option<FinalLeaseAgeHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     pub(crate) pending_wait_observation: Option<WaitObservation>,
@@ -437,122 +211,24 @@ pub(crate) struct WorkerRuntime {
     pub(crate) last_physical_send_completion_qpc: Option<QpcTicks>,
     pub(crate) previous_sendinput_completion_qpc: Option<QpcTicks>,
     pub(crate) previous_sender_completion_known: bool,
-    /// Legacy scheduler admission state retained for the test-only adapter.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) down_boundary_state: DownBoundaryState,
-    /// Legacy missed-boundary recovery retained for the test-only adapter.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) pending_up_recovery: Option<PendingUpRecovery>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) terminal_error: Option<String>,
     pub(crate) terminal_trigger: Option<TerminalTrigger>,
-    #[cfg(any(test, feature = "test-support"))]
-    focus_loss_fault_injected: bool,
     pub(crate) manual_pause_suspension_pending: bool,
     /// True only after the first successful authored musical commit. A
     /// final foreground mismatch before that point is startup failure, not a
     /// pause/rebase event.
     pub(crate) musical_physical_commit_started: bool,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
-    #[cfg(any(test, feature = "test-support"))]
-    chord_integrity_lost: u64,
 }
 
 impl WorkerRuntime {
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn set_physical_timing_guard_for_test(
-        &mut self,
-        effective_min_hold_ticks: DurationTicks,
-        min_release_gap_ticks: DurationTicks,
-    ) {
-        self.physical_timing_guard = Some(physical_timing_guard::PhysicalTimingGuard::new(
-            effective_min_hold_ticks,
-            min_release_gap_ticks,
-        ));
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn physical_timing_window_for_test(
-        &self,
-        authored_target_qpc: QpcTicks,
-        up_mask: u16,
-        down_mask: u16,
-    ) -> Option<physical_timing_guard::PhysicalTimingWindow> {
-        self.physical_timing_guard
-            .as_ref()?
-            .query(authored_target_qpc, up_mask, down_mask)
-            .ok()
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn establish_resume_down_barrier_for_test(
-        &mut self,
-        cleanup_completed_qpc: QpcTicks,
-    ) -> Result<(), String> {
-        self.physical_timing_guard
-            .as_mut()
-            .ok_or_else(|| "physical timing guard is not initialized".to_string())?
-            .establish_resume_down_barrier(cleanup_completed_qpc)
-            .map_err(|error| format!("test resume Down barrier: {error:?}"))
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn create_test_runtime(verified_target: Option<TargetStamp>) -> Self {
         Self {
             verified_target,
             ..Self::default()
         }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn chord_integrity_lost_count(&self) -> u64 {
-        self.chord_integrity_lost
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn set_deadline_wake_qpc_for_test(&mut self, ticks: Option<QpcTicks>) {
-        self.last_dispatch_deadline_wake_qpc = ticks;
-        self.last_dispatch_deadline_target_qpc = ticks;
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn set_deadline_wait_evidence_for_test(
-        &mut self,
-        wake_qpc: Option<QpcTicks>,
-        target_qpc: Option<QpcTicks>,
-    ) {
-        self.last_dispatch_deadline_wake_qpc = wake_qpc;
-        self.last_dispatch_deadline_target_qpc = target_qpc;
-    }
-
-    #[inline]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn observe_future_down_boundary(&mut self, boundary: PhysicalBoundaryStamp) {
-        if self.down_boundary_state != DownBoundaryState::FutureAuthorized(boundary) {
-            self.down_boundary_state = DownBoundaryState::FutureAuthorized(boundary);
-        }
-    }
-
-    #[inline]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn authorize_down_boundary(&mut self, boundary: PhysicalBoundaryStamp) -> bool {
-        self.down_boundary_state.authorization() == Some(boundary)
-    }
-
-    #[inline]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn invalidate_down_authorization(&mut self) {
-        self.down_boundary_state = DownBoundaryState::AwaitingFuture;
-    }
-
-    /// Model `WaitBoundary::Due { wait_result: None }` after a future plan
-    /// was classified but before the waiter could block. The timing observer
-    /// evidence is cleared; strict Down authorization remains owned by the
-    /// authored dispatch state.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn record_due_without_wait_for_test(&mut self) {
-        self.last_dispatch_deadline_wake_qpc = None;
-        self.last_dispatch_deadline_target_qpc = None;
     }
 }
 
@@ -799,51 +475,5 @@ impl<'a> Worker<'a> {
 
     pub(super) fn run(mut self) -> u8 {
         orchestration::run(&mut self)
-    }
-}
-
-#[cfg(test)]
-mod observer_profile_tests {
-    use super::{
-        DownBoundaryState, PhysicalBoundaryStamp, QpcTicks, WorkerObserverState, WorkerRuntime,
-    };
-
-    fn boundary(source_action_index: u32) -> PhysicalBoundaryStamp {
-        PhysicalBoundaryStamp {
-            first_batch_index: 0,
-            packet_index: 0,
-            packet_batch_count: 1,
-            source_action_index,
-            up_mask: 0,
-            down_mask: 1,
-            physical_target_qpc: QpcTicks::from_raw(100),
-        }
-    }
-
-    #[test]
-    fn default_production_observer_state_has_no_queue_or_thread() {
-        let state = WorkerObserverState::default();
-        assert!(state.pending.is_none());
-        assert!(state.runtime.is_none());
-    }
-
-    #[test]
-    fn only_exact_future_observation_authorizes_a_down_boundary() {
-        let mut runtime = WorkerRuntime::create_test_runtime(None);
-        assert_eq!(
-            runtime.down_boundary_state,
-            DownBoundaryState::AwaitingFuture
-        );
-        let stamp = boundary(7);
-        assert!(!runtime.authorize_down_boundary(stamp));
-        runtime.observe_future_down_boundary(stamp);
-        assert!(runtime.authorize_down_boundary(stamp));
-        assert!(!runtime.authorize_down_boundary(boundary(8)));
-        runtime.invalidate_down_authorization();
-        assert_eq!(
-            runtime.down_boundary_state,
-            DownBoundaryState::AwaitingFuture
-        );
-        assert!(!runtime.authorize_down_boundary(stamp));
     }
 }

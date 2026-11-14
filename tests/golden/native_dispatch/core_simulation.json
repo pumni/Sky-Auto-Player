@@ -58,7 +58,7 @@
         "result": {
           "events": [
             {"step": 0, "kind": "down", "scheduled_us": 0, "actual_us": 0, "completed_us": 10, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"},
-            {"step": 1, "kind": "up", "scheduled_us": 5000, "actual_us": 5000, "completed_us": 5010, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"}
+            {"step": 1, "kind": "up", "scheduled_us": 5000, "actual_us": 5010, "completed_us": 5020, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"}
           ],
           "status_counts": {"active": 0, "cancelled": 0, "dropped_backend": 0, "dropped_conflict": 0, "dropped_expired": 0, "released": 1, "scheduled": 0},
           "total_generations": 1,
@@ -117,9 +117,8 @@
         "outcome": "finished",
         "result": {
           "events": [
-            {"step": 0, "kind": "up", "scheduled_us": 0, "actual_us": 0, "completed_us": 0, "scan_codes": [1], "generation_ids": [null], "outcome": "suppressed_stale_up"},
-            {"step": 1, "kind": "down", "scheduled_us": 100, "actual_us": 100, "completed_us": 110, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"},
-            {"step": 2, "kind": "up", "scheduled_us": 200, "actual_us": 200, "completed_us": 210, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"}
+            {"step": 0, "kind": "down", "scheduled_us": 100, "actual_us": 100, "completed_us": 110, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"},
+            {"step": 1, "kind": "up", "scheduled_us": 200, "actual_us": 200, "completed_us": 210, "scan_codes": [1], "generation_ids": [0], "outcome": "sent"}
           ],
           "status_counts": {"active": 0, "cancelled": 0, "dropped_backend": 0, "dropped_conflict": 0, "dropped_expired": 0, "released": 1, "scheduled": 0},
           "total_generations": 1,

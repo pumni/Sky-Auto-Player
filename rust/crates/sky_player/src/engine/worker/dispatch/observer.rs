@@ -2,34 +2,18 @@ use super::super::super::{
     DurationTicks, QpcClock, SharedMetrics, TelemetryCollector, TimelineTicks,
     try_publish_observer_metrics,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::super::WorkerRuntime;
 use super::super::health::build_dispatch_budget;
-#[cfg(any(test, feature = "test-support"))]
-use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, WorkerHealthState,
     WorkerMetricsLocal, WorkerTimingState, observe_dispatch_health, record_lateness, signed_delta,
     signed_timeline_delta_ticks,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::AuthoredBatchView;
 use super::DispatchStep;
-#[cfg(any(test, feature = "test-support"))]
-use super::authored::resolve_slo_terminal_step;
-#[cfg(any(test, feature = "test-support"))]
-use super::observation::DownTraceObservation;
 use super::observation::{
     DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, down_effective_ticks,
     down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::observer_wake::take_deadline_wake_qpc;
-#[cfg(any(test, feature = "test-support"))]
-use super::recovery::record_physical_floor_delays;
-#[cfg(any(test, feature = "test-support"))]
-use super::timing::DownSendTiming;
 use super::timing::is_clean_dispatch_observation;
 use crossbeam_queue::ArrayQueue;
 use sky_dispatch_core::time::QpcTicks;
@@ -106,124 +90,6 @@ fn down_pre_call_evidence(
         policy_to_pre_call_us,
         wake_to_pre_call_us,
     })
-}
-#[cfg(any(test, feature = "test-support"))]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn publisher_down_send_outcome(
-    view: &AuthoredBatchView,
-    runtime: &mut WorkerRuntime,
-    _health: &mut WorkerHealthState,
-    local_metrics: &mut WorkerMetricsLocal,
-    qpc_clock: QpcClock,
-    _effective_now_ticks: TimelineTicks,
-    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
-    physical_timing_window: PhysicalTimingWindow,
-    capture_dispatch_ready_qpc: bool,
-    trace_kind: u8,
-    result_status: sky_dispatch_win32::input::SendTransactionStatus,
-    result_confirmed_mask: u16,
-    result_skipped_mask: u16,
-    result_send_attempts: u8,
-    result_retry_reason: PacketRetryReason,
-    result_chord_integrity_lost: bool,
-    result_last_win32_error: Option<u32>,
-    observer: Option<&PendingObservationQueue>,
-    timing_proof: &DownSendTiming,
-) -> DispatchStep {
-    let requested_packet = view.packet_masks;
-    let final_policy_qpc = timing_proof.final_policy_qpc;
-    let pre_call_qpc = timing_proof.pre_call_qpc;
-    let sendinput_completion_qpc = timing_proof.sendinput_completion_qpc;
-    let strict_completion_late = timing_proof.strict_completion_late;
-    let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
-    let wake_qpc = take_deadline_wake_qpc(runtime);
-    let precision_handoff = super::observer_wake::precision_handoff(
-        runtime,
-        wake_qpc,
-        timing_proof.target_crossing_qpc,
-        final_policy_qpc,
-    );
-    let dispatch_ready_qpc = if capture_dispatch_ready_qpc {
-        match qpc_clock.now() {
-            Ok(ticks) => Some(ticks),
-            Err(error) => {
-                return DispatchStep::Terminate(format!("QPC runtime failure: {error:?}"));
-            }
-        }
-    } else {
-        None
-    };
-    runtime.production_forensics.observe_packet_result(
-        requested_packet,
-        view.batch_source_action_index,
-        physical_target_qpc,
-        pre_call_qpc,
-        sendinput_completion_qpc,
-        result_status,
-        local_metrics,
-    );
-    if matches!(
-        result_status,
-        sky_dispatch_win32::input::SendTransactionStatus::Complete
-    ) && (physical_timing_window.hold_floor_mask != 0
-        || physical_timing_window.release_floor_mask != 0)
-    {
-        record_physical_floor_delays(local_metrics, physical_timing_window);
-    }
-    if let Some(observer) = observer {
-        let observation = DownObservation {
-            wait_sequence: 0,
-            wait_spin_ticks: 0,
-            up_slots: None,
-            up_slot_count: 0,
-            up_pre_call_available: false,
-            epoch_qpc: timing_proof.epoch_qpc,
-            allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
-            physical_target_qpc,
-            physical_timing_window,
-            final_policy_qpc,
-            pre_call_qpc: Some(pre_call_qpc),
-            sendinput_completion_qpc,
-            previous_sendinput_completion_qpc: timing_proof.previous_sendinput_completion_qpc,
-            previous_sender_completion_known: timing_proof.previous_sender_completion_known,
-            dispatch_ready_qpc,
-            wake_qpc,
-            precision_handoff,
-            requested_packet,
-            confirmed_mask: result_confirmed_mask,
-            skipped_mask: result_skipped_mask,
-            trace: DownTraceObservation {
-                event_index: view.batch_source_action_index,
-                compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
-                trace_kind,
-                result_status,
-                send_attempts: result_send_attempts,
-                retry_reason: result_retry_reason,
-                chord_integrity_lost: result_chord_integrity_lost,
-                last_win32_error: result_last_win32_error.unwrap_or(0),
-                authored_ticks: view.authored_batch_scheduled_ticks,
-                effective_deadline_ticks: view.batch_scheduled_ticks,
-            },
-        };
-        observer.push(
-            DispatchObservation::Down(observation),
-            &mut local_metrics.observer_dropped_samples,
-        );
-        super::observer_wake::publish_pending_wait_observation(
-            runtime,
-            Some(observer),
-            local_metrics,
-        );
-    }
-    resolve_slo_terminal_step(
-        result_chord_integrity_lost,
-        strict_completion_late,
-        false,
-        qpc_clock,
-        completion_error_ticks_value,
-        view,
-        runtime,
-    )
 }
 #[derive(Clone, Debug)]
 pub struct PendingObservationQueue {
@@ -403,10 +269,6 @@ impl ObserverRuntime {
                             terminal_error = Some((*error).to_string());
                             break;
                         }
-                        #[cfg(any(test, feature = "test-support"))]
-                        Err(DispatchStep::NoWork | DispatchStep::Continue) => {}
-                        #[cfg(any(test, feature = "test-support"))]
-                        Err(DispatchStep::Dispatched) => {}
                     }
                 }
                 ObserverOutput {
@@ -746,10 +608,6 @@ pub(crate) fn drain_one_observer(
                 timing,
             )?,
             #[cfg(any(test, feature = "test-support"))]
-            DispatchObservation::DownMiss(miss) => {
-                super::observer_trace::drain_down_miss(miss, telemetry)?;
-            }
-            #[cfg(any(test, feature = "test-support"))]
             DispatchObservation::Up(up) => super::observer_trace::drain_up_send_outcome(
                 up,
                 super::observer_trace::UpObservationDrainContext {
@@ -767,10 +625,6 @@ pub(crate) fn drain_one_observer(
             #[cfg(any(test, feature = "test-support"))]
             DispatchObservation::StaleMetadata(stale) => {
                 super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
-            }
-            #[cfg(any(test, feature = "test-support"))]
-            DispatchObservation::BlockedUnfocused(blocked) => {
-                super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
             }
         }
         #[cfg(any(test, feature = "test-support"))]
@@ -808,10 +662,7 @@ pub(crate) fn drain_one_observer(
         #[cfg(any(test, feature = "test-support"))]
         let is_immediate_publish = matches!(
             observation,
-            DispatchObservation::Wait(_)
-                | DispatchObservation::StaleMetadata(_)
-                | DispatchObservation::DownMiss(_)
-                | DispatchObservation::BlockedUnfocused(_)
+            DispatchObservation::Wait(_) | DispatchObservation::StaleMetadata(_)
         );
         #[cfg(not(any(test, feature = "test-support")))]
         let is_immediate_publish = matches!(observation, DispatchObservation::Wait(_));
@@ -843,7 +694,3 @@ mod observer_accounting_tests;
 #[cfg(test)]
 #[path = "hold_forensics_tests.rs"]
 mod hold_forensics_tests;
-
-#[cfg(test)]
-#[path = "dispatch_forensics_qualification_tests.rs"]
-mod dispatch_forensics_qualification_tests;

@@ -28,8 +28,8 @@ path = "tests/golden.rs"
 required-features = ["test-support"]
 
 [[test]]
-name = "legacy_properties"
-path = "tests/legacy_properties.rs"
+name = "executor_properties"
+path = "tests/executor_properties.rs"
 required-features = ["test-support"]
 
 [[bench]]

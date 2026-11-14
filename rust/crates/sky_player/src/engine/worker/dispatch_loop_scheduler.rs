@@ -128,25 +128,6 @@ fn resolve_scheduler_down_chord(
     Ok(Some(chord.into()))
 }
 
-#[cfg(test)]
-fn stage_scheduler_action(
-    action: SchedulerAction,
-    target: &SessionTarget,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-) -> Result<Option<StagedCandidate>, String> {
-    let SchedulerAction::Send {
-        up_mask,
-        down_chord_index,
-        timing_window,
-    } = action
-    else {
-        return Ok(None);
-    };
-    let down_chord = resolve_scheduler_down_chord(&resources.scheduler, down_chord_index)?;
-    stage_candidate(up_mask, down_chord, timing_window, target, resources, runtime)
-}
-
 struct UpOnlyTargetReplanAdmission<'a> {
     target_stale: bool,
     require_focus: bool,
