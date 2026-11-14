@@ -112,6 +112,64 @@ fn lifecycle_cleanup_qpc_failure_and_overflow_leave_down_fail_closed() {
 }
 
 #[test]
+fn terminal_cleanup_reports_missing_qpc_without_fabricating_zero_timestamp() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::clock::QpcError;
+    use sky_dispatch_win32::input::{SendEvidence, SendTransactionOutcome, SendTransactionStatus};
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.resources.backend.active_mask = 1;
+    harness.resources.backend.custom_emitter = None;
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let completed_ticks = clock.now().expect("terminal mock completion QPC");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::ClockFailureAfterSend,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: sky_dispatch_win32::input::PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: None,
+                completed_ticks: Some(completed_ticks),
+                timing_error: Some(QpcError::CounterUnavailable),
+            },
+        }
+    });
+
+    let mut observation = super::worker::FinalizeTestObservation::default();
+    let outcome = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(outcome, super::OUTCOME_ERROR);
+    assert_eq!(observation.cleanup_outcome.as_ref().unwrap().attempts, 1);
+    assert!(
+        observation
+            .cleanup_outcome
+            .as_ref()
+            .unwrap()
+            .released_successfully
+    );
+    assert!(
+        observation
+            .cleanup_outcome
+            .as_ref()
+            .unwrap()
+            .transport_anomaly
+    );
+    assert_eq!(observation.release_obligation_mask, 0);
+    assert!(
+        observation
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("cleanup QPC timing evidence unavailable"))
+    );
+}
+
+#[test]
 fn lifecycle_inconclusive_cleanup_does_not_establish_or_bypass_barrier() {
     use super::test_support::ProductionDispatchTestHarness;
     use std::sync::atomic::AtomicBool;

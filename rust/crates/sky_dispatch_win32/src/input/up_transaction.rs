@@ -2,6 +2,8 @@ use super::outcome::{
     PacketRetryReason, PlatformSendResult, SendEvidence, SendTransactionOutcome,
     SendTransactionStatus, classify_send_status,
 };
+use super::outcome::{PhysicalPacket, TerminalUpTransportResult};
+use super::packet::invalid_packet_outcome;
 use super::physical::mask_for_scan_codes;
 use super::raw::{no_syscall_boundary_with_clock, send_input_raw};
 
@@ -198,6 +200,65 @@ where
             first_win32_error: win32_error,
             last_win32_error: win32_error,
             started_ticks: Some(result.started_ticks),
+            completed_ticks: result.completed_ticks,
+            timing_error: result.timing_error,
+        },
+    }
+}
+
+/// Convert one terminal Up transport result into the shared cleanup evidence
+/// shape. Full insertion without a Win32 error confirms transport acceptance
+/// even if a timestamp is unavailable; the independent physical probe still
+/// owns obligation resolution.
+pub(crate) fn terminal_up_outcome(
+    packet: PhysicalPacket,
+    result: TerminalUpTransportResult,
+) -> SendTransactionOutcome {
+    if !packet.is_up_only() || packet.up_mask == 0 {
+        return invalid_packet_outcome(packet);
+    }
+
+    let expected = usize::from(packet.event_count());
+    let requested = usize::from(result.requested);
+    if requested != expected {
+        return invalid_packet_outcome(packet);
+    }
+    let inserted = usize::from(result.inserted).min(requested);
+    let status = classify_send_status(
+        inserted,
+        requested,
+        result.win32_error,
+        result.started_ticks,
+        result.completed_ticks,
+    );
+    let win32_error = (result.win32_error != 0).then_some(result.win32_error);
+    let retry_reason = if inserted == 0 {
+        PacketRetryReason::ZeroProgress
+    } else if inserted < requested {
+        PacketRetryReason::PartialProgress {
+            inserted_count: inserted as u8,
+        }
+    } else {
+        PacketRetryReason::None
+    };
+
+    SendTransactionOutcome {
+        status,
+        evidence: SendEvidence {
+            requested_mask: packet.up_mask,
+            confirmed_mask: if inserted == requested && result.win32_error == 0 {
+                packet.up_mask
+            } else {
+                0
+            },
+            skipped_mask: 0,
+            first_inserted: inserted as u8,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason,
+            first_win32_error: win32_error,
+            last_win32_error: win32_error,
+            started_ticks: result.started_ticks,
             completed_ticks: result.completed_ticks,
             timing_error: result.timing_error,
         },

@@ -3,10 +3,12 @@ use super::outcome::{
     SendTransactionOutcome, SendTransactionStatus, classify_send_status,
 };
 use super::profile::MaterializedInstrumentKeyProfile;
+use super::raw::terminal_up_send_with;
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
-use crate::clock::{QpcClock, QpcTicks};
+use super::up_transaction::terminal_up_outcome;
+use crate::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_core::model::MAX_KEYS;
 #[cfg(windows)]
 use std::mem::MaybeUninit;
@@ -381,6 +383,62 @@ pub(crate) fn invalid_packet_outcome(packet: PhysicalPacket) -> SendTransactionO
             timing_error: None,
         },
     }
+}
+
+/// Send one already-validated Up-only packet for terminal cleanup. Timing is
+/// sampled when available, but a missing pre-call QPC sample cannot block this
+/// bounded safety send. The caller retains ownership of retry and verification.
+pub(crate) fn send_prepared_terminal_up_once(
+    prepared: &PreparedPhysicalPacket,
+    clock: Option<QpcClock>,
+) -> SendTransactionOutcome {
+    let packet = prepared.packet();
+    if !packet.is_up_only() || packet.up_mask == 0 {
+        return invalid_packet_outcome(packet);
+    }
+
+    let clock = clock.or_else(|| QpcClock::initialize().ok());
+    let initialization_error = clock.is_none().then_some(QpcError::FrequencyUnavailable);
+    let mut sample_qpc = || match clock {
+        Some(clock) => clock.now(),
+        None => Err(initialization_error.unwrap_or(QpcError::FrequencyUnavailable)),
+    };
+
+    #[cfg(windows)]
+    let transport = {
+        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+
+        let requested = prepared.event_count();
+        let cb_size =
+            std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32;
+        terminal_up_send_with(requested, &mut sample_qpc, || {
+            // Clear stale thread-local state after the optional start
+            // sample and immediately before the authoritative syscall.
+            unsafe { SetLastError(0) };
+            let inserted = unsafe {
+                SendInput(
+                    u32::from(requested),
+                    prepared.initialized_inputs().as_ptr(),
+                    cb_size,
+                )
+            }
+            .min(u32::from(requested)) as u8;
+            let win32_error = if inserted != requested {
+                unsafe { GetLastError() }
+            } else {
+                0
+            };
+            (inserted, win32_error)
+        })
+    };
+
+    #[cfg(not(windows))]
+    let transport = terminal_up_send_with(prepared.event_count(), &mut sample_qpc, || {
+        (prepared.event_count(), 0)
+    });
+
+    terminal_up_outcome(packet, transport)
 }
 
 enum PreparedSendFailure {

@@ -606,6 +606,230 @@ fn production_scheduler_lifecycle_matrix_cleans_accepted_downs() {
 }
 
 #[test]
+fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commit() {
+    use crate::engine::worker::StagedDispatchOutcome;
+    use std::sync::atomic::Ordering;
+
+    for rejection in ["target_generation", "supervisor_lease", "quit_control"] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+        let chord = harness.current_executor_chord_for_test();
+        let candidate = harness
+            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .expect("stage production final-gate candidate")
+            .expect("production final-gate Down candidate");
+        let before_accounting = harness.generation_accounting_for_test();
+
+        match rejection {
+            "target_generation" => assert!(harness.target.publish(2)),
+            "supervisor_lease" => {
+                harness.supervisor_expired.latch_expired();
+            }
+            "quit_control" => harness.quit_requested.store(true, Ordering::Release),
+            _ => unreachable!(),
+        }
+
+        let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+        assert_ne!(outcome, StagedDispatchOutcome::Dispatched, "{rejection}");
+        assert!(packets.lock().expect("scheduler packet capture").is_empty());
+        assert_eq!(
+            harness.generation_accounting_for_test(),
+            before_accounting,
+            "{rejection}: denied final gate cannot commit scheduler accounting"
+        );
+        assert_eq!(
+            harness.current_executor_chord_for_test(),
+            chord,
+            "{rejection}: denied final gate cannot advance the Down cursor"
+        );
+    }
+}
+
+#[test]
+fn live_scheduler_partial_chord_send_is_not_replayed_and_remains_owned_for_cleanup() {
+    use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
+    use std::sync::{Arc, Mutex};
+
+    let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
+    let packet_attempts = Arc::new(Mutex::new(Vec::new()));
+    let attempts = Arc::clone(&packet_attempts);
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        attempts
+            .lock()
+            .expect("partial production packet capture")
+            .push(packet);
+        let started_ticks = clock.now().expect("partial sender start QPC");
+        let completed_ticks = clock.now().expect("partial sender completion QPC");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 1,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 1 },
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(started_ticks),
+                completed_ticks: Some(completed_ticks),
+                timing_error: None,
+            },
+        }
+    });
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage production chord")
+        .expect("production chord candidate");
+    let before = harness.generation_accounting_for_test();
+
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    ));
+    let attempts = packet_attempts
+        .lock()
+        .expect("partial production packet capture");
+    assert_eq!(attempts.len(), 1, "the split Down chord must never replay");
+    assert_eq!(attempts[0].up_mask, 0);
+    assert_eq!(attempts[0].down_mask.count_ones(), 2);
+    drop(attempts);
+    assert_eq!(harness.generation_accounting_for_test(), before);
+    assert_eq!(harness.current_executor_chord_for_test(), chord);
+    let obligation = harness.release_obligation_mask_for_test();
+    assert_eq!(obligation, 0b11);
+
+    let mut observation = FinalizeTestObservation::default();
+    let _ = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(observation.attempted_mask, obligation);
+    assert_eq!(observation.release_obligation_mask, 0);
+    assert_eq!(
+        cleanup.lock().expect("partial cleanup capture").as_slice(),
+        &[(vec![0x15, 0x16], true)]
+    );
+}
+
+#[test]
+fn live_scheduler_terminal_finalizer_cleans_lease_panic_and_worker_unwind() {
+    use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
+    use std::sync::atomic::Ordering;
+
+    for path in ["supervisor_lease", "panic_request", "worker_unwind"] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+        let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+        let chord = harness.current_executor_chord_for_test();
+        let candidate = harness
+            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .expect("stage production terminal candidate")
+            .expect("production terminal Down candidate");
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            StagedDispatchOutcome::Dispatched
+        ));
+        assert_eq!(
+            packets
+                .lock()
+                .expect("terminal scheduler packet capture")
+                .len(),
+            1,
+            "{path}: one production Down before terminal path"
+        );
+
+        let mut observation = FinalizeTestObservation::default();
+        match path {
+            "supervisor_lease" => {
+                harness.supervisor_expired.latch_expired();
+                assert!(harness.process_command_control_for_test());
+                assert_eq!(
+                    harness.finalize_worker_for_test(false, &mut observation),
+                    crate::engine::OUTCOME_ERROR
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("supervisor_lease_expired")
+                );
+            }
+            "panic_request" => {
+                harness.panic_requested.store(true, Ordering::Release);
+                assert!(harness.process_command_control_for_test());
+                assert_eq!(
+                    harness.finalize_worker_for_test(false, &mut observation),
+                    crate::engine::OUTCOME_ERROR
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("panic_release_requested")
+                );
+            }
+            "worker_unwind" => {
+                let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    harness.finalize_worker_for_test(true, &mut observation);
+                }));
+                assert!(
+                    unwind.is_err(),
+                    "worker panic must propagate after finalization"
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("worker_panic")
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(
+            observation.attempted_mask, 1,
+            "{path}: tracked ownership only"
+        );
+        assert_eq!(observation.release_obligation_mask, 0, "{path}");
+        assert_eq!(observation.generation_accounting.active, 0, "{path}");
+        assert!(observation.generation_accounting.cancelled >= 1, "{path}");
+        assert_eq!(
+            cleanup.lock().expect("terminal cleanup capture").as_slice(),
+            &[(vec![0x15], true)],
+            "{path}: one bounded terminal Up after the accepted Down"
+        );
+    }
+}
+
+#[test]
+fn live_scheduler_cleanup_qpc_failure_never_mints_resumable_barrier() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_mock_packet_sender_for_test(&[0]);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage QPC barrier candidate")
+        .expect("scheduler QPC barrier Down candidate");
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        crate::engine::worker::StagedDispatchOutcome::Dispatched
+    ));
+
+    let outcome = harness
+        .apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            Err("injected post-cleanup QPC failure".to_string())
+        });
+    assert!(outcome.is_err());
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.resources.scheduler.accounting().active, 1);
+    assert_eq!(harness.resources.scheduler.resume_barrier_qpc(), None);
+    assert_eq!(
+        cleanup
+            .lock()
+            .expect("QPC failure cleanup capture")
+            .as_slice(),
+        &[(vec![0x15], true)]
+    );
+}
+
+#[test]
 fn lifecycle_not_due_dispatch_preserves_sender_cursor_and_generation_until_floor() {
     let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
     let mut harness =

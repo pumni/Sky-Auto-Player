@@ -123,6 +123,17 @@ impl TrackedKeyState {
         self.custom_packet_emitter = Some(Box::new(emitter));
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_terminal_up_emitter_for_test<F>(&mut self, emitter: F)
+    where
+        F: Fn(PhysicalPacket) -> super::super::outcome::TerminalUpTransportResult
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.custom_terminal_up_emitter = Some(Box::new(emitter));
+    }
+
     /// Force successful test sends to provide only completion QPC evidence.
     /// This exercises callers that must preserve an unavailable pre-call
     /// sample without weakening the production sender's timestamp authority.

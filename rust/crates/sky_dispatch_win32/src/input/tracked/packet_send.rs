@@ -5,6 +5,7 @@ use super::super::outcome::{
 use super::super::packet::{
     PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
     send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_start,
+    send_prepared_terminal_up_once,
 };
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
@@ -12,6 +13,8 @@ use super::super::raw::{
 };
 use super::super::scan_code::key_mask;
 use super::super::up_transaction::emit_up_once_with;
+#[cfg(test)]
+use super::super::up_transaction::terminal_up_outcome;
 use super::TrackedKeyState;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
@@ -183,7 +186,11 @@ impl TrackedKeyState {
     /// Single-send note-off for operator-owned cleanup retries. The cleanup FSM
     /// bounds the raw `SendInput` count itself; this must never perform an
     /// internal retry.
-    pub(super) fn do_emit_up_once(&mut self, logical_mask: u16) -> SendTransactionOutcome {
+    pub(super) fn do_emit_up_once(
+        &mut self,
+        logical_mask: u16,
+        terminal_qpc_fallback: bool,
+    ) -> SendTransactionOutcome {
         let packet = PhysicalPacket::new(logical_mask, 0);
         let prepared = match PreparedPhysicalPacket::try_new_with_profile(
             packet,
@@ -192,6 +199,11 @@ impl TrackedKeyState {
             Ok(prepared) => prepared,
             Err(_) => return invalid_packet_outcome(packet),
         };
+
+        #[cfg(test)]
+        if terminal_qpc_fallback && let Some(emitter) = self.custom_terminal_up_emitter.as_ref() {
+            return terminal_up_outcome(packet, emitter(packet));
+        }
 
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
@@ -214,10 +226,14 @@ impl TrackedKeyState {
             return emitter(packet);
         }
 
-        let Some(clock) = self.qpc_clock else {
-            return invalid_packet_outcome(packet);
-        };
-        send_prepared_physical_packet_once(&prepared, clock)
+        if terminal_qpc_fallback {
+            send_prepared_terminal_up_once(&prepared, self.qpc_clock)
+        } else {
+            match self.qpc_clock {
+                Some(clock) => send_prepared_physical_packet_once(&prepared, clock),
+                None => invalid_packet_outcome(packet),
+            }
+        }
     }
 
     pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {

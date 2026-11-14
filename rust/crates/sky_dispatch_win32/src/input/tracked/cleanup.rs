@@ -7,6 +7,21 @@ use super::{ReleaseScope, TrackedKeyState, release_retry_sleep};
 
 impl TrackedKeyState {
     pub fn release_scope(&mut self, scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
+        self.release_scope_with_qpc_fallback(scope, target_hwnd, false)
+    }
+
+    /// Terminal finalization may issue one bounded Up transport when QPC is
+    /// unavailable, but it is restricted to this session's tracked mask.
+    pub fn release_terminal_tracked_scope(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
+        self.release_scope_with_qpc_fallback(ReleaseScope::Tracked, target_hwnd, true)
+    }
+
+    fn release_scope_with_qpc_fallback(
+        &mut self,
+        scope: ReleaseScope,
+        target_hwnd: isize,
+        terminal_qpc_fallback: bool,
+    ) -> ReleaseAllOutcome {
         let requested_mask = match scope {
             ReleaseScope::Tracked => self.release_obligation_mask(),
             ReleaseScope::FullInstrument => FULL_INSTRUMENT_MASK,
@@ -42,7 +57,10 @@ impl TrackedKeyState {
 
             let previous_unresolved = unresolved_mask;
             self.release_attempts_total = self.release_attempts_total.saturating_add(1);
-            let emitted = self.do_emit_up_once(unresolved_mask);
+            let emitted = self.do_emit_up_once(unresolved_mask, terminal_qpc_fallback);
+            if emitted.evidence.timing_error.is_some() {
+                self.timing_error = emitted.evidence.timing_error;
+            }
             let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 
             transport_anomaly |= !matches!(emitted.status, SendTransactionStatus::Complete)

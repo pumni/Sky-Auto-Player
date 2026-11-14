@@ -14,6 +14,13 @@ pub type CustomPacketEmitterFn = Box<
     dyn Fn(super::outcome::PhysicalPacket) -> super::outcome::SendTransactionOutcome + Send + Sync,
 >;
 
+#[cfg(test)]
+pub(crate) type CustomTerminalUpEmitterFn = Box<
+    dyn Fn(super::outcome::PhysicalPacket) -> super::outcome::TerminalUpTransportResult
+        + Send
+        + Sync,
+>;
+
 /// Test-only deterministic physical probe used by the cleanup FSM.
 ///
 /// The signature receives the still-unresolved mask and the transport-confirmed
@@ -107,6 +114,8 @@ pub struct TrackedKeyState {
     pub custom_emitter: Option<CustomEmitterFn>,
     #[cfg(any(test, feature = "test-support"))]
     pub custom_packet_emitter: Option<CustomPacketEmitterFn>,
+    #[cfg(test)]
+    pub(crate) custom_terminal_up_emitter: Option<CustomTerminalUpEmitterFn>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) custom_probe: Option<CustomProbeFn>,
     #[cfg(any(test, feature = "test-support"))]

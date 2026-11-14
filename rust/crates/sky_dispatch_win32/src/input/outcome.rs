@@ -14,6 +14,18 @@ pub struct PlatformSendResult {
     pub timing_error: Option<crate::clock::QpcError>,
 }
 
+/// Terminal Up transport evidence keeps a failed pre-call QPC sample absent
+/// while still allowing the bounded safety release to reach SendInput.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalUpTransportResult {
+    pub requested: u8,
+    pub inserted: u8,
+    pub started_ticks: Option<QpcTicks>,
+    pub completed_ticks: Option<QpcTicks>,
+    pub win32_error: u32,
+    pub timing_error: Option<crate::clock::QpcError>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalPacket {
     pub up_mask: u16,

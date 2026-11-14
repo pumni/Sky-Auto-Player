@@ -100,9 +100,8 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // owner; resumable cleanup remains a separate lifecycle operation.
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_release_started");
-    let release_scope = sky_dispatch_win32::input::ReleaseScope::Tracked;
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        backend.release_scope(release_scope, target.hwnd_for_safety_release())
+        backend.release_terminal_tracked_scope(target.hwnd_for_safety_release())
     }));
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
@@ -121,6 +120,13 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             &mut terminal_error,
             &mut secondary_errors,
             "terminal backend cleanup panicked".to_string(),
+        );
+    }
+    if let Some(error) = backend.timing_error {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("cleanup QPC timing evidence unavailable: {error:?}"),
         );
     }
     #[cfg(any(test, feature = "test-support"))]
