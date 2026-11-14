@@ -2430,22 +2430,13 @@ mod tests {
     }
 
     #[test]
-    fn blocked_resume_replan_waits_interruptibly_and_rechecks_target() {
+    fn blocked_resume_replan_accepts_due_or_event_and_rechecks_target() {
         use crate::engine::shared::{SupervisorLeaseState, SystemPowerState};
         use crate::engine::target::SessionTarget;
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
 
         let clock = QpcClock::initialize().expect("QPC clock");
-        let target = Arc::new(SessionTarget::new(0, 1));
-        let interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("interrupt event"));
-        let target_signaler = Arc::clone(&target);
-        let event_signaler = Arc::clone(&interrupt);
-        let signaler = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(10));
-            assert!(target_signaler.publish(123));
-            assert!(event_signaler.signal());
-        });
+        let target = SessionTarget::new(0, 1);
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
 
         let desired_pause = AtomicBool::new(false);
         let focus_active = AtomicBool::new(true);
@@ -2458,39 +2449,58 @@ mod tests {
         let waiter = sky_dispatch_win32::wait::HybridWaiter::new();
         let mut local_metrics = WorkerMetricsLocal::default();
         let mut terminal_error = None;
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let expected_target = target
+            .load_stable()
+            .map(|(hwnd, generation)| super::TargetStamp { hwnd, generation });
+        let control_signals = super::FinalControlSignals {
+            quit_requested: &quit_requested,
+            skip_requested: &skip_requested,
+            panic_requested: &panic_requested,
+            desired_pause: &desired_pause,
+            supervisor_expired: &supervisor_expired,
+            system_power: Some(&system_power),
+        };
 
-        while local_metrics.wait_interrupted_count == 0 && Instant::now() < deadline {
-            let expected_target = target
-                .load_stable()
-                .map(|(hwnd, generation)| super::TargetStamp { hwnd, generation });
-            assert!(wait_for_blocked_resume_replan(
-                clock.now().expect("QPC now"),
-                super::FinalControlSignals {
-                    quit_requested: &quit_requested,
-                    skip_requested: &skip_requested,
-                    panic_requested: &panic_requested,
-                    desired_pause: &desired_pause,
-                    supervisor_expired: &supervisor_expired,
-                    system_power: Some(&system_power),
-                },
-                false,
-                &focus_active,
-                true,
-                false,
-                &target,
-                expected_target,
-                clock,
-                &waiter,
-                &interrupt,
-                &mut local_metrics,
-                &mut terminal_error,
-            ));
-            assert_eq!(terminal_error, None);
-        }
+        // A pre-signaled event must return to the caller even if the timer
+        // reaches its deadline before the wait classifies the wake.
+        assert!(interrupt.signal());
+        assert!(wait_for_blocked_resume_replan(
+            clock.now().expect("QPC now"),
+            control_signals,
+            false,
+            &focus_active,
+            true,
+            false,
+            &target,
+            expected_target,
+            clock,
+            &waiter,
+            &interrupt,
+            &mut local_metrics,
+            &mut terminal_error,
+        ));
+        assert_eq!(terminal_error, None);
 
-        signaler.join().expect("target signaler");
-        assert_eq!(local_metrics.wait_interrupted_count, 1);
+        // Model the target becoming valid before the next state recheck. The
+        // stale expected stamp must return to the caller without another wait.
+        assert!(target.publish(123));
+        assert!(interrupt.signal());
+        assert!(wait_for_blocked_resume_replan(
+            clock.now().expect("QPC now"),
+            control_signals,
+            false,
+            &focus_active,
+            true,
+            false,
+            &target,
+            expected_target,
+            clock,
+            &waiter,
+            &interrupt,
+            &mut local_metrics,
+            &mut terminal_error,
+        ));
+        assert_eq!(terminal_error, None);
         assert_eq!(target.load_stable(), Some((123, 2)));
     }
 

@@ -1136,14 +1136,18 @@ fn user_held_preroll_preflight_emits_no_unowned_cleanup() {
 
 #[test]
 fn focus_restore_race_after_validation_does_not_resume() {
+    use super::test_support::MockSendInputCapture;
+
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_override_reset = FocusOverrideResetGuard;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
 
     let raced = Arc::new(AtomicBool::new(false));
     let full_release_count = Arc::new(AtomicU64::new(0));
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    fault_script.send_input_capture = Some(Arc::clone(&send_input_capture));
     let race_hook: super::config::RestoreRaceHook = {
         let raced = Arc::clone(&raced);
         Arc::new(move |focus_active, _target| {
@@ -1155,6 +1159,18 @@ fn focus_restore_race_after_validation_does_not_resume() {
     let session = start_focus_recovery_session(fault_script, Some(race_hook));
 
     wait_for_focus_down(&session);
+    let down_call_count = || {
+        send_input_capture
+            .lock()
+            .expect("mock SendInput capture")
+            .iter()
+            .filter(|capture| match capture {
+                MockSendInputCapture::Packet { packet, .. } => packet.down_mask != 0,
+                MockSendInputCapture::SingleEmitter { key_up, .. } => !*key_up,
+            })
+            .count()
+    };
+    assert_eq!(down_call_count(), 1, "first Down must be captured");
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
     session.set_focus_hint(false);
     wait_for_focus_pause(&session);
@@ -1192,6 +1208,11 @@ fn focus_restore_race_after_validation_does_not_resume() {
     );
     assert_eq!(snapshot.terminal_error, None);
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        down_call_count(),
+        1,
+        "blocked focus restore must not send another Down"
+    );
 
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
@@ -1208,7 +1229,7 @@ fn focus_restore_race_after_validation_does_not_resume() {
         }
         assert!(
             Instant::now() < resume_deadline,
-            "focus/target recovery did not wake the blocked resume path: {snapshot:?}"
+            "focus recovery did not wake the blocked resume path: {snapshot:?}"
         );
         session
             .publish_supervisor_progress()
@@ -1216,6 +1237,11 @@ fn focus_restore_race_after_validation_does_not_resume() {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        down_call_count(),
+        1,
+        "resume must preserve the next Down gate"
+    );
 
     session.quit().expect("quit raced session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
