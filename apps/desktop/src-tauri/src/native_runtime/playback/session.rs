@@ -3028,7 +3028,7 @@ mod preparation_cancellation_tests {
     use std::time::Duration;
 
     #[test]
-    fn valid_one_million_single_key_actions_are_rejected_by_combined_startup_budget() {
+    fn valid_one_million_single_key_actions_fit_compact_executor_budget() {
         const ACTION_COUNT: usize = 1_000_000;
         let mut actions = Vec::with_capacity(ACTION_COUNT);
         for index in 0..(ACTION_COUNT / 2) {
@@ -3079,35 +3079,48 @@ mod preparation_cancellation_tests {
             .memory_metrics()
             .expect("compiled schedule capacity")
             .heap_payload_bytes;
-        let error = sky_player::adapter_support::RuntimeDispatchCoordinator::try_new_ticks(
-            compiled,
-            0,
-            sky_player::adapter_support::DurationTicks::ZERO,
-            |microseconds| {
-                Ok::<_, sky_player::adapter_support::CoordinatorError>(
-                    sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
-                )
-            },
-        )
-        .expect_err("combined schedule, coordinator, and executor exceeds 512 MiB");
-        let error = error.to_string();
+        let mut coordinator =
+            sky_player::adapter_support::RuntimeDispatchCoordinator::try_new_ticks(
+                compiled,
+                0,
+                sky_player::adapter_support::DurationTicks::ZERO,
+                |microseconds| {
+                    Ok::<_, sky_player::adapter_support::CoordinatorError>(
+                        sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
+                    )
+                },
+            )
+            .expect("compact schedule and projected executor fit the combined budget");
+        coordinator
+            .attach_executor_with_cancellation(
+                sky_player::adapter_support::DurationTicks::ZERO,
+                sky_player::adapter_support::DurationTicks::ZERO,
+                |microseconds| {
+                    Ok::<_, std::convert::Infallible>(
+                        sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
+                    )
+                },
+                || Ok(()),
+            )
+            .expect("materialized executor remains within the combined budget");
+        let dispatch_memory = coordinator
+            .memory_metrics()
+            .expect("combined dispatch memory metrics");
+        let budget_bytes = sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES;
+        assert!(dispatch_memory.executor_heap_bytes > 0);
+        assert!(dispatch_memory.retained_capacity_bytes <= budget_bytes);
+        assert!(dispatch_memory.startup_peak_capacity_bytes <= budget_bytes);
         eprintln!(
-            "dispatch_memory workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_heap_bytes} compiler_phase_peak_capacity_bytes={} policy_bytes={} disposition=combined_dispatch_rejected memory_basis=calculated_size_and_capacity lifetime_model=source_schedule_overlaps_compile_input_output_and_coordinator_materialization;compiler_input_and_temp_drop_before_coordinator_materialization complete_application_process_peak=not_measured windows_process_memory=not_measured reason={error}",
+            "dispatch_memory workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_heap_bytes} coordinator_heap_bytes={} executor_heap_bytes={} retained_capacity_bytes={} compiler_phase_peak_capacity_bytes={} coordinator_materialization_peak_capacity_bytes={} startup_peak_capacity_bytes={} policy_bytes={budget_bytes} disposition=admitted_within_combined_budget memory_basis=calculated_size_and_capacity lifetime_model=source_schedule_overlaps_compile_input_output_and_coordinator_materialization;compiler_input_and_temp_drop_before_coordinator_materialization complete_application_process_peak=not_measured windows_process_memory=not_measured",
             compile_memory.caller_retained_capacity_bytes,
             compile_memory.input_capacity_bytes,
             compile_memory.temporary_capacity_bytes,
-            compile_memory.phase_peak_capacity_bytes,
-            sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES,
-        );
-        assert!(error.contains("exceeds dispatch budget"), "{error}");
-        assert!(
-            error.contains("536870912 bytes"),
-            "the fixed 512 MiB admission limit must remain visible: {error}"
-        );
-        assert!(
-            !error.to_ascii_lowercase().contains("out of memory")
-                && error.contains("exceeds dispatch budget of 536870912 bytes"),
-            "budget rejection must not be mislabeled as OOM: {error}"
+            dispatch_memory.coordinator_heap_bytes,
+            dispatch_memory.executor_heap_bytes,
+            dispatch_memory.retained_capacity_bytes,
+            dispatch_memory.compiler_phase_peak_capacity_bytes,
+            dispatch_memory.coordinator_materialization_peak_capacity_bytes,
+            dispatch_memory.startup_peak_capacity_bytes,
         );
     }
 
