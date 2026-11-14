@@ -10,6 +10,7 @@ use super::{
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcError;
+use sky_dispatch_win32::input::TerminalReleaseEvidence;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -104,16 +105,41 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         backend.release_terminal_tracked_scope(target.hwnd_for_safety_release())
     }));
     if let Ok(outcome) = &cleanup_result {
-        *metrics.terminal_release_outcome.lock() = Some(outcome.clone());
-        if !release_state_verified(&backend, outcome) {
+        *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
+        if !release_state_verified(&backend, &outcome.release_outcome) {
             record_termination_error(
                 &mut terminal_error,
                 &mut secondary_errors,
                 format!(
-                    "terminal release verification failed: {}",
-                    describe_release_outcome(&backend, outcome)
+                    "terminal release verification failed: {}; {}",
+                    describe_release_outcome(&backend, &outcome.release_outcome),
+                    describe_terminal_release_evidence(outcome)
                 ),
             );
+        }
+        if outcome
+            .send_attempts
+            .iter()
+            .any(|attempt| attempt.qpc_error.is_some())
+        {
+            record_termination_error(
+                &mut terminal_error,
+                &mut secondary_errors,
+                format!(
+                    "terminal cleanup QPC evidence unavailable: {}",
+                    describe_terminal_release_evidence(outcome)
+                ),
+            );
+        } else if outcome.release_outcome.transport_anomaly
+            && release_state_verified(&backend, &outcome.release_outcome)
+        {
+            let diagnostic = format!(
+                "terminal cleanup transport anomaly: {}",
+                describe_terminal_release_evidence(outcome)
+            );
+            if !secondary_errors.contains(&diagnostic) {
+                secondary_errors.push(diagnostic);
+            }
         }
     } else {
         record_termination_error(
@@ -126,7 +152,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         record_termination_error(
             &mut terminal_error,
             &mut secondary_errors,
-            format!("cleanup QPC timing evidence unavailable: {error:?}"),
+            format!("earlier SendInput QPC timing evidence unavailable: {error:?}"),
         );
     }
     #[cfg(any(test, feature = "test-support"))]
@@ -149,13 +175,17 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         observation.attempted_mask = cleanup_result
             .as_ref()
             .ok()
-            .map_or(0, |outcome| outcome.attempted_mask);
+            .map_or(0, |outcome| outcome.release_outcome.attempted_mask);
         observation.terminal_release_attempts = cleanup_result
             .as_ref()
             .ok()
-            .map_or(0, |outcome| outcome.attempts);
+            .map_or(0, |outcome| outcome.release_outcome.attempts);
         observation.total_release_attempts = backend.release_attempts_total;
-        observation.cleanup_outcome = cleanup_result.as_ref().ok().cloned();
+        observation.cleanup_outcome = cleanup_result
+            .as_ref()
+            .ok()
+            .map(|outcome| outcome.release_outcome.clone());
+        observation.terminal_cleanup_evidence = cleanup_result.as_ref().ok().cloned();
     }
 
     // Preserve the pre-cancel ledger evidence, but only after the first
@@ -410,6 +440,38 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     } else {
         OUTCOME_FINISHED
     }
+}
+
+fn describe_terminal_release_evidence(evidence: &TerminalReleaseEvidence) -> String {
+    let send = evidence
+        .send_attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "raw_calls={},requested={},inserted={},win32_error={:?}",
+                attempt.raw_calls,
+                attempt.requested_events,
+                attempt.inserted_events,
+                attempt.win32_error
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    let qpc = evidence
+        .send_attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "pre={:?},completion={:?},error={:?}",
+                attempt.started_ticks, attempt.completed_ticks, attempt.qpc_error
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    format!(
+        "send=[{send}], qpc=[{qpc}], physical_probe={:?}",
+        evidence.probe_verdict
+    )
 }
 
 #[cfg(any(test, feature = "test-support"))]

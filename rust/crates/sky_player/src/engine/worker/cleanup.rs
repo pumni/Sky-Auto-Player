@@ -19,7 +19,7 @@ use sky_dispatch_core::executor::DispatchExecutor;
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
-use sky_dispatch_win32::input::ReleaseAllOutcome;
+use sky_dispatch_win32::input::{ReleaseAllOutcome, TerminalReleaseEvidence};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -89,6 +89,7 @@ pub(crate) struct FinalizeTestObservation {
     pub(crate) terminal_release_attempts: u8,
     pub(crate) total_release_attempts: u64,
     pub(crate) cleanup_outcome: Option<ReleaseAllOutcome>,
+    pub(crate) terminal_cleanup_evidence: Option<TerminalReleaseEvidence>,
     pub(crate) generation_accounting: sky_dispatch_core::coordinator::GenerationAccounting,
     pub(crate) pre_cancel_generation_accounting:
         sky_dispatch_core::coordinator::GenerationAccounting,

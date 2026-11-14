@@ -224,13 +224,20 @@ pub(crate) fn terminal_up_outcome(
         return invalid_packet_outcome(packet);
     }
     let inserted = usize::from(result.inserted).min(requested);
-    let status = classify_send_status(
-        inserted,
-        requested,
-        result.win32_error,
-        result.started_ticks,
-        result.completed_ticks,
-    );
+    // Terminal Up is an independent safety send. Its status describes the
+    // actual transport result; optional QPC samples remain separate evidence
+    // and cannot relabel an attempted zero-insert syscall as pre-send failure.
+    let status = if inserted < requested {
+        if inserted == 0 {
+            SendTransactionStatus::ZeroProgress
+        } else {
+            SendTransactionStatus::IntegrityLost
+        }
+    } else if result.win32_error != 0 {
+        SendTransactionStatus::IntegrityLost
+    } else {
+        SendTransactionStatus::Complete
+    };
     let win32_error = (result.win32_error != 0).then_some(result.win32_error);
     let retry_reason = if inserted == 0 {
         PacketRetryReason::ZeroProgress

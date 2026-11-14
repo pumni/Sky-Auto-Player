@@ -21,7 +21,8 @@ pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
 pub use outcome::{
     PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket,
     PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus,
+    SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
+    TerminalSendAttemptEvidence,
 };
 
 pub(crate) use packet::PreparedTaggedCalibrationPacket;

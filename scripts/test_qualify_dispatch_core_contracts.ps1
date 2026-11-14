@@ -667,4 +667,119 @@ try {
     Remove-Item -LiteralPath $pairedCsv -Force -ErrorAction SilentlyContinue
 }
 
+Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+if (-not $qualifierSource.Contains('New-QualificationReportProjection') -or
+    -not $qualifierSource.Contains('Get-QualificationReportRowLabel')) {
+    throw 'qualification runner is not using the tested report projection and role-label functions'
+}
+
+# Historical Scheduler/DispatchCore manifests predate the separate margin
+# fields. They must still reach report serialization under strict mode.
+$legacyCandidate = [pscustomobject]@{
+    qualification_profile = 'Scheduler'; source_role = 'Candidate';
+    workload_version = 'scheduler-single-owner-v1'; observer_mode = 'SchedulerQueuedV3Compat3';
+    guard_mode = 'frozen';
+}
+$legacyControl = [pscustomobject]@{
+    qualification_profile = 'Scheduler'; source_role = 'Baseline';
+    workload_version = 'scheduler-single-owner-v1'; observer_mode = 'SchedulerQueuedV3Compat3';
+    guard_mode = 'frozen';
+}
+$legacyProjection = New-QualificationReportProjection -Profile Scheduler -Candidate $legacyCandidate `
+    -Control $legacyControl -Stage Compare -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500
+$legacySummaryJson = [ordered]@{
+    candidate_label = $legacyProjection.CandidateLabel
+    control_label = $legacyProjection.ControlLabel
+    parameters = $legacyProjection.SummaryParameters
+} | ConvertTo-Json -Depth 8
+$legacyManifestJson = [ordered]@{
+    candidate_label = $legacyProjection.CandidateLabel
+    control_label = $legacyProjection.ControlLabel
+    parameters = $legacyProjection.ManifestParameters
+} | ConvertTo-Json -Depth 8
+$legacySummary = $legacySummaryJson | ConvertFrom-Json
+$legacyResultManifest = $legacyManifestJson | ConvertFrom-Json
+if ($null -ne $legacySummary.parameters.performance_timing_margin_us -or
+    $null -ne $legacySummary.parameters.safety_timing_margin_us -or
+    $null -ne $legacyResultManifest.parameters.performance_timing_margin_us -or
+    $null -ne $legacyResultManifest.parameters.safety_timing_margin_us) {
+    throw 'legacy report projection fabricated missing timing margins instead of preserving null'
+}
+
+# Exercise the same role/margin projection consumed by sessions.csv,
+# summary.json, summary.md, and the run result manifest for a FrameSnapshot
+# baseline/candidate pair.
+$frameProjection = New-QualificationReportProjection -Profile FrameSnapshot -Candidate $validFrameCandidate `
+    -Control $validFrameBaseline -Stage Final -Pairs 6 -SampleSeconds 15 -TimingMarginUs 0
+$frameRows = @(
+    [pscustomobject]@{ role = 'control'; control_label = $frameProjection.CsvRoleLabels.control },
+    [pscustomobject]@{ role = 'candidate'; control_label = $frameProjection.CsvRoleLabels.candidate }
+)
+$reportRoot = Join-Path $env:TEMP ('qualification-report-projection-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $reportRoot | Out-Null
+try {
+    $frameRows | Export-Csv -LiteralPath (Join-Path $reportRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    [ordered]@{
+        candidate = [ordered]@{
+            label = $frameProjection.CandidateLabel
+            performance_timing_margin_us = $frameProjection.CandidateMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.CandidateMargins.safety_timing_margin_us
+        }
+        control = [ordered]@{
+            control_label = $frameProjection.ControlLabel
+            performance_timing_margin_us = $frameProjection.ControlMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.ControlMargins.safety_timing_margin_us
+        }
+        parameters = $frameProjection.SummaryParameters
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $reportRoot 'summary.json') -Encoding UTF8
+    @(
+        '- Candidate: ' + $frameProjection.MarkdownCandidatePrefix.TrimEnd()
+        '- Control: ' + $frameProjection.MarkdownControlLabel
+    ) |
+        Set-Content -LiteralPath (Join-Path $reportRoot 'summary.md') -Encoding UTF8
+    [ordered]@{
+        control_manifest = [ordered]@{
+            control_label = $frameProjection.ControlLabel
+            performance_timing_margin_us = $frameProjection.ControlMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.ControlMargins.safety_timing_margin_us
+        }
+        candidate_manifest = [ordered]@{
+            label = $frameProjection.CandidateLabel
+            performance_timing_margin_us = $frameProjection.CandidateMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.CandidateMargins.safety_timing_margin_us
+        }
+        parameters = $frameProjection.ManifestParameters
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $reportRoot 'manifest.json') -Encoding UTF8
+
+    $csvReport = @(Import-Csv -LiteralPath (Join-Path $reportRoot 'sessions.csv'))
+    $summaryReport = Get-Content -LiteralPath (Join-Path $reportRoot 'summary.json') -Raw | ConvertFrom-Json
+    $markdownReport = Get-Content -LiteralPath (Join-Path $reportRoot 'summary.md') -Raw
+    $manifestReport = Get-Content -LiteralPath (Join-Path $reportRoot 'manifest.json') -Raw | ConvertFrom-Json
+    if ($csvReport[0].control_label -ne 'FrameSnapshot-Baseline' -or
+        $csvReport[1].control_label -ne 'FrameSnapshot-Candidate' -or
+        $summaryReport.candidate.label -ne 'FrameSnapshot-Candidate' -or
+        $summaryReport.control.control_label -ne 'FrameSnapshot-Baseline' -or
+        $manifestReport.candidate_manifest.label -ne 'FrameSnapshot-Candidate' -or
+        $manifestReport.control_manifest.control_label -ne 'FrameSnapshot-Baseline' -or
+        -not $markdownReport.Contains('- Candidate: FrameSnapshot-Candidate') -or
+        -not $markdownReport.Contains('- Control: FrameSnapshot-Baseline')) {
+        throw 'FrameSnapshot role labels differ between CSV, summary JSON, Markdown, and result manifest'
+    }
+    foreach ($report in @($summaryReport, $manifestReport)) {
+        if ($report.parameters.performance_timing_margin_us -ne 0 -or
+            $report.parameters.safety_timing_margin_us -ne 500) {
+            throw 'FrameSnapshot report parameters lost the performance/safety margin distinction'
+        }
+    }
+    if ($summaryReport.control.performance_timing_margin_us -ne 0 -or
+        $summaryReport.control.safety_timing_margin_us -ne 500 -or
+        $manifestReport.control_manifest.performance_timing_margin_us -ne 0 -or
+        $manifestReport.control_manifest.safety_timing_margin_us -ne 500) {
+        throw 'FrameSnapshot baseline report margin provenance is incorrect'
+    }
+} finally {
+    Remove-Item -LiteralPath $reportRoot -Recurse -Force
+}
+
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

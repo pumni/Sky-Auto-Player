@@ -154,19 +154,63 @@ fn terminal_cleanup_reports_missing_qpc_without_fabricating_zero_timestamp() {
             .released_successfully
     );
     assert!(
-        observation
+        !observation
             .cleanup_outcome
             .as_ref()
             .unwrap()
             .transport_anomaly
     );
-    assert_eq!(observation.release_obligation_mask, 0);
-    assert!(
-        observation
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.contains("cleanup QPC timing evidence unavailable"))
+    let terminal_evidence = observation
+        .terminal_cleanup_evidence
+        .as_ref()
+        .expect("terminal cleanup evidence");
+    assert_eq!(terminal_evidence.send_attempts.len(), 1);
+    assert_eq!(terminal_evidence.send_attempts[0].raw_calls, 1);
+    assert_eq!(terminal_evidence.send_attempts[0].requested_events, 1);
+    assert_eq!(terminal_evidence.send_attempts[0].inserted_events, 1);
+    assert_eq!(terminal_evidence.send_attempts[0].win32_error, None);
+    assert_eq!(terminal_evidence.send_attempts[0].started_ticks, None);
+    assert!(terminal_evidence.send_attempts[0].completed_ticks.is_some());
+    assert_eq!(
+        terminal_evidence.send_attempts[0].qpc_error,
+        Some(QpcError::CounterUnavailable)
     );
+    assert_eq!(
+        terminal_evidence.probe_verdict,
+        sky_dispatch_win32::input::TerminalProbeVerdict::AllUp
+    );
+    assert_eq!(observation.release_obligation_mask, 0);
+    assert!(observation.terminal_error.as_deref().is_some_and(|error| {
+        error.contains("terminal cleanup QPC evidence unavailable")
+            && error.contains("send=[raw_calls=1,requested=1,inserted=1,win32_error=None]")
+            && error.contains("pre=None")
+            && error.contains("physical_probe=AllUp")
+    }));
+}
+
+#[test]
+fn empty_terminal_cleanup_does_not_misattribute_playback_qpc_error() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::clock::QpcError;
+    use sky_dispatch_win32::input::TerminalProbeVerdict;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.resources.backend.timing_error = Some(QpcError::CounterUnavailable);
+
+    let mut observation = super::worker::FinalizeTestObservation::default();
+    let outcome = harness.finalize_worker_for_test(false, &mut observation);
+
+    assert_eq!(outcome, super::OUTCOME_ERROR);
+    let cleanup = observation
+        .terminal_cleanup_evidence
+        .as_ref()
+        .expect("terminal cleanup evidence");
+    assert!(cleanup.send_attempts.is_empty());
+    assert_eq!(cleanup.probe_verdict, TerminalProbeVerdict::NotRequired);
+    assert!(observation.terminal_error.as_deref().is_some_and(|error| {
+        error.contains("earlier SendInput QPC timing evidence unavailable")
+            && !error.contains("terminal cleanup QPC evidence unavailable")
+    }));
 }
 
 #[test]

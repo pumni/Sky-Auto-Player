@@ -22,6 +22,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot')
@@ -615,7 +616,7 @@ function Invoke-NativeCase {
         source_revision = $HarnessManifest.source_revision
         source_tree_sha = $HarnessManifest.source_tree_sha
         control_kind = Get-OptionalProperty $HarnessManifest 'control_kind'
-        control_label = if ($QualificationProfile -eq 'Scheduler') { if ($Role -eq 'control') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HarnessManifest.c1_timed_verified) { 'C1-TIMED-R2' } elseif ($Role -eq 'candidate') { 'Candidate-R2' } else { 'C0' }
+        control_label = Get-QualificationReportRowLabel -Profile $QualificationProfile -Role $Role -Manifest $HarnessManifest
         base_source_revision = Get-OptionalProperty $HarnessManifest 'base_source_revision'
         base_source_tree_sha = Get-OptionalProperty $HarnessManifest 'base_source_tree_sha'
         base_source_archive_sha256 = Get-OptionalProperty $HarnessManifest 'base_source_archive_sha256'
@@ -1016,17 +1017,19 @@ try {
     $os = Get-CimInstance Win32_OperatingSystem
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
     $pairedMetrics = Get-PairedMetrics
+    $reportProjection = New-QualificationReportProjection `
+        -Profile $QualificationProfile `
+        -Candidate $candidate `
+        -Control $control `
+        -Stage $Stage `
+        -Pairs $Pairs `
+        -SampleSeconds $SampleSeconds `
+        -TimingMarginUs $TimingMarginUs
     $comparisonDescription = if ($Stage -eq 'Compare') {
         Get-ComparisonDescription -Profile $QualificationProfile -Control $control -Candidate $candidate
     } else { $null }
-    $controlLabel = if ($QualificationProfile -eq 'FrameSnapshot') {
-        'FrameSnapshot-Baseline'
-    } elseif ($QualificationProfile -eq 'Scheduler') {
-        'C0-Scheduler-Baseline'
-    } elseif ($control -and $control.c1_timed_verified) {
-        'C1-TIMED-R2'
-    } else { 'C0' }
-    $candidateLabel = if ($QualificationProfile -eq 'FrameSnapshot') { 'FrameSnapshot-Candidate' } elseif ($QualificationProfile -eq 'Scheduler') { 'Scheduler-Candidate' } else { 'Candidate-R2' }
+    $controlLabel = $reportProjection.ControlLabel
+    $candidateLabel = $reportProjection.CandidateLabel
     $passed = @($runRows | Where-Object status -eq 'PASS').Count
     $safetyRows = @($runRows | Where-Object { $_.workload -like '*safety*' -or $_.cell_id -eq 'boundary-safety' })
     $hardSafety = [ordered]@{
@@ -1046,9 +1049,9 @@ try {
         qualification_profile = $QualificationProfile
         receiveonly_observer = [ordered]@{ mode = if ($qualifiedProfile) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }; version = if ($qualifiedProfile) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null } }
         source = $source
-        candidate = [ordered]@{ label = $candidateLabel; manifest_path = $candidate.manifest_path; manifest_sha256 = $candidate.manifest_sha256; qualification_profile = $candidate.qualification_profile; source_role = Get-OptionalProperty $candidate 'source_role'; source_root = Get-OptionalProperty $candidate 'source_root'; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; base_source_revision = Get-OptionalProperty $candidate 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $candidate 'base_source_tree_sha'; binary_path = $candidate.resolved_binary_path; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); target = $candidate.target; binary_sha256 = $candidate.binary_sha256; performance_timing_margin_us = Get-OptionalProperty $candidate 'performance_timing_margin_us'; safety_timing_margin_us = Get-OptionalProperty $candidate 'safety_timing_margin_us' }
-        control = if ($control) { [ordered]@{ control_label = $controlLabel; manifest_path = $control.manifest_path; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; qualification_profile = $control.qualification_profile; source_role = Get-OptionalProperty $control 'source_role'; source_root = Get-OptionalProperty $control 'source_root'; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; binary_path = $control.resolved_binary_path; profile = $control.cargo_profile; features = @($control.cargo_features); target = $control.target; binary_sha256 = $control.binary_sha256; performance_timing_margin_us = Get-OptionalProperty $control 'performance_timing_margin_us'; safety_timing_margin_us = Get-OptionalProperty $control 'safety_timing_margin_us' } } else { $null }
-        parameters = [ordered]@{ pairs = if ($Stage -in @('Canary', 'Smoke')) { 1 } else { $Pairs }; sample_seconds = if ($Stage -in @('Canary', 'Smoke')) { $null } else { $SampleSeconds }; timing_margin_us = $TimingMarginUs; performance_timing_margin_us = $candidate.performance_timing_margin_us; safety_timing_margin_us = $candidate.safety_timing_margin_us; order = 'alternating AB/BA, three pairs each per cell'; quiet = 'no benchmark CPU workers'; contention = 'two hidden pwsh busy workers at BelowNormal priority'; sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID'; receiveonly_observer_mode = if ($qualifiedProfile) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }; receiveonly_observer_version = if ($qualifiedProfile) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null } }
+        candidate = [ordered]@{ label = $candidateLabel; manifest_path = $candidate.manifest_path; manifest_sha256 = $candidate.manifest_sha256; qualification_profile = $candidate.qualification_profile; source_role = Get-OptionalProperty $candidate 'source_role'; source_root = Get-OptionalProperty $candidate 'source_root'; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; base_source_revision = Get-OptionalProperty $candidate 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $candidate 'base_source_tree_sha'; binary_path = $candidate.resolved_binary_path; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); target = $candidate.target; binary_sha256 = $candidate.binary_sha256; performance_timing_margin_us = $reportProjection.CandidateMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.CandidateMargins.safety_timing_margin_us }
+        control = if ($control) { [ordered]@{ control_label = $controlLabel; manifest_path = $control.manifest_path; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; qualification_profile = $control.qualification_profile; source_role = Get-OptionalProperty $control 'source_role'; source_root = Get-OptionalProperty $control 'source_root'; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; binary_path = $control.resolved_binary_path; profile = $control.cargo_profile; features = @($control.cargo_features); target = $control.target; binary_sha256 = $control.binary_sha256; performance_timing_margin_us = $reportProjection.ControlMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.ControlMargins.safety_timing_margin_us } } else { $null }
+        parameters = $reportProjection.SummaryParameters
         environment = [ordered]@{ rustc_version = $rustcVersion.Trim(); windows_caption = $os.Caption; windows_version = $os.Version; windows_build = $os.BuildNumber; processor_name = $cpu.Name; processor_cores = $cpu.NumberOfCores; processor_logical_processors = $cpu.NumberOfLogicalProcessors; power_scheme = (& powercfg /getactivescheme | Out-String).Trim() }
         run_count = $runRows.Count
         passed_count = $passed
@@ -1092,8 +1095,8 @@ try {
         } else { $null }),
         '- Run: `' + $runId + '`',
         '- Source: `' + $head + '` tree `' + $tree + '` (clean)',
-        '- Candidate: `' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`',
-        ('- Control: ' + $(if ($control) { $(if ($control.c1_timed_verified) { 'C1-TIMED-R2 derived from frozen C0 A1; C0 not timed-qualified; ' } else { 'C0; ' }) + '`' + $control.source_revision + '` / `' + $control.cargo_profile + '` / SHA-256 `' + $control.binary_sha256 + '`' } else { 'not applicable' })),
+        ('- Candidate: ' + $reportProjection.MarkdownCandidatePrefix + '`' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`'),
+        ('- Control: ' + $(if ($control) { $(if ($control.c1_timed_verified) { $reportProjection.MarkdownControlLabel + ' derived from frozen C0 A1; C0 not timed-qualified; ' } else { $reportProjection.MarkdownControlLabel + '; ' }) + '`' + $control.source_revision + '` / `' + $control.cargo_profile + '` / SHA-256 `' + $control.binary_sha256 + '`' } else { $reportProjection.MarkdownControlLabel })),
         '- Sessions: ' + $runRows.Count + '; PASS: ' + $passed + '; failed/inconclusive: ' + $failureRows.Count,
         '- Disposition: ' + $(if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -ne 0) { 'FAILED' } else { 'COMPLETED' }),
         '- Paired order: AB/BA alternating; six pairs per workload/load cell; 15 seconds per timed session.',
@@ -1142,9 +1145,9 @@ try {
         source_revision = $source.revision
         source_tree_sha = $source.tree
         source_tree_clean = $source.clean
-        control_manifest = if ($control) { [ordered]@{ control_label = $controlLabel; path = $control.manifest_path; control_kind = Get-OptionalProperty $control 'control_kind'; sha256 = $control.manifest_sha256; qualification_profile = $control.qualification_profile; source_role = Get-OptionalProperty $control 'source_role'; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; binary_path = $control.resolved_binary_path; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); target = $control.target; binary_sha256 = $control.binary_sha256; performance_timing_margin_us = Get-OptionalProperty $control 'performance_timing_margin_us'; safety_timing_margin_us = Get-OptionalProperty $control 'safety_timing_margin_us' } } else { $null }
-        candidate_manifest = [ordered]@{ label = $candidateLabel; path = $candidate.manifest_path; sha256 = $candidate.manifest_sha256; qualification_profile = $candidate.qualification_profile; source_role = Get-OptionalProperty $candidate 'source_role'; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; binary_path = $candidate.resolved_binary_path; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); target = $candidate.target; binary_sha256 = $candidate.binary_sha256; performance_timing_margin_us = Get-OptionalProperty $candidate 'performance_timing_margin_us'; safety_timing_margin_us = Get-OptionalProperty $candidate 'safety_timing_margin_us' }
-        parameters = [ordered]@{ pairs = if ($Stage -in @('Canary', 'Smoke')) { 1 } else { 6 }; sample_seconds = if ($Stage -in @('Canary', 'Smoke')) { $null } else { 15 }; timing_margin_us = $TimingMarginUs; performance_timing_margin_us = $candidate.performance_timing_margin_us; safety_timing_margin_us = $candidate.safety_timing_margin_us; workload_version = $candidate.workload_version; observer_mode = $candidate.observer_mode; guard_mode = $candidate.guard_mode; quiet_load = 'no extra qualification workers'; contention_load = 'two BelowNormal CPU workers'; pair_order = 'alternating AB/BA' }
+        control_manifest = if ($control) { [ordered]@{ control_label = $controlLabel; path = $control.manifest_path; control_kind = Get-OptionalProperty $control 'control_kind'; sha256 = $control.manifest_sha256; qualification_profile = $control.qualification_profile; source_role = Get-OptionalProperty $control 'source_role'; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; binary_path = $control.resolved_binary_path; cargo_profile = $control.cargo_profile; cargo_features = @($control.cargo_features); target = $control.target; binary_sha256 = $control.binary_sha256; performance_timing_margin_us = $reportProjection.ControlMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.ControlMargins.safety_timing_margin_us } } else { $null }
+        candidate_manifest = [ordered]@{ label = $candidateLabel; path = $candidate.manifest_path; sha256 = $candidate.manifest_sha256; qualification_profile = $candidate.qualification_profile; source_role = Get-OptionalProperty $candidate 'source_role'; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; binary_path = $candidate.resolved_binary_path; cargo_profile = $candidate.cargo_profile; cargo_features = @($candidate.cargo_features); target = $candidate.target; binary_sha256 = $candidate.binary_sha256; performance_timing_margin_us = $reportProjection.CandidateMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.CandidateMargins.safety_timing_margin_us }
+        parameters = $reportProjection.ManifestParameters
         rustc_version = $rustcVersion.Trim()
         windows_caption = $os.Caption
         windows_version = $os.Version

@@ -185,6 +185,39 @@ pub struct ReleaseAllOutcome {
     pub attempts: u8,
 }
 
+/// One bounded terminal cleanup attempt, with transport and clock evidence
+/// kept independent. `raw_calls` is zero when preparation failed before the
+/// Win32 syscall; otherwise it records the actual SendInput call count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalSendAttemptEvidence {
+    pub raw_calls: u8,
+    pub requested_events: u8,
+    pub inserted_events: u8,
+    pub win32_error: Option<u32>,
+    pub started_ticks: Option<QpcTicks>,
+    pub completed_ticks: Option<QpcTicks>,
+    pub qpc_error: Option<crate::clock::QpcError>,
+}
+
+/// Physical-probe verdict after terminal cleanup. No obligations means no
+/// probe was required; other variants reflect the final independent probe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalProbeVerdict {
+    NotRequired,
+    AllUp,
+    Held(u16),
+    Inconclusive(u16),
+}
+
+/// Terminal cleanup's three evidence dimensions without changing the public
+/// release outcome or qualification/IPC schema.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalReleaseEvidence {
+    pub release_outcome: ReleaseAllOutcome,
+    pub send_attempts: SmallVec<[TerminalSendAttemptEvidence; 4]>,
+    pub probe_verdict: TerminalProbeVerdict,
+}
+
 impl ReleaseAllOutcome {
     pub fn attempted(&self) -> Vec<u16> {
         scan_codes_from_mask(self.attempted_mask)

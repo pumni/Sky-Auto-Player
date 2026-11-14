@@ -203,14 +203,26 @@ The bounded observation producer does not sample queue occupancy; the observer
 consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
 accounting remain off the real-time producer suffix.
 
-`MAX_EXECUTOR_BYTES` caps the estimated `DownChordTicks` backing array, while
-`MAX_RETAINED_DISPATCH_BYTES` enforces the unchanged 512 MiB (536,870,912-byte)
-combined schedule, coordinator and executor admission bound using calculated
-capacities and startup overlap. It is not a process-RSS or full-application peak
-limit. The one-million-action single-key case is rejected at its combined
-741,502,832-byte estimate; see the [pinned historical FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md).
-Allocation failures are not universally recoverable: in particular, constructing
-shared reason strings still uses infallible allocation.
+The live `DispatchExecutor` stores compact chord headers and their intents in a
+contiguous arena. `MAX_EXECUTOR_BYTES` bounds the calculated capacities of
+those two executor vectors; it does not bound a `DownChordTicks` fixture's
+owned `SmallVec`. Schedule compilation has a separate phase-capacity check.
+`MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated overlap bound used by
+the legacy coordinator's combined schedule/coordinator/executor memory
+accounting. None of these values is a process-RSS or full-application peak
+limit.
+
+Production worker boot constructs `DispatchExecutor` directly from the compiled
+schedule; it does not materialize a `RuntimeDispatchCoordinator`. The
+one-million-action test in `session.rs` exercises compilation and then the
+legacy coordinator's combined memory metrics, where it is admitted within
+that calculated budget. It is not a measurement of the production worker's
+peak memory. The historical [FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md)
+reports an earlier coordinator fixture rejected at 741,502,832 estimated
+bytes; that result describes only its pinned revision and fixture. Do not use
+either result as a production-worker million-action memory claim. Allocation
+failures are not universally recoverable: in particular, constructing shared
+reason strings still uses infallible allocation.
 
 ## Implementation Map
 
