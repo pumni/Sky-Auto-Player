@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 #[cfg(any(test, feature = "qpc-read-counting"))]
 use std::sync::atomic::AtomicU64;
-#[cfg(any(test, feature = "qpc-read-counting", feature = "test-support"))]
+#[cfg(any(test, feature = "qpc-read-counting"))]
 use std::sync::atomic::Ordering;
 
 pub use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
