@@ -820,20 +820,25 @@ impl RuntimeDispatchCoordinator {
     pub fn attach_executor<F, E>(
         &mut self,
         min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
         to_ticks: F,
     ) -> Result<(), String>
     where
         F: FnMut(u64) -> Result<TimelineTicks, E>,
         E: std::fmt::Display,
     {
-        self.attach_executor_with_cancellation(min_hold_ticks, frame_ticks, to_ticks, || Ok(()))
+        self.attach_executor_with_cancellation(
+            min_hold_ticks,
+            min_release_gap_ticks,
+            to_ticks,
+            || Ok(()),
+        )
     }
 
     pub fn attach_executor_with_cancellation<F, E, C>(
         &mut self,
         min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
         to_ticks: F,
         checkpoint: C,
     ) -> Result<(), String>
@@ -852,7 +857,7 @@ impl RuntimeDispatchCoordinator {
         let executor = crate::executor::DispatchExecutor::new_with_cancellation(
             &self.schedule,
             min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             to_ticks,
             checkpoint,
         )?;

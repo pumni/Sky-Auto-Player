@@ -436,9 +436,11 @@ fn lifecycle_late_up_empty_pause_resume_preserves_release_floor() {
             up_completion,
             up_at.checked_add_duration(completion_latency).unwrap()
         );
-        let frame_ticks = clock.duration_from_us(16_667).expect("frame conversion");
+        let release_gap_ticks = clock
+            .duration_from_us(harness.config.timing.min_release_gap_us)
+            .expect("release-gap conversion");
         let required_down_floor = up_completion
-            .checked_add_duration(frame_ticks)
+            .checked_add_duration(release_gap_ticks)
             .expect("release floor arithmetic");
 
         let frame_offsets_before_pause = harness.prepared_frame_offsets_for_test();
@@ -473,7 +475,7 @@ fn lifecycle_late_up_empty_pause_resume_preserves_release_floor() {
             .prepared_physical_floor_for_test()
             .expect("post-cleanup Down floor");
         let expected_barrier = pause_at
-            .checked_add_duration(frame_ticks)
+            .checked_add_duration(release_gap_ticks)
             .expect("post-cleanup barrier arithmetic");
         assert_eq!(resume_floor.down_not_before_qpc, expected_barrier);
         harness.set_mock_sender_start_qpc_for_test(resume_floor.packet_not_before_qpc);
@@ -493,7 +495,7 @@ fn lifecycle_late_up_empty_pause_resume_preserves_release_floor() {
             .expect("resumed Down pre-call QPC");
         assert!(
             next_down_pre_call >= required_down_floor,
-            "resumed Down at {next_down_pre_call:?} preceded last Up completion plus one frame {required_down_floor:?} at {frequency_hz}Hz"
+            "resumed Down at {next_down_pre_call:?} preceded last Up completion plus G {required_down_floor:?} at {frequency_hz}Hz"
         );
     }
 }

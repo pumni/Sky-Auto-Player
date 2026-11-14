@@ -61,7 +61,7 @@ impl TimingModelAssumptions {
         WholeStreamModelConfig {
             qpc_frequency_hz: self.qpc_frequency_hz,
             effective_min_hold_us: policy.min_hold_us,
-            physical_release_gap_us: policy.frame_us,
+            physical_release_gap_us: policy.min_release_gap_us,
             estimated_sender_setup_us: self.sender_setup_us,
             estimated_per_input_us: self.per_input_us,
             estimated_post_send_us: self.post_send_us,
@@ -149,7 +149,7 @@ fn analyze_variant_with_assumptions_and_hook(
     }
     result.effective_hold_floor_h_us = Some(policy.min_hold_us);
     result.authored_release_gap_floor_g_us = Some(policy.min_release_gap_us);
-    result.physical_release_gap_floor_g_us = Some(policy.frame_us);
+    result.physical_release_gap_floor_g_us = Some(policy.min_release_gap_us);
     result.structural_same_key_cycle_minimum_us =
         policy.min_hold_us.checked_add(policy.min_release_gap_us);
     if schedule.actions.len() > MAX_TIMING_ADVISORY_ACTIONS {
@@ -317,13 +317,13 @@ fn validate_assumptions(
         .frame_base_hold_us
         .checked_add(policy.timing_margin_us)
         .ok_or_else(|| "The effective hold floor overflows.".to_string())?;
-    let expected_authored_gap = policy
+    let expected_release_gap = policy
         .frame_us
         .checked_add(policy.timing_margin_us)
         .ok_or_else(|| "The authored release gap overflows.".to_string())?;
     if policy.frame_us == 0
         || policy.min_hold_us != expected_hold
-        || policy.min_release_gap_us != expected_authored_gap
+        || policy.min_release_gap_us != expected_release_gap
     {
         return Err("The materialized H/G timing floors are inconsistent.".into());
     }
@@ -411,11 +411,11 @@ fn summarize_report(
                 .max_h_floor_displacement_us
                 .max(row.h_floor_displacement_ticks);
         }
-        if row.t_floor_displacement_ticks > 0 {
+        if row.g_floor_displacement_ticks > 0 {
             advisory.g_floor_displaced_packet_count += 1;
             advisory.max_g_floor_displacement_us = advisory
                 .max_g_floor_displacement_us
-                .max(row.t_floor_displacement_ticks);
+                .max(row.g_floor_displacement_ticks);
         }
         if row.hol_delay_lower_bound_ticks > 0 {
             advisory.head_of_line_packet_count += 1;
@@ -576,7 +576,7 @@ mod tests {
     fn supported_fps_hold_profiles_and_margin_edges_preserve_each_materialized_floor() {
         for fps in sky_app_core::settings::VALID_FPS {
             for hold_frames in sky_app_core::settings::HOLD_FRAME_OPTIONS {
-                for timing_margin_us in [0, sky_app_core::settings::MAX_TIMING_MARGIN_US] {
+                for timing_margin_us in [0, 500, sky_app_core::settings::MAX_TIMING_MARGIN_US] {
                     let config = PlaybackConfigDto {
                         fps,
                         hold_frames,
@@ -593,7 +593,7 @@ mod tests {
                     );
                     assert_eq!(
                         advisory.physical_release_gap_floor_g_us,
-                        Some(policy.frame_us)
+                        Some(policy.min_release_gap_us)
                     );
                     assert_eq!(
                         advisory.structural_same_key_cycle_minimum_us,
@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn near_floor_same_key_cycle_models_h_and_physical_g_without_changing_authored_actions() {
+    fn near_floor_same_key_cycle_models_h_and_g_without_changing_authored_actions() {
         let config = config(false);
         let policy = policy(&config);
         let cycle = policy
@@ -628,7 +628,10 @@ mod tests {
             first.authored_release_gap_floor_g_us,
             Some(policy.min_release_gap_us)
         );
-        assert_eq!(first.physical_release_gap_floor_g_us, Some(policy.frame_us));
+        assert_eq!(
+            first.physical_release_gap_floor_g_us,
+            Some(policy.min_release_gap_us)
+        );
         assert_eq!(
             first.structural_same_key_cycle_minimum_us,
             Some(policy.min_hold_us + policy.min_release_gap_us)

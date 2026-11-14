@@ -37,21 +37,21 @@ pub(crate) struct PhysicalTimingGuard {
     down_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
     resume_down_not_before_qpc: Option<QpcTicks>,
     effective_min_hold_ticks: DurationTicks,
-    frame_ticks: DurationTicks,
+    min_release_gap_ticks: DurationTicks,
     valid: bool,
 }
 
 impl PhysicalTimingGuard {
     pub(crate) const fn new(
         effective_min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
     ) -> Self {
         Self {
             musical_up_not_before_qpc: [None; MAX_KEYS],
             down_not_before_qpc: [None; MAX_KEYS],
             resume_down_not_before_qpc: None,
             effective_min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             valid: true,
         }
     }
@@ -79,7 +79,7 @@ impl PhysicalTimingGuard {
         &mut self,
         cleanup_completed_qpc: QpcTicks,
     ) -> Result<(), PhysicalTimingGuardError> {
-        let barrier = match cleanup_completed_qpc.checked_add_duration(self.frame_ticks) {
+        let barrier = match cleanup_completed_qpc.checked_add_duration(self.min_release_gap_ticks) {
             Ok(barrier) => barrier,
             Err(_) => {
                 self.invalidate();
@@ -109,7 +109,7 @@ impl PhysicalTimingGuard {
         Self::validate_packet_masks(up_mask, down_mask)?;
 
         let new_down_floor = if up_mask != 0 {
-            match completed_qpc.checked_add_duration(self.frame_ticks) {
+            match completed_qpc.checked_add_duration(self.min_release_gap_ticks) {
                 Ok(floor) => Some(floor),
                 Err(_) => {
                     self.invalidate();
@@ -261,17 +261,17 @@ mod tests {
     #[test]
     fn effective_min_hold_floor_is_applied_once_without_rebasing() {
         let key = bit(0);
-        let frame = DurationTicks::from_raw(16_667);
-        let authored_minimum_hold = DurationTicks::from_raw(17_167);
+        let min_release_gap = DurationTicks::from_raw(17_167);
+        let authored_minimum_hold = DurationTicks::from_raw(10_000);
 
-        let mut case_a = PhysicalTimingGuard::new(authored_minimum_hold, frame);
+        let mut case_a = PhysicalTimingGuard::new(authored_minimum_hold, min_release_gap);
         case_a
             .observe_successful_packet(qpc(100_300), 0, key)
             .unwrap();
         let authored_down = qpc(100_000);
-        let authored_up = qpc(117_167);
+        let authored_up = qpc(110_000);
         let window_a = case_a.query(authored_up, key, 0).unwrap();
-        let physical_up_floor = qpc(117_467);
+        let physical_up_floor = qpc(110_300);
         assert_eq!(
             qpc(100_300)
                 .checked_add_duration(authored_minimum_hold)
@@ -286,29 +286,29 @@ mod tests {
             authored_minimum_hold.as_u64()
         );
 
-        let mut case_b = PhysicalTimingGuard::new(authored_minimum_hold, frame);
+        let mut case_b = PhysicalTimingGuard::new(authored_minimum_hold, min_release_gap);
         case_b
             .observe_successful_packet(qpc(100_800), 0, key)
             .unwrap();
         let window_b = case_b.query(authored_up, key, 0).unwrap();
-        assert_eq!(window_b.musical_up_not_before_qpc, qpc(117_967));
-        assert_eq!(window_b.packet_not_before_qpc, qpc(117_967));
+        assert_eq!(window_b.musical_up_not_before_qpc, qpc(110_800));
+        assert_eq!(window_b.packet_not_before_qpc, qpc(110_800));
         assert_eq!(
             window_b.packet_not_before_qpc.as_u64() - authored_up.as_u64(),
             800
         );
 
-        let up_completion = qpc(117_467);
-        let mut case_c = PhysicalTimingGuard::new(authored_minimum_hold, frame);
+        let up_completion = qpc(110_300);
+        let mut case_c = PhysicalTimingGuard::new(authored_minimum_hold, min_release_gap);
         case_c
             .observe_successful_packet(up_completion, key, 0)
             .unwrap();
-        let next_down_authored = qpc(117_500);
+        let next_down_authored = qpc(110_333);
         let window_c = case_c.query(next_down_authored, 0, key).unwrap();
-        assert_eq!(window_c.down_not_before_qpc, qpc(134_134));
+        assert_eq!(window_c.down_not_before_qpc, qpc(127_467));
         assert_eq!(
             window_c.down_not_before_qpc.as_u64() - up_completion.as_u64(),
-            frame.as_u64()
+            min_release_gap.as_u64()
         );
         assert_ne!(
             window_c.down_not_before_qpc.as_u64() - up_completion.as_u64(),

@@ -54,17 +54,17 @@ pub(crate) struct ProductionHoldForensics {
     structural_anomaly_count: u64,
     timing_diagnostic_count: u64,
     effective_min_hold_ticks: u64,
-    frame_ticks: u64,
+    min_release_gap_ticks: u64,
 }
 
 impl ProductionHoldForensics {
-    pub(crate) fn set_frame_policies(
+    pub(crate) fn set_timing_policies(
         &mut self,
         effective_min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
     ) {
         self.effective_min_hold_ticks = effective_min_hold_ticks.as_u64();
-        self.frame_ticks = frame_ticks.as_u64();
+        self.min_release_gap_ticks = min_release_gap_ticks.as_u64();
     }
 
     pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
@@ -292,7 +292,7 @@ impl ProductionHoldForensics {
                             } else {
                                 self.min_down_start_after_up_completion_ticks.min(gap)
                             };
-                        if gap < self.frame_ticks {
+                        if gap < self.min_release_gap_ticks {
                             self.release_floor_violation_count =
                                 self.release_floor_violation_count.saturating_add(1);
                             self.record_anomaly(
@@ -391,7 +391,7 @@ impl ProductionHoldForensics {
             self.min_down_start_after_up_completion_ticks;
         metrics.production_release_floor_violation_count = self.release_floor_violation_count;
         metrics.production_hold_floor_ticks = self.effective_min_hold_ticks;
-        metrics.production_release_floor_ticks = self.frame_ticks;
+        metrics.production_release_floor_ticks = self.min_release_gap_ticks;
         metrics.production_same_key_overlap_forensics_count = self.same_key_overlap_forensics_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;
         metrics.production_unmatched_up_count = self.unmatched_up_count;

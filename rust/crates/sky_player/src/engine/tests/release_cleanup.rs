@@ -51,16 +51,16 @@ fn lifecycle_active_cleanup_barrier_starts_after_verified_safety_up() {
     assert_eq!(packets.lock().expect("packet capture").len(), 1);
 
     let sample = QpcTicks::from_raw(post_cleanup_sample.load(Ordering::Acquire));
-    let frame_ticks = qpc_clock
-        .duration_from_us(16_667)
-        .expect("frame conversion");
+    let release_gap_ticks = qpc_clock
+        .duration_from_us(harness.config.timing.min_release_gap_us)
+        .expect("release-gap conversion");
     let barrier = sample
-        .checked_add_duration(frame_ticks)
+        .checked_add_duration(release_gap_ticks)
         .expect("post-cleanup barrier arithmetic");
     assert_eq!(
         harness.down_floor_for_test(QpcTicks::ZERO, 1),
         Some(barrier),
-        "every later Down must start no earlier than fresh cleanup QPC plus one frame"
+        "every later Down must start no earlier than cleanup completion plus G"
     );
 }
 
@@ -194,14 +194,16 @@ fn focus_restoration_is_resumable_while_system_suspend_is_terminal() {
     focus
         .restore_focus_for_test(focus_restore)
         .expect("focus restore verified cleanup");
-    let frame_ticks = qpc_clock.duration_from_us(16_667).expect("frame ticks");
+    let release_gap_ticks = qpc_clock
+        .duration_from_us(focus.config.timing.min_release_gap_us)
+        .expect("release-gap ticks");
     let focus_floor = focus
         .down_floor_for_test(QpcTicks::ZERO, 1)
         .expect("focus restore barrier");
     assert!(
         focus_floor
             >= focus_restore
-                .checked_add_duration(frame_ticks)
+                .checked_add_duration(release_gap_ticks)
                 .expect("focus barrier arithmetic"),
         "focus restoration must use the shared post-cleanup barrier"
     );
@@ -640,13 +642,13 @@ fn terminal_release_precedes_million_generation_scheduler_audit_and_publication(
         compile_memory: Default::default(),
     };
     let qpc_clock = harness.resources.clock;
-    let frame_ticks = qpc_clock
-        .duration_from_us(16_667)
-        .expect("million-generation scheduler frame");
+    let min_release_gap_ticks = qpc_clock
+        .duration_from_us(harness.config.timing.min_release_gap_us)
+        .expect("million-generation scheduler release gap");
     harness.resources.scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
         &schedule,
         DurationTicks::ZERO,
-        frame_ticks,
+        min_release_gap_ticks,
         |us| Ok::<_, String>(TimelineTicks::from_raw(us)),
     )
     .expect("million-generation scheduler");

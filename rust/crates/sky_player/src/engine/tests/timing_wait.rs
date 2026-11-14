@@ -570,10 +570,17 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
     let backend = TrackedKeyState::with_qpc_clock(qpc_clock);
     let schedule = startup_boundary_schedule();
     let min_hold_ticks = qpc_clock.duration_from_us(10_000).expect("min hold ticks");
+    let min_release_gap_ticks = qpc_clock
+        .duration_from_us(
+            crate::engine::WorkerConfig::default()
+                .timing
+                .min_release_gap_us,
+        )
+        .expect("minimum release-gap ticks");
     let scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
         &schedule,
         min_hold_ticks,
-        qpc_clock.duration_from_us(16_667).expect("frame ticks"),
+        min_release_gap_ticks,
         |us| {
             qpc_clock
                 .timeline_from_us(us)

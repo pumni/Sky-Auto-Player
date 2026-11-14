@@ -41,7 +41,7 @@ pub struct ModelPacket {
 pub struct WholeStreamModelConfig {
     pub qpc_frequency_hz: u64,
     pub effective_min_hold_us: u64,
-    /// Physical same-key Up-completion to next-Down floor (one frame).
+    /// Physical same-key Up-completion to next-Down floor G.
     pub physical_release_gap_us: u64,
     pub estimated_sender_setup_us: u64,
     pub estimated_per_input_us: u64,
@@ -67,12 +67,12 @@ pub struct WholeStreamPacketEstimate {
     pub modeled_sender_completion_ticks: Option<u64>,
     pub modeled_worker_free_ticks: u64,
     pub h_floor_displacement_ticks: u64,
-    pub t_floor_displacement_ticks: u64,
+    pub g_floor_displacement_ticks: u64,
     pub resume_floor_displacement_ticks: u64,
     pub total_floor_displacement_ticks: u64,
     pub hol_delay_lower_bound_ticks: u64,
     pub modeled_lateness_ticks: u64,
-    /// `authored_target - max(H/T/resume/previous-worker constraints)`.
+    /// `authored_target - max(H/G/resume/previous-worker constraints)`.
     /// Negative values predict a late boundary under these assumptions.
     pub signed_slack_ticks: i64,
     pub slack_class: SlackClass,
@@ -172,7 +172,7 @@ fn analyze_whole_stream_inner(
         return Err(WholeStreamModelError::ZeroQpcFrequency);
     }
     let h_ticks = us_to_ticks_ceil(config.effective_min_hold_us, config.qpc_frequency_hz)?;
-    let t_ticks = us_to_ticks_ceil(config.physical_release_gap_us, config.qpc_frequency_hz)?;
+    let g_ticks = us_to_ticks_ceil(config.physical_release_gap_us, config.qpc_frequency_hz)?;
     let setup_ticks = us_to_ticks_ceil(config.estimated_sender_setup_us, config.qpc_frequency_hz)?;
     let input_ticks = us_to_ticks_ceil(config.estimated_per_input_us, config.qpc_frequency_hz)?;
     let post_send_ticks = us_to_ticks_ceil(config.estimated_post_send_us, config.qpc_frequency_hz)?;
@@ -180,7 +180,7 @@ fn analyze_whole_stream_inner(
         us_to_ticks_ceil(config.estimated_metadata_cost_us, config.qpc_frequency_hz)?;
 
     let mut h_not_before = [None; INSTRUMENT_SLOT_COUNT];
-    let mut t_not_before = [None; INSTRUMENT_SLOT_COUNT];
+    let mut g_not_before = [None; INSTRUMENT_SLOT_COUNT];
     let mut previous_worker_free: Option<u64> = None;
     let mut rows = Vec::with_capacity(packets.len());
     let mut positive_slack_count = 0u64;
@@ -216,7 +216,7 @@ fn analyze_whole_stream_inner(
         }
 
         let mut h_floor: Option<u64> = None;
-        let mut t_floor: Option<u64> = None;
+        let mut g_floor: Option<u64> = None;
         if packet.up_mask != 0 {
             let mut mask = packet.up_mask;
             while mask != 0 {
@@ -230,7 +230,7 @@ fn analyze_whole_stream_inner(
             while mask != 0 {
                 let slot = mask.trailing_zeros() as usize;
                 mask &= mask - 1;
-                t_floor = Some(t_floor.unwrap_or(0).max(t_not_before[slot].unwrap_or(0)));
+                g_floor = Some(g_floor.unwrap_or(0).max(g_not_before[slot].unwrap_or(0)));
             }
         }
         let resume_floor = if packet.down_mask != 0 {
@@ -241,11 +241,11 @@ fn analyze_whole_stream_inner(
         let floor_ready = packet
             .authored_target_ticks
             .max(h_floor.unwrap_or(packet.authored_target_ticks))
-            .max(t_floor.unwrap_or(packet.authored_target_ticks))
+            .max(g_floor.unwrap_or(packet.authored_target_ticks))
             .max(resume_floor.unwrap_or(packet.authored_target_ticks));
         let constraint_ready = h_floor
             .unwrap_or(0)
-            .max(t_floor.unwrap_or(0))
+            .max(g_floor.unwrap_or(0))
             .max(resume_floor.unwrap_or(0))
             .max(previous_worker_free.unwrap_or(0));
         let ready = packet.authored_target_ticks.max(constraint_ready);
@@ -272,7 +272,7 @@ fn analyze_whole_stream_inner(
         let h_displacement = h_floor
             .map(|floor| floor.max(packet.authored_target_ticks) - packet.authored_target_ticks)
             .unwrap_or(0);
-        let t_displacement = t_floor
+        let g_displacement = g_floor
             .map(|floor| floor.max(packet.authored_target_ticks) - packet.authored_target_ticks)
             .unwrap_or(0);
         let resume_displacement = resume_floor
@@ -310,10 +310,10 @@ fn analyze_whole_stream_inner(
             // SendInput observes one packet completion, not per-key event
             // completions. The production guard applies that same completion
             // to every member and replaces the opposite-direction floor.
-            let next_t_floor = if packet.up_mask != 0 {
+            let next_g_floor = if packet.up_mask != 0 {
                 Some(
                     sender_completion
-                        .checked_add(t_ticks)
+                        .checked_add(g_ticks)
                         .ok_or(WholeStreamModelError::ArithmeticOverflow)?,
                 )
             } else {
@@ -334,13 +334,13 @@ fn analyze_whole_stream_inner(
                 let slot = up_mask.trailing_zeros() as usize;
                 up_mask &= up_mask - 1;
                 h_not_before[slot] = None;
-                t_not_before[slot] = next_t_floor;
+                g_not_before[slot] = next_g_floor;
             }
             let mut down_mask = packet.down_mask;
             while down_mask != 0 {
                 let slot = down_mask.trailing_zeros() as usize;
                 down_mask &= down_mask - 1;
-                t_not_before[slot] = None;
+                g_not_before[slot] = None;
                 h_not_before[slot] = next_h_floor;
             }
             (Some(sender_completion), worker_free)
@@ -359,7 +359,7 @@ fn analyze_whole_stream_inner(
             modeled_sender_completion_ticks: sender_completion,
             modeled_worker_free_ticks: worker_free,
             h_floor_displacement_ticks: h_displacement,
-            t_floor_displacement_ticks: t_displacement,
+            g_floor_displacement_ticks: g_displacement,
             resume_floor_displacement_ticks: resume_displacement,
             total_floor_displacement_ticks: total_floor_displacement,
             hol_delay_lower_bound_ticks: hol_delay,
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_repeat_chain_reports_h_and_t_floor_displacement_and_signed_slack() {
+    fn golden_repeat_chain_reports_h_and_g_floor_displacement_and_signed_slack() {
         let report = analyze_whole_stream(
             &[
                 physical(0, 0, 1),
@@ -585,7 +585,7 @@ mod tests {
             [0, 11, 16, 27]
         );
         assert_eq!(report.packets[1].h_floor_displacement_ticks, 1);
-        assert_eq!(report.packets[2].t_floor_displacement_ticks, 2);
+        assert_eq!(report.packets[2].g_floor_displacement_ticks, 2);
         assert_eq!(report.packets[2].signed_slack_ticks, -2);
         assert_eq!(report.packets[2].slack_class, SlackClass::Negative);
         assert_eq!(report.negative_slack_count, 3);
@@ -598,6 +598,59 @@ mod tests {
             }
         );
         assert!(!report.guarantee);
+    }
+
+    #[test]
+    fn dispatch_schedule_uses_ceil_converted_g_at_non_divisible_qpc_frequency() {
+        let actions = [
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "first down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 17_167,
+                scan_codes: vec![0x15].into(),
+                reason: "first up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 34_334,
+                scan_codes: vec![0x15].into(),
+                reason: "repeated down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 51_501,
+                scan_codes: vec![0x15].into(),
+                reason: "repeated up".into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &[0x15]).expect("repeat schedule");
+        let config = WholeStreamModelConfig {
+            qpc_frequency_hz: 1_000_003,
+            effective_min_hold_us: 17_167,
+            physical_release_gap_us: 17_167,
+            estimated_sender_setup_us: 0,
+            estimated_per_input_us: 0,
+            estimated_post_send_us: 0,
+            estimated_metadata_cost_us: 0,
+            resume_down_barrier_ticks: None,
+        };
+        let report =
+            analyze_dispatch_schedule_cancellable(&schedule, config, &AtomicBool::new(false))
+                .expect("QPC-quantized production schedule model");
+
+        let repeated_down = &report.packets[2];
+        assert_eq!(repeated_down.authored_target_ticks, 34_335);
+        assert_eq!(repeated_down.modeled_ready_ticks, 34_336);
+        assert_eq!(repeated_down.g_floor_displacement_ticks, 1);
     }
 
     #[test]
@@ -625,7 +678,7 @@ mod tests {
         assert_eq!(report.packets[0].modeled_sender_completion_ticks, Some(8));
         assert_eq!(report.packets[1].authored_target_ticks, 1_000_000);
         assert_eq!(report.packets[1].modeled_ready_ticks, 1_000_000);
-        assert_eq!(report.packets[1].t_floor_displacement_ticks, 0);
+        assert_eq!(report.packets[1].g_floor_displacement_ticks, 0);
         assert_eq!(report.packets[1].signed_slack_ticks, 999_988);
         assert_eq!(report.positive_slack_count, 1);
     }

@@ -86,20 +86,27 @@ game frame rate and user-configured timing margin:
 | --- | --- | --- |
 | Frame Interval ($T$) | Single frame duration | $\lceil 1{,}000{,}000 / \text{FPS} \rceil\ \mu\text{s}$ |
 | Hold Floor ($H$) | Minimum key-down duration | $\lceil \text{hold\_frames} \times T \rceil + \text{margin}\ \mu\text{s}$ |
-| Release Gap ($G$) | Physical same-key retrigger floor | $T\ \mu\text{s}$ |
-| Authored Gap | Authored spacing between notes | $T + \text{margin}\ \mu\text{s}$ |
+| Release Gap ($G$) | Authored and physical same-key retrigger floor | $T + \text{margin}\ \mu\text{s}$ |
+| Authored Gap | Minimum authored spacing between repeated notes | $G\ \mu\text{s}$ |
 | Structural Cycle Floor | Minimum same-key cycle | $H + G$ |
 
-Here $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$ microseconds and
-$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$.
+Here $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$ microseconds,
+$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$, and
+$G = T + \text{margin}$.
 
 - **Hold floor ($H$):** Sender policy: Up is not eligible before the later of
   authored Up time and successful Down completion plus $H$.
-- **Release floor ($G$):** Sender policy: same-key Down is not eligible before
-  successful Up completion plus $G$. These floors do not guarantee which frame
-  the game samples; Windows and game sampling are independent.
-- **Timing margin:** Protects against host scheduling jitter and Windows timer
-  granularity variations.
+- **Release floor ($G$):** Authored repeat spacing and sender policy use the same
+  value. A same-key Down is not eligible before successful Up completion plus
+  $G$. These sender-side floors do not guarantee which frame the game samples;
+  Windows and game sampling are independent.
+- **Timing margin:** Extends both $H$ and $G$ at the sender boundary. Sender
+  setup, per-input cost, and post-send cost remain separate advisory estimates.
+  For example, at 60 FPS with 1.0 hold frame and a 500 µs margin, $T$ is
+  16,667 µs and both $H$ and $G$ are 17,167 µs. At 120 FPS they are each
+  8,834 µs. The game does not acknowledge `SendInput`; sender completion alone
+  cannot attribute a missing game note. Without an operator-controlled real
+  sheet and mapped note position, gameplay evidence remains inconclusive.
 
 ## Final Down Admission and Safety Boundary
 

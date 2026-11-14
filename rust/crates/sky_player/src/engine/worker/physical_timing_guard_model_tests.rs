@@ -30,13 +30,13 @@ fn assert_model_matches_production_guard(
             .expect("test release conversion"),
     );
     if let Some(barrier) = config.resume_down_barrier_ticks {
-        let frame = clock
+        let release_gap = clock
             .duration_from_us(config.physical_release_gap_us)
-            .expect("test frame conversion")
+            .expect("test release-gap conversion")
             .as_u64();
         let cleanup_completed = barrier
-            .checked_sub(frame)
-            .expect("test barrier includes one frame");
+            .checked_sub(release_gap)
+            .expect("test barrier includes G");
         guard
             .establish_resume_down_barrier(qpc(cleanup_completed))
             .expect("test resume barrier");

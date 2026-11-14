@@ -36,11 +36,20 @@ fn lifecycle_fixture_admission_and_config_metadata_match_native_contract() {
         assert_eq!(config.effective_hold_us, DISPATCH_EFFECTIVE_HOLD_US);
         assert_eq!(config.min_release_gap_us, DISPATCH_RELEASE_GAP_US);
         assert_eq!(
-            config.frame_ticks,
+            config.frame_interval_ticks,
             fixture
                 .resources
                 .clock
                 .duration_from_us(DISPATCH_FRAME_US)
+                .unwrap()
+                .as_u64()
+        );
+        assert_eq!(
+            config.min_release_gap_ticks,
+            fixture
+                .resources
+                .clock
+                .duration_from_us(DISPATCH_RELEASE_GAP_US)
                 .unwrap()
                 .as_u64()
         );
@@ -381,7 +390,11 @@ fn lifecycle_not_due_dispatch_preserves_sender_cursor_and_generation_until_floor
 
     let released_at = evidence_completion_for_harness(&packets, 1);
     let expected_floor = released_at
-        .checked_add_duration(clock.duration_from_us(DISPATCH_FRAME_US).unwrap())
+        .checked_add_duration(
+            clock
+                .duration_from_us(harness.config.timing.min_release_gap_us)
+                .unwrap(),
+        )
         .expect("release floor");
     let floor_evidence = harness
         .prepared_physical_floor_for_test()

@@ -464,11 +464,11 @@ impl WorkerRuntime {
     pub(crate) fn set_physical_timing_guard_for_test(
         &mut self,
         effective_min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
     ) {
         self.physical_timing_guard = Some(physical_timing_guard::PhysicalTimingGuard::new(
             effective_min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
         ));
     }
 

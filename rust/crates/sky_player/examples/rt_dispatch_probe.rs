@@ -712,7 +712,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     } else {
         vec![0, 17_167, 34_334, 51_501]
     };
-    let frame_ticks = duration_ticks(clock, FRAME_US)?;
+    let min_release_gap_ticks = duration_ticks(clock, FRAME_US + MARGIN_US)?;
 
     // The negative control observes the same prepared next Down without a
     // pause transition and must hold at 118,300 us until its physical floor.
@@ -735,7 +735,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let no_pause_obligation_after = no_pause.harness.release_obligation_mask_for_test();
     let no_pause_completion_floor = no_pause
         .up_completion
-        .checked_add_duration(frame_ticks)
+        .checked_add_duration(min_release_gap_ticks)
         .map_err(|error| format!("no-pause release floor overflow: {error}"))?;
 
     // Repeat the prefix and perform the real manual pause/resume transition.
@@ -838,7 +838,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let next_down_completion = evidence_completion(&lifecycle.packets, 2)?;
     let required_down_floor = lifecycle
         .up_completion
-        .checked_add_duration(frame_ticks)
+        .checked_add_duration(min_release_gap_ticks)
         .map_err(|error| format!("release floor overflow: {error}"))?;
 
     let final_up_floor = lifecycle.harness.prepared_physical_floor_for_test()?;
@@ -901,7 +901,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
             "effective_hold_h_us": config.effective_hold_us,
             "effective_hold_h_ticks": config.effective_hold_ticks,
             "same_key_gap_g_us": config.frame_us,
-            "same_key_gap_g_ticks": config.frame_ticks,
+            "same_key_gap_g_ticks": config.min_release_gap_ticks,
             "timing_margin_us": config.timing_margin_us,
             "timing_margin_ticks": config.timing_margin_ticks,
             "min_release_gap_us": config.min_release_gap_us,
@@ -1004,8 +1004,8 @@ fn run_hol_vector() -> Result<Value, String> {
         "status": "CHARACTERIZATION_ONLY",
         "qpc_frequency_hz": frequency_hz,
         "timing_config": {
-            "frame_gap_g_us": timing_config.frame_us,
-            "frame_gap_g_ticks": timing_config.frame_ticks,
+            "frame_gap_g_us": timing_config.min_release_gap_us,
+            "frame_gap_g_ticks": timing_config.min_release_gap_ticks,
             "frame_base_hold_us": timing_config.frame_base_hold_us,
             "timing_margin_us": timing_config.timing_margin_us,
             "timing_margin_ticks": timing_config.timing_margin_ticks,
@@ -2183,8 +2183,8 @@ fn precision_report(
         "pre_call_unavailable_sample_count":pre_call_unavailable_samples,
         "packet_shape":workload_shape(workload.kind),
         "dispatch_timing_config": {
-            "frame_gap_g_us":config.frame_us,
-            "frame_gap_g_ticks":config.frame_ticks,
+            "frame_gap_g_us":config.min_release_gap_us,
+            "frame_gap_g_ticks":config.min_release_gap_ticks,
             "frame_base_hold_us":config.frame_base_hold_us,
             "timing_margin_us":config.timing_margin_us,
             "timing_margin_ticks":config.timing_margin_ticks,
@@ -2218,7 +2218,7 @@ fn precision_report(
             "released_generations":released,
             "cancelled_generations":cancelled,
             "final_release_obligation_mask":final_release_obligation_mask,
-            "frame_gap_g_us":FRAME_US,
+            "frame_gap_g_us":FRAME_US + MARGIN_US,
             "effective_hold_h_us":HOLD_US,
             "timing_margin_us":MARGIN_US
         },

@@ -53,7 +53,7 @@ fn dispatch_cost_qualification() {
         let mut builder_guard = make_guard();
         let mut measured_guard = make_guard();
         let mut forensics = ProductionHoldForensics::default();
-        forensics.set_frame_policies(
+        forensics.set_timing_policies(
             DurationTicks::from_raw(HOLD_TICKS),
             DurationTicks::from_raw(RELEASE_TICKS),
         );

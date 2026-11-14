@@ -76,7 +76,7 @@ pub struct PhysicalFloorEvidence {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchTimingConfigEvidence {
     pub frame_us: u64,
-    pub frame_ticks: u64,
+    pub frame_interval_ticks: u64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
     pub timing_margin_ticks: u64,
@@ -534,15 +534,15 @@ impl ProductionDispatchTestHarness {
         let hold_ticks = clock
             .duration_from_us(effective_hold_us)
             .map_err(|error| format!("dispatch effective hold conversion: {error:?}"))?;
-        let frame_ticks = clock
-            .duration_from_us(frame_us)
-            .map_err(|error| format!("dispatch frame conversion: {error:?}"))?;
+        let release_gap_ticks = clock
+            .duration_from_us(min_release_gap_us)
+            .map_err(|error| format!("dispatch release-gap conversion: {error:?}"))?;
         let margin_ticks = clock
             .duration_from_us(timing_margin_us)
             .map_err(|error| format!("dispatch margin conversion: {error:?}"))?;
         self.timing.timing_margin_ticks = margin_ticks;
         self.runtime
-            .set_physical_timing_guard_for_test(hold_ticks, frame_ticks);
+            .set_physical_timing_guard_for_test(hold_ticks, release_gap_ticks);
 
         let mut scan_codes: Vec<u16> = actions
             .iter()
@@ -559,13 +559,23 @@ impl ProductionDispatchTestHarness {
             self.config.timing.min_release_gap_us,
             clock,
         )?;
+        self.resources.scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
+            &schedule,
+            hold_ticks,
+            release_gap_ticks,
+            |microseconds| {
+                clock
+                    .timeline_from_us(microseconds)
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )?;
         self.native_admission_passed = true;
         Ok(())
     }
 
     pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {
         let clock = self.resources.clock;
-        let frame_ticks = clock
+        let frame_interval_ticks = clock
             .duration_from_us(self.config.timing.frame_us)
             .map_err(|error| format!("dispatch frame metadata conversion: {error:?}"))?;
         let margin_ticks = clock
@@ -579,7 +589,7 @@ impl ProductionDispatchTestHarness {
             .map_err(|error| format!("dispatch release-gap metadata conversion: {error:?}"))?;
         Ok(DispatchTimingConfigEvidence {
             frame_us: self.config.timing.frame_us,
-            frame_ticks: frame_ticks.as_u64(),
+            frame_interval_ticks: frame_interval_ticks.as_u64(),
             frame_base_hold_us: self.config.timing.frame_base_hold_us,
             timing_margin_us: self.config.timing.timing_margin_us,
             timing_margin_ticks: margin_ticks.as_u64(),
@@ -1554,13 +1564,13 @@ impl ProductionDispatchTestHarness {
         } else {
             min_hold_ticks
         };
-        let frame_ticks = qpc_clock
-            .duration_from_us(16_667)
-            .expect("test frame conversion");
+        let min_release_gap_ticks = qpc_clock
+            .duration_from_us(WorkerConfig::default().timing.min_release_gap_us)
+            .expect("test release-gap conversion");
         let scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
             &schedule,
             effective_min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             |us| {
                 qpc_clock
                     .timeline_from_us(us)
@@ -1650,7 +1660,9 @@ impl ProductionDispatchTestHarness {
         }));
         runtime.set_physical_timing_guard_for_test(
             effective_min_hold_ticks,
-            qpc_clock.duration_from_us(16_667).expect("test frame"),
+            qpc_clock
+                .duration_from_us(WorkerConfig::default().timing.min_release_gap_us)
+                .expect("test release gap"),
         );
         Self {
             config: WorkerConfig::default(),

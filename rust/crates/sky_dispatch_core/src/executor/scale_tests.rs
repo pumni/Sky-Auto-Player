@@ -54,8 +54,9 @@ fn generate_scale_schedule(
 
 fn execute_scale_scenario(schedule: &RuntimeSchedule) {
     let min_hold = DurationTicks::from_raw(20_000); // 20 ms
-    let frame_time = DurationTicks::from_raw(16_000); // 16 ms
-    let mut executor = DispatchExecutor::new(schedule, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // 16 ms
+    let mut executor =
+        DispatchExecutor::new(schedule, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     let mut sim_time = TimelineTicks::ZERO;
     let mut steps = 0usize;
@@ -289,7 +290,7 @@ fn next_stale_packet_target_ticks_reports_target_and_corruption() {
 #[test]
 fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
     // Parameters from Leader L9:
-    // GameFps = 60, TimingMarginUs = 500, T = 16_667 us, H = 2*T + 500 = 33_834 us.
+    // GameFps = 60, TimingMarginUs = 500, T = 16_667 us, H = 2*T + 500 = 33_834 us, G = 17_167 us.
     // Repeating cycle every 100_000 us, starting at 50_000 us:
     // Key A Down @ 50_000 us (slot 0)
     // Key A Up   @ 84_000 us (slot 0, hold = 34_000 us >= H)
@@ -334,8 +335,9 @@ fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
 
     let sched = compile_runtime_intents(&actions, &allowed).expect("valid schedule");
     let min_hold = DurationTicks::from_raw(33_834);
-    let frame_time = DurationTicks::from_raw(16_667);
-    let mut exec = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(17_167);
+    let mut exec =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 1. At 50_000 us: Key A Down is evaluated and returned for dispatch.
     let step_a_down = exec.evaluate(TimelineTicks::from_raw(50_000));

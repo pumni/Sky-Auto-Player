@@ -54,14 +54,13 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
         advisory.authored_release_gap_floor_g_us !== null &&
         advisory.physical_release_gap_floor_g_us !== null && (
           <span>
-            H {advisory.effective_hold_floor_h_us} µs · authored G{' '}
-            {advisory.authored_release_gap_floor_g_us} µs · physical G{' '}
+            H floor {advisory.effective_hold_floor_h_us} µs · G floor (authored and physical){' '}
             {advisory.physical_release_gap_floor_g_us} µs
           </span>
         )}
       {advisory.structural_same_key_cycle_minimum_us !== null && (
         <span>
-          Same-key authored cycle floor (H + authored G):{' '}
+          Same-key structural cycle floor (H + G):{' '}
           {advisory.structural_same_key_cycle_minimum_us} µs
         </span>
       )}

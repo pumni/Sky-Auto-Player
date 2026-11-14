@@ -1,8 +1,11 @@
 use super::startup_admission::{startup_probe_deadline, validate_production_wait_backend};
+use super::timing_admission::convert;
 use crate::engine::WaitOptions;
+use crate::engine::config::{EffectiveRuntimePolicy, WorkerConfig};
 use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::QpcTicks;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::wait::WaitFailure;
+use std::num::NonZeroU64;
 
 fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions {
     WaitOptions {
@@ -92,5 +95,33 @@ fn calibration_deadline_overflow_fails_closed() {
     assert_eq!(
         startup_probe_deadline(initial_now, calibration_budget),
         None
+    );
+}
+
+#[test]
+fn timing_admission_converts_materialized_g_with_ceil_in_odd_qpc_domain() {
+    let mut config = WorkerConfig::default();
+    config.timing.frame_us = 16_667;
+    config.timing.frame_base_hold_us = 16_667;
+    config.timing.timing_margin_us = 500;
+    config.timing.min_hold_us = 17_167;
+    config.timing.min_release_gap_us = 17_167;
+    let clock = QpcClock::from_frequency_hz(NonZeroU64::new(3_579_545).expect("QPC frequency"));
+    let effective_policy = EffectiveRuntimePolicy::for_worker(&config);
+
+    let converted = convert(&config, clock, &effective_policy).expect("converted policy");
+    assert_eq!(
+        converted.min_release_gap_ticks,
+        clock.duration_from_us(17_167).expect("ceil G conversion")
+    );
+    assert_eq!(
+        converted.min_hold_ticks,
+        clock.duration_from_us(17_167).expect("ceil H conversion")
+    );
+    assert_ne!(
+        converted.min_release_gap_ticks,
+        clock
+            .duration_from_us(config.timing.frame_us)
+            .expect("T conversion")
     );
 }

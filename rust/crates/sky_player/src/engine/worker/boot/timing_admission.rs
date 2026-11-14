@@ -4,7 +4,7 @@ use crate::engine::{DurationTicks, PAUSED_POLL_US, QpcClock};
 
 pub(super) struct ConvertedTiming {
     pub(super) min_hold_ticks: DurationTicks,
-    pub(super) frame_ticks: DurationTicks,
+    pub(super) min_release_gap_ticks: DurationTicks,
     pub(super) worker_timing: WorkerTimingState,
 }
 
@@ -19,9 +19,9 @@ pub(super) fn convert(
     let min_hold_ticks = qpc_clock
         .duration_from_us(effective_min_hold_us)
         .map_err(|error| format!("min-hold conversion failed: {error:?}"))?;
-    let frame_ticks = qpc_clock
-        .duration_from_us(config.timing.frame_us)
-        .map_err(|error| format!("frame-gap conversion failed: {error:?}"))?;
+    let min_release_gap_ticks = qpc_clock
+        .duration_from_us(config.timing.min_release_gap_us)
+        .map_err(|error| format!("minimum release-gap conversion failed: {error:?}"))?;
     let timing_margin_ticks = qpc_clock
         .duration_from_us(config.timing.timing_margin_us)
         .map_err(|error| format!("timing-margin conversion failed: {error:?}"))?;
@@ -73,7 +73,7 @@ pub(super) fn convert(
 
     Ok(ConvertedTiming {
         min_hold_ticks,
-        frame_ticks,
+        min_release_gap_ticks,
         worker_timing: WorkerTimingState {
             strict_timing: effective_policy.strict_failure_policy,
             timing_margin_ticks,

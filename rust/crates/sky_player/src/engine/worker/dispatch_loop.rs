@@ -2021,16 +2021,16 @@ mod tests {
 
     fn set_zero_timing_margin(harness: &mut ProductionDispatchTestHarness) {
         let clock = harness.resources.clock;
-        let frame = clock
-            .duration_from_us(harness.config.timing.frame_us)
-            .expect("frame duration");
+        let release_gap = clock
+            .duration_from_us(harness.config.timing.min_release_gap_us)
+            .expect("release-gap duration");
         let base_hold = clock
             .duration_from_us(harness.config.timing.frame_base_hold_us)
             .expect("base hold duration");
         harness.timing.timing_margin_ticks = DurationTicks::ZERO;
         harness
             .runtime
-            .set_physical_timing_guard_for_test(base_hold, frame);
+            .set_physical_timing_guard_for_test(base_hold, release_gap);
     }
 
     #[test]
@@ -2506,7 +2506,9 @@ mod tests {
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
         let clock = harness.resources.clock;
-        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let release_gap = clock
+            .duration_from_us(harness.config.timing.min_release_gap_us)
+            .expect("release-gap ticks");
         let beyond_authored_target = harness
             .timing
             .timing_margin_ticks
@@ -2517,7 +2519,7 @@ mod tests {
             .expect("release floor");
         let completed_up = release_floor
             .as_u64()
-            .checked_sub(frame.as_u64())
+            .checked_sub(release_gap.as_u64())
             .map(QpcTicks::from_raw)
             .expect("prior Up completion");
         harness
@@ -2954,7 +2956,13 @@ mod tests {
             .physical_floor_evidence_for_test(&mixed)
             .expect("mixed physical timing window");
         let release_floor = just_before_mixed
-            .checked_add_duration(harness.resources.clock.duration_from_us(16_667).unwrap())
+            .checked_add_duration(
+                harness
+                    .resources
+                    .clock
+                    .duration_from_us(harness.config.timing.min_release_gap_us)
+                    .unwrap(),
+            )
             .expect("mixed release floor");
         assert_eq!(
             window.down_not_before_qpc, release_floor,
@@ -3230,14 +3238,16 @@ mod tests {
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
         let clock = harness.resources.clock;
-        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let release_gap = clock
+            .duration_from_us(harness.config.timing.min_release_gap_us)
+            .expect("release-gap ticks");
         let inside_margin = clock.duration_from_us(250).expect("inside margin");
         let release_floor = target
             .checked_add_duration(inside_margin)
             .expect("release floor");
         let completed_up = release_floor
             .as_u64()
-            .checked_sub(frame.as_u64())
+            .checked_sub(release_gap.as_u64())
             .map(QpcTicks::from_raw)
             .expect("prior Up completion");
         harness
@@ -3279,13 +3289,15 @@ mod tests {
         let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
         let packets = harness.configure_packet_capture();
         let clock = harness.resources.clock;
-        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let release_gap = clock
+            .duration_from_us(harness.config.timing.min_release_gap_us)
+            .expect("release-gap ticks");
         let base_hold = clock.duration_from_us(10_000).expect("base hold ticks");
         let margin = clock.duration_from_us(20_000).expect("timing margin");
         harness.timing.timing_margin_ticks = margin;
         harness
             .runtime
-            .set_physical_timing_guard_for_test(base_hold, frame);
+            .set_physical_timing_guard_for_test(base_hold, release_gap);
         harness.align_next_plan_to_benchmark_margin_for_test(5_000);
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
@@ -3295,7 +3307,7 @@ mod tests {
         let completed_up = QpcTicks::from_raw(
             release_floor
                 .as_u64()
-                .checked_sub(frame.as_u64())
+                .checked_sub(release_gap.as_u64())
                 .expect("prior Up completion"),
         );
         harness
@@ -3340,7 +3352,9 @@ mod tests {
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
         let clock = harness.resources.clock;
-        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let release_gap = clock
+            .duration_from_us(harness.config.timing.min_release_gap_us)
+            .expect("release-gap ticks");
         let beyond_authored_target = harness
             .timing
             .timing_margin_ticks
@@ -3351,7 +3365,7 @@ mod tests {
             .expect("release floor");
         let completed_up = release_floor
             .as_u64()
-            .checked_sub(frame.as_u64())
+            .checked_sub(release_gap.as_u64())
             .map(QpcTicks::from_raw)
             .expect("prior Up completion");
         harness

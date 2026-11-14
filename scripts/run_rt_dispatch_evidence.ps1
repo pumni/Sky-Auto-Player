@@ -1039,7 +1039,7 @@ try {
             }
         }
         if ($contractReport.test_vectors.C_serial_HOL.timing_config.native_admission -ne 'PASS' -or
-            $contractReport.test_vectors.C_serial_HOL.timing_config.frame_gap_g_us -ne 16667 -or
+            $contractReport.test_vectors.C_serial_HOL.timing_config.frame_gap_g_us -ne 17167 -or
             $contractReport.test_vectors.C_serial_HOL.timing_config.effective_hold_h_us -ne 17167 -or
             $contractReport.test_vectors.C_serial_HOL.timing_config.min_release_gap_us -ne 17167 -or
             $contractReport.test_vectors.D_focus_loss_policy.restore_path.release_on_restore -ne $true) {
@@ -1435,7 +1435,7 @@ try {
                                 $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
                                 $precisionRun = @($report.test_vectors.precision_runs)[0]
                                 $expectedSetupRefreshes = if ($workload.StartsWith('mixed-') -or $workload.StartsWith('up-only-')) { 11000 } else { 0 }
-                                $expectedFrameTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 16667 / 1000000)
+                                $expectedReleaseGapTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 17167 / 1000000)
                                 $expectedMarginTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 500 / 1000000)
                                 $expectedHoldTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 17167 / 1000000)
                                 $expectedLeaseTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 3000000 / 1000000)
@@ -1448,8 +1448,8 @@ try {
                                     $report.load_mode -ne $loadMode -or
                                     $report.contention_workers -ne $(if ($loadMode -eq 'cpu_contention') { 2 } else { 0 }) -or
                                     $report.warmup_count -ne 1000 -or $report.measured_count -ne 10000 -or
-                                    $precisionRun.dispatch_timing_config.frame_gap_g_us -ne 16667 -or
-                                    $precisionRun.dispatch_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
+                                    $precisionRun.dispatch_timing_config.frame_gap_g_us -ne 17167 -or
+                                    $precisionRun.dispatch_timing_config.frame_gap_g_ticks -ne $expectedReleaseGapTicks -or
                                     $precisionRun.dispatch_timing_config.frame_base_hold_us -ne 16667 -or
                                     $precisionRun.dispatch_timing_config.timing_margin_us -ne 500 -or
                                     $precisionRun.dispatch_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or
@@ -1699,7 +1699,7 @@ try {
         $vectorA.malformed_duplicate_up_control.status -ne 'REJECTED_BY_SCHEDULE_COMPILER' -or
         $vectorC.timing_config.native_admission -ne 'PASS' -or
         $vectorC.timing_config.tick_domain_admission -ne 'PASS' -or
-        $vectorC.timing_config.frame_gap_g_us -ne 16667 -or
+        $vectorC.timing_config.frame_gap_g_us -ne 17167 -or
         $vectorC.timing_config.effective_hold_h_us -ne 17167 -or
         $vectorC.timing_config.min_release_gap_us -ne 17167 -or
         $vectorB.hypothesis_status -ne 'REPRODUCED' -or
@@ -1750,7 +1750,7 @@ try {
                     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
                     $precisionRun = @($report.test_vectors.precision_runs)[0]
                     $expectedSetupRefreshes = if ($workload.StartsWith('mixed-') -or $workload.StartsWith('up-only-')) { 11000 } else { 0 }
-                    $expectedFrameTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 16667 / 1000000)
+                    $expectedReleaseGapTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 17167 / 1000000)
                     $expectedMarginTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 500 / 1000000)
                     $expectedHoldTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 17167 / 1000000)
                     $expectedLeaseTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 3000000 / 1000000)
@@ -1760,8 +1760,8 @@ try {
                         $report.mode -ne 'precision' -or $report.load_mode -ne $loadMode -or
                         $report.contention_workers -ne $(if ($loadMode -eq 'cpu_contention') { 2 } else { 0 }) -or
                         $report.warmup_count -ne 1000 -or $report.measured_count -ne 10000 -or
-                        $precisionRun.dispatch_timing_config.frame_gap_g_us -ne 16667 -or
-                        $precisionRun.dispatch_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
+                        $precisionRun.dispatch_timing_config.frame_gap_g_us -ne 17167 -or
+                        $precisionRun.dispatch_timing_config.frame_gap_g_ticks -ne $expectedReleaseGapTicks -or
                         $precisionRun.dispatch_timing_config.frame_base_hold_us -ne 16667 -or
                         $precisionRun.dispatch_timing_config.timing_margin_us -ne 500 -or
                         $precisionRun.dispatch_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or

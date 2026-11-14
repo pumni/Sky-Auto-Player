@@ -15,7 +15,7 @@ fn test_ticks(us: u64) -> Result<TimelineTicks, std::convert::Infallible> {
 #[test]
 fn fixture_1_independent_release_a_floor_does_not_block_b_down() {
     // A-Up authored 20 ms, floor 25 ms; B-Down independent at 21 ms
-    // H = 25 ms, T = 16 ms
+    // H = 25 ms, G = 16 ms
     let allowed = vec![0x15, 0x16]; // 0x15 = Key A (slot 0), 0x16 = Key B (slot 1)
     let actions = vec![
         // Down A at 0 ms
@@ -54,8 +54,9 @@ fn fixture_1_independent_release_a_floor_does_not_block_b_down() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(25_000); // H = 25 ms floor
-    let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // G = 16 ms
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 1. At 0 ms: Down A is ready
     let step0 = executor.evaluate(TimelineTicks::from_raw(0));
@@ -135,8 +136,8 @@ fn fixture_1_independent_release_a_floor_does_not_block_b_down() {
 }
 
 #[test]
-fn fixture_2_same_key_down_waits_up_completion_plus_t() {
-    // Same-key Down on A waits for Up completion + T
+fn fixture_2_same_key_down_waits_up_completion_plus_g() {
+    // Same-key Down on A waits for Up completion + G
     let allowed = vec![0x15];
     let actions = vec![
         KeyActionInput {
@@ -171,8 +172,9 @@ fn fixture_2_same_key_down_waits_up_completion_plus_t() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000); // H = 5 ms
-    let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // G = 16 ms
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // Down 1
     assert!(matches!(
@@ -194,7 +196,7 @@ fn fixture_2_same_key_down_waits_up_completion_plus_t() {
             down_chord: None
         }
     ));
-    // Up 1 completes at 20_000. Therefore next Down on A cannot happen before 20_000 + 16_000 = 36_000!
+    // Up 1 completes at 20_000. Therefore next Down on A cannot happen before 20_000 + G = 36_000!
     executor
         .on_send_completed(0x01, 0, TimelineTicks::from_raw(20_000))
         .unwrap();
@@ -207,14 +209,14 @@ fn fixture_2_same_key_down_waits_up_completion_plus_t() {
         DispatchAction::Wait {
             deadline_ticks: TimelineTicks::from_raw(36_000)
         },
-        "Same-key Down must wait until Up completion + T = 36 ms"
+        "Same-key Down must wait until Up completion + G = 36 ms"
     );
 
     // At 35_999: still waiting
     let step35 = executor.evaluate(TimelineTicks::from_raw(35_999));
     assert!(matches!(step35, DispatchAction::Wait { .. }));
 
-    // At 36_000: now T gap has elapsed, Down 2 is dispatched!
+    // At 36_000: the G gap has elapsed, Down 2 is dispatched!
     let step36 = executor.evaluate(TimelineTicks::from_raw(36_000));
     assert!(
         matches!(
@@ -224,7 +226,7 @@ fn fixture_2_same_key_down_waits_up_completion_plus_t() {
                 down_chord: Some(_)
             }
         ),
-        "Down on A is eligible exactly at Up completion + T"
+        "Down on A is eligible exactly at Up completion + G"
     );
 }
 
@@ -278,8 +280,9 @@ fn fixture_3_and_4_chord_blocked_by_member_does_not_split_while_unrelated_up_pro
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000); // H = 5 ms
-    let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // G = 16 ms
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 0 ms: Down {A, C} (chord 0 has A, chord 1 has C? Wait, A and C are at same timestamp 0 so compiler combined them into chord {A, C})
     let step0 = executor.evaluate(TimelineTicks::from_raw(0));
@@ -309,7 +312,7 @@ fn fixture_3_and_4_chord_blocked_by_member_does_not_split_while_unrelated_up_pro
         .unwrap();
 
     // At 21 ms: Chord {B, C} is scheduled.
-    // B is free, but C is BLOCKED by T floor (until 26 ms).
+    // B is free, but C is BLOCKED by G floor (until 26 ms).
     // The chord must NOT split: B must NOT be dispatched alone!
     let step21 = executor.evaluate(TimelineTicks::from_raw(21_000));
     assert_eq!(
@@ -338,7 +341,7 @@ fn fixture_3_and_4_chord_blocked_by_member_does_not_split_while_unrelated_up_pro
         .on_send_completed(0x01, 0, TimelineTicks::from_raw(22_000))
         .unwrap();
 
-    // At 26 ms: C's T floor has arrived!
+    // At 26 ms: C's G floor has arrived!
     // Entire chord {B, C} is dispatched intact!
     let step26 = executor.evaluate(TimelineTicks::from_raw(26_000));
     assert!(
@@ -394,8 +397,9 @@ fn fixture_5_mixed_up_down_combined_when_coincident_split_when_divergent() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
-    let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // G = 16 ms
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 0 ms: Down A
     executor
@@ -457,8 +461,9 @@ fn fixture_hol_stalled_down_does_not_block_independent_slot() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
-    let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000);
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 10 ms: Key A is dispatched
     let step10 = executor.evaluate(TimelineTicks::from_raw(10_000));
@@ -551,8 +556,9 @@ fn fixture_6_down_delayed_past_authored_up_creates_valid_release() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
-    let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000);
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // Down completes late at 35 ms (past authored Up of 20 ms)
     executor
@@ -609,8 +615,9 @@ fn fixture_7_15_slots_distinct_deadlines_no_starvation() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000);
-    let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000);
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // Down chord of 15 keys completed at 10 ms
     executor
@@ -679,8 +686,9 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000);
-    let frame_time = DurationTicks::from_raw(16_000); // T = 16 ms
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // G = 16 ms
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // Down first chord at 10 ms
     executor
@@ -753,8 +761,8 @@ fn fixture_forced_conversion_failure_fails_construction() {
     ];
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000);
-    let frame_time = DurationTicks::from_raw(16_000);
-    let err = DispatchExecutor::new(&sched, min_hold, frame_time, |us| {
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000);
+    let err = DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, |us| {
         if us == 10_000 {
             Err("simulated QPC clock overflow")
         } else {
@@ -789,8 +797,9 @@ fn fixture_end_state_waits_for_schedule_end_offset_even_with_zero_active_keys() 
     sched.schedule_end_offset_us = 60_000;
 
     let min_hold = DurationTicks::from_raw(10_000);
-    let frame_time = DurationTicks::from_raw(16_000);
-    let mut executor = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000);
+    let mut executor =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 10 ms: Down
     let step = executor.evaluate(TimelineTicks::from_raw(10_000));

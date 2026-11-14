@@ -22,7 +22,7 @@ pub struct MusicalSlot {
     pub authored_up_offset_ticks: TimelineTicks,
     /// Physical hold floor: successful Down completion QPC + H.
     pub release_not_before_qpc: QpcTicks,
-    /// Physical repress floor: previous Up completion QPC + T.
+    /// Physical repress floor: previous Up completion QPC + G.
     pub next_down_not_before_qpc: QpcTicks,
     /// Exact authored source action index of the paired Up.
     pub paired_up_source_action_index: u32,
@@ -117,7 +117,7 @@ pub struct DispatchExecutor {
     slots: [MusicalSlot; MAX_KEYS],
     resume_barrier_qpc: Option<QpcTicks>,
     min_hold_ticks: DurationTicks,
-    frame_ticks: DurationTicks,
+    min_release_gap_ticks: DurationTicks,
     counters: GenerationCounters,
     total_generations: u64,
     activated_generations: u64,
@@ -160,7 +160,7 @@ impl DispatchExecutor {
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, String>
     where
@@ -170,7 +170,7 @@ impl DispatchExecutor {
         Self::new_with_cancellation(
             schedule,
             min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             us_to_ticks,
             || Ok(()),
         )
@@ -180,7 +180,7 @@ impl DispatchExecutor {
     pub fn new_with_cancellation<F, E, C>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
         mut us_to_ticks: F,
         mut checkpoint: C,
     ) -> Result<Self, String>
@@ -257,7 +257,7 @@ impl DispatchExecutor {
             slots: [MusicalSlot::default(); MAX_KEYS],
             resume_barrier_qpc: None,
             min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             counters: GenerationCounters::default(),
             total_generations: schedule.generation_count,
             activated_generations: 0,
@@ -451,7 +451,7 @@ impl DispatchExecutor {
                     )?;
                     let key_release_due = authored_up_qpc.max(slot.release_not_before_qpc);
                     let key_next_down_min =
-                        key_release_due.checked_add_duration(self.frame_ticks)?;
+                        key_release_due.checked_add_duration(self.min_release_gap_ticks)?;
                     chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_next_down_min);
                     if key_next_down_min > authored_down_qpc {
                         down_release_floor_mask |= 1 << k;
@@ -565,7 +565,7 @@ impl DispatchExecutor {
         let new_down_floor = if confirmed_up_mask != 0 {
             Some(
                 completion_qpc
-                    .checked_add_duration(self.frame_ticks)
+                    .checked_add_duration(self.min_release_gap_ticks)
                     .map_err(|error| format!("Up completion G floor overflow: {error}"))?,
             )
         } else {
@@ -696,7 +696,7 @@ impl DispatchExecutor {
     ///
     /// Clears active musical owners in all 15 slots without physical replay,
     /// marks cancelled generations in accounting, and sets the session-wide
-    /// resume barrier to `completion_ticks + T`.
+    /// resume barrier to `completion_ticks + G`.
     pub fn on_verified_cleanup_at(&mut self, completion_qpc: QpcTicks) -> Result<u64, String> {
         let active_count = self
             .slots
@@ -709,7 +709,7 @@ impl DispatchExecutor {
             .checked_add(active_count)
             .ok_or("cancelled counter overflow")?;
         let barrier = completion_qpc
-            .checked_add_duration(self.frame_ticks)
+            .checked_add_duration(self.min_release_gap_ticks)
             .map_err(|error| format!("resume barrier overflow: {error}"))?;
         for slot in &mut self.slots {
             slot.active_generation = None;

@@ -215,7 +215,7 @@ fn physical_guard_and_production_forensics_agree_on_successful_workload_matrix()
         let samples = make_samples(workload, &mut builder_guard, 0, cycles);
         let mut measured_guard = make_guard();
         let mut forensics = ProductionHoldForensics::default();
-        forensics.set_frame_policies(
+        forensics.set_timing_policies(
             DurationTicks::from_raw(HOLD_TICKS),
             DurationTicks::from_raw(RELEASE_TICKS),
         );
@@ -336,7 +336,7 @@ fn offline_whole_stream_model_characterizes_hold_gap_and_hol_for_workload_matrix
         let max_release_displacement = report
             .packets
             .iter()
-            .map(|packet| packet.t_floor_displacement_ticks)
+            .map(|packet| packet.g_floor_displacement_ticks)
             .max()
             .unwrap_or_default();
         let max_hol_lower_bound = report
@@ -414,7 +414,7 @@ fn offline_whole_stream_model_characterizes_hold_gap_and_hol_for_workload_matrix
 fn lifecycle_reset_and_uncertain_transport_do_not_create_independent_floor_proof() {
     let mut guard = make_guard();
     let mut forensics = ProductionHoldForensics::default();
-    forensics.set_frame_policies(
+    forensics.set_timing_policies(
         DurationTicks::from_raw(HOLD_TICKS),
         DurationTicks::from_raw(RELEASE_TICKS),
     );
@@ -499,7 +499,7 @@ fn lifecycle_reset_and_uncertain_transport_do_not_create_independent_floor_proof
 fn interrupted_wait_replan_preserves_sender_completion_anchors() {
     let mut guard = make_guard();
     let mut forensics = ProductionHoldForensics::default();
-    forensics.set_frame_policies(
+    forensics.set_timing_policies(
         DurationTicks::from_raw(HOLD_TICKS),
         DurationTicks::from_raw(RELEASE_TICKS),
     );
@@ -570,7 +570,7 @@ fn interrupted_wait_replan_preserves_sender_completion_anchors() {
 #[test]
 fn anomaly_ring_remains_bounded_and_reports_overwrites() {
     let mut forensics = ProductionHoldForensics::default();
-    forensics.set_frame_policies(
+    forensics.set_timing_policies(
         DurationTicks::from_raw(HOLD_TICKS),
         DurationTicks::from_raw(RELEASE_TICKS),
     );

@@ -231,7 +231,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     let ConvertedTiming {
         min_hold_ticks,
-        frame_ticks,
+        min_release_gap_ticks,
         mut worker_timing,
         ..
     } = match convert_timing(config, qpc_clock, &effective_policy) {
@@ -241,7 +241,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let lease_timeout_ticks = worker_timing.lease_timeout_ticks;
     core.runtime
         .production_forensics
-        .set_frame_policies(min_hold_ticks, frame_ticks);
+        .set_timing_policies(min_hold_ticks, min_release_gap_ticks);
     #[cfg(any(test, feature = "test-support"))]
     if let Err(error) = startup_checkpoint(
         shared,
@@ -254,7 +254,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let scheduler = match sky_dispatch_core::executor::DispatchExecutor::new_with_cancellation(
         &schedule,
         min_hold_ticks,
-        frame_ticks,
+        min_release_gap_ticks,
         |us| {
             qpc_clock
                 .timeline_from_us(us)

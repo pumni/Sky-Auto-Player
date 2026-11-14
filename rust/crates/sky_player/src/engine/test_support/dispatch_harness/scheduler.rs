@@ -11,21 +11,21 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
-        let frame_ticks = self
+        let min_release_gap_ticks = self
             .resources
             .clock
-            .duration_from_us(16_667)
-            .map_err(|e| format!("{e:?}"))?;
+            .duration_from_us(self.config.timing.min_release_gap_us)
+            .map_err(|e| format!("release-gap conversion failed: {e:?}"))?;
         let min_hold_ticks = self
             .resources
             .clock
-            .duration_from_us(10_000)
-            .map_err(|e| format!("{e:?}"))?;
+            .duration_from_us(self.config.timing.min_hold_us)
+            .map_err(|e| format!("min-hold conversion failed: {e:?}"))?;
         let clock = self.resources.clock;
         self.resources.scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
             &self.legacy_coordinator_fixture.schedule,
             min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             |microseconds| {
                 clock
                     .timeline_from_us(microseconds)
@@ -35,7 +35,7 @@ impl ProductionDispatchTestHarness {
         self.legacy_coordinator_fixture
             .attach_executor_with_cancellation(
                 min_hold_ticks,
-                frame_ticks,
+                min_release_gap_ticks,
                 |us| clock.timeline_from_us(us).map_err(|e| format!("{e:?}")),
                 || Ok(()),
             )
