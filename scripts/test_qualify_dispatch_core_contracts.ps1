@@ -383,6 +383,9 @@ if (-not $caseRunnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `
     -not $runnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$manifest")) {
     throw 'Scheduler profile changes removed the established #646 provenance validation path'
 }
+if (-not $caseRunnerSource.Contains("if (`$receiveOnlyObserverVersion -and `$Scenario -ne 'owner-process-termination')")) {
+    throw 'owner-process-termination must not require a ReceiveOnly observer shutdown summary after terminating that observer process'
+}
 
 $frameBaseRevision = '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327'
 $frameBaseTree = '48eec424c155e98fa1a81ad018bc832b6e6b964f'

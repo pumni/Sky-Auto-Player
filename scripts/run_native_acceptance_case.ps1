@@ -592,7 +592,9 @@ try {
 
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
     $observerSummary = $null
-    if ($receiveOnlyObserverVersion) {
+    # This scenario deliberately terminates the ReceiveOnly process before the
+    # first Down admission, so it cannot flush its post-shutdown summary.
+    if ($receiveOnlyObserverVersion -and $Scenario -ne 'owner-process-termination') {
         $observerSummary = Get-Content -LiteralPath $sinkObserverSummaryPath -Raw | ConvertFrom-Json
         Assert-SchedulerObserverEvidence -Ready $sink -Summary $observerSummary -Records $sinkRecords -ExpectedObserverVersion $receiveOnlyObserverVersion
     }
