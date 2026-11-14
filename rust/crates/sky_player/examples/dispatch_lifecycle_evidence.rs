@@ -341,6 +341,25 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     stages.push(accounting(&harness, "after_final_cleanup"));
     let packet_evidence = packet_capture_evidence(&packets)?;
     let attempts = packet_evidence.len();
+    let initial_down_completion = packet_evidence
+        .first()
+        .and_then(|packet| packet["completed_qpc_ticks"].as_u64())
+        .ok_or("initial Down capture has no completion QPC")?;
+    let resumed_packet = packet_evidence
+        .get(1)
+        .ok_or("resumed Down capture is missing")?;
+    let resumed_sender_start = resumed_packet["started_qpc_ticks"]
+        .as_u64()
+        .ok_or("resumed Down capture has no start QPC")?;
+    let resumed_down_completion = resumed_packet["completed_qpc_ticks"]
+        .as_u64()
+        .ok_or("resumed Down capture has no completion QPC")?;
+    if resumed_sender_start != sender_start.as_u64()
+        || initial_down_completion > cleanup_qpc.as_u64()
+        || final_cleanup_qpc < resumed_down_completion
+    {
+        return Err("captured Down/cleanup/resume QPC chronology is inconsistent".into());
+    }
     let all_cleanup_records = cleanup_capture_records(&cleanup_packets)?;
     if all_cleanup_records.len() < pause_cleanup_records.len() {
         return Err("cleanup capture lost records after pause cleanup".into());
@@ -374,7 +393,7 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         "min_release_gap_ticks": gap_ticks,
         "resume_barrier_qpc_ticks": barrier.as_u64(),
         "candidate_packet_not_before_qpc_ticks": staged_window.packet_not_before_qpc.as_u64(),
-        "resumed_sender_start_qpc_ticks": sender_start.as_u64(),
+        "resumed_sender_start_qpc_ticks": resumed_sender_start,
         "g_minus_one_decision": "wait",
         "exact_g_decision": "send",
         "final_release_obligation_mask": final_obligation,

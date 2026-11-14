@@ -34,7 +34,7 @@ function New-LiveAccountingStage {
 }
 
 function New-DispatchPacket {
-    param([long]$UpMask, [long]$DownMask, [long]$Started)
+    param([long]$UpMask, [long]$DownMask, [long]$Started, [long]$Completed)
     $mask = $UpMask -bor $DownMask
     return [ordered]@{
         up_mask = $UpMask
@@ -44,7 +44,7 @@ function New-DispatchPacket {
         first_inserted = 1
         attempts = 1
         started_qpc_ticks = $Started
-        completed_qpc_ticks = $Started
+        completed_qpc_ticks = $Completed
         worker_outcome = 'dispatched'
     }
 }
@@ -58,7 +58,7 @@ function New-DispatchCleanupCapture {
         up_events = 1
         down_events = 0
         completion_qpc_ticks = $CompletionQpcTicks
-        packets = @([ordered]@{ scan_codes = @(30); key_up = $true })
+        packets = @([ordered]@{ scan_codes = @(21); key_up = $true })
     }
 }
 
@@ -102,10 +102,10 @@ $liveV2 = [ordered]@{
                 (New-LiveAccountingStage 'after_final_up' 0 2 2 0 0)
             )
             packets = @(
-                (New-DispatchPacket 0 1 100),
-                (New-DispatchPacket 1 0 200),
-                (New-DispatchPacket 0 1 300),
-                (New-DispatchPacket 1 0 400)
+                (New-DispatchPacket 0 1 100000 110000),
+                (New-DispatchPacket 1 0 281671 290000),
+                (New-DispatchPacket 0 1 461671 470000),
+                (New-DispatchPacket 1 0 641671 650000)
             )
         }
         pause_cleanup_resume = [ordered]@{
@@ -125,20 +125,20 @@ $liveV2 = [ordered]@{
                 (New-LiveAccountingStage 'after_final_cleanup' 0 2 0 2 0)
             )
             packets = @(
-                (New-DispatchPacket 0 1 171771),
-                (New-DispatchPacket 0 1 171772)
+                (New-DispatchPacket 0 1 100 150),
+                (New-DispatchPacket 0 1 171871 171881)
             )
             cleanup_captures = [ordered]@{
-                pause = New-DispatchCleanupCapture 100
-                final = New-DispatchCleanupCapture 171773
+                pause = New-DispatchCleanupCapture 200
+                final = New-DispatchCleanupCapture 171882
                 total_attempts = 2
             }
-            cleanup_completion_qpc_ticks = 100
+            cleanup_completion_qpc_ticks = 200
             min_release_gap_us = 17167
             min_release_gap_ticks = 171671
-            resume_barrier_qpc_ticks = 171771
-            candidate_packet_not_before_qpc_ticks = 171771
-            resumed_sender_start_qpc_ticks = 171771
+            resume_barrier_qpc_ticks = 171871
+            candidate_packet_not_before_qpc_ticks = 171871
+            resumed_sender_start_qpc_ticks = 171871
             g_minus_one_decision = 'wait'
             exact_g_decision = 'send'
         }
@@ -192,10 +192,47 @@ try { [void](Test-DispatchLifecycleReport -Report $wrongBarrierV2) } catch { $wr
 Assert-Contract $wrongBarrierRejected 'schema v2 accepted a barrier other than cleanup completion + G'
 
 $earlyResumedSendV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
-$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.resumed_sender_start_qpc_ticks = 171770
+$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.packets[1].started_qpc_ticks = 171870
+$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.packets[1].completed_qpc_ticks = 171870
+$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.resumed_sender_start_qpc_ticks = 171870
 $earlyResumedSendRejected = $false
 try { [void](Test-DispatchLifecycleReport -Report $earlyResumedSendV2) } catch { $earlyResumedSendRejected = $true }
-Assert-Contract $earlyResumedSendRejected 'schema v2 accepted resumed sender start before completion + G'
+Assert-Contract $earlyResumedSendRejected 'schema v2 accepted a resumed Down capture at G-1'
+
+$captureAliasMismatchV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$captureAliasMismatchV2.live_scheduler.pause_cleanup_resume.packets[1].started_qpc_ticks = 171870
+$captureAliasMismatchV2.live_scheduler.pause_cleanup_resume.packets[1].completed_qpc_ticks = 171870
+$captureAliasMismatchRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $captureAliasMismatchV2) } catch { $captureAliasMismatchRejected = $true }
+Assert-Contract $captureAliasMismatchRejected 'schema v2 accepted a packet capture that disagrees with the summary sender-start alias'
+
+$holdOneTickEarlyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$holdOneTickEarlyV2.live_scheduler.no_pause_control.packets[1].started_qpc_ticks = 281670
+$holdOneTickEarlyV2.live_scheduler.no_pause_control.packets[1].completed_qpc_ticks = 281670
+$holdOneTickEarlyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $holdOneTickEarlyV2) } catch { $holdOneTickEarlyRejected = $true }
+Assert-Contract $holdOneTickEarlyRejected 'schema v2 accepted Up one QPC tick before Down completion + H'
+
+$gapOneTickEarlyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$gapOneTickEarlyV2.live_scheduler.no_pause_control.packets[2].started_qpc_ticks = 461670
+$gapOneTickEarlyV2.live_scheduler.no_pause_control.packets[2].completed_qpc_ticks = 470000
+$gapOneTickEarlyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $gapOneTickEarlyV2) } catch { $gapOneTickEarlyRejected = $true }
+Assert-Contract $gapOneTickEarlyRejected 'schema v2 accepted Down one QPC tick before Up completion + G'
+
+$cleanupBeforeDownV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$cleanupBeforeDown = $cleanupBeforeDownV2.live_scheduler.pause_cleanup_resume
+$cleanupBeforeDown.cleanup_captures.pause.completion_qpc_ticks = 149
+$cleanupBeforeDown.cleanup_completion_qpc_ticks = 149
+$cleanupBeforeDown.resume_barrier_qpc_ticks = 171820
+$cleanupBeforeDown.candidate_packet_not_before_qpc_ticks = 171820
+$cleanupBeforeDown.packets[1].started_qpc_ticks = 171820
+$cleanupBeforeDown.packets[1].completed_qpc_ticks = 171830
+$cleanupBeforeDown.resumed_sender_start_qpc_ticks = 171820
+$cleanupBeforeDown.cleanup_captures.final.completion_qpc_ticks = 171831
+$cleanupBeforeDownRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $cleanupBeforeDownV2) } catch { $cleanupBeforeDownRejected = $true }
+Assert-Contract $cleanupBeforeDownRejected 'schema v2 accepted cleanup completion before the initial Down completion'
 
 $cleanupDownV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
 $cleanupDownV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.packets[0].key_up = $false
@@ -214,6 +251,18 @@ $cleanupStampV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.compl
 $cleanupStampRejected = $false
 try { [void](Test-DispatchLifecycleReport -Report $cleanupStampV2) } catch { $cleanupStampRejected = $true }
 Assert-Contract $cleanupStampRejected 'schema v2 accepted cleanup capture with a completion stamp different from its resume barrier source'
+
+$wrongCleanupKeyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$wrongCleanupKeyV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.packets[0].scan_codes[0] = 0x39
+$wrongCleanupKeyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $wrongCleanupKeyV2) } catch { $wrongCleanupKeyRejected = $true }
+Assert-Contract $wrongCleanupKeyRejected 'schema v2 accepted a cleanup Up for a scan code outside the fixture slot'
+
+$finalCleanupTooEarlyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$finalCleanupTooEarlyV2.live_scheduler.pause_cleanup_resume.cleanup_captures.final.completion_qpc_ticks = 1
+$finalCleanupTooEarlyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $finalCleanupTooEarlyV2) } catch { $finalCleanupTooEarlyRejected = $true }
+Assert-Contract $finalCleanupTooEarlyRejected 'schema v2 accepted final cleanup completion before the resumed Down completion'
 
 Assert-DispatchReportSourceIdentity -Report $liveV2 -SourceSha ('a' * 40) -SourceTreeSha ('b' * 40)
 $sourceMismatchRejected = $false

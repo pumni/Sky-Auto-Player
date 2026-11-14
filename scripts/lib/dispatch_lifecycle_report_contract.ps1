@@ -131,6 +131,7 @@ function Assert-DispatchPacketEvidence {
     if ($actualPackets.Count -ne $ExpectedMasks.Count) {
         throw "$Path must capture exactly $($ExpectedMasks.Count) musical sender attempts"
     }
+    $validatedPackets = [System.Collections.Generic.List[object]]::new()
     for ($index = 0; $index -lt $ExpectedMasks.Count; $index++) {
         $packet = $actualPackets[$index]
         $packetPath = "$Path.packets[$index]"
@@ -153,6 +154,12 @@ function Assert-DispatchPacketEvidence {
             (Assert-DispatchReportField $packet 'worker_outcome' $packetPath) -cne 'dispatched') {
             throw "$packetPath does not prove the expected dispatched packet and completed mock transport"
         }
+        [void]$validatedPackets.Add([pscustomobject]@{
+            UpMask = $up
+            DownMask = $down
+            Started = $started
+            Completed = $completed
+        })
     }
 
     $senderAttempts = ConvertTo-DispatchInteger `
@@ -162,12 +169,28 @@ function Assert-DispatchPacketEvidence {
     if ($senderAttempts -ne $ExpectedMasks.Count -or $musicalAttempts -ne $senderAttempts) {
         throw "$Path sender counters must describe only captured musical packet sends"
     }
+    return $validatedPackets.ToArray()
+}
+
+function Assert-DispatchPacketTimingFloor {
+    param(
+        [Parameter(Mandatory)] [object] $PreviousPacket,
+        [Parameter(Mandatory)] [object] $NextPacket,
+        [Parameter(Mandatory)] [System.Numerics.BigInteger] $FloorTicks,
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    $earliestStart = $PreviousPacket.Completed + $FloorTicks
+    if ($NextPacket.Started -lt $earliestStart) {
+        throw "$Path packet started before the previous completion + floor ($FloorTicks QPC ticks)"
+    }
 }
 
 function Assert-DispatchCleanupCapture {
     param(
         [Parameter(Mandatory)] [object] $Cleanup,
-        [Parameter(Mandatory)] [string] $Path
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [long] $ExpectedScanCode
     )
 
     $packets = Assert-DispatchReportField $Cleanup 'packets' $Path
@@ -193,6 +216,11 @@ function Assert-DispatchCleanupCapture {
         }
         $eventCount = @($scanCodes).Count
         if ($eventCount -le 0) { throw "$Path captured an empty cleanup packet" }
+        $scanCodeValues = @($scanCodes)
+        if ($eventCount -ne 1 -or
+            (ConvertTo-DispatchInteger $scanCodeValues[0] "$Path.scan_codes[0]") -ne $ExpectedScanCode) {
+            throw "$Path must capture the fixture slot scan code 0x$($ExpectedScanCode.ToString('X2')) exactly once"
+        }
         if ($keyUp) {
             $upAttempts++
             $upEvents += $eventCount
@@ -271,6 +299,10 @@ function Test-DispatchLifecycleReport {
         ($frequency * $gapUs + 999999),
         1000000
     )
+    $holdTicks = [System.Numerics.BigInteger]::Divide(
+        ($frequency * $holdUs + 999999),
+        1000000
+    )
     if ($gapTicks -ne $expectedTicks) {
         throw 'timing.min_release_gap_ticks does not equal ceil(QPC frequency × G_us / 1,000,000)'
     }
@@ -294,7 +326,10 @@ function Test-DispatchLifecycleReport {
         @{ phase = 'after_second_down'; total = 2; scheduled = 0; activated = 2; released = 1; cancelled = 0; active = 1 },
         @{ phase = 'after_final_up'; total = 2; scheduled = 0; activated = 2; released = 2; cancelled = 0; active = 0 }
     )
-    Assert-DispatchPacketEvidence -Branch $normal -Path 'no_pause_control' -ExpectedMasks @('0:1', '1:0', '0:1', '1:0')
+    $normalPackets = @(Assert-DispatchPacketEvidence -Branch $normal -Path 'no_pause_control' -ExpectedMasks @('0:1', '1:0', '0:1', '1:0'))
+    Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[0] -NextPacket $normalPackets[1] -FloorTicks $holdTicks -Path 'no_pause_control Down→Up H'
+    Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[1] -NextPacket $normalPackets[2] -FloorTicks $gapTicks -Path 'no_pause_control Up→Down G'
+    Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[2] -NextPacket $normalPackets[3] -FloorTicks $holdTicks -Path 'no_pause_control Down→Up H (second generation)'
 
     $paused = Assert-DispatchReportField $live 'pause_cleanup_resume' 'live_scheduler'
     if (-not [bool](Assert-DispatchReportField $paused 'pause_requested' 'pause_cleanup_resume') -or
@@ -309,13 +344,13 @@ function Test-DispatchLifecycleReport {
         @{ phase = 'after_resumed_down'; total = 2; scheduled = 0; activated = 2; released = 0; cancelled = 1; active = 1 },
         @{ phase = 'after_final_cleanup'; total = 2; scheduled = 0; activated = 2; released = 0; cancelled = 2; active = 0 }
     )
-    Assert-DispatchPacketEvidence -Branch $paused -Path 'pause_cleanup_resume' -ExpectedMasks @('0:1', '0:1')
+    $pausedPackets = @(Assert-DispatchPacketEvidence -Branch $paused -Path 'pause_cleanup_resume' -ExpectedMasks @('0:1', '0:1'))
 
     $cleanup = Assert-DispatchReportField $paused 'cleanup_captures' 'pause_cleanup_resume'
     $pauseCleanup = Assert-DispatchReportField $cleanup 'pause' 'cleanup_captures'
     $finalCleanup = Assert-DispatchReportField $cleanup 'final' 'cleanup_captures'
-    Assert-DispatchCleanupCapture -Cleanup $pauseCleanup -Path 'pause_cleanup_resume.cleanup_captures.pause'
-    Assert-DispatchCleanupCapture -Cleanup $finalCleanup -Path 'pause_cleanup_resume.cleanup_captures.final'
+    Assert-DispatchCleanupCapture -Cleanup $pauseCleanup -Path 'pause_cleanup_resume.cleanup_captures.pause' -ExpectedScanCode 21
+    Assert-DispatchCleanupCapture -Cleanup $finalCleanup -Path 'pause_cleanup_resume.cleanup_captures.final' -ExpectedScanCode 21
     $cleanupAttempts = ConvertTo-DispatchInteger (Assert-DispatchReportField $cleanup 'total_attempts' 'cleanup_captures') 'cleanup_captures.total_attempts'
     $pauseCaptureCompletion = ConvertTo-DispatchInteger (Assert-DispatchReportField $pauseCleanup 'completion_qpc_ticks' 'cleanup_captures.pause') 'cleanup_captures.pause.completion_qpc_ticks'
     $finalCaptureCompletion = ConvertTo-DispatchInteger (Assert-DispatchReportField $finalCleanup 'completion_qpc_ticks' 'cleanup_captures.final') 'cleanup_captures.final.completion_qpc_ticks'
@@ -335,10 +370,14 @@ function Test-DispatchLifecycleReport {
     $candidateNotBefore = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'candidate_packet_not_before_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.candidate_packet_not_before_qpc_ticks'
     $senderStart = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'resumed_sender_start_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.resumed_sender_start_qpc_ticks'
     if ($cleanupQpc -le 0 -or $pauseCaptureCompletion -ne $cleanupQpc -or
+        $pausedPackets[0].Completed -gt $pauseCaptureCompletion -or
         (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'min_release_gap_us' 'pause_cleanup_resume') 'pause_cleanup_resume.min_release_gap_us') -ne $gapUs -or
         (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'min_release_gap_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.min_release_gap_ticks') -ne $gapTicks -or
         $resumeBarrier -ne ($cleanupQpc + $gapTicks) -or
-        $candidateNotBefore -ne $resumeBarrier -or $senderStart -lt $resumeBarrier -or
+        $candidateNotBefore -ne $resumeBarrier -or
+        $senderStart -ne $pausedPackets[1].Started -or
+        $pausedPackets[1].Started -lt $resumeBarrier -or
+        $finalCaptureCompletion -lt $pausedPackets[1].Completed -or
         [string](Assert-DispatchReportField $paused 'g_minus_one_decision' 'pause_cleanup_resume') -cne 'wait' -or
         [string](Assert-DispatchReportField $paused 'exact_g_decision' 'pause_cleanup_resume') -cne 'send') {
         throw 'pause_cleanup_resume does not prove cleanup completion + G, G-1 wait, exact-G send and sender start at/after the barrier'
