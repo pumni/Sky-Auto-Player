@@ -30,7 +30,7 @@ pub struct PreparedPhysicalPacket {
 /// Borrowed view over an already materialized physical packet.
 ///
 /// The view never owns or rebuilds Win32 `INPUT` values. It is used for the
-/// canonical Up prefix of a Mixed packet during missed-Down recovery.
+/// final sender boundary to borrow the prepared packet without allocating.
 #[derive(Clone, Copy)]
 pub struct PreparedPacketView<'a> {
     packet: PhysicalPacket,

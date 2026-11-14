@@ -110,6 +110,132 @@ fn call_indices(lines: &[String], fragment: &str) -> Vec<usize> {
         .collect()
 }
 
+fn is_call_instruction(line: &str) -> bool {
+    let instruction = line.trim_start().to_ascii_lowercase();
+    instruction.starts_with("call ")
+        || instruction.starts_with("callq ")
+        || instruction.starts_with("call\t")
+        || instruction.starts_with("callq\t")
+}
+
+fn is_physical_send_reference(line: &str) -> bool {
+    let folded = line.trim().to_ascii_lowercase();
+    if folded.contains("__imp_sendinput") {
+        return true;
+    }
+    let Some(target) = folded
+        .strip_prefix("callq")
+        .or_else(|| folded.strip_prefix("call"))
+    else {
+        return false;
+    };
+    let target = target
+        .trim_start()
+        .trim_start_matches('*')
+        .trim_start_matches('_');
+    let direct_sendinput = target.starts_with("sendinput")
+        && target["sendinput".len()..]
+            .chars()
+            .next()
+            .is_none_or(|suffix| !suffix.is_ascii_alphanumeric());
+    direct_sendinput
+        || [
+            "send_prepared_physical_packet",
+            "send_physical_packet",
+            "send_packet",
+            "send_keyboard_packet",
+        ]
+        .iter()
+        .any(|needle| target.contains(needle))
+}
+
+fn is_forbidden_suffix_effect(line: &str) -> bool {
+    let folded = line.trim_start().to_ascii_lowercase();
+    let forbidden_symbols = [
+        "__rust_alloc",
+        "__rust_realloc",
+        "__rust_dealloc",
+        "malloc",
+        "calloc",
+        "realloc",
+        "heapalloc",
+        "heapfree",
+        "memcpy",
+        "memmove",
+        "memset",
+        "memcpy_inline",
+        "memmove_inline",
+        "criticalsection",
+        "srwlock",
+        "mutex",
+        "prepare_physical_packet",
+        "materialize_physical_packet",
+        "compile_physical_packet",
+    ];
+    forbidden_symbols
+        .iter()
+        .any(|needle| folded.contains(needle))
+        || folded.starts_with("lock ")
+        || folded.starts_with("lock\t")
+        || folded.starts_with("rep movs")
+        || folded.starts_with("rep stos")
+        || [
+            "movsb", "movsw", "movsl", "movsq", "stosb", "stosw", "stosl", "stosq",
+        ]
+        .iter()
+        .any(|mnemonic| {
+            folded
+                .split_whitespace()
+                .next()
+                .is_some_and(|actual| actual == *mnemonic)
+        })
+        || (folded.starts_with("subq ") && folded.contains("%rsp"))
+        || (folded.starts_with("andq ") && folded.contains("%rsp"))
+}
+
+fn validate_scoped_send_suffix(
+    function: &[String],
+    final_owner: usize,
+    deferred_sender: usize,
+) -> Result<()> {
+    for (index, line) in function.iter().enumerate() {
+        if index != deferred_sender && is_physical_send_reference(line) {
+            return Err(format!(
+                "production dispatch boundary contains an additional physical-send reference at line {}: {}",
+                index + 1,
+                line.trim()
+            )
+            .into());
+        }
+    }
+
+    for (index, line) in function[final_owner..deferred_sender].iter().enumerate() {
+        let function_index = final_owner + index;
+        if is_forbidden_suffix_effect(line) {
+            return Err(format!(
+                "scoped final-admission→sender suffix contains allocation/copy/lock/packet-build work at line {}: {}",
+                function_index + 1,
+                line.trim()
+            )
+            .into());
+        }
+        if is_call_instruction(line)
+            && !(function_index == final_owner
+                && line
+                    .to_ascii_lowercase()
+                    .contains("foreground_window_owner_matches"))
+        {
+            return Err(format!(
+                "scoped final-admission→sender suffix contains an unexpected call at line {}: {}",
+                function_index + 1,
+                line.trim()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn production_dispatch_range(lines: &[String]) -> Result<(usize, usize)> {
     find_unique_function_body(
         lines,
@@ -183,6 +309,7 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
         .filter(|index| *index < sender)
         .max()
         .expect("checked owner recheck");
+    validate_scoped_send_suffix(function, final_owner, sender)?;
     Ok(DispatchAssemblyShape {
         dispatch_lines: (range.0 + 1, range.1 + 1),
         final_owner_rechecks: owner_checks,
@@ -263,7 +390,7 @@ fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &s
         shape.journal_commits
     );
     println!(
-        "scoped_send_suffix_lines={}-{}; worker-wide copy/division thresholds=not applied",
+        "scoped_send_suffix_lines={}-{}; non_owner_calls=0; forbidden_effects=0; worker-wide copy/division thresholds=not applied",
         shape.send_suffix_lines.0, shape.send_suffix_lines.1
     );
     println!("production dispatch assembly audit: PASS");
@@ -479,6 +606,7 @@ mod tests {
              callq query_async_key_state\n\
              callq query_async_key_state\n\
              callq query_async_key_state\n\
+             callq record_sendinput_pre_call_lateness\n\
              callq foreground_window_owner_matches\n\
              callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
              callq DispatchExecutor20on_send_completed_at\n\
@@ -545,6 +673,38 @@ mod tests {
              callq commit_physical_packet\n.seh_endproc",
         );
         assert!(validate_production_dispatch_assembly(&wrong_commit_order).is_err());
+
+        for unexpected_effect in [
+            "callq *__imp_SendInput",
+            "callq __rust_alloc",
+            "callq memcpy",
+        ] {
+            let mut injected = valid_dispatch();
+            let sender = injected
+                .iter()
+                .position(|line| {
+                    line.contains("send_prepared_physical_packet_at_final_boundary_deferred_commit")
+                })
+                .expect("fixture deferred sender");
+            injected.insert(sender, unexpected_effect.to_owned());
+            assert!(
+                validate_production_dispatch_assembly(&injected).is_err(),
+                "production dispatch assembly accepted injected effect: {unexpected_effect}"
+            );
+        }
+
+        let diagnostic_only = fixture(
+            ".seh_proc _fixture_dispatch_staged_candidate\n\
+             callq query_async_key_state\ncallq query_async_key_state\n\
+             callq query_async_key_state\ncallq query_async_key_state\n\
+             callq query_async_key_state\n\
+             callq record_sendinput_pre_call_lateness\n\
+             callq foreground_window_owner_matches\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n.seh_endproc",
+        );
+        assert!(validate_production_dispatch_assembly(&diagnostic_only).is_ok());
     }
 
     #[test]

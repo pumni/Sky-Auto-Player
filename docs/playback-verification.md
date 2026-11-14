@@ -53,6 +53,42 @@ The existing fail-stop sequence stops on the first failed native case. Do not
 retry failures to complete a matrix. Smoke, Compare, the six AB/BA pairs, metric
 filters, thresholds, and drain timeout keep their defined behavior.
 
+## Offline lifecycle and manifest checks
+
+The current offline scheduler lifecycle report is produced and validated with:
+
+```powershell
+pwsh -NoProfile -File scripts/run_dispatch_lifecycle_evidence.ps1
+```
+
+It runs the schema-v2 probe through the live `DispatchExecutor` with deterministic
+test-support senders, validates generation accounting, captured musical packets,
+cleanup Up captures, and the completion + G resume barrier, then writes the report
+outside the checkout. It performs no native `SendInput` calls and does not qualify
+foreground delivery or gameplay reception. The P0-P5 publication helper is
+historical metadata only; it is not a producer or validator for this report.
+
+For an offline FrameSnapshot binary/manifest build, first use a detached worktree
+at the pinned baseline and the clean candidate checkout, each with a new empty
+output directory outside both checkouts:
+
+```powershell
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile FrameSnapshot -SourceRole Baseline `
+  -SourceRoot <detached-pinned-baseline> -OutputRoot <new-baseline-output>
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile FrameSnapshot -SourceRole Candidate `
+  -SourceRoot <clean-candidate-checkout> -OutputRoot <new-candidate-output>
+```
+
+The build emits the binary and immutable manifest but does not execute the
+acceptance harness or send keys. Verify each manifest offline with
+`Assert-FrameSnapshotManifestIdentity` for its role and
+`Assert-ImmutableHarnessManifestIntegrity` before any later approved native
+qualification. Physical qualification uses `qualify_dispatch_core.ps1` and its
+`run_native_acceptance_case.ps1` route only after a separately approved session
+budget; building or validating a manifest is not a native test.
+
 ## Verdict and evidence
 
 A cell is complete only with six valid pairs and complete provenance. Report

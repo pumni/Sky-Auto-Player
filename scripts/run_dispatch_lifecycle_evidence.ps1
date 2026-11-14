@@ -40,6 +40,7 @@ try {
     }
     $jsonText = ($runOutput | ForEach-Object { $_.ToString() }) -join "`n"
     $report = $jsonText | ConvertFrom-Json -AsHashtable
+    Assert-DispatchReportSourceIdentity -Report $report -SourceSha $sourceSha -SourceTreeSha $sourceTree
     $contract = Test-DispatchLifecycleReport -Report $report
     if ($contract.EvidenceClass -ne 'live_scheduler') { throw 'runner expected schema v2 live scheduler evidence' }
 

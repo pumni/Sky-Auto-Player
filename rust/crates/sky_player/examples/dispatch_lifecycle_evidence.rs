@@ -6,7 +6,9 @@ use sky_dispatch_core::time::QpcTicks;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::input::PhysicalPacket;
 use sky_player::engine::StagedDispatchOutcome;
-use sky_player::engine::dispatch_primitives::ProductionDispatchTestHarness;
+use sky_player::engine::dispatch_primitives::{
+    CleanupCapture, PacketCapture, ProductionDispatchTestHarness,
+};
 use std::time::Duration;
 
 const FRAME_US: u64 = 16_667;
@@ -24,6 +26,78 @@ fn accounting(harness: &ProductionDispatchTestHarness, phase: &str) -> Value {
         "released": value.released,
         "cancelled": value.cancelled,
         "active": value.active,
+    })
+}
+
+fn packet_capture_evidence(capture: &PacketCapture) -> Result<Vec<Value>, String> {
+    let captured = capture
+        .lock()
+        .map_err(|_| "mock transport capture poisoned".to_string())?;
+    let mut packets = Vec::with_capacity(captured.len());
+    for (packet, evidence) in captured.iter() {
+        let requested_mask = packet.up_mask | packet.down_mask;
+        if evidence.requested_mask != requested_mask
+            || evidence.confirmed_mask != requested_mask
+            || evidence.first_inserted != packet.event_count()
+            || evidence.attempts != 1
+            || evidence.started_ticks.is_none()
+            || evidence.completed_ticks.is_none()
+            || evidence.completed_ticks < evidence.started_ticks
+        {
+            return Err("mock packet capture did not confirm one complete dispatched send".into());
+        }
+        packets.push(json!({
+            "up_mask": packet.up_mask,
+            "down_mask": packet.down_mask,
+            "requested_mask": evidence.requested_mask,
+            "confirmed_mask": evidence.confirmed_mask,
+            "first_inserted": evidence.first_inserted,
+            "attempts": evidence.attempts,
+            "started_qpc_ticks": evidence.started_ticks.map(QpcTicks::as_u64),
+            "completed_qpc_ticks": evidence.completed_ticks.map(QpcTicks::as_u64),
+            "worker_outcome": "dispatched",
+        }));
+    }
+    Ok(packets)
+}
+
+fn cleanup_capture_records(capture: &CleanupCapture) -> Result<Vec<(Vec<u16>, bool)>, String> {
+    capture
+        .lock()
+        .map(|records| records.clone())
+        .map_err(|_| "mock cleanup capture poisoned".to_string())
+}
+
+fn cleanup_capture_evidence(records: &[(Vec<u16>, bool)], completion_qpc_ticks: u64) -> Value {
+    let up_attempts = records.iter().filter(|(_, key_up)| *key_up).count();
+    let down_attempts = records.len() - up_attempts;
+    let up_events = records
+        .iter()
+        .filter(|(_, key_up)| *key_up)
+        .map(|(scan_codes, _)| scan_codes.len())
+        .sum::<usize>();
+    let down_events = records
+        .iter()
+        .filter(|(_, key_up)| !*key_up)
+        .map(|(scan_codes, _)| scan_codes.len())
+        .sum::<usize>();
+    let packets = records
+        .iter()
+        .map(|(scan_codes, key_up)| {
+            json!({
+                "scan_codes": scan_codes,
+                "key_up": key_up,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "attempts": records.len(),
+        "up_attempts": up_attempts,
+        "down_attempts": down_attempts,
+        "up_events": up_events,
+        "down_events": down_events,
+        "completion_qpc_ticks": completion_qpc_ticks,
+        "packets": packets,
     })
 }
 
@@ -112,7 +186,6 @@ fn run_no_pause_control(clock: QpcClock, frequency_hz: u64) -> Result<Value, Str
     let epoch = new_epoch(clock, &mut harness)?;
     let mut stages = vec![accounting(&harness, "before_first_down")];
     let expected_packets = [(0, 1), (1, 0), (0, 1), (1, 0)];
-    let mut observed_packets = Vec::with_capacity(expected_packets.len());
 
     for (index, expected) in expected_packets.into_iter().enumerate() {
         let packet = dispatch_next(&mut harness, clock, epoch)?
@@ -123,7 +196,6 @@ fn run_no_pause_control(clock: QpcClock, frequency_hz: u64) -> Result<Value, Str
                 "live scheduler packet {index} was {observed:?}, expected {expected:?}"
             ));
         }
-        observed_packets.push(json!({"up_mask": packet.up_mask, "down_mask": packet.down_mask}));
         stages.push(accounting(
             &harness,
             match index {
@@ -135,10 +207,8 @@ fn run_no_pause_control(clock: QpcClock, frequency_hz: u64) -> Result<Value, Str
         ));
     }
 
-    let captured = packets
-        .lock()
-        .map_err(|_| "mock transport capture poisoned".to_string())?;
-    let attempts = captured.len();
+    let packet_evidence = packet_capture_evidence(&packets)?;
+    let attempts = packet_evidence.len();
     let accounting = harness.generation_accounting_for_test();
     let final_obligation = harness.release_obligation_mask_for_test();
     let passed = attempts == 4
@@ -154,7 +224,10 @@ fn run_no_pause_control(clock: QpcClock, frequency_hz: u64) -> Result<Value, Str
     Ok(json!({
         "pause_requested": false,
         "sender_attempts": attempts,
-        "packets": observed_packets,
+        "musical_sender_attempts": attempts,
+        "cleanup_sender_attempts": 0,
+        "total_mock_send_attempts": attempts,
+        "packets": packet_evidence,
         "accounting_stages": stages,
         "final_release_obligation_mask": final_obligation,
         "generation_accounting_owner": "live_scheduler",
@@ -166,16 +239,17 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     let mut harness =
         ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(frequency_hz, false)?;
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
-    let (_, cleanup_completion) =
+    let (cleanup_packets, cleanup_completion) =
         harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
     harness.attach_executor_for_test()?;
     let epoch = new_epoch(clock, &mut harness)?;
+    let mut stages = vec![accounting(&harness, "before_first_down")];
     let first = dispatch_next(&mut harness, clock, epoch)?
         .ok_or("scheduler finished before pause control Down")?;
     if (first.up_mask, first.down_mask) != (0, 1) {
         return Err("pause control did not begin with the live scheduler Down".into());
     }
-    let mut stages = vec![accounting(&harness, "after_initial_down")];
+    stages.push(accounting(&harness, "after_initial_down"));
 
     harness.set_pause_requested_for_test(true);
     harness.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
@@ -187,6 +261,7 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     )?;
     let cleanup_qpc =
         QpcTicks::from_raw(cleanup_completion.load(std::sync::atomic::Ordering::Acquire));
+    let pause_cleanup_records = cleanup_capture_records(&cleanup_packets)?;
     let barrier = harness
         .resume_barrier_qpc_for_test()
         .ok_or("verified cleanup did not establish a resume barrier")?;
@@ -250,6 +325,9 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     ) {
         return Err("exact-G resumed production packet did not dispatch".into());
     }
+    if sender_start < barrier {
+        return Err("resumed mock sender started before cleanup completion + G".into());
+    }
     stages.push(accounting(&harness, "after_resumed_down"));
 
     harness.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
@@ -259,11 +337,19 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
             ))
         },
     )?;
+    let final_cleanup_qpc = cleanup_completion.load(std::sync::atomic::Ordering::Acquire);
     stages.push(accounting(&harness, "after_final_cleanup"));
-    let attempts = packets
-        .lock()
-        .map_err(|_| "pause/resume packet capture poisoned".to_string())?
-        .len();
+    let packet_evidence = packet_capture_evidence(&packets)?;
+    let attempts = packet_evidence.len();
+    let all_cleanup_records = cleanup_capture_records(&cleanup_packets)?;
+    if all_cleanup_records.len() < pause_cleanup_records.len() {
+        return Err("cleanup capture lost records after pause cleanup".into());
+    }
+    let final_cleanup_records = &all_cleanup_records[pause_cleanup_records.len()..];
+    let cleanup_attempts = all_cleanup_records.len();
+    if pause_cleanup_records.is_empty() || final_cleanup_records.is_empty() {
+        return Err("pause/resume lifecycle did not capture both cleanup Up operations".into());
+    }
     let final_obligation = harness.release_obligation_mask_for_test();
     if attempts != 2 || final_obligation != 0 {
         return Err("pause/resume sender count or final release obligation failed".into());
@@ -272,6 +358,15 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     Ok(json!({
         "pause_requested": true,
         "sender_attempts": attempts,
+        "musical_sender_attempts": attempts,
+        "cleanup_sender_attempts": cleanup_attempts,
+        "total_mock_send_attempts": attempts + cleanup_attempts,
+        "packets": packet_evidence,
+        "cleanup_captures": {
+            "pause": cleanup_capture_evidence(&pause_cleanup_records, cleanup_qpc.as_u64()),
+            "final": cleanup_capture_evidence(final_cleanup_records, final_cleanup_qpc),
+            "total_attempts": cleanup_attempts,
+        },
         "generation_accounting_owner": "live_scheduler",
         "accounting_stages": stages,
         "cleanup_completion_qpc_ticks": cleanup_qpc.as_u64(),
@@ -279,6 +374,7 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         "min_release_gap_ticks": gap_ticks,
         "resume_barrier_qpc_ticks": barrier.as_u64(),
         "candidate_packet_not_before_qpc_ticks": staged_window.packet_not_before_qpc.as_u64(),
+        "resumed_sender_start_qpc_ticks": sender_start.as_u64(),
         "g_minus_one_decision": "wait",
         "exact_g_decision": "send",
         "final_release_obligation_mask": final_obligation,
