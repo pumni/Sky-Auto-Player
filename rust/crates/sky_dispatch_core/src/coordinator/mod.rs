@@ -19,6 +19,18 @@ type SplitIntentResult = (
     SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
 );
 
+fn projected_executor_storage_bytes(schedule: &RuntimeSchedule) -> Result<usize, String> {
+    let intent_count = schedule
+        .down_chords
+        .iter()
+        .try_fold(0usize, |total, chord| {
+            total
+                .checked_add(chord.intents.len())
+                .ok_or_else(|| "executor Down intent count overflow".to_string())
+        })?;
+    crate::executor::checked_executor_storage_bytes(schedule.down_chords.len(), intent_count)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationStatus {
@@ -648,10 +660,7 @@ impl RuntimeDispatchCoordinator {
                 generation_count_usize,
                 std::mem::size_of::<Option<(usize, usize)>>(),
             )?,
-            checked_storage_bytes(
-                schedule.down_chords.len(),
-                std::mem::size_of::<crate::executor::DownChordTicks>(),
-            )?,
+            projected_executor_storage_bytes(&schedule).map_err(CoordinatorError::Allocation)?,
         ])?;
         check_retained_budget(projected_coordinator)?;
         let mut generation_states = Vec::new();
@@ -755,10 +764,7 @@ impl RuntimeDispatchCoordinator {
             schedule_heap_bytes,
             std::mem::size_of::<Self>(),
             coordinator_vector_peak_bytes,
-            checked_storage_bytes(
-                schedule.down_chords.len(),
-                std::mem::size_of::<crate::executor::DownChordTicks>(),
-            )?,
+            projected_executor_storage_bytes(&schedule).map_err(CoordinatorError::Allocation)?,
         ])?;
         check_retained_budget(startup_peak_preflight)?;
 
@@ -847,12 +853,7 @@ impl RuntimeDispatchCoordinator {
         E: std::fmt::Display,
         C: FnMut() -> Result<(), String>,
     {
-        let projected_executor_bytes = self
-            .schedule
-            .down_chords
-            .len()
-            .checked_mul(std::mem::size_of::<crate::executor::DownChordTicks>())
-            .ok_or_else(|| "executor storage size overflow".to_string())?;
+        let projected_executor_bytes = projected_executor_storage_bytes(&self.schedule)?;
         self.check_retained_with_executor_bytes(projected_executor_bytes)?;
         let executor = crate::executor::DispatchExecutor::new_with_cancellation(
             &self.schedule,

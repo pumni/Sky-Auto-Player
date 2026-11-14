@@ -1051,6 +1051,7 @@ impl NativeDispatchSession {
             return Err("window identity could not bind to the current target generation".into());
         }
         *retained = Some((authority, generation));
+        let _ = self.shared.commands.interrupt.signal();
         Ok(())
     }
 
@@ -1063,6 +1064,7 @@ impl NativeDispatchSession {
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
         self.shared.target.invalidate_owner_identity();
+        let _ = self.shared.commands.interrupt.signal();
     }
 
     /// Poll the retained process object and exact target HWND on the desktop
@@ -1081,6 +1083,7 @@ impl NativeDispatchSession {
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
             self.shared.target.invalidate_owner_identity();
+            let _ = self.shared.commands.interrupt.signal();
             return false;
         };
         if target != (authority.identity().hwnd, *bound_generation) {
@@ -1090,6 +1093,7 @@ impl NativeDispatchSession {
                     .system_power
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
+            let _ = self.shared.commands.interrupt.signal();
             return false;
         }
         let failure = match authority.continuity() {
@@ -1117,6 +1121,7 @@ impl NativeDispatchSession {
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
         self.shared.target.invalidate_owner_identity_with(failure);
+        let _ = self.shared.commands.interrupt.signal();
         false
     }
 

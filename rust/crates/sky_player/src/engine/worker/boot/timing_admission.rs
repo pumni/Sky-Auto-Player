@@ -1,6 +1,6 @@
 use crate::engine::config::{EffectiveRuntimePolicy, WorkerConfig};
 use crate::engine::worker::WorkerTimingState;
-use crate::engine::{DurationTicks, PAUSED_POLL_US, QpcClock};
+use crate::engine::{DurationTicks, QpcClock};
 
 pub(super) struct ConvertedTiming {
     pub(super) min_hold_ticks: DurationTicks,
@@ -34,9 +34,6 @@ pub(super) fn convert(
     let focus_restore_grace_ticks = qpc_clock
         .duration_from_us(config.focus.focus_restore_grace_us)
         .map_err(|error| format!("focus grace conversion failed: {error:?}"))?;
-    let paused_poll_ticks = qpc_clock
-        .duration_from_us(PAUSED_POLL_US)
-        .map_err(|error| format!("paused polling conversion failed: {error:?}"))?;
     let lease_timeout_ticks = qpc_clock
         .duration_from_us(config.wait.supervisor_lease_timeout_us)
         .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
@@ -80,7 +77,6 @@ pub(super) fn convert(
             strict_down_completion_late_ticks,
             strict_up_completion_late_ticks,
             focus_restore_grace_ticks,
-            paused_poll_ticks,
             lease_timeout_ticks,
             effective_spin_threshold_ticks: DurationTicks::ZERO,
             pre_call_250us_ticks,

@@ -142,8 +142,7 @@ pub(crate) use timing::{
 };
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
-    wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;
@@ -572,7 +571,6 @@ pub(crate) struct WorkerTimingState {
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
-    pub(super) paused_poll_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
     /// First QPC tick whose floored public duration is strictly over the
@@ -602,7 +600,6 @@ impl WorkerTimingState {
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
-            paused_poll_ticks: DurationTicks::ZERO,
             lease_timeout_ticks: DurationTicks::ZERO,
             effective_spin_threshold_ticks: DurationTicks::ZERO,
             // Test harnesses replace these with the captured clock-domain

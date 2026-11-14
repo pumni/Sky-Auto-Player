@@ -1,7 +1,6 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
 use super::super::{
-    DurationTicks, QpcError, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
-    try_publish_metrics,
+    DurationTicks, QpcError, TimelineTicks, publish_lifecycle_metrics, try_publish_metrics,
 };
 use super::admission::{FinalControlAdmission, final_control_precheck};
 #[cfg(any(test, feature = "test-support"))]
@@ -11,8 +10,8 @@ use super::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
-    publish_backend_counters, publish_backend_metrics, record_wait_failure,
-    target_stamp_still_current, verify_final_down_admission, wait_for_next_boundary,
+    publish_backend_counters, publish_backend_metrics, target_stamp_still_current,
+    verify_final_down_admission, wait_for_next_boundary,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::test_support::PacketSenderAttemptEvidence;
@@ -60,6 +59,53 @@ fn account_unobserved_up_slots(
     local_metrics.up_slot_records_not_captured_by_mode = local_metrics
         .up_slot_records_not_captured_by_mode
         .saturating_add(count);
+}
+
+fn paused_focus_grace_deadline(
+    focus_pause_active: bool,
+    focus_active: bool,
+    target_available: bool,
+    restored_at: Option<sky_dispatch_win32::clock::QpcTicks>,
+    grace_ticks: DurationTicks,
+) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
+    if !focus_pause_active || !focus_active || !target_available {
+        return Ok(None);
+    }
+    restored_at
+        .map(|start| {
+            start
+                .checked_add_duration(grace_ticks)
+                .map_err(|error| format!("focus grace deadline overflow: {error}"))
+        })
+        .transpose()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paused_wait_state_is_stable(
+    desired_pause: &AtomicBool,
+    expected_desired_pause: bool,
+    focus_active: &AtomicBool,
+    expected_focus_active: bool,
+    require_focus: bool,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
+    system_power: &SystemPowerState,
+    target: &SessionTarget,
+    expected_target: Option<(isize, u64)>,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    expected_wake_generation: u64,
+) -> bool {
+    desired_pause.load(Ordering::Acquire) == expected_desired_pause
+        && focus_matches(require_focus, focus_active) == expected_focus_active
+        && !quit_requested.load(Ordering::Acquire)
+        && !skip_requested.load(Ordering::Acquire)
+        && !panic_requested.load(Ordering::Acquire)
+        && !supervisor_expired.is_expired()
+        && !system_power.down_blocked()
+        && target.load_stable() == expected_target
+        && interrupt.signal_generation() == expected_wake_generation
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -516,7 +562,7 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
 #[derive(Debug)]
 pub struct StagedCandidate {
     pub(crate) up_mask: u16,
-    pub(crate) down_chord: Option<sky_dispatch_core::executor::DownChordTicks>,
+    pub(crate) down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
     pub(crate) packet_masks: sky_dispatch_win32::input::PhysicalPacket,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(crate) authored_target_ticks: TimelineTicks,
@@ -532,7 +578,7 @@ pub struct StagedCandidate {
 
 fn down_authored_target(
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-    down_chord: Option<&sky_dispatch_core::executor::DownChordTicks>,
+    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
 ) -> Result<Option<(TimelineTicks, sky_dispatch_win32::clock::QpcTicks)>, String> {
     down_chord
         .map(|chord| {
@@ -583,13 +629,13 @@ pub(crate) struct StagedDispatchContext<'a> {
 
 pub(crate) fn stage_candidate(
     up_mask: u16,
-    down_chord: Option<sky_dispatch_core::executor::DownChordTicks>,
+    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     target: &SessionTarget,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
-    let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
+    let down_mask = down_chord.map_or(0, |c| c.down_mask);
     let has_down = down_mask != 0;
     let packet_masks = sky_dispatch_win32::input::PhysicalPacket::new(up_mask, down_mask);
 
@@ -630,7 +676,7 @@ pub(crate) fn stage_candidate(
         .map_err(|error| format!("authored target precedes current playback epoch: {error}"))?
         .as_u64();
     let authored_target_ticks = TimelineTicks::from_raw(authored_target_ticks);
-    let down_target = down_authored_target(resources.playback.epoch, down_chord.as_ref())?;
+    let down_target = down_authored_target(resources.playback.epoch, down_chord)?;
 
     let prepared_packet =
         match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
@@ -648,7 +694,7 @@ pub(crate) fn stage_candidate(
         _ => crate::engine::TRACE_KIND_UP,
     };
     let source_action_index = if has_down {
-        down_chord.as_ref().map_or(0, |c| c.source_action_index)
+        down_chord.map_or(0, |c| c.source_action_index)
     } else if let Some(first_up) = up_slot_timings.first() {
         first_up.source_action_index
     } else {
@@ -1022,7 +1068,7 @@ pub(crate) fn dispatch_staged_candidate(
             skipped_mask: send_result.evidence.skipped_mask,
             trace: crate::engine::worker::dispatch::observation::DownTraceObservation {
                 event_index: candidate.source_action_index,
-                compiled_packet_index: candidate.down_chord.as_ref().map(|c| c.chord_index as u64),
+                compiled_packet_index: candidate.down_chord.map(|c| c.chord_index as u64),
                 trace_kind: candidate.trace_kind,
                 result_status: send_result.status,
                 send_attempts: send_result.evidence.attempts,
@@ -1478,31 +1524,73 @@ pub(super) fn dispatch(
             let paused = resources.playback.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
-                let pause_target = match now_ticks.checked_add_duration(timing.paused_poll_ticks) {
-                    Ok(target) => target,
+                let target_snapshot = target.load_stable();
+                let focus_snapshot = focus_matches(config.focus.require_focus, focus_active);
+                let focus_grace_deadline = match paused_focus_grace_deadline(
+                    resources.playback.has_pause_reason(PauseReason::Focus),
+                    focus_snapshot,
+                    target_snapshot.is_some(),
+                    core.runtime.focus_restore_started_ticks,
+                    timing.focus_restore_grace_ticks,
+                ) {
+                    Ok(deadline) => deadline,
                     Err(error) => {
-                        core.runtime.terminal_error =
-                            Some(format!("pause deadline arithmetic failure: {error}"));
+                        core.runtime.terminal_error = Some(error);
                         break;
                     }
                 };
-                if let WaitOutcome::Failed(failure) = resources
-                    .waiter
-                    .wait_until_ticks_with_metrics_typed(
-                        qpc_clock,
-                        pause_target,
-                        DurationTicks::ZERO,
-                        interrupt,
-                    )
-                    .outcome
-                {
-                    record_wait_failure(
-                        failure,
-                        &mut core.metrics,
-                        &mut core.runtime.terminal_error,
-                    );
+                if focus_grace_deadline.is_some_and(|deadline| deadline <= now_ticks) {
+                    continue;
+                }
+                let wake_generation = interrupt.signal_generation();
+                if !paused_wait_state_is_stable(
+                    desired_pause,
+                    manual_pause,
+                    focus_active,
+                    focus_snapshot,
+                    config.focus.require_focus,
+                    quit_requested,
+                    skip_requested,
+                    panic_requested,
+                    supervisor_expired,
+                    system_power,
+                    target,
+                    target_snapshot,
+                    interrupt,
+                    wake_generation,
+                ) {
+                    continue;
+                }
+                if let Some(deadline_qpc) = focus_grace_deadline {
+                    match wait_for_next_boundary(WaitBoundaryInput {
+                        deadline: WaitDeadline {
+                            physical_target_qpc: Some(deadline_qpc),
+                            spin_threshold_ticks: DurationTicks::ZERO,
+                            qpc_clock,
+                        },
+                        signals: WaitSignals {
+                            waiter: &resources.waiter,
+                            interrupt,
+                        },
+                        mutable: WaitMutable {
+                            local_metrics: &mut core.metrics,
+                            terminal_error: &mut core.runtime.terminal_error,
+                        },
+                    }) {
+                        WaitBoundary::Due { .. } => {}
+                        WaitBoundary::Interrupted(_, _, _) => {
+                            let _ = interrupt.try_take();
+                        }
+                        WaitBoundary::Exit => break,
+                    }
+                } else if let Err(win32_error) = interrupt.wait_indefinitely() {
+                    core.runtime.terminal_error = Some(format!(
+                        "paused worker event wait failed (Win32 error {win32_error})"
+                    ));
                     break;
                 }
+                // Return through the state machine after a wake/deadline so
+                // controls, focus, target, power and lease are rechecked.
                 continue;
             }
 
@@ -1517,36 +1605,34 @@ pub(super) fn dispatch(
                     break;
                 }
             };
-            let scheduler_wait_target_qpc = match &action {
-                SchedulerAction::Finished => break,
-                SchedulerAction::Wait { deadline_qpc } => *deadline_qpc,
-                SchedulerAction::Send { .. } => now_ticks,
-            };
-            let action_to_stage = match action {
-                SchedulerAction::Wait { deadline_qpc } => {
-                    if deadline_qpc <= now_ticks {
-                        continue;
+            if matches!(&action, SchedulerAction::Finished) {
+                break;
+            }
+            if matches!(&action, SchedulerAction::Wait { deadline_qpc } if *deadline_qpc <= now_ticks)
+            {
+                continue;
+            }
+            let (scheduler_wait_target_qpc, action_to_stage) =
+                match project_scheduler_action_for_staging(
+                    &resources.scheduler,
+                    action,
+                    now_ticks,
+                    resources.playback.epoch,
+                ) {
+                    Ok(projected) => projected,
+                    Err(error) => {
+                        core.runtime.terminal_error = Some(error);
+                        break;
                     }
-                    match evaluate_scheduler_action(
-                        &resources.scheduler,
-                        deadline_qpc,
-                        resources.playback.epoch,
-                    ) {
-                        Ok(action) => action,
-                        Err(error) => {
-                            core.runtime.terminal_error = Some(error);
-                            break;
-                        }
-                    }
-                }
-                action => action,
-            };
+                };
             let packet_not_before_qpc = match &action_to_stage {
-                SchedulerAction::Send { timing_window, .. } => timing_window.packet_not_before_qpc,
-                SchedulerAction::Finished | SchedulerAction::Wait { .. } => now_ticks,
+                Some(SchedulerAction::Send { timing_window, .. }) => {
+                    timing_window.packet_not_before_qpc
+                }
+                None | Some(SchedulerAction::Finished | SchedulerAction::Wait { .. }) => now_ticks,
             };
             let mut candidate = match action_to_stage {
-                send_action @ SchedulerAction::Send { .. } => {
+                Some(send_action @ SchedulerAction::Send { .. }) => {
                     match stage_scheduler_action_preserving_due_up(
                         send_action,
                         target,
@@ -1588,8 +1674,7 @@ pub(super) fn dispatch(
                         }
                     }
                 }
-                SchedulerAction::Finished => continue,
-                SchedulerAction::Wait { .. } => None,
+                None | Some(SchedulerAction::Finished | SchedulerAction::Wait { .. }) => None,
             };
             let mut wait_target_qpc =
                 candidate
@@ -1890,10 +1975,11 @@ pub(super) fn dispatch(
 mod tests {
     use super::{
         SchedulerAction, down_authored_target, evaluate_scheduler_action,
-        physical_target_qpc_for_work, physical_wait_target_for_plan, pre_wait_candidate_admission,
-        publish_live_metrics_after_dispatch, source_action_target, stage_scheduler_action,
-        stage_scheduler_action_preserving_due_up, stage_up_only_for_stale_mixed_candidate,
-        wait_after_unstable_target,
+        paused_focus_grace_deadline, paused_wait_state_is_stable, physical_target_qpc_for_work,
+        physical_wait_target_for_plan, pre_wait_candidate_admission,
+        project_scheduler_action_for_staging, publish_live_metrics_after_dispatch,
+        source_action_target, stage_scheduler_action, stage_scheduler_action_preserving_due_up,
+        stage_up_only_for_stale_mixed_candidate, wait_after_unstable_target,
     };
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
@@ -1903,14 +1989,301 @@ mod tests {
     };
     use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
     use sky_dispatch_win32::clock::QpcClock;
+    use sky_dispatch_win32::event::OwnedEvent;
     use sky_dispatch_win32::input::{
         PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome,
         SendTransactionStatus,
     };
     use std::num::NonZeroU64;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     type MockPacketCapture = std::sync::Arc<std::sync::Mutex<Vec<(PhysicalPacket, SendEvidence)>>>;
+
+    #[test]
+    fn metadata_only_tail_waits_to_timeline_end_without_spinning_or_staging() {
+        use sky_dispatch_core::compile::compile_runtime_intents;
+        use sky_dispatch_core::executor::DispatchExecutor;
+
+        let clock = QpcClock::initialize().expect("QPC clock");
+        let tail_us = 80_000;
+        let mut schedule = compile_runtime_intents(&[], &[0x15]).expect("empty schedule");
+        schedule.schedule_end_offset_us = tail_us;
+        let executor =
+            DispatchExecutor::new(&schedule, DurationTicks::ZERO, DurationTicks::ZERO, |us| {
+                clock
+                    .timeline_from_us(us)
+                    .map_err(|error| format!("{error:?}"))
+            })
+            .expect("metadata-tail executor");
+        assert!(!executor.has_physical_work());
+
+        let epoch = clock.now().expect("QPC epoch");
+        let initial_action =
+            evaluate_scheduler_action(&executor, epoch, epoch).expect("scheduler tail decision");
+        let SchedulerAction::Wait { deadline_qpc } = initial_action else {
+            panic!("metadata-only tail must wait for the schedule end");
+        };
+        assert!(deadline_qpc > epoch);
+        let started = std::time::Instant::now();
+        let (wait_target, action_to_stage) = project_scheduler_action_for_staging(
+            &executor,
+            SchedulerAction::Wait { deadline_qpc },
+            epoch,
+            epoch,
+        )
+        .expect("project deadline action");
+        assert_eq!(wait_target, deadline_qpc);
+        assert!(
+            action_to_stage.is_none(),
+            "Finished projection must not busy-loop"
+        );
+
+        let waiter = sky_dispatch_win32::wait::HybridWaiter::new();
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let mut terminal_error = None;
+        match super::wait_for_next_boundary(super::WaitBoundaryInput {
+            deadline: super::WaitDeadline {
+                physical_target_qpc: Some(wait_target),
+                spin_threshold_ticks: DurationTicks::ZERO,
+                qpc_clock: clock,
+            },
+            signals: super::WaitSignals {
+                waiter: &waiter,
+                interrupt: &interrupt,
+            },
+            mutable: super::WaitMutable {
+                local_metrics: &mut local_metrics,
+                terminal_error: &mut terminal_error,
+            },
+        }) {
+            super::WaitBoundary::Due {
+                target_qpc,
+                dispatch_qpc,
+                wait_result,
+                ..
+            } => {
+                assert_eq!(target_qpc, deadline_qpc);
+                assert!(dispatch_qpc >= deadline_qpc);
+                assert_eq!(
+                    wait_result
+                        .expect("tail deadline used an interruptible wait")
+                        .spin_ticks,
+                    DurationTicks::ZERO,
+                    "metadata-only tail must not precision-spin"
+                );
+            }
+            super::WaitBoundary::Interrupted(..) => panic!("tail unexpectedly interrupted"),
+            super::WaitBoundary::Exit => panic!("tail wait exited: {terminal_error:?}"),
+        }
+        assert!(started.elapsed() >= std::time::Duration::from_millis(40));
+        assert_eq!(local_metrics.wait_interrupted_count, 0);
+    }
+
+    #[test]
+    fn metadata_only_tail_can_be_interrupted_near_deadline_without_spinning() {
+        use sky_dispatch_core::compile::compile_runtime_intents;
+        use sky_dispatch_core::executor::DispatchExecutor;
+
+        let clock = QpcClock::initialize().expect("QPC clock");
+        let mut schedule = compile_runtime_intents(&[], &[0x15]).expect("empty schedule");
+        schedule.schedule_end_offset_us = 200_000;
+        let executor =
+            DispatchExecutor::new(&schedule, DurationTicks::ZERO, DurationTicks::ZERO, |us| {
+                clock
+                    .timeline_from_us(us)
+                    .map_err(|error| format!("{error:?}"))
+            })
+            .expect("metadata-tail executor");
+        let epoch = clock.now().expect("QPC epoch");
+        let SchedulerAction::Wait { deadline_qpc } =
+            evaluate_scheduler_action(&executor, epoch, epoch).expect("tail action")
+        else {
+            panic!("metadata-only tail must retain the timeline-end wait");
+        };
+        let (wait_target, action_to_stage) = project_scheduler_action_for_staging(
+            &executor,
+            SchedulerAction::Wait { deadline_qpc },
+            epoch,
+            epoch,
+        )
+        .expect("project tail deadline");
+        assert_eq!(wait_target, deadline_qpc);
+        assert!(action_to_stage.is_none());
+
+        let interrupt = std::sync::Arc::new(OwnedEvent::new_auto_reset().expect("interrupt event"));
+        let signaler_event = std::sync::Arc::clone(&interrupt);
+        let signaler = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            assert!(signaler_event.signal());
+        });
+        let started = std::time::Instant::now();
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let mut terminal_error = None;
+        match super::wait_for_next_boundary(super::WaitBoundaryInput {
+            deadline: super::WaitDeadline {
+                physical_target_qpc: Some(wait_target),
+                spin_threshold_ticks: DurationTicks::ZERO,
+                qpc_clock: clock,
+            },
+            signals: super::WaitSignals {
+                waiter: &sky_dispatch_win32::wait::HybridWaiter::new(),
+                interrupt: &interrupt,
+            },
+            mutable: super::WaitMutable {
+                local_metrics: &mut local_metrics,
+                terminal_error: &mut terminal_error,
+            },
+        }) {
+            super::WaitBoundary::Interrupted(result, target, _) => {
+                assert_eq!(target, deadline_qpc);
+                assert_eq!(result.spin_ticks, DurationTicks::ZERO);
+            }
+            super::WaitBoundary::Due { .. } => panic!("signal should arrive before the deadline"),
+            super::WaitBoundary::Exit => panic!("tail wait exited: {terminal_error:?}"),
+        }
+        signaler.join().expect("control signaler");
+        assert!(started.elapsed() >= std::time::Duration::from_millis(120));
+        assert!(started.elapsed() < std::time::Duration::from_millis(190));
+        assert_eq!(local_metrics.wait_interrupted_count, 1);
+    }
+
+    #[test]
+    fn paused_wait_recheck_closes_wake_race_and_rechecks_multiple_controls() {
+        use crate::engine::shared::{SupervisorLeaseState, SystemPowerState};
+        use crate::engine::target::SessionTarget;
+        use sky_dispatch_win32::event::OwnedEvent;
+
+        let target = SessionTarget::new(42, 7);
+        let desired_pause = AtomicBool::new(true);
+        let focus_active = AtomicBool::new(true);
+        let quit_requested = AtomicBool::new(false);
+        let skip_requested = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(false);
+        let supervisor_expired = SupervisorLeaseState::new(QpcTicks::ZERO);
+        let system_power = SystemPowerState::default();
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+        let target_state = target.load_stable();
+        let wake_generation = interrupt.signal_generation();
+
+        assert!(interrupt.signal(), "raced signal before block");
+        assert!(
+            !paused_wait_state_is_stable(
+                &desired_pause,
+                true,
+                &focus_active,
+                true,
+                true,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &supervisor_expired,
+                &system_power,
+                &target,
+                target_state,
+                &interrupt,
+                wake_generation,
+            ),
+            "a signal racing the pre-block snapshot must return through the state machine"
+        );
+        assert!(interrupt.try_take());
+
+        let stable_generation = interrupt.signal_generation();
+        assert!(
+            paused_wait_state_is_stable(
+                &desired_pause,
+                true,
+                &focus_active,
+                true,
+                true,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &supervisor_expired,
+                &system_power,
+                &target,
+                target_state,
+                &interrupt,
+                stable_generation,
+            ),
+            "a spurious wake with unchanged semantic state can safely re-enter the wait"
+        );
+
+        desired_pause.store(false, Ordering::Release);
+        assert!(
+            interrupt.signal(),
+            "resume publisher signals the paused worker"
+        );
+        assert!(
+            !paused_wait_state_is_stable(
+                &desired_pause,
+                true,
+                &focus_active,
+                true,
+                true,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &supervisor_expired,
+                &system_power,
+                &target,
+                target_state,
+                &interrupt,
+                interrupt.signal_generation(),
+            ),
+            "resume state is rechecked after the wake"
+        );
+        desired_pause.store(true, Ordering::Release);
+        assert!(interrupt.try_take());
+
+        skip_requested.store(true, Ordering::Release);
+        quit_requested.store(true, Ordering::Release);
+        assert!(interrupt.signal());
+        assert!(
+            !paused_wait_state_is_stable(
+                &desired_pause,
+                true,
+                &focus_active,
+                true,
+                true,
+                &quit_requested,
+                &skip_requested,
+                &panic_requested,
+                &supervisor_expired,
+                &system_power,
+                &target,
+                target_state,
+                &interrupt,
+                interrupt.signal_generation(),
+            ),
+            "coalesced event wakes cannot hide independent Stop and Skip state"
+        );
+    }
+
+    #[test]
+    fn paused_focus_grace_wait_uses_one_absolute_deadline() {
+        let restored_at = QpcTicks::from_raw(10_000);
+        let deadline = paused_focus_grace_deadline(
+            true,
+            true,
+            true,
+            Some(restored_at),
+            DurationTicks::from_raw(4_000),
+        )
+        .expect("checked focus grace deadline");
+        assert_eq!(deadline, Some(QpcTicks::from_raw(14_000)));
+        assert_eq!(
+            paused_focus_grace_deadline(
+                true,
+                true,
+                false,
+                Some(restored_at),
+                DurationTicks::from_raw(4_000),
+            )
+            .expect("target-less focus does not arm a grace timer"),
+            None
+        );
+    }
 
     #[test]
     fn mixed_packet_down_lateness_uses_down_target_and_keeps_packet_target() {
@@ -1927,7 +2300,7 @@ mod tests {
             reason_id: 0,
             intents: SmallVec::new(),
         };
-        let down_target = down_authored_target(epoch, Some(&chord))
+        let down_target = down_authored_target(epoch, Some((&chord).into()))
             .expect("checked Down target")
             .expect("Down target exists");
         let packet_authored_qpc = QpcTicks::from_raw(17_167);

@@ -70,7 +70,8 @@ $requiredFunctions = @(
     'Get-TimingMetrics',
     'Invoke-NativeCaseFailStopSequence',
     'Assert-SchedulerManifestIdentity',
-    'Assert-SchedulerObserverPairMode'
+    'Assert-SchedulerObserverPairMode',
+    'Assert-QualificationTimingMargin'
 )
 foreach ($name in $requiredFunctions) {
     $functionAst = $ast.Find({
@@ -288,6 +289,7 @@ $wrongVersionSummary = $observerSummary | Select-Object *
 $wrongVersionSummary.observer_version = 'scheduler-receiveonly-queue-v2'
 & $assertObserverRejected $observerReady $wrongVersionSummary $observerRecords $observerVersion 'historical v2 observer version'
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 
 $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
 if ([regex]::Matches($runnerSource, 'Invoke-NativeCaseFailStopSequence').Count -lt 3) {
@@ -380,6 +382,101 @@ $caseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_nativ
 if (-not $caseRunnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$harnessManifest") -or
     -not $runnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$manifest")) {
     throw 'Scheduler profile changes removed the established #646 provenance validation path'
+}
+
+$frameBaseRevision = '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327'
+$frameBaseTree = '48eec424c155e98fa1a81ad018bc832b6e6b964f'
+$validFrameCandidate = [pscustomobject]@{
+    qualification_profile = 'FrameSnapshot'; source_role = 'Candidate'; source_branch = 'refactor/frame-snapshot-dispatch'
+    source_tree_clean = $true; clean_build = $true; source_revision = ('a' * 40); source_tree_sha = ('b' * 40)
+    base_source_revision = $frameBaseRevision; base_source_tree_sha = $frameBaseTree; workload_version = 'frame-snapshot-v1'
+    receiveonly_observer_mode = 'SchedulerQueuedV3Compat3'; receiveonly_observer_version = 'scheduler-receiveonly-queue-v3-compat3'
+    performance_timing_margin_us = 0; safety_timing_margin_us = 500; target = 'x86_64-pc-windows-msvc'; binary_sha256 = ('c' * 64)
+}
+$validFrameBaseline = $validFrameCandidate | Select-Object *
+$validFrameBaseline.source_role = 'Baseline'; $validFrameBaseline.source_branch = ''
+$validFrameBaseline.source_revision = $frameBaseRevision; $validFrameBaseline.source_tree_sha = $frameBaseTree
+Assert-FrameSnapshotManifestIdentity -Manifest $validFrameBaseline -ExpectedRole Baseline
+Assert-FrameSnapshotManifestIdentity -Manifest $validFrameCandidate -ExpectedRole Candidate
+
+$frameInvalidCases = @(
+    @{ name = 'branch'; mutate = { param($m) $m.source_branch = 'wrong-branch' } },
+    @{ name = 'base'; mutate = { param($m) $m.base_source_revision = ('0' * 40) } },
+    @{ name = 'source hash'; mutate = { param($m) $m.source_tree_sha = 'not-a-tree-hash' } },
+    @{ name = 'role'; mutate = { param($m) $m.source_role = 'Baseline' } },
+    @{ name = 'dirty source'; mutate = { param($m) $m.source_tree_clean = $false } }
+)
+foreach ($case in $frameInvalidCases) {
+    $invalidFrame = $validFrameCandidate | Select-Object *
+    & $case.mutate $invalidFrame
+    $rejected = $false
+    try { Assert-FrameSnapshotManifestIdentity -Manifest $invalidFrame -ExpectedRole Candidate } catch { $rejected = $true }
+    if (-not $rejected) { throw ('FrameSnapshot accepted invalid manifest ' + $case.name) }
+}
+$wrongFramePinnedHash = $validFrameBaseline | Select-Object *
+$wrongFramePinnedHash.source_tree_sha = ('0' * 40)
+$wrongFrameHashRejected = $false
+try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -ExpectedRole Baseline } catch { $wrongFrameHashRejected = $true }
+if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
+
+$frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
+if ($frameBuilderSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)" -or
+    $acceptanceSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)") {
+    throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
+}
+$qualifierSource = Get-Content -LiteralPath $runnerPath -Raw
+if ($qualifierSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)") {
+    throw 'FrameSnapshot profile is missing from qualification runner'
+}
+Assert-QualificationTimingMargin -RequestedStage Canary -Profile FrameSnapshot -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Smoke -Profile FrameSnapshot -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Compare -Profile FrameSnapshot -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Final -Profile FrameSnapshot -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Compare -Profile Scheduler -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+$wrongFrameMarginRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Compare -Profile FrameSnapshot -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 } catch { $wrongFrameMarginRejected = $true }
+if (-not $wrongFrameMarginRejected) { throw 'FrameSnapshot Compare accepted a nonzero performance margin' }
+$wrongFrameCanaryRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Canary -Profile FrameSnapshot -MarginUs 0 -PairCount 1 -SampleDurationSeconds 0 } catch { $wrongFrameCanaryRejected = $true }
+if (-not $wrongFrameCanaryRejected) { throw 'FrameSnapshot safety canary accepted a non-safety margin' }
+if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Final'\)" -or
+    -not $qualifierSource.Contains("if (`$Stage -eq 'Canary' -and `$QualificationProfile -ne 'FrameSnapshot')")) {
+    throw 'FrameSnapshot canary stage is missing its opt-in stage and profile boundary'
+}
+
+$integrityRoot = Join-Path $env:TEMP ('dispatch-manifest-integrity-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $integrityRoot | Out-Null
+try {
+    $integrityBinary = Join-Path $integrityRoot 'rt-native-acceptance.exe'
+    $integrityManifestPath = Join-Path $integrityRoot 'manifest.json'
+    $integrityBuilder = Join-Path $integrityRoot 'build_dispatch_core_harness.ps1'
+    $integrityBuildLog = Join-Path $integrityRoot 'build.log'
+    $integrityCleanLog = Join-Path $integrityRoot 'clean.log'
+    [System.IO.File]::WriteAllBytes($integrityBinary, [byte[]](1, 2, 3, 4))
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Destination $integrityBuilder
+    [System.IO.File]::WriteAllText($integrityBuildLog, 'build fixture')
+    [System.IO.File]::WriteAllText($integrityCleanLog, 'clean fixture')
+    $integrityManifest = [pscustomobject]@{
+        binary_name = 'rt-native-acceptance.exe'; binary_path = $integrityBinary
+        binary_sha256 = (Get-FileHash -LiteralPath $integrityBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+        builder_script_sha256 = (Get-FileHash -LiteralPath $integrityBuilder -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $integrityManifest | ConvertTo-Json | Set-Content -LiteralPath $integrityManifestPath -Encoding UTF8
+    $integrityRows = @(
+        ((Get-FileHash -LiteralPath $integrityManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() + '  manifest.json'),
+        ($integrityManifest.binary_sha256 + '  rt-native-acceptance.exe'),
+        ($integrityManifest.builder_script_sha256 + '  build_dispatch_core_harness.ps1'),
+        ((Get-FileHash -LiteralPath $integrityBuildLog -Algorithm SHA256).Hash.ToLowerInvariant() + '  build.log'),
+        ((Get-FileHash -LiteralPath $integrityCleanLog -Algorithm SHA256).Hash.ToLowerInvariant() + '  clean.log')
+    )
+    Set-Content -LiteralPath (Join-Path $integrityRoot 'SHA256SUMS.txt') -Value $integrityRows -Encoding UTF8
+    Assert-ImmutableHarnessManifestIntegrity -Manifest $integrityManifest -ManifestPath $integrityManifestPath | Out-Null
+    [System.IO.File]::WriteAllBytes($integrityBinary, [byte[]](4, 3, 2, 1))
+    $integrityRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $integrityManifest -ManifestPath $integrityManifestPath | Out-Null } catch { $integrityRejected = $true }
+    if (-not $integrityRejected) { throw 'immutable harness manifest integrity accepted a changed binary' }
+} finally {
+    Remove-Item -LiteralPath $integrityRoot -Recurse -Force
 }
 
 $smokeRuns = [System.Collections.Generic.List[string]]::new()

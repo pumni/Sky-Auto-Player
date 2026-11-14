@@ -21,6 +21,92 @@ function Get-FileSha256 {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Assert-FrameSnapshotManifestIdentity {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$ExpectedRole
+    )
+
+    $expectedBranch = if ($ExpectedRole -eq 'Baseline') { '' } else { 'refactor/frame-snapshot-dispatch' }
+    $sourceRevision = [string](Get-ManifestProperty $Manifest 'source_revision')
+    $sourceTree = [string](Get-ManifestProperty $Manifest 'source_tree_sha')
+    $binarySha = [string](Get-ManifestProperty $Manifest 'binary_sha256')
+    if ((Get-ManifestProperty $Manifest 'qualification_profile') -ne 'FrameSnapshot' -or
+        (Get-ManifestProperty $Manifest 'source_role') -ne $ExpectedRole -or
+        (Get-ManifestProperty $Manifest 'source_branch') -ne $expectedBranch -or
+        -not [bool](Get-ManifestProperty $Manifest 'source_tree_clean') -or
+        -not [bool](Get-ManifestProperty $Manifest 'clean_build') -or
+        (Get-ManifestProperty $Manifest 'base_source_revision') -ne '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' -or
+        (Get-ManifestProperty $Manifest 'base_source_tree_sha') -ne '48eec424c155e98fa1a81ad018bc832b6e6b964f' -or
+        (Get-ManifestProperty $Manifest 'workload_version') -ne 'frame-snapshot-v1' -or
+        (Get-ManifestProperty $Manifest 'receiveonly_observer_mode') -ne 'SchedulerQueuedV3Compat3' -or
+        (Get-ManifestProperty $Manifest 'receiveonly_observer_version') -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+        (Get-ManifestProperty $Manifest 'performance_timing_margin_us') -ne 0 -or
+        (Get-ManifestProperty $Manifest 'safety_timing_margin_us') -ne 500 -or
+        (Get-ManifestProperty $Manifest 'target') -ne 'x86_64-pc-windows-msvc' -or
+        $sourceRevision -notmatch '^[0-9a-f]{40}$' -or
+        $sourceTree -notmatch '^[0-9a-f]{40}$' -or
+        $binarySha -notmatch '^[0-9a-f]{64}$') {
+        throw ('FrameSnapshot ' + $ExpectedRole + ' manifest identity, role, branch, base, hashes, workload, observer, or timing margins are invalid')
+    }
+
+    if ($ExpectedRole -eq 'Baseline' -and
+        ($sourceRevision -ne '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' -or
+            $sourceTree -ne '48eec424c155e98fa1a81ad018bc832b6e6b964f')) {
+        throw 'FrameSnapshot baseline must be the exact pinned source SHA and tree'
+    }
+}
+
+function Assert-ImmutableHarnessManifestIntegrity {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] [string]$ManifestPath
+    )
+
+    $manifestFullPath = [System.IO.Path]::GetFullPath($ManifestPath)
+    $manifestRoot = [System.IO.Path]::GetDirectoryName($manifestFullPath)
+    $expectedManifestPath = [System.IO.Path]::GetFullPath((Join-Path $manifestRoot 'manifest.json'))
+    if (-not [string]::Equals($manifestFullPath, $expectedManifestPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'immutable harness manifest must be named manifest.json in its evidence directory'
+    }
+    $expectedBinaryPath = [System.IO.Path]::GetFullPath((Join-Path $manifestRoot ([string](Get-ManifestProperty $Manifest 'binary_name'))))
+    $actualBinaryPath = [System.IO.Path]::GetFullPath([string](Get-ManifestProperty $Manifest 'binary_path'))
+    if (-not [string]::Equals($actualBinaryPath, $expectedBinaryPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'immutable harness binary path must be the manifest sibling named by binary_name'
+    }
+
+    $checksumPath = Join-Path $manifestRoot 'SHA256SUMS.txt'
+    if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) { throw 'immutable harness SHA256SUMS.txt is missing' }
+    $expected = @{
+        'manifest.json' = Get-FileSha256 $manifestFullPath
+        ([string](Get-ManifestProperty $Manifest 'binary_name')) = Get-FileSha256 $actualBinaryPath
+        'build_dispatch_core_harness.ps1' = Get-FileSha256 (Join-Path $manifestRoot 'build_dispatch_core_harness.ps1')
+        'build.log' = Get-FileSha256 (Join-Path $manifestRoot 'build.log')
+        'clean.log' = Get-FileSha256 (Join-Path $manifestRoot 'clean.log')
+    }
+    if ((Get-FileSha256 (Join-Path $manifestRoot 'build_dispatch_core_harness.ps1')) -ne
+        [string](Get-ManifestProperty $Manifest 'builder_script_sha256')) {
+        throw 'immutable harness builder copy does not match its manifest source hash'
+    }
+    $actual = @{}
+    foreach ($line in Get-Content -LiteralPath $checksumPath) {
+        if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw 'immutable harness checksum file contains an invalid row' }
+        $name = $Matches[2]
+        if ($actual.ContainsKey($name)) { throw ('immutable harness checksum file repeats ' + $name) }
+        $actual[$name] = $Matches[1]
+    }
+    if ($actual.Count -ne $expected.Count) { throw 'immutable harness checksum inventory is incomplete or contains unexpected files' }
+    foreach ($name in $expected.Keys) {
+        if (-not $actual.ContainsKey($name) -or $actual[$name] -ne $expected[$name]) {
+            throw ('immutable harness checksum mismatch for ' + $name)
+        }
+    }
+    if ((Get-FileSha256 $actualBinaryPath) -ne [string](Get-ManifestProperty $Manifest 'binary_sha256')) {
+        throw 'immutable harness binary hash differs from manifest binary_sha256'
+    }
+    $true
+}
+
 function Resolve-OutsideRepositoryFile {
     param([string]$Path, [string]$RepositoryRoot, [string]$Label)
     if ([string]::IsNullOrWhiteSpace($Path) -or -not [System.IO.Path]::IsPathRooted($Path)) {
@@ -140,4 +226,4 @@ function Assert-C1TimedControlProvenance {
     $true
 }
 
-Export-ModuleMember -Function Get-ManifestProperty, Assert-C1TimedControlProvenance
+Export-ModuleMember -Function Get-ManifestProperty, Assert-C1TimedControlProvenance, Assert-FrameSnapshotManifestIdentity, Assert-ImmutableHarnessManifestIntegrity

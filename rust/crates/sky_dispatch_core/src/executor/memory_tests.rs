@@ -56,12 +56,123 @@ fn executor_new_with_cancellation_and_memory_metrics() {
     let mem = exec.memory_metrics();
     assert_eq!(mem.chord_count, 1);
     assert!(mem.chord_capacity >= 1);
+    assert_eq!(mem.intent_count, 1);
+    assert!(mem.intent_capacity >= 1);
+    assert_eq!(
+        mem.chord_header_heap_bytes,
+        mem.chord_capacity * std::mem::size_of::<DownChordHeaderTicks>()
+    );
+    assert_eq!(
+        mem.intent_heap_bytes,
+        mem.intent_capacity * std::mem::size_of::<DownIntentTicks>()
+    );
     assert_eq!(
         mem.chord_heap_bytes,
-        mem.chord_capacity * std::mem::size_of::<crate::executor::DownChordTicks>()
+        mem.chord_header_heap_bytes + mem.intent_heap_bytes
     );
     assert_eq!(mem.struct_bytes, std::mem::size_of::<DispatchExecutor>());
     assert_eq!(mem.total_bytes, mem.chord_heap_bytes + mem.struct_bytes);
+}
+
+#[test]
+fn compact_executor_arena_tracks_one_five_and_fifteen_key_chords() {
+    for key_count in [1usize, 5, crate::model::MAX_KEYS] {
+        let allowed: Vec<u16> = (0..key_count).map(|index| 0x15 + index as u16).collect();
+        let actions = vec![
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::SmallVec::from_slice(&allowed),
+                reason: "full chord Down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 30_000,
+                scan_codes: smallvec::SmallVec::from_slice(&allowed),
+                reason: "full chord Up".into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &allowed).expect("schedule");
+        let mut coordinator = crate::coordinator::RuntimeDispatchCoordinator::new(
+            schedule,
+            0,
+            0,
+            TimelineTicks::from_raw,
+        );
+        coordinator
+            .attach_executor_with_cancellation(
+                DurationTicks::from_raw(1_000),
+                DurationTicks::from_raw(16_667),
+                |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
+                || Ok(()),
+            )
+            .expect("compact executor");
+        let executor = coordinator.executor.as_ref().expect("attached executor");
+        let chord = executor.current_chord().expect("compiled Down chord");
+        assert_eq!(chord.chord_index, 0);
+        assert_eq!(chord.source_action_index, 0);
+        assert_eq!(chord.scheduled_us, 10_000);
+        assert!(
+            std::mem::size_of::<DownChordMetadata>() < std::mem::size_of::<DownChordTicks>(),
+            "production staged provenance must not retain the owned chord fixture"
+        );
+        let actual_scan_codes: Vec<u16> = chord
+            .intents
+            .iter()
+            .map(|intent| intent.scan_code)
+            .collect();
+        assert_eq!(
+            actual_scan_codes, allowed,
+            "intent order for {key_count} keys"
+        );
+        assert_eq!(chord.intents.len(), key_count);
+        assert_eq!(chord.down_mask.count_ones() as usize, key_count);
+
+        let memory = executor
+            .try_memory_metrics()
+            .expect("executor memory metrics");
+        assert_eq!(memory.chord_count, 1);
+        assert_eq!(memory.intent_count, key_count);
+        assert_eq!(
+            memory.chord_header_heap_bytes,
+            memory.chord_capacity * std::mem::size_of::<DownChordHeaderTicks>()
+        );
+        assert_eq!(
+            memory.intent_heap_bytes,
+            memory.intent_capacity * std::mem::size_of::<DownIntentTicks>()
+        );
+        assert_eq!(
+            memory.chord_heap_bytes,
+            memory.chord_header_heap_bytes + memory.intent_heap_bytes
+        );
+        assert!(memory.chord_capacity >= memory.chord_count);
+        assert!(memory.intent_capacity >= memory.intent_count);
+        let dispatch_memory = coordinator
+            .memory_metrics()
+            .expect("startup memory metrics");
+        assert!(
+            dispatch_memory.startup_peak_capacity_bytes >= dispatch_memory.retained_capacity_bytes
+        );
+        assert_eq!(dispatch_memory.executor_heap_bytes, memory.chord_heap_bytes);
+        let legacy_chord_heap_bytes = memory
+            .chord_count
+            .checked_mul(std::mem::size_of::<DownChordTicks>())
+            .expect("legacy inline chord storage size");
+        eprintln!(
+            "dispatch_memory workload=full_chord keys={key_count} legacy_executor_chord_capacity_bytes={legacy_chord_heap_bytes} legacy_chord_struct_bytes={} compact_headers={} header_capacity_bytes={} intent_count={} intent_capacity={} intent_capacity_bytes={} compact_executor_capacity_bytes={} retained_capacity_bytes={} startup_peak_capacity_bytes={} memory_basis=actual_vector_capacities",
+            std::mem::size_of::<DownChordTicks>(),
+            memory.chord_count,
+            memory.chord_header_heap_bytes,
+            memory.intent_count,
+            memory.intent_capacity,
+            memory.intent_heap_bytes,
+            memory.chord_heap_bytes,
+            dispatch_memory.retained_capacity_bytes,
+            dispatch_memory.startup_peak_capacity_bytes,
+        );
+    }
 }
 
 #[test]
@@ -169,9 +280,16 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
             coordinator.executor.as_ref().unwrap().down_chord_count(),
             chord_count
         );
-        assert!(
-            mem.executor_heap_bytes
-                >= chord_count * std::mem::size_of::<crate::executor::DownChordTicks>()
+        assert_eq!(
+            mem.executor_heap_bytes,
+            coordinator
+                .executor
+                .as_ref()
+                .expect("attached executor")
+                .try_memory_metrics()
+                .expect("executor memory metrics")
+                .chord_heap_bytes,
+            "retained metrics include both executor vector capacities"
         );
         assert!(mem.retained_capacity_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
         assert!(mem.startup_peak_capacity_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
@@ -285,16 +403,23 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
 }
 #[test]
 fn executor_storage_admission_rejects_overflow_and_budget_excess() {
-    let chord_size = std::mem::size_of::<DownChordTicks>();
-    let largest_admitted = MAX_EXECUTOR_BYTES / chord_size;
-    assert!(checked_executor_storage_bytes(largest_admitted).is_ok());
+    let header_size = std::mem::size_of::<DownChordHeaderTicks>();
+    let intent_size = std::mem::size_of::<DownIntentTicks>();
+    let per_chord_size = header_size + intent_size;
+    let largest_admitted = MAX_EXECUTOR_BYTES / per_chord_size;
+    assert!(checked_executor_storage_bytes(largest_admitted, largest_admitted).is_ok());
     assert!(
-        checked_executor_storage_bytes(largest_admitted + 1)
+        checked_executor_storage_bytes(largest_admitted + 1, largest_admitted + 1)
             .unwrap_err()
             .contains("exceeds budget")
     );
     assert!(
-        checked_executor_storage_bytes(usize::MAX)
+        checked_executor_storage_bytes(usize::MAX, 0)
+            .unwrap_err()
+            .contains("overflow")
+    );
+    assert!(
+        checked_executor_storage_bytes(0, usize::MAX)
             .unwrap_err()
             .contains("overflow")
     );
@@ -307,6 +432,12 @@ fn executor_reservation_reports_real_try_reserve_failure() {
         .expect_err("unrepresentable Vec capacity must be denied by try_reserve_exact");
     assert!(error.contains("executor chord capacity allocation failed"));
     assert!(chords.is_empty());
+
+    let mut intents = Vec::new();
+    let error = reserve_executor_intents(&mut intents, usize::MAX)
+        .expect_err("unrepresentable intent arena capacity must be denied by try_reserve_exact");
+    assert!(error.contains("executor intent-arena capacity allocation failed"));
+    assert!(intents.is_empty());
 }
 
 #[test]
@@ -341,7 +472,7 @@ fn executor_cancellation_interrupts_large_materialization() {
         },
         || {
             checks += 1;
-            if checks == 3 {
+            if checks == 4 {
                 Err("cancelled during materialization".into())
             } else {
                 Ok(())
@@ -353,6 +484,6 @@ fn executor_cancellation_interrupts_large_materialization() {
             .unwrap_err()
             .contains("cancelled during materialization")
     );
-    assert_eq!(checks, 3);
-    assert_eq!(converted_timestamps, 2 * 8_192);
+    assert_eq!(checks, 4);
+    assert_eq!(converted_timestamps, 2 * 4_096);
 }

@@ -6,8 +6,8 @@ use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 impl ProductionDispatchTestHarness {
     pub fn current_executor_chord_for_test(
         &self,
-    ) -> Option<sky_dispatch_core::executor::DownChordTicks> {
-        self.resources.scheduler.current_chord().cloned()
+    ) -> Option<sky_dispatch_core::executor::DownChordMetadata> {
+        self.resources.scheduler.current_chord().map(Into::into)
     }
 
     pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
@@ -44,7 +44,7 @@ impl ProductionDispatchTestHarness {
     pub fn stage_candidate_for_test(
         &mut self,
         up_mask: u16,
-        down_chord: Option<sky_dispatch_core::executor::DownChordTicks>,
+        down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
         fallback_ticks: TimelineTicks,
     ) -> Result<Option<crate::engine::worker::StagedCandidate>, String> {
         let up_slot_timings = self.resources.scheduler.up_slot_timings(up_mask);

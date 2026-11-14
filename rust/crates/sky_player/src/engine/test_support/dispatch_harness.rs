@@ -284,7 +284,7 @@ impl ProductionDispatchTestHarness {
         &mut self,
         prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
         up_mask: u16,
-        down_chord: Option<&sky_dispatch_core::executor::DownChordTicks>,
+        down_chord: Option<&sky_dispatch_core::executor::DownChordMetadata>,
         target_qpc: QpcTicks,
     ) -> Result<(), String> {
         let completion_qpc = target_qpc;
@@ -302,8 +302,46 @@ impl ProductionDispatchTestHarness {
         if let Some(exec) = self.legacy_coordinator_fixture.executor.as_mut() {
             exec.on_send_completed(confirmed_up_mask, confirmed_down_mask, completion_ticks)?;
         }
+        let fixture_chord = down_chord.map(|metadata| {
+            let compiled = self
+                .legacy_coordinator_fixture
+                .schedule
+                .down_chords
+                .get(metadata.chord_index)
+                .expect("test metadata identifies a compiled fixture chord");
+            assert_eq!(compiled.down_mask, metadata.down_mask);
+            assert_eq!(compiled.source_action_index, metadata.source_action_index);
+            let mut intents = smallvec::SmallVec::<
+                [sky_dispatch_core::executor::DownIntentTicks; sky_dispatch_core::model::MAX_KEYS],
+            >::new();
+            for intent in &compiled.intents {
+                intents.push(sky_dispatch_core::executor::DownIntentTicks {
+                    generation_id: intent.generation_id,
+                    key_slot: intent.key_slot,
+                    scan_code: intent.scan_code,
+                    source_action_index: intent.source_action_index,
+                    reason_id: intent.reason_id,
+                    paired_up_offset_ticks: self
+                        .resources
+                        .clock
+                        .timeline_from_us(intent.paired_up_offset_us)
+                        .expect("test fixture Up offset converts to QPC ticks"),
+                    paired_up_offset_us: intent.paired_up_offset_us,
+                    paired_up_source_action_index: intent.paired_up_source_action_index,
+                });
+            }
+            sky_dispatch_core::executor::DownChordTicks {
+                chord_index: metadata.chord_index,
+                scheduled_ticks: metadata.scheduled_ticks,
+                scheduled_us: metadata.scheduled_us,
+                down_mask: metadata.down_mask,
+                source_action_index: metadata.source_action_index,
+                reason_id: metadata.reason_id,
+                intents,
+            }
+        });
         self.legacy_coordinator_fixture
-            .record_executor_completion(confirmed_up_mask, down_chord);
+            .record_executor_completion(confirmed_up_mask, fixture_chord.as_ref());
         Ok(())
     }
 

@@ -134,7 +134,7 @@ pub fn analyze_dispatch_schedule_cancellable(
                         ))
                         .map_err(|_| WholeStreamModelError::ArithmeticOverflow)?
                         .as_u64();
-                    for intent in &chord.intents {
+                    for intent in chord.intents {
                         let floor = executor.slots()[intent.key_slot as usize]
                             .next_down_not_before_qpc
                             .as_u64();

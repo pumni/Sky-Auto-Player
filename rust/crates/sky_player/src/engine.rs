@@ -146,9 +146,9 @@ use sky_dispatch_win32::event::OwnedEvent;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
 use sky_dispatch_win32::input::TrackedKeyState;
+use sky_dispatch_win32::wait::HybridWaiter;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
@@ -163,7 +163,6 @@ const OUTCOME_QUIT: u8 = 2;
 const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
 const OUTCOME_SYSTEM_SUSPENDED: u8 = 5;
-const PAUSED_POLL_US: u64 = 2_000;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
 #[cfg(test)]
 mod tests;
