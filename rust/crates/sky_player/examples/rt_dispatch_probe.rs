@@ -461,13 +461,13 @@ fn contracts_report() -> Result<Value, String> {
             "vector_cases": vector_a,
             "malformed_duplicate_up_control": malformed_duplicate_up_control,
             "path_evidence": "test-support due seam recomputes the current production physical timing window for the current prepared packet on every call, accepts wall QPC only, and enters the unchanged prepared suffix only when due; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
-            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; resumed Down must satisfy musical Up completion plus one frame and the absolute post-cleanup global Down barrier"
+            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; resumed Down must satisfy musical Up completion plus G (T + timing margin) and the absolute post-cleanup global Down barrier"
         },
         "F_final_lease_age_proof": final_lease_age_proof,
         "C_serial_HOL": run_hol_vector()?,
         "D_focus_loss_policy": run_focus_vectors()?,
         "E_empty_cleanup": run_empty_cleanup()?,
-        "scope": "D4 lifecycle release-barrier qualification plus retained lease, HOL, focus, and empty-cleanup characterizations; no H/G, scheduler, or cleanup transport policy changed"
+        "scope": "M1 frame-snapshot H/G lifecycle release-barrier evidence plus retained lease, HOL, focus, and empty-cleanup characterizations"
     }))
 }
 
@@ -857,6 +857,36 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let final_accounting = generation_accounting_json(&lifecycle.harness);
     let final_obligation = lifecycle.harness.release_obligation_mask_for_test();
     let config = lifecycle.harness.dispatch_timing_config_for_test()?;
+    let expected_g_us = config
+        .frame_us
+        .checked_add(config.timing_margin_us)
+        .ok_or_else(|| "lifecycle G microseconds overflow".to_string())?;
+    let expected_g_ticks = duration_ticks(clock, expected_g_us)?.as_u64();
+    let conversion = json!({
+        "authored_offsets_us": authored_offsets,
+        "authored_offset_ticks": authored_offsets.iter().map(|us| duration_ticks(clock,*us).map(|ticks| ticks.as_u64())).collect::<Result<Vec<_>,_>>()?,
+        "effective_hold_h_us": config.effective_hold_us,
+        "effective_hold_h_ticks": config.effective_hold_ticks,
+        "same_key_gap_g_us": config.min_release_gap_us,
+        "same_key_gap_g_ticks": config.min_release_gap_ticks,
+        "timing_margin_us": config.timing_margin_us,
+        "timing_margin_ticks": config.timing_margin_ticks,
+        "min_release_gap_us": config.min_release_gap_us,
+        "min_release_gap_ticks": config.min_release_gap_ticks,
+        "native_admission": if config.native_admission_passed { "PASS" } else { "FAIL" },
+        "odd_frequency_feasible_extra_us": if odd_vector { 1 } else { 0 }
+    });
+    let g_conversion_contract_passed = conversion["same_key_gap_g_us"].as_u64()
+        == Some(expected_g_us)
+        && conversion["same_key_gap_g_us"].as_u64() == conversion["min_release_gap_us"].as_u64()
+        && conversion["same_key_gap_g_ticks"].as_u64() == Some(expected_g_ticks)
+        && conversion["same_key_gap_g_ticks"].as_u64()
+            == conversion["min_release_gap_ticks"].as_u64();
+    if !g_conversion_contract_passed {
+        return Err(format!(
+            "lifecycle G conversion evidence disagrees with T + margin at QPC frequency {frequency_hz} Hz"
+        ));
+    }
 
     let no_pause_not_due = no_pause_step.is_none()
         && no_pause_floor.packet_not_before_qpc == no_pause_completion_floor
@@ -880,6 +910,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     };
     let normal_gap_contract_passed = actual_next_down >= required_down_floor;
     let due_seam_integrity_passed = no_pause_not_due
+        && g_conversion_contract_passed
         && resume_gate_integrity_passed
         && actual_next_down >= after_cleanup_floor.packet_not_before_qpc
         && config.native_admission_passed
@@ -895,20 +926,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
 
     Ok(json!({
         "qpc_frequency_hz": frequency_hz,
-        "conversion": {
-            "authored_offsets_us": authored_offsets,
-            "authored_offset_ticks": authored_offsets.iter().map(|us| duration_ticks(clock,*us).map(|ticks| ticks.as_u64())).collect::<Result<Vec<_>,_>>()?,
-            "effective_hold_h_us": config.effective_hold_us,
-            "effective_hold_h_ticks": config.effective_hold_ticks,
-            "same_key_gap_g_us": config.frame_us,
-            "same_key_gap_g_ticks": config.min_release_gap_ticks,
-            "timing_margin_us": config.timing_margin_us,
-            "timing_margin_ticks": config.timing_margin_ticks,
-            "min_release_gap_us": config.min_release_gap_us,
-            "min_release_gap_ticks": config.min_release_gap_ticks,
-            "native_admission": if config.native_admission_passed { "PASS" } else { "FAIL" },
-            "odd_frequency_feasible_extra_us": if odd_vector { 1 } else { 0 }
-        },
+        "conversion": conversion,
         "events": {
             "down": event_json(clock, evidence_start(&lifecycle.packets,0)?, lifecycle.down_completion)?,
             "musical_up": event_json(clock, evidence_start(&lifecycle.packets,1)?, lifecycle.up_completion)?,

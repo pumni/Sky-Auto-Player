@@ -60,8 +60,8 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
         )}
       {advisory.structural_same_key_cycle_minimum_us !== null && (
         <span>
-          Same-key structural cycle floor (H + G):{' '}
-          {advisory.structural_same_key_cycle_minimum_us} µs
+          Same-key structural cycle floor (H + G): {advisory.structural_same_key_cycle_minimum_us}{' '}
+          µs
         </span>
       )}
       {advisory.dry_run_is_hypothetical && (
