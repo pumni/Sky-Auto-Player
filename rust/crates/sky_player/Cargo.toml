@@ -45,10 +45,6 @@ required-features = ["test-support"]
 name = "rt_corpus_packet_probe"
 required-features = ["test-support"]
 
-[[example]]
-name = "rt_prepared_acceptance"
-required-features = ["test-support"]
-
 [[bin]]
 name = "rt-native-acceptance"
 path = "src/bin/rt_native_acceptance.rs"

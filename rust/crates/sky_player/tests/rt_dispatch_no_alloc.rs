@@ -15,6 +15,7 @@
 
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
+use sky_player::engine::StagedDispatchOutcome;
 use sky_player::engine::dispatch_primitives::{
     DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep,
     DownMissObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
@@ -23,7 +24,11 @@ use sky_player::engine::dispatch_primitives::{
 };
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+type ProductionPacketCapture =
+    Arc<std::sync::Mutex<Vec<(PhysicalPacket, sky_dispatch_win32::input::SendEvidence)>>>;
 
 // ---------------------------------------------------------------------------
 // Counting allocator — delegates to System, but increments a global counter
@@ -102,6 +107,98 @@ fn disable_counting() -> u64 {
     COUNTING_ENABLED.store(0, Ordering::SeqCst);
     CURRENT_THREAD_ID.store(0, Ordering::SeqCst);
     ALLOC_COUNT.load(Ordering::SeqCst)
+}
+
+fn production_resume_barrier_fixture() -> (
+    ProductionDispatchTestHarness,
+    ProductionPacketCapture,
+    QpcTicks,
+    QpcTicks,
+) {
+    use sky_dispatch_core::executor::DispatchDecision;
+    use std::sync::atomic::Ordering;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
+            .expect("production scheduler lifecycle fixture");
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    let (_, cleanup_completion) =
+        harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    let now = harness
+        .qpc_now_for_test()
+        .expect("resume barrier setup QPC");
+    let one_second = harness
+        .qpc_duration_from_us_for_test(1_000_000)
+        .expect("past scheduler epoch conversion");
+    let epoch = QpcTicks::from_raw(now.as_u64().saturating_sub(one_second.as_u64()));
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("resume barrier playback epoch");
+
+    let (up_mask, down_chord) = match harness
+        .evaluate_live_scheduler_for_test(now, epoch)
+        .expect("initial live scheduler evaluation")
+    {
+        DispatchDecision::Send {
+            up_mask,
+            down_chord,
+            ..
+        } => (up_mask, down_chord.map(Into::into)),
+        decision => panic!("expected initial production Down, got {decision:?}"),
+    };
+    assert_eq!(up_mask, 0);
+    assert!(down_chord.is_some());
+    let candidate = harness
+        .stage_candidate_for_test(up_mask, down_chord, TimelineTicks::ZERO)
+        .expect("stage initial production Down")
+        .expect("initial production Down candidate");
+    harness.set_mock_sender_start_qpc_for_test(now);
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Dispatched
+    ));
+
+    harness
+        .apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            Ok(QpcTicks::from_raw(
+                cleanup_completion.load(Ordering::Acquire),
+            ))
+        })
+        .expect("verified production scheduler cleanup");
+    let completion = QpcTicks::from_raw(cleanup_completion.load(Ordering::Acquire));
+    let barrier = harness
+        .resume_barrier_qpc_for_test()
+        .expect("production scheduler resume barrier");
+    let timing = harness
+        .dispatch_timing_config_for_test()
+        .expect("production scheduler timing config");
+    assert_eq!(timing.min_release_gap_us, 17_167);
+    let gap = harness
+        .qpc_duration_from_us_for_test(timing.min_release_gap_us)
+        .expect("production scheduler G conversion");
+    assert_eq!(barrier, completion.checked_add_duration(gap).unwrap());
+    let accounting = harness.generation_accounting_for_test();
+    assert_eq!(accounting.total, 2);
+    assert_eq!(accounting.activated, 1);
+    assert_eq!(accounting.cancelled, 1);
+    assert_eq!(accounting.scheduled, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    packets.lock().expect("production packet capture").clear();
+
+    (harness, packets, epoch, barrier)
+}
+
+fn wait_until_qpc(deadline: QpcTicks) {
+    loop {
+        let now = sky_dispatch_win32::clock::QpcClock::initialize()
+            .expect("noalloc test QPC")
+            .now()
+            .expect("noalloc test QPC sample");
+        if now >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_micros(100));
+    }
 }
 
 fn down_observation(n: u64) -> DispatchObservation {
@@ -869,66 +966,83 @@ fn production_normal_late_down_dispatch_no_alloc() {
 #[test]
 fn lifecycle_resume_barrier_guard_query_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness =
-        ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
-            .expect("dispatch lifecycle fixture");
-    harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
-    harness.prepare_prepared_stream_for_test();
-    let epoch = harness.qpc_now_for_test().expect("resume barrier epoch");
-    harness
-        .reanchor_playback_clock_for_test(epoch)
-        .expect("resume barrier playback epoch");
-    harness
-        .establish_resume_barrier_for_test(epoch)
-        .expect("resume barrier test setup");
-    let before = harness
-        .prepared_physical_floor_for_test()
-        .expect("Down physical floor");
-    assert!(before.down_not_before_qpc > before.authored_target_qpc);
+    use sky_dispatch_core::executor::DispatchDecision;
+
+    let (harness, packets, epoch, barrier) = production_resume_barrier_fixture();
+    let one_tick_early = QpcTicks::from_raw(barrier.as_u64() - 1);
 
     enable_counting();
     let queried = harness
-        .prepared_physical_floor_for_test()
-        .expect("barrier query remains healthy");
+        .evaluate_live_scheduler_for_test(one_tick_early, epoch)
+        .expect("G-1 production scheduler query");
     let allocs = disable_counting();
 
-    assert_eq!(allocs, 0, "resume barrier guard query allocated");
-    assert_eq!(queried.down_not_before_qpc, before.down_not_before_qpc);
+    assert_eq!(allocs, 0, "G-1 production scheduler query allocated");
+    assert!(matches!(
+        queried,
+        DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier
+    ));
+    assert!(
+        packets
+            .lock()
+            .expect("production packet capture")
+            .is_empty(),
+        "G-1 denial performs no production send"
+    );
 }
 
 #[test]
 fn lifecycle_resume_barrier_healthy_down_dispatch_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness =
-        ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
-            .expect("dispatch lifecycle fixture");
-    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
-    harness.prepare_prepared_stream_for_test();
-    let epoch = harness.qpc_now_for_test().expect("resume barrier epoch");
-    harness
-        .reanchor_playback_clock_for_test(epoch)
-        .expect("resume barrier playback epoch");
-    harness
-        .establish_resume_barrier_for_test(epoch)
-        .expect("resume barrier test setup");
-    let before = harness
-        .prepared_physical_floor_for_test()
-        .expect("Down physical floor");
-    let barrier = harness
-        .prepared_physical_floor_for_test()
-        .expect("barrier physical wait target")
-        .packet_not_before_qpc;
-    assert!(barrier > before.authored_target_qpc);
+    use sky_dispatch_core::executor::DispatchDecision;
+
+    let (mut harness, packets, epoch, barrier) = production_resume_barrier_fixture();
+    let before_barrier = QpcTicks::from_raw(barrier.as_u64() - 1);
+    assert!(matches!(
+        harness
+            .evaluate_live_scheduler_for_test(before_barrier, epoch)
+            .expect("G-1 production scheduler evaluation"),
+        DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier
+    ));
+    let (up_mask, down_chord) = {
+        enable_counting();
+        let evaluated = harness
+            .evaluate_live_scheduler_for_test(barrier, epoch)
+            .expect("exact-G production scheduler evaluation");
+        let details = match evaluated {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                ..
+            } => (up_mask, down_chord.map(Into::into)),
+            decision => panic!("expected exact-G production Send, got {decision:?}"),
+        };
+        let allocs = disable_counting();
+        assert_eq!(allocs, 0, "exact-G production scheduler query allocated");
+        details
+    };
+    assert_eq!(up_mask, 0);
+    assert!(down_chord.is_some());
+    enable_counting();
+    let candidate = harness
+        .stage_candidate_for_test(up_mask, down_chord, TimelineTicks::ZERO)
+        .expect("stage exact-G production Down")
+        .expect("exact-G production Down candidate");
+    let stage_allocs = disable_counting();
+    assert_eq!(stage_allocs, 0, "exact-G production staging allocated");
+
+    wait_until_qpc(barrier);
     harness.set_mock_sender_start_qpc_for_test(barrier);
 
     enable_counting();
-    let step =
-        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(barrier);
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
     let allocs = disable_counting();
 
     assert_eq!(allocs, 0, "healthy Down with resume barrier allocated");
-    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
-    assert_eq!(packets.lock().expect("packet capture").len(), 1);
+    assert!(matches!(outcome, StagedDispatchOutcome::Dispatched));
+    let packets = packets.lock().expect("packet capture");
+    assert_eq!(packets.len(), 1);
+    assert_eq!(packets[0].0, PhysicalPacket::new(0, 1));
 }
 
 #[test]

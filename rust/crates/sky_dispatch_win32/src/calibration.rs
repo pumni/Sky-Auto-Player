@@ -1389,6 +1389,7 @@ pub fn check_foreground_owned(hwnd: isize) -> bool {
 mod platform {
     use super::*;
     use crate::event::OwnedEvent;
+    #[cfg(not(test))]
     use crate::input::send_input_raw;
     use crate::mmcss::{MmcssGuard, PriorityMode};
     use crate::power::PowerThrottlingGuard;
@@ -1407,6 +1408,84 @@ mod platform {
         SetForegroundWindow, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_QUIT,
         WM_USER, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
+
+    #[cfg(test)]
+    pub(super) type CalibrationCleanupCall = (Vec<u16>, bool);
+
+    #[cfg(test)]
+    pub(super) type CalibrationCleanupCalls =
+        std::sync::Arc<std::sync::Mutex<Vec<CalibrationCleanupCall>>>;
+
+    #[cfg(test)]
+    #[derive(Clone)]
+    struct CalibrationCleanupSenderState {
+        inserted_override: Option<u8>,
+        calls: CalibrationCleanupCalls,
+    }
+
+    #[cfg(test)]
+    std::thread_local! {
+        static CALIBRATION_CLEANUP_SENDER: std::cell::RefCell<Option<CalibrationCleanupSenderState>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    #[cfg(test)]
+    pub(super) struct CalibrationCleanupSenderGuard {
+        previous: Option<CalibrationCleanupSenderState>,
+    }
+
+    #[cfg(test)]
+    impl Drop for CalibrationCleanupSenderGuard {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            CALIBRATION_CLEANUP_SENDER.with(|sender| {
+                sender.replace(previous);
+            });
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn install_calibration_cleanup_sender_for_test(
+        inserted_override: Option<u8>,
+    ) -> (CalibrationCleanupSenderGuard, CalibrationCleanupCalls) {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let previous = CALIBRATION_CLEANUP_SENDER.with(|slot| {
+            slot.replace(Some(CalibrationCleanupSenderState {
+                inserted_override,
+                calls: std::sync::Arc::clone(&calls),
+            }))
+        });
+        (CalibrationCleanupSenderGuard { previous }, calls)
+    }
+
+    fn send_calibration_cleanup_up(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
+        #[cfg(test)]
+        {
+            CALIBRATION_CLEANUP_SENDER.with(|sender| {
+                let mut sender = sender.borrow_mut();
+                let Some(sender) = sender.as_mut() else {
+                    panic!("calibration unit test cleanup requires a fake sender");
+                };
+                sender
+                    .calls
+                    .lock()
+                    .expect("calibration fake sender call log")
+                    .push((scan_codes.to_vec(), key_up));
+                let requested = scan_codes.len() as u8;
+                PlatformSendResult {
+                    requested,
+                    inserted: sender.inserted_override.unwrap_or(requested).min(requested),
+                    started_ticks: QpcTicks::ZERO,
+                    completed_ticks: Some(QpcTicks::ZERO),
+                    win32_error: 0,
+                    timing_error: None,
+                }
+            })
+        }
+
+        #[cfg(not(test))]
+        send_input_raw(scan_codes, key_up)
+    }
 
     // HID_USAGE_PAGE_GENERIC = 0x01 (USB HID spec, no feature flag needed)
     const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
@@ -3020,7 +3099,7 @@ mod platform {
             let expected = attempted.len() as u8;
             let mut cleanup_success = false;
             for _ in 0..3 {
-                let result = send_input_raw(&attempted, true);
+                let result = send_calibration_cleanup_up(&attempted, true);
                 if result.inserted == expected {
                     cleanup_success = true;
                     break;
@@ -6706,32 +6785,64 @@ mod tests {
     #[cfg(windows)]
     use platform::CalibrationSession;
 
+    #[cfg(windows)]
+    static CALIBRATION_WINDOW_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(windows)]
+    fn fake_calibration_cleanup_sender(
+        inserted_override: Option<u8>,
+    ) -> (
+        platform::CalibrationCleanupSenderGuard,
+        platform::CalibrationCleanupCalls,
+    ) {
+        platform::install_calibration_cleanup_sender_for_test(inserted_override)
+    }
+
+    #[cfg(windows)]
+    fn assert_fake_cleanup_calls(calls: &platform::CalibrationCleanupCalls, expected_count: usize) {
+        let calls = calls.lock().expect("calibration fake sender call log");
+        assert_eq!(calls.len(), expected_count);
+        for (scan_codes, key_up) in calls.iter() {
+            assert_eq!(scan_codes.as_slice(), PHYSICAL_INSTRUMENT_SCAN_CODES);
+            assert!(*key_up, "calibration cleanup fake received a non-Up send");
+        }
+    }
+
     #[test]
     #[cfg(windows)]
     fn no_send_before_foreground_acquired() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(None);
         set_test_foreground_override(Some(|_| false));
         let res = CalibrationSession::open();
+        set_test_foreground_override::<fn(isize) -> bool>(None);
         assert!(matches!(
             res,
             Err(CalibrationError::ForegroundAcquireFailed)
         ));
-        set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert_fake_cleanup_calls(&calls, 1);
     }
 
     #[test]
     #[cfg(windows)]
     fn foreground_loss_aborts_before_next_send() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(None);
         set_test_foreground_override(Some(|_| true));
         let mut session = CalibrationSession::open().expect("session open");
         set_test_foreground_override(Some(|_| false));
         let res = session.ensure_foreground_owned();
         assert!(matches!(res, Err(CalibrationError::ForegroundLost)));
+        drop(session);
         set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert_fake_cleanup_calls(&calls, 1);
     }
 
     #[test]
     #[cfg(windows)]
     fn foreground_loss_still_runs_emergency_cleanup() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(None);
         set_test_foreground_override(Some(|_| true));
         let mut session = CalibrationSession::open().expect("session open");
         session.possibly_active_mask = 0b11;
@@ -6740,12 +6851,32 @@ mod tests {
         let outcome = session.cleanup_keyboard();
         assert!(outcome.cleanup_attempted);
         assert_eq!(session.possibly_active_mask, 0);
+        drop(session);
         set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert_fake_cleanup_calls(&calls, 2);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn calibration_cleanup_retries_are_fake_up_only_and_bounded_to_three_calls() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(Some(0));
+        set_test_foreground_override(Some(|_| true));
+        let session = CalibrationSession::open().expect("session open");
+
+        let outcome = session.close_sender();
+
+        set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert!(outcome.cleanup_attempted);
+        assert!(!outcome.cleanup_success);
+        assert_fake_cleanup_calls(&calls, 3);
     }
 
     #[test]
     #[cfg(windows)]
     fn closed_window_cancels_calibration() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(None);
         set_test_foreground_override(Some(|_| true));
         let mut session = CalibrationSession::open().expect("session open");
         {
@@ -6757,25 +6888,35 @@ mod tests {
             res,
             Err(CalibrationError::CalibrationWindowClosed)
         ));
+        drop(session);
         set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert_fake_cleanup_calls(&calls, 1);
     }
 
     #[test]
     #[cfg(windows)]
     fn foreground_check_is_outside_qpc_measurement_boundary() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(None);
         set_test_foreground_override(Some(|_| true));
         let mut session = CalibrationSession::open().expect("session open");
         let check_res = session.ensure_foreground_owned();
         assert!(check_res.is_ok());
+        drop(session);
         set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert_fake_cleanup_calls(&calls, 1);
     }
 
     #[test]
     #[cfg(windows)]
     fn successful_run_requires_foreground_ownership() {
+        let _test_lock = CALIBRATION_WINDOW_TEST_LOCK.lock().unwrap();
+        let (_fake_sender, calls) = fake_calibration_cleanup_sender(None);
         set_test_foreground_override(Some(|_| true));
         let mut session = CalibrationSession::open().expect("session open");
         assert!(session.ensure_foreground_owned().is_ok());
+        drop(session);
         set_test_foreground_override::<fn(isize) -> bool>(None);
+        assert_fake_cleanup_calls(&calls, 1);
     }
 }

@@ -106,7 +106,8 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }));
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
-        if !release_state_verified(&backend, &outcome.release_outcome) {
+        let release_verified = release_state_verified(&backend, &outcome.release_outcome);
+        if !release_verified {
             record_termination_error(
                 &mut terminal_error,
                 &mut secondary_errors,
@@ -130,9 +131,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
                     describe_terminal_release_evidence(outcome)
                 ),
             );
-        } else if outcome.release_outcome.transport_anomaly
-            && release_state_verified(&backend, &outcome.release_outcome)
-        {
+        } else if outcome.release_outcome.transport_anomaly && release_verified {
             let diagnostic = format!(
                 "terminal cleanup transport anomaly: {}",
                 describe_terminal_release_evidence(outcome)
@@ -240,7 +239,9 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
 
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_cancellation");
-    let terminal_cleanup_result = scheduler.on_verified_terminal_cleanup().map(|_| ());
+    let terminal_cleanup_result = scheduler
+        .cancel_remaining_generations_for_terminal_shutdown()
+        .map(|_| ());
     if let Err(error) = terminal_cleanup_result {
         record_termination_error(
             &mut terminal_error,

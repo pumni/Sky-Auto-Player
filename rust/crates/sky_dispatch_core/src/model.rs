@@ -109,8 +109,9 @@ pub struct RuntimeKeyIntent {
 /// Compact immutable intent stored in the schedule arena.
 ///
 /// The batch header owns the fields shared by every intent in a chord.  The
-/// full `RuntimeKeyIntent` remains the short-lived materialized view consumed
-/// by the coordinator and worker, so the million-action schedule does not
+/// full `RuntimeKeyIntent` remains a short-lived view for the test-support
+/// legacy coordinator. Production `DispatchExecutor` consumes the compact
+/// schedule representation directly, so the million-action schedule does not
 /// inline fifteen copies of those fields for every action.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

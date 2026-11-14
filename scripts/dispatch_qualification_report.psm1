@@ -108,6 +108,8 @@ function New-QualificationReportProjection {
     }
 
     [pscustomobject]@{
+        CandidateQualificationProfile = Get-ReportOptionalProperty $Candidate 'qualification_profile'
+        ControlQualificationProfile = Get-ReportOptionalProperty $Control 'qualification_profile'
         CsvRoleLabels = [ordered]@{
             control = if ($Control) { Get-QualificationReportRowLabel -Profile $Profile -Role control -Manifest $Control } else { $null }
             candidate = Get-QualificationReportRowLabel -Profile $Profile -Role candidate -Manifest $Candidate

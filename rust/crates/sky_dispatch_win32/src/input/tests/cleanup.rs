@@ -476,7 +476,7 @@ fn terminal_up_qpc_pre_and_post_failures_do_not_reclassify_transport() {
 }
 
 #[test]
-fn terminal_zero_insert_with_missing_qpc_keeps_transport_clock_and_probe_separate() {
+fn terminal_zero_insert_with_all_up_probe_keeps_physical_verdict_and_obligation_separate() {
     let mut state = TrackedKeyState::new();
     state.active_mask = 1;
     state.set_terminal_up_emitter_for_test(|packet| {
@@ -489,14 +489,16 @@ fn terminal_zero_insert_with_missing_qpc_keeps_transport_clock_and_probe_separat
             timing_error: Some(QpcError::CounterUnavailable),
         }
     });
-    state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
     let outcome = state.release_terminal_tracked_scope(77);
     assert!(outcome.release_outcome.transport_anomaly);
+    assert!(!outcome.release_outcome.released_successfully);
     assert!(outcome.release_outcome.verification_inconclusive);
+    assert_eq!(outcome.release_outcome.stuck_mask, 1);
     assert_eq!(
         outcome.probe_verdict,
-        super::super::outcome::TerminalProbeVerdict::Inconclusive(1)
+        super::super::outcome::TerminalProbeVerdict::AllUp
     );
     assert_eq!(outcome.send_attempts.len(), 4);
     assert!(outcome.send_attempts.iter().all(|attempt| {
@@ -509,6 +511,34 @@ fn terminal_zero_insert_with_missing_qpc_keeps_transport_clock_and_probe_separat
             && attempt.qpc_error == Some(QpcError::CounterUnavailable)
     }));
     assert_eq!(state.release_obligation_mask(), 1);
+}
+
+#[test]
+fn terminal_partial_up_reports_only_the_physical_held_mask() {
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 0b0011;
+    state.set_terminal_up_emitter_for_test(|packet| {
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 1,
+            started_ticks: Some(QpcTicks::from_raw(10)),
+            completed_ticks: Some(QpcTicks::from_raw(11)),
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::Held(vec![0x15].into()));
+
+    let outcome = state.release_terminal_tracked_scope(77);
+
+    assert_eq!(
+        outcome.probe_verdict,
+        super::super::outcome::TerminalProbeVerdict::Held(0b0001)
+    );
+    assert_eq!(outcome.release_outcome.stuck_mask, 0b0011);
+    assert!(!outcome.release_outcome.released_successfully);
+    assert!(!outcome.release_outcome.verification_inconclusive);
+    assert_eq!(state.release_obligation_mask(), 0b0011);
 }
 
 #[test]

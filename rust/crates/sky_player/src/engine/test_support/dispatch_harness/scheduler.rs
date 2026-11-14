@@ -1,9 +1,24 @@
 #![cfg(any(test, feature = "test-support"))]
 
 use super::ProductionDispatchTestHarness;
-use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 
 impl ProductionDispatchTestHarness {
+    pub fn evaluate_live_scheduler_for_test(
+        &self,
+        now: QpcTicks,
+        epoch: QpcTicks,
+    ) -> Result<sky_dispatch_core::executor::DispatchDecision<'_>, String> {
+        self.resources
+            .scheduler
+            .evaluate_at(now, epoch)
+            .map_err(|error| format!("live scheduler QPC evaluation failed: {error}"))
+    }
+
+    pub fn resume_barrier_qpc_for_test(&self) -> Option<QpcTicks> {
+        self.resources.scheduler.resume_barrier_qpc()
+    }
+
     pub fn current_executor_chord_for_test(
         &self,
     ) -> Option<sky_dispatch_core::executor::DownChordMetadata> {

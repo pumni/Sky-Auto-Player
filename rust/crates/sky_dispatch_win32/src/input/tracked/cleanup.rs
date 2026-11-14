@@ -3,7 +3,7 @@ use super::super::outcome::{
     TerminalSendAttemptEvidence,
 };
 use super::super::physical::{
-    CleanupVerification, ReconciledRelease, reconcile_logical_release_observation,
+    LogicalInstrumentPhysicalState, ReconciledRelease, reconcile_logical_release_observation,
 };
 use super::super::scan_code::FULL_INSTRUMENT_MASK;
 use super::{ReleaseScope, TrackedKeyState, release_retry_sleep};
@@ -53,11 +53,12 @@ impl TrackedKeyState {
         let mut unresolved_mask = requested_mask;
         const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
-        // Independent evidence dimensions: `transport_anomaly` records that
-        // the release path saw any non-clean transport outcome, while the
-        // typed verification verdict records what the physical probe decides.
+        // Keep the raw physical probe verdict separate from reconciliation:
+        // the report exposes what the probe observed, while ownership is only
+        // discharged when transport and probe evidence agree.
         let mut transport_anomaly = false;
-        let mut final_verification: Option<CleanupVerification> = None;
+        let mut final_reconciliation: Option<ReconciledRelease> = None;
+        let mut final_probe_verdict: Option<TerminalProbeVerdict> = None;
         let mut terminal_send_attempts = SmallVec::<[TerminalSendAttemptEvidence; 4]>::new();
 
         for attempt_idx in 0..4 {
@@ -101,6 +102,15 @@ impl TrackedKeyState {
 
             let physical_state =
                 self.resolve_release_probe(target_hwnd, unresolved_mask, transport_confirmed_mask);
+            final_probe_verdict = Some(match physical_state {
+                LogicalInstrumentPhysicalState::AllUp => TerminalProbeVerdict::AllUp,
+                LogicalInstrumentPhysicalState::Held(held_mask) => {
+                    TerminalProbeVerdict::Held(held_mask)
+                }
+                LogicalInstrumentPhysicalState::Inconclusive => {
+                    TerminalProbeVerdict::Inconclusive(previous_unresolved)
+                }
+            });
             let reconciled = reconcile_logical_release_observation(
                 unresolved_mask,
                 transport_confirmed_mask,
@@ -115,14 +125,7 @@ impl TrackedKeyState {
                 }
                 verdict => verdict,
             };
-
-            final_verification = Some(match reconciled {
-                ReconciledRelease::VerifiedAllUp => CleanupVerification::AllUp,
-                ReconciledRelease::Held(held_mask) => CleanupVerification::Held(held_mask),
-                ReconciledRelease::Inconclusive(unconfirmed_mask) => {
-                    CleanupVerification::Inconclusive(unconfirmed_mask)
-                }
-            });
+            final_reconciliation = Some(reconciled);
 
             let resolved_this_transition = match reconciled {
                 ReconciledRelease::VerifiedAllUp => previous_unresolved,
@@ -163,9 +166,12 @@ impl TrackedKeyState {
             }
         }
 
-        let verification = final_verification.unwrap_or(CleanupVerification::Held(unresolved_mask));
-        let released_successfully = verification.is_success();
-        let verification_inconclusive = verification.is_inconclusive();
+        let release_verification =
+            final_reconciliation.unwrap_or(ReconciledRelease::Inconclusive(unresolved_mask));
+        let released_successfully =
+            matches!(release_verification, ReconciledRelease::VerifiedAllUp);
+        let verification_inconclusive =
+            matches!(release_verification, ReconciledRelease::Inconclusive(_));
         let stuck_mask = if released_successfully {
             0
         } else {
@@ -189,11 +195,8 @@ impl TrackedKeyState {
             self.failed_release_mask |= stuck_mask;
         }
 
-        let probe_verdict = match verification {
-            CleanupVerification::AllUp => TerminalProbeVerdict::AllUp,
-            CleanupVerification::Held(mask) => TerminalProbeVerdict::Held(mask),
-            CleanupVerification::Inconclusive(mask) => TerminalProbeVerdict::Inconclusive(mask),
-        };
+        let probe_verdict =
+            final_probe_verdict.unwrap_or(TerminalProbeVerdict::Inconclusive(unresolved_mask));
 
         TerminalReleaseEvidence {
             release_outcome: ReleaseAllOutcome {

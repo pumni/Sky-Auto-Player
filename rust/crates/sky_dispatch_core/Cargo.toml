@@ -24,3 +24,4 @@ harness = false
 [[bench]]
 name = "commit_scaling"
 harness = false
+required-features = ["test-support"]

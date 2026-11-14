@@ -1,6 +1,6 @@
 use parking_lot::{Mutex, RwLock};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
-use sky_dispatch_core::coordinator::GenerationAccounting;
+use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::input::ReleaseAllOutcome;

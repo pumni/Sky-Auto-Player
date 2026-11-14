@@ -10,6 +10,7 @@
 /// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
+    #[cfg(any(test, feature = "test-support"))]
     pub use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
     pub use sky_dispatch_core::model::{
         ActionKind, CompactIntent, CompileMemoryMetrics, CompiledBatch, CompiledPacket,

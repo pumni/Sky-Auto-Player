@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
+pub use crate::accounting::{GenerationAccounting, GenerationCounters};
 use crate::model::*;
 use crate::time::{DurationTicks, TimelineTicks};
 
@@ -174,41 +175,7 @@ pub fn physical_packet_kind(
     }
 }
 
-/// Counter-only generation summary.
-///
-/// Active counts are derived from `active_mask` at query time; this struct
-/// tracks only terminal generations.
-/// No `HashMap` is allocated; all fields are plain `u64`.
-///
-/// Invariant: `scheduled + active + released + dropped_conflict
-///            + dropped_backend + dropped_expired + cancelled
-///            == total (generation_count)`
-///
-/// "scheduled" is implicit: `generation_count - (active + terminal_total)`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GenerationCounters {
-    pub released: u64,
-    pub dropped_conflict: u64,
-    pub dropped_backend: u64,
-    pub dropped_expired: u64,
-    pub cancelled: u64,
-}
-
 impl GenerationCounters {
-    /// Sum of all terminal buckets.
-    fn terminal_total_checked(&self) -> Option<u64> {
-        self.released
-            .checked_add(self.dropped_conflict)?
-            .checked_add(self.dropped_backend)?
-            .checked_add(self.dropped_expired)?
-            .checked_add(self.cancelled)
-    }
-
-    pub fn terminal_total(&self) -> u64 {
-        self.terminal_total_checked()
-            .expect("terminal generation counters must remain checked")
-    }
-
     fn increment(&mut self, status: GenerationStatus) -> Result<(), CoordinatorInvariantError> {
         let counter = match status {
             GenerationStatus::Released => &mut self.released,
@@ -224,21 +191,6 @@ impl GenerationCounters {
         })?;
         Ok(())
     }
-}
-
-/// Allocation-free generation lifecycle accounting derived from the
-/// compiler-owned generation ledger and coordinator masks/counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GenerationAccounting {
-    pub total: u64,
-    pub activated: u64,
-    pub scheduled: u64,
-    pub active: u64,
-    pub released: u64,
-    pub dropped_conflict: u64,
-    pub dropped_backend: u64,
-    pub dropped_expired: u64,
-    pub cancelled: u64,
 }
 
 pub const ALL_GENERATION_STATUSES: [GenerationStatus; 7] = [

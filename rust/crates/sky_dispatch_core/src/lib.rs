@@ -3,11 +3,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod accounting;
 pub mod clock;
 pub mod compile;
+#[cfg(any(test, feature = "test-support"))]
 pub mod coordinator;
 pub mod executor;
 pub mod model;
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod time;
 pub mod validation;

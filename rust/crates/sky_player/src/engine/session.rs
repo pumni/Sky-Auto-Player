@@ -9,7 +9,7 @@ use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_t
 use crate::engine::target::OwnerIdentityFailure;
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
-use sky_dispatch_core::coordinator::GenerationAccounting;
+use sky_dispatch_core::accounting::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::{Duration, Instant};

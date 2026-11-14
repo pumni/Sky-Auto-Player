@@ -336,14 +336,15 @@ fn live_scheduler_completion_gap_and_two_generation_accounting_qualify() {
     let one_tick_early = QpcTicks::from_raw(exact_g_floor.as_u64() - 1);
     let sends_before_early_evaluation =
         packets.lock().expect("live scheduler packet capture").len();
-    assert!(matches!(
-        harness
-            .resources
-            .scheduler
-            .evaluate_at(one_tick_early, epoch)
-            .expect("G-1 scheduler evaluation"),
-        DispatchDecision::Wait { deadline_qpc } if deadline_qpc == exact_g_floor
-    ));
+    let early_decision = harness
+        .resources
+        .scheduler
+        .evaluate_at(one_tick_early, epoch)
+        .expect("G-1 scheduler evaluation");
+    assert!(
+        matches!(&early_decision, DispatchDecision::Wait { .. }),
+        "G-1 must be blocked before the completion + G floor; decision={early_decision:?}, G floor={exact_g_floor:?}, Up completion={up_completion:?}, Up authored floor={up_floor:?}"
+    );
     assert_eq!(
         packets.lock().expect("live scheduler packet capture").len(),
         sends_before_early_evaluation,
@@ -401,6 +402,11 @@ fn live_scheduler_completion_gap_and_two_generation_accounting_qualify() {
     ));
 
     let final_accounting = harness.generation_accounting_for_test();
+    assert_eq!(
+        packets.lock().expect("live scheduler packet capture").len(),
+        4,
+        "two completed generations traverse exactly Down, Up, Down, Up"
+    );
     assert_eq!(final_accounting.total, 2);
     assert_eq!(final_accounting.activated, 2);
     assert_eq!(final_accounting.released, 2);

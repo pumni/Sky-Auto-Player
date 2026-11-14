@@ -580,7 +580,7 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
 }
 
 fn generation_accounting_signature(
-    accounting: sky_dispatch_core::coordinator::GenerationAccounting,
+    accounting: sky_dispatch_core::accounting::GenerationAccounting,
 ) -> Value {
     json!({
         "total": accounting.total,

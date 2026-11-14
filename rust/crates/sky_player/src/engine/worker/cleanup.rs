@@ -13,13 +13,15 @@ use crate::engine::telemetry::{
     NativeTelemetryOutput, SharedMetrics, TelemetryCollector, publish_terminal_metrics,
 };
 use parking_lot::Mutex;
+use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::coordinator::GenerationAccounting;
 use sky_dispatch_core::executor::DispatchExecutor;
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
-use sky_dispatch_win32::input::{ReleaseAllOutcome, TerminalReleaseEvidence};
+use sky_dispatch_win32::input::ReleaseAllOutcome;
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_win32::input::TerminalReleaseEvidence;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,9 +92,9 @@ pub(crate) struct FinalizeTestObservation {
     pub(crate) total_release_attempts: u64,
     pub(crate) cleanup_outcome: Option<ReleaseAllOutcome>,
     pub(crate) terminal_cleanup_evidence: Option<TerminalReleaseEvidence>,
-    pub(crate) generation_accounting: sky_dispatch_core::coordinator::GenerationAccounting,
+    pub(crate) generation_accounting: sky_dispatch_core::accounting::GenerationAccounting,
     pub(crate) pre_cancel_generation_accounting:
-        sky_dispatch_core::coordinator::GenerationAccounting,
+        sky_dispatch_core::accounting::GenerationAccounting,
     pub(crate) terminal_trigger_reason: Option<String>,
     pub(crate) terminal_error: Option<String>,
     pub(crate) secondary_errors: Vec<String>,

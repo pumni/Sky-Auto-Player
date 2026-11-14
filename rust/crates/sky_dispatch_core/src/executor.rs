@@ -6,7 +6,7 @@
 
 use smallvec::SmallVec;
 
-use crate::coordinator::{GenerationAccounting, GenerationCounters};
+use crate::accounting::{GenerationAccounting, GenerationCounters};
 use crate::model::{GenerationId, KeyRegistry, KeySlot, MAX_KEYS, RuntimeSchedule};
 use crate::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 mod memory;
@@ -883,9 +883,9 @@ impl DispatchExecutor {
         Ok(active_count)
     }
 
-    /// Cancel every remaining generation after verified terminal cleanup.
-    /// Scheduled generations are included because the session will not resume.
-    pub fn on_verified_terminal_cleanup(&mut self) -> Result<u64, String> {
+    /// Cancel every remaining generation after the terminal cleanup attempt.
+    /// Scheduled generations are included because terminal shutdown cannot resume.
+    pub fn cancel_remaining_generations_for_terminal_shutdown(&mut self) -> Result<u64, String> {
         let accounting = self.accounting();
         let cancelled_count = accounting
             .active

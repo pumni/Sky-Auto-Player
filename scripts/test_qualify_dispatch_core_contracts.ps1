@@ -707,6 +707,60 @@ if ($null -ne $legacySummary.parameters.performance_timing_margin_us -or
     throw 'legacy report projection fabricated missing timing margins instead of preserving null'
 }
 
+$historicalDispatchCoreManifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\dispatch-core-c0-b52106b4.manifest.json') -Raw | ConvertFrom-Json
+if ($historicalDispatchCoreManifest.PSObject.Properties['qualification_profile'] -or
+    $historicalDispatchCoreManifest.PSObject.Properties['performance_timing_margin_us'] -or
+    $historicalDispatchCoreManifest.PSObject.Properties['safety_timing_margin_us']) {
+    throw 'pinned historical DispatchCore fixture unexpectedly contains the new optional qualification fields'
+}
+$historicalProjection = New-QualificationReportProjection -Profile DispatchCore `
+    -Candidate $historicalDispatchCoreManifest -Control $historicalDispatchCoreManifest `
+    -Stage Compare -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500
+$historicalSummaryJson = [ordered]@{
+    candidate = [ordered]@{
+        label = $historicalProjection.CandidateLabel
+        qualification_profile = $historicalProjection.CandidateQualificationProfile
+        performance_timing_margin_us = $historicalProjection.CandidateMargins.performance_timing_margin_us
+        safety_timing_margin_us = $historicalProjection.CandidateMargins.safety_timing_margin_us
+    }
+    control = [ordered]@{
+        control_label = $historicalProjection.ControlLabel
+        qualification_profile = $historicalProjection.ControlQualificationProfile
+        performance_timing_margin_us = $historicalProjection.ControlMargins.performance_timing_margin_us
+        safety_timing_margin_us = $historicalProjection.ControlMargins.safety_timing_margin_us
+    }
+    parameters = $historicalProjection.SummaryParameters
+} | ConvertTo-Json -Depth 8
+$historicalResultManifestJson = [ordered]@{
+    candidate_manifest = [ordered]@{
+        label = $historicalProjection.CandidateLabel
+        qualification_profile = $historicalProjection.CandidateQualificationProfile
+    }
+    control_manifest = [ordered]@{
+        control_label = $historicalProjection.ControlLabel
+        qualification_profile = $historicalProjection.ControlQualificationProfile
+    }
+    parameters = $historicalProjection.ManifestParameters
+} | ConvertTo-Json -Depth 8
+$historicalSummary = $historicalSummaryJson | ConvertFrom-Json
+$historicalResultManifest = $historicalResultManifestJson | ConvertFrom-Json
+if ($historicalSummary.candidate.label -ne 'Candidate-R2' -or
+    $historicalSummary.control.control_label -ne 'C0' -or
+    $null -ne $historicalSummary.candidate.qualification_profile -or
+    $null -ne $historicalSummary.control.qualification_profile -or
+    $null -ne $historicalSummary.candidate.performance_timing_margin_us -or
+    $null -ne $historicalSummary.candidate.safety_timing_margin_us -or
+    $null -ne $historicalSummary.control.performance_timing_margin_us -or
+    $null -ne $historicalSummary.control.safety_timing_margin_us -or
+    $historicalResultManifest.candidate_manifest.label -ne 'Candidate-R2' -or
+    $historicalResultManifest.control_manifest.control_label -ne 'C0') {
+    throw 'historical DispatchCore report projection failed strict-mode provenance serialization'
+}
+if (-not $qualifierSource.Contains('report_projection_sha256') -or
+    -not $qualifierSource.Contains('dispatch_qualification_report.psm1')) {
+    throw 'qualification evidence package does not hash and preserve the report projection module'
+}
+
 # Exercise the same role/margin projection consumed by sessions.csv,
 # summary.json, summary.md, and the run result manifest for a FrameSnapshot
 # baseline/candidate pair.
