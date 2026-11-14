@@ -8,6 +8,8 @@ mod target;
 pub(crate) mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
+#[cfg(test)]
+mod tests;
 mod worker;
 
 pub use config::DispatchProfile;
@@ -59,23 +61,20 @@ pub mod dispatch_primitives {
     //! Do not use in production code.
     pub use super::target::SessionTarget;
     pub use super::test_support::{
-        CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PhysicalFloorEvidence,
-        PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,
+        CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PacketCapture,
         ProductionDispatchTestHarness,
     };
     pub use super::worker::WaitObservation;
     pub use super::worker::dispatch::DispatchStep;
     pub use super::worker::dispatch::observation::{
-        DispatchObservation, DownMissKind, DownMissObservation, DownObservation,
-        DownTraceObservation, OBSERVATION_QUEUE_CAPACITY, PrecisionHandoffEvidence, UpObservation,
-        UpTraceObservation,
+        DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
+        PrecisionHandoffEvidence, UpObservation, UpTraceObservation,
     };
     pub use super::worker::dispatch::observer::PendingObservationQueue;
     pub use super::worker::dispatch::timing::{
         DispatchObservationEvidence, is_clean_dispatch_observation,
     };
     pub use super::worker::health::DispatchPath;
-    pub use super::worker::{NextDispatchPlan, PreparationCounts};
 
     /// Production timing policy constants shared by diagnostic benchmarks.
     pub const PRODUCTION_MIN_SPIN_THRESHOLD_US: u64 = super::config::MIN_CALIBRATED_SPIN_US;
@@ -136,19 +135,17 @@ pub mod observer_test_hooks {
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 #[cfg(any(test, feature = "test-support"))]
-use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+pub use sky_dispatch_core::executor::{DispatchExecutor, DispatchTimingWindow};
 #[cfg(any(test, feature = "test-support"))]
 pub use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
-#[cfg(test)]
-pub(crate) use sky_dispatch_win32::input::PlatformSendResult;
-use sky_dispatch_win32::input::TrackedKeyState;
+pub(crate) use sky_dispatch_win32::input::TrackedKeyState;
+use sky_dispatch_win32::wait::HybridWaiter;
 #[cfg(test)]
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
-use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
@@ -163,7 +160,4 @@ const OUTCOME_QUIT: u8 = 2;
 const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
 const OUTCOME_SYSTEM_SUSPENDED: u8 = 5;
-const PAUSED_POLL_US: u64 = 2_000;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
-#[cfg(test)]
-mod tests;

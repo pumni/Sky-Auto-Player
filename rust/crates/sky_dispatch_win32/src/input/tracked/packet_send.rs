@@ -5,6 +5,7 @@ use super::super::outcome::{
 use super::super::packet::{
     PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
     send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_start,
+    send_prepared_terminal_up_once,
 };
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
@@ -12,6 +13,8 @@ use super::super::raw::{
 };
 use super::super::scan_code::key_mask;
 use super::super::up_transaction::emit_up_once_with;
+#[cfg(test)]
+use super::super::up_transaction::terminal_up_outcome;
 use super::TrackedKeyState;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
@@ -37,6 +40,43 @@ pub(super) fn clock_failure_before_send_outcome(
             completed_ticks: None,
             timing_error: Some(error),
         },
+    }
+}
+
+fn packet_outcome_proves_zero_transport(
+    packet: PhysicalPacket,
+    outcome: SendTransactionOutcome,
+) -> bool {
+    let evidence = outcome.evidence;
+    let packet_mask = packet.up_mask | packet.down_mask;
+    if packet_mask == 0
+        || evidence.requested_mask != packet_mask
+        || evidence.confirmed_mask != 0
+        || evidence.skipped_mask != 0
+        || evidence.first_inserted != 0
+    {
+        return false;
+    }
+
+    match outcome.status {
+        SendTransactionStatus::ClockFailureBeforeSend => {
+            evidence.attempts == 0
+                && evidence.timing_error.is_some()
+                && evidence.retry_reason == PacketRetryReason::None
+        }
+        SendTransactionStatus::ZeroProgress => {
+            evidence.attempts <= 1
+                && matches!(
+                    evidence.retry_reason,
+                    PacketRetryReason::None | PacketRetryReason::ZeroProgress
+                )
+        }
+        SendTransactionStatus::ClockFailureAfterSend => {
+            evidence.attempts == 1
+                && evidence.timing_error.is_some()
+                && evidence.retry_reason == PacketRetryReason::None
+        }
+        _ => false,
     }
 }
 
@@ -90,6 +130,7 @@ impl TrackedKeyState {
             };
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
+            let previous_in_flight_mask = self.in_flight_mask;
             self.in_flight_mask |= packet.up_mask | packet.down_mask;
             let mut outcome = emitter(packet);
             #[cfg(any(test, feature = "test-support"))]
@@ -108,6 +149,9 @@ impl TrackedKeyState {
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
             let outcome =
                 self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
+            if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+                self.in_flight_mask = previous_in_flight_mask;
+            }
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
             return outcome;
@@ -138,6 +182,7 @@ impl TrackedKeyState {
         };
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
+        let previous_in_flight_mask = self.in_flight_mask;
         self.in_flight_mask |= packet.up_mask | packet.down_mask;
         let outcome =
             super::super::packet::send_prepared_physical_packet_view_once(prepared, clock);
@@ -147,6 +192,9 @@ impl TrackedKeyState {
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
         let outcome =
             self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
+        if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+            self.in_flight_mask = previous_in_flight_mask;
+        }
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
@@ -183,7 +231,11 @@ impl TrackedKeyState {
     /// Single-send note-off for operator-owned cleanup retries. The cleanup FSM
     /// bounds the raw `SendInput` count itself; this must never perform an
     /// internal retry.
-    pub(super) fn do_emit_up_once(&mut self, logical_mask: u16) -> SendTransactionOutcome {
+    pub(super) fn do_emit_up_once(
+        &mut self,
+        logical_mask: u16,
+        terminal_qpc_fallback: bool,
+    ) -> SendTransactionOutcome {
         let packet = PhysicalPacket::new(logical_mask, 0);
         let prepared = match PreparedPhysicalPacket::try_new_with_profile(
             packet,
@@ -192,6 +244,11 @@ impl TrackedKeyState {
             Ok(prepared) => prepared,
             Err(_) => return invalid_packet_outcome(packet),
         };
+
+        #[cfg(test)]
+        if terminal_qpc_fallback && let Some(emitter) = self.custom_terminal_up_emitter.as_ref() {
+            return terminal_up_outcome(packet, emitter(packet));
+        }
 
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
@@ -214,10 +271,14 @@ impl TrackedKeyState {
             return emitter(packet);
         }
 
-        let Some(clock) = self.qpc_clock else {
-            return invalid_packet_outcome(packet);
-        };
-        send_prepared_physical_packet_once(&prepared, clock)
+        if terminal_qpc_fallback {
+            send_prepared_terminal_up_once(&prepared, self.qpc_clock)
+        } else {
+            match self.qpc_clock {
+                Some(clock) => send_prepared_physical_packet_once(&prepared, clock),
+                None => invalid_packet_outcome(packet),
+            }
+        }
     }
 
     pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
@@ -605,33 +666,6 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_view(prepared.as_view())
     }
 
-    /// Final authored boundary sender. Production always samples the true
-    /// pre-call QPC inside the immediate prepared sender; test support may
-    /// inject a deterministic start sample without changing that path.
-    pub fn send_prepared_physical_packet_at_final_boundary(
-        &mut self,
-        prepared: &PreparedPhysicalPacket,
-        test_started_ticks: Option<QpcTicks>,
-    ) -> SendTransactionOutcome {
-        #[cfg(any(test, feature = "test-support"))]
-        if prepared.packet().down_mask != 0
-            && let Some(hook) = self.physical_study_hook.as_ref()
-        {
-            hook(prepared.packet().down_mask);
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        if self.use_actual_pre_call_clock_for_test && self.qpc_clock.is_some() {
-            return self.send_prepared_physical_packet(prepared);
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(test_started_ticks) = test_started_ticks {
-            return self.send_prepared_physical_packet_with_start(prepared, test_started_ticks);
-        }
-        #[cfg(not(any(test, feature = "test-support")))]
-        let _ = test_started_ticks;
-        self.send_prepared_physical_packet(prepared)
-    }
-
     /// Production scheduler path: retain the in-flight transport journal until
     /// the scheduler has committed the matching physical packet.
     pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit(
@@ -733,7 +767,9 @@ impl TrackedKeyState {
             SendTransactionStatus::ClockFailureBeforeSend
             | SendTransactionStatus::ClockFailureAfterSend => {
                 self.timing_error = outcome.evidence.timing_error;
-                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend) {
+                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend)
+                    && !packet_outcome_proves_zero_transport(packet, outcome)
+                {
                     let uncertain_mask = packet.up_mask | packet.down_mask;
                     self.active_mask &= !uncertain_mask;
                     self.possibly_active_mask |= uncertain_mask;

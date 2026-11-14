@@ -745,11 +745,15 @@ mod tests {
             )),
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../sky_player/src/engine/worker/dispatch/prepared.rs"
+                "/../sky_player/src/engine/worker/dispatch_loop_scheduler.rs"
             )),
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../sky_player/src/engine/worker/dispatch/recovery.rs"
+                "/../sky_player/src/engine/worker/admission.rs"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../sky_player/src/engine/worker/boot.rs"
             )),
         ];
         for source in sources {

@@ -99,6 +99,36 @@ impl OwnedEvent {
         }
     }
 
+    /// Block until this auto-reset event is signalled. Native playback uses
+    /// this only while paused with no active deadline; all state publishers
+    /// pair a state update with this event.
+    pub fn wait_indefinitely(&self) -> Result<(), u32> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{GetLastError, WAIT_OBJECT_0};
+            use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+            // SAFETY: the event handle remains owned by self for the duration
+            // of the blocking wait and auto-reset consumes the delivered wake.
+            let result = unsafe { WaitForSingleObject(self.raw_handle(), u32::MAX) };
+            if result == WAIT_OBJECT_0 {
+                Ok(())
+            } else {
+                Err(unsafe { GetLastError() })
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // The desktop worker is Windows-only. Keep portable unit tests
+            // functional with a bounded fallback where no native event wait
+            // primitive is available.
+            while !self.try_take() {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Ok(())
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn take_count(&self) -> u64 {
         self.take_count.load(Ordering::Relaxed)
@@ -128,6 +158,8 @@ impl Drop for OwnedEvent {
 #[cfg(test)]
 mod tests {
     use super::OwnedEvent;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn auto_reset_event_consumes_one_signal() {
@@ -147,6 +179,29 @@ mod tests {
         assert!(event.signal());
         assert_eq!(event.signal_generation(), 2);
         assert!(event.try_take());
+        assert!(!event.try_take());
+    }
+
+    #[test]
+    fn indefinite_wait_observes_signal_before_and_during_block() {
+        let event = Arc::new(OwnedEvent::new_auto_reset().expect("event"));
+        assert!(event.signal());
+        event
+            .wait_indefinitely()
+            .expect("signal before wait is retained");
+        assert!(!event.try_take());
+
+        let signaler_event = Arc::clone(&event);
+        let signaler = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            assert!(signaler_event.signal());
+        });
+        let started = Instant::now();
+        event
+            .wait_indefinitely()
+            .expect("signal during wait interrupts the block");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        signaler.join().expect("signaler thread");
         assert!(!event.try_take());
     }
 }

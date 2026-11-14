@@ -160,617 +160,256 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
 }
 
 #[test]
-fn unstable_target_replan_wait_bounds_overdue_dispatch_retries() {
-    let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
-    harness.runtime.verified_target = None;
-    let target = std::sync::Arc::clone(&harness.target);
-    harness.resources.backend.set_preflight_physical_mask_probe(move || {
-        let next_hwnd = match target.load_stable().map(|(hwnd, _)| hwnd) {
-            Some(1) => 2,
-            _ => 1,
-        };
-        target.publish(next_hwnd);
-        0
-    });
-    let clock = harness.resources.clock;
-    let epoch = sky_dispatch_win32::clock::QpcTicks::ZERO;
-    harness.resources.playback.epoch = epoch;
-    let accounting_before = harness.resources.scheduler.accounting();
-    let start = clock.now().expect("test start");
-    let duration = clock.duration_from_us(20_000).expect("window duration");
-    let mut stage_attempts = 0usize;
+fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_commit() {
+    use sky_dispatch_core::executor::DispatchDecision;
+    use sky_dispatch_win32::clock::QpcError;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
-    loop {
-        let now = clock.now().expect("test loop QPC");
-        if now
-            .checked_duration_since(start)
-            .expect("monotonic test QPC")
-            >= duration
-        {
-            break;
-        }
-        let action = evaluate_scheduler_action(&harness.resources.scheduler, now, epoch)
-            .expect("scheduler action");
-        let packet_not_before = match &action {
-            SchedulerAction::Send { timing_window, .. } => timing_window.packet_not_before_qpc,
-            action => panic!("overdue Down must remain eligible for replan: {action:?}"),
-        };
-        assert!(
-            stage_scheduler_action(
-                action,
-                &harness.target,
-                &mut harness.resources,
-                &mut harness.runtime,
+    for inserted_count in 0..=2_u8 {
+        let mut harness = ProductionDispatchTestHarness::new_mixed();
+        let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+        let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
+        harness.attach_executor_for_test().expect("attach live scheduler");
+        let epoch = harness.resources.playback.epoch;
+        let first_now = harness.qpc_now_for_test().expect("first Down QPC");
+        let first = harness
+            .stage_candidate_for_test(
+                0,
+                harness.current_executor_chord_for_test(),
+                TimelineTicks::ZERO,
             )
-            .expect("stage with invalid target")
-            .is_none(),
-            "invalid target must not produce a physical candidate"
-        );
-        stage_attempts += 1;
-
-        match wait_after_unstable_target(
-            now,
-            packet_not_before,
-            clock,
-            &harness.resources.waiter,
-            &harness.interrupt,
-            &mut harness.local_metrics,
-            &mut harness.runtime.terminal_error,
-        ) {
-            super::WaitBoundary::Due { .. } => {}
-            super::WaitBoundary::Interrupted(_, _, _) => {
-                let _ = harness.interrupt.try_take();
-            }
-            super::WaitBoundary::Exit => panic!("bounded replan wait failed"),
-        }
-    }
-
-    assert!(stage_attempts >= 3, "stage attempts={stage_attempts}");
-    assert!(
-        stage_attempts <= 40,
-        "target churn caused unbounded retries: {stage_attempts} in 20 ms"
-    );
-    assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
-    assert_eq!(
-        harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-        Some(0)
-    );
-    assert_eq!(harness.resources.backend.in_flight_mask, 0);
-}
-
-#[test]
-fn unstable_target_prewait_and_final_gate_replans_are_rate_limited() {
-    for replan_site in ["prewait", "final_gate"] {
-        let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
-        let packets = harness.configure_mock_packet_sender_for_test(&[]);
-        if replan_site == "final_gate" {
-            harness.set_post_focus_revalidation_race_hook(|_, target, _, _, _, _, _| {
-                let next_hwnd = match target.load_stable().map(|(hwnd, _)| hwnd) {
-                    Some(1) => 2,
-                    _ => 1,
-                };
-                target.publish(next_hwnd);
-            });
-        }
-        let clock = harness.resources.clock;
-        let epoch = sky_dispatch_win32::clock::QpcTicks::ZERO;
-        harness.resources.playback.epoch = epoch;
-        let start = clock.now().expect("replan test start");
-        let duration = clock.duration_from_us(20_000).expect("bounded test window");
-        let accounting_before = harness.resources.scheduler.accounting();
-        let mut attempts = 0usize;
-
-        loop {
-            let now = clock.now().expect("replan loop QPC");
-            if now
-                .checked_duration_since(start)
-                .expect("monotonic replan QPC")
-                >= duration
-            {
-                break;
-            }
-            let action = evaluate_scheduler_action(&harness.resources.scheduler, now, epoch)
-                .expect("production scheduler action");
-            let deadline = match &action {
-                SchedulerAction::Send { timing_window, .. } => {
-                    timing_window.packet_not_before_qpc
-                }
-                action => panic!("eligible Down must send during target churn: {action:?}"),
-            };
-            let candidate = stage_scheduler_action(
-                action,
-                &harness.target,
-                &mut harness.resources,
-                &mut harness.runtime,
-            )
-            .expect("stage production scheduler candidate")
-            .expect("valid target before injected churn");
-            let retry_deadline = candidate.timing_window.packet_not_before_qpc;
-            let controls = super::FinalControlSignals {
-                quit_requested: &harness.quit_requested,
-                skip_requested: &harness.skip_requested,
-                panic_requested: &harness.panic_requested,
-                desired_pause: &harness.desired_pause,
-                supervisor_expired: &harness.supervisor_expired,
-                system_power: None,
-            };
-
-            let outcome = if replan_site == "prewait" {
-                let next_hwnd = match harness.target.load_stable().map(|(hwnd, _)| hwnd) {
-                    Some(1) => 2,
-                    _ => 1,
-                };
-                harness.target.publish(next_hwnd);
-                pre_wait_candidate_admission(
-                    &candidate,
-                    &harness.target,
-                    harness.config.focus.require_focus,
-                    &harness.focus_active,
-                    controls,
-                    &mut harness.runtime,
-                )
-            } else {
-                harness.dispatch_staged_candidate_for_test(candidate, false)
-            };
-            assert_eq!(
-                outcome,
-                super::StagedDispatchOutcome::Replan,
-                "{replan_site}: target churn must reject each candidate"
-            );
-            attempts += 1;
-
-            match wait_after_unstable_target(
-                now,
-                if replan_site == "prewait" { deadline } else { retry_deadline },
-                clock,
-                &harness.resources.waiter,
-                &harness.interrupt,
-                &mut harness.local_metrics,
-                &mut harness.runtime.terminal_error,
-            ) {
-                super::WaitBoundary::Due { .. } => {}
-                super::WaitBoundary::Interrupted(_, _, _) => {
-                    let _ = harness.interrupt.try_take();
-                    panic!("unexpected control interrupt during {replan_site} churn");
-                }
-                super::WaitBoundary::Exit => panic!("{replan_site} bounded wait failed"),
-            }
-        }
-
-        assert!(attempts >= 2, "{replan_site}: attempts={attempts}");
-        assert!(
-            attempts <= 40,
-            "{replan_site}: target churn caused unbounded retries: {attempts} in 20 ms"
-        );
+            .expect("stage production first Down")
+            .expect("first Down candidate");
+        harness.set_mock_sender_start_qpc_for_test(first_now);
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(first, false),
+            super::StagedDispatchOutcome::Dispatched
+        ));
         assert_eq!(
-            packets.lock().expect("churn packet capture").len(),
-            0,
-            "{replan_site}: no Down is sent before stable target admission"
+            harness.generation_accounting_for_test().activated,
+            1,
+            "first Down is committed before the mixed packet"
         );
-        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
-        assert_eq!(harness.resources.backend.in_flight_mask, 0);
+        assert_eq!(harness.release_obligation_mask_for_test(), 0b01);
+
+        let mixed_target = epoch
+            .checked_add_duration(
+                harness
+                    .qpc_duration_from_us_for_test(20_000)
+                    .expect("authored mixed target"),
+            )
+            .expect("mixed target QPC");
+        while harness.qpc_now_for_test().expect("wait for mixed target") < mixed_target {
+            std::thread::yield_now();
+        }
+        let (up_mask, down_chord, timing_window): (
+            u16,
+            Option<sky_dispatch_core::executor::DownChordMetadata>,
+            sky_dispatch_core::executor::DispatchTimingWindow,
+        ) = match harness
+            .evaluate_live_scheduler_for_test(mixed_target, epoch)
+            .expect("live scheduler mixed evaluation")
+        {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => (up_mask, down_chord.map(Into::into), timing_window),
+            decision => panic!("expected production mixed Up+Down, got {decision:?}"),
+        };
+        assert_eq!(up_mask, 0b01);
+        assert_eq!(down_chord.as_ref().map(|chord| chord.down_mask), Some(0b10));
+        let candidate = harness
+            .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+            .expect("stage production mixed packet")
+            .expect("mixed packet candidate");
+        assert_eq!(candidate.packet_masks.up_mask, 0b01);
+        assert_eq!(candidate.packet_masks.down_mask, 0b10);
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let clock = harness.resources.clock;
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            observed_attempts.fetch_add(1, Ordering::Relaxed);
+            let started = clock.now().expect("mixed sender start QPC");
+            let confirmed_mask = match inserted_count {
+                0 => 0,
+                1 => packet.up_mask,
+                _ => packet.up_mask | packet.down_mask,
+            };
+            SendTransactionOutcome {
+                status: SendTransactionStatus::ClockFailureAfterSend,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask,
+                    skipped_mask: 0,
+                    first_inserted: inserted_count,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: Some(0),
+                    last_win32_error: Some(0),
+                    started_ticks: Some(started),
+                    completed_ticks: None,
+                    timing_error: Some(QpcError::CounterUnavailable),
+                },
+            }
+        });
+
+        let accounting_before = harness.generation_accounting_for_test();
+        harness.set_mock_sender_start_qpc_for_test(mixed_target);
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            super::StagedDispatchOutcome::Exit
+        ));
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(harness.generation_accounting_for_test(), accounting_before);
         assert_eq!(
             harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-            Some(0)
+            Some(1),
+            "QPC failure cannot advance the production Down cursor"
         );
+        let obligation = harness.release_obligation_mask_for_test();
+        match inserted_count {
+            0 => {
+                assert_eq!(obligation, 0b01, "zero insertion retains only prior held A");
+                assert_eq!(harness.resources.backend.in_flight_mask, 0);
+            }
+            1 | 2 => {
+                assert_eq!(obligation, 0b11, "partial/full insert without completion is uncertain");
+                assert_eq!(harness.resources.backend.in_flight_mask, 0b11);
+            }
+            _ => unreachable!(),
+        }
+        let error = harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .expect("post-call QPC failure record");
+        assert!(error.contains("status=ClockFailureAfterSend"), "{error}");
+        assert!(error.contains("first_inserted="), "{error}");
+        assert!(error.contains("completion_qpc=unavailable"), "{error}");
+        assert_eq!(packets.lock().expect("initial packet capture").len(), 1);
+        let _ = harness.finalize_for_test();
     }
 }
 
 #[test]
-fn unstable_target_replan_wait_keeps_stop_pause_and_lease_interruptible() {
-    for signal_kind in ["stop", "pause", "lease"] {
-        let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
-        let clock = harness.resources.clock;
-        let now = clock.now().expect("test now");
-        let deadline = now
-            .checked_add_duration(clock.duration_from_us(5_000_000).expect("long wait"))
-            .expect("deadline");
-        let accounting_before = harness.resources.scheduler.accounting();
-        match signal_kind {
-            "stop" => harness.quit_requested.store(true, std::sync::atomic::Ordering::Release),
-            "pause" => harness
-                .desired_pause
-                .store(true, std::sync::atomic::Ordering::Release),
-            "lease" => harness.supervisor_expired.latch_expired(),
-            _ => unreachable!(),
-        }
-        assert!(harness.interrupt.signal());
+fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
+    use sky_dispatch_core::executor::DispatchDecision;
 
-        assert!(matches!(
-            wait_after_unstable_target(
-                now,
-                deadline,
-                clock,
-                &harness.resources.waiter,
-                &harness.interrupt,
-                &mut harness.local_metrics,
-                &mut harness.runtime.terminal_error,
-            ),
-            super::WaitBoundary::Interrupted(_, _, _)
-        ));
-        match signal_kind {
-            "stop" | "lease" => assert!(harness.process_command_control_for_test()),
-            "pause" => assert!(harness.desired_pause.load(std::sync::atomic::Ordering::Acquire)),
-            _ => unreachable!(),
-        }
-        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
-        assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    }
-}
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness.attach_executor_for_test().expect("attach live scheduler");
+    let epoch = harness.resources.playback.epoch;
 
-#[test]
-fn mixed_preflight_target_churn_sends_due_up_only_and_leaves_down_uncommitted() {
-    let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
-    harness.runtime.verified_target = None;
-    let target = std::sync::Arc::clone(&harness.target);
-    harness.set_preflight_physical_mask_probe_for_test(move || {
-        target.publish(2);
-        0
-    });
-
-    let action = next_mixed_action(&harness);
+    let first_now = harness.qpc_now_for_test().expect("first Down QPC");
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage first Down")
+        .expect("first Down candidate");
+    harness.set_mock_sender_start_qpc_for_test(first_now);
     assert!(matches!(
-        &action,
-        SchedulerAction::Send {
-            up_mask: 1,
-            down_chord_index: Some(1),
-            ..
-        }
-    ));
-    let controls = super::FinalControlSignals {
-        quit_requested: &harness.quit_requested,
-        skip_requested: &harness.skip_requested,
-        panic_requested: &harness.panic_requested,
-        desired_pause: &harness.desired_pause,
-        supervisor_expired: &harness.supervisor_expired,
-        system_power: None,
-    };
-    let fallback = stage_scheduler_action_preserving_due_up(
-        action,
-        &harness.target,
-        harness.config.focus.require_focus,
-        &harness.focus_active,
-        controls,
-        &mut harness.resources,
-        &mut harness.runtime,
-    )
-    .expect("replan stale Mixed candidate")
-    .expect("due A Up fallback");
-    assert_eq!(fallback.packet_masks.up_mask, 1);
-    assert_eq!(fallback.packet_masks.down_mask, 0);
-
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(fallback, false),
+        harness.dispatch_staged_candidate_for_test(first, false),
         super::StagedDispatchOutcome::Dispatched
     ));
-    let captured = packets.lock().expect("Mixed packets");
-    assert_eq!(
-        captured
-            .iter()
-            .map(|(packet, _)| *packet)
-            .collect::<Vec<_>>(),
-        vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
-    );
-    drop(captured);
-    let accounting = harness.resources.scheduler.accounting();
-    assert_eq!(accounting.activated, 1);
-    assert_eq!(accounting.released, 1);
-    assert_eq!(accounting.active, 0);
-    assert_eq!(
-        harness
-            .current_executor_chord_for_test()
-            .map(|chord| chord.chord_index),
-        Some(1),
-        "the unrelated B Down remains current and uncommitted"
-    );
-    assert_eq!(harness.resources.backend.in_flight_mask, 0);
-}
 
-#[test]
-fn mixed_up_only_fallback_keeps_the_up_deadline_when_down_is_later() {
-    let (mut harness, _) = mixed_scheduler_after_accepted_a_down();
-    harness.runtime.verified_target = None;
-    let target = std::sync::Arc::clone(&harness.target);
-    harness.resources.backend.set_preflight_physical_mask_probe(move || {
-        target.publish(2);
-        0
-    });
-
-    let action = next_mixed_action(&harness);
-    let (up_mask, down_chord_index, mut timing_window) = match action {
-        SchedulerAction::Send {
-            up_mask,
-            down_chord_index: Some(down_chord_index),
-            timing_window,
-        } if up_mask != 0 => (up_mask, down_chord_index, timing_window),
-        action => panic!("expected a production Mixed action, got {action:?}"),
-    };
-    let epoch_qpc = harness.resources.playback.epoch;
-    let up_slots = harness.resources.scheduler.up_slot_timings(up_mask);
-    assert!(!up_slots.is_empty(), "the scheduler owns a due Up slot");
-    let up_deadline = up_slots
-        .iter()
-        .map(|slot| {
-            epoch_qpc
-                .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
-                    slot.authored_up_offset_ticks.as_u64(),
-                ))
-                .expect("authored Up QPC")
-                .max(slot.release_not_before_qpc)
-        })
-        .max()
-        .expect("Up deadline");
-    let authored_up_target = up_slots
-        .iter()
-        .map(|slot| {
-            epoch_qpc
-                .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
-                    slot.authored_up_offset_ticks.as_u64(),
-                ))
-                .expect("authored Up target")
-        })
-        .min()
-        .expect("authored Up target");
-    let later_down_deadline = harness
-        .resources
-        .clock
-        .now()
-        .expect("current QPC")
+    let mixed_target = epoch
         .checked_add_duration(
             harness
-                .resources
-                .clock
-                .duration_from_us(5_000_000)
-                .expect("later Down floor"),
+                .qpc_duration_from_us_for_test(20_000)
+                .expect("mixed target conversion"),
         )
-        .expect("later Down QPC");
-    timing_window.down_not_before_qpc = later_down_deadline;
-    timing_window.packet_not_before_qpc =
-        timing_window.musical_up_not_before_qpc.max(later_down_deadline);
-
-    let controls = super::FinalControlSignals {
-        quit_requested: &harness.quit_requested,
-        skip_requested: &harness.skip_requested,
-        panic_requested: &harness.panic_requested,
-        desired_pause: &harness.desired_pause,
-        supervisor_expired: &harness.supervisor_expired,
-        system_power: None,
-    };
-    let fallback = stage_scheduler_action_preserving_due_up(
-        SchedulerAction::Send {
+        .expect("mixed target QPC");
+    while harness.qpc_now_for_test().expect("wait for mixed target") < mixed_target {
+        std::thread::yield_now();
+    }
+    let (up_mask, down_chord, timing_window): (
+        u16,
+        Option<sky_dispatch_core::executor::DownChordMetadata>,
+        sky_dispatch_core::executor::DispatchTimingWindow,
+    ) = match harness
+        .evaluate_live_scheduler_for_test(mixed_target, epoch)
+        .expect("live mixed scheduler evaluation")
+    {
+        DispatchDecision::Send {
             up_mask,
-            down_chord_index: Some(down_chord_index),
+            down_chord,
             timing_window,
-        },
-        &harness.target,
-        harness.config.focus.require_focus,
-        &harness.focus_active,
-        controls,
-        &mut harness.resources,
-        &mut harness.runtime,
-    )
-    .expect("replan stale Mixed candidate")
-    .expect("due Up-only fallback");
+        } => (up_mask, down_chord.map(Into::into), timing_window),
+        decision => panic!("expected mixed Up+Down candidate, got {decision:?}"),
+    };
+    assert_eq!(up_mask, 0b01);
+    let mixed = harness
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .expect("stage mixed candidate")
+        .expect("mixed candidate");
+    assert_eq!(mixed.packet_masks.down_mask, 0b10);
+    let accounting_before_replan = harness.generation_accounting_for_test();
 
-    assert_eq!(fallback.packet_masks, PhysicalPacket::new(up_mask, 0));
-    assert_eq!(fallback.timing_window.authored_target_qpc, authored_up_target);
-    assert_eq!(fallback.timing_window.packet_not_before_qpc, up_deadline);
-    assert_eq!(
-        fallback.timing_window.packet_not_before_qpc,
-        fallback.timing_window.musical_up_not_before_qpc
+    assert!(harness.target.publish(2), "publish a new target generation");
+    harness.set_mock_sender_start_qpc_for_test(
+        harness.qpc_now_for_test().expect("fallback Up sender QPC"),
     );
-    assert_eq!(
-        fallback.timing_window.down_not_before_qpc,
-        fallback.timing_window.authored_target_qpc
-    );
-    assert_eq!(fallback.timing_window.release_floor_mask, 0);
-    assert!(fallback.timing_window.packet_not_before_qpc < later_down_deadline);
-    assert_eq!(harness.resources.scheduler.accounting().activated, 1);
-    assert_eq!(harness.resources.scheduler.accounting().released, 0);
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(mixed, false),
+        super::StagedDispatchOutcome::Dispatched
+    ));
+
+    let captured = packets.lock().expect("mock packet capture");
+    assert_eq!(captured.len(), 2, "stale target sends only the independent Up");
+    assert_eq!(captured[0].0, sky_dispatch_win32::input::PhysicalPacket::new(0, 1));
+    assert_eq!(captured[1].0, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
+    assert_eq!(harness.generation_accounting_for_test().activated, 1);
+    assert_eq!(harness.generation_accounting_for_test().released, 1);
+    assert_eq!(harness.generation_accounting_for_test().active, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(
         harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-        Some(down_chord_index),
-        "the unrelated Down remains uncommitted"
+        Some(1),
+        "replanning Up-only cannot advance the rejected Down cursor"
+    );
+    assert_eq!(accounting_before_replan.activated, 1);
+    assert_eq!(accounting_before_replan.released, 0);
+    assert_eq!(
+        harness.resources.backend.in_flight_mask,
+        0,
+        "successful Up clears its journal entry"
     );
 }
 
 #[test]
-fn mixed_prewait_target_churn_replans_as_up_only() {
-    let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
-    let candidate = stage_scheduler_action(
-        next_mixed_action(&harness),
-        &harness.target,
-        &mut harness.resources,
-        &mut harness.runtime,
-    )
-    .expect("stage production Mixed candidate")
-    .expect("production Mixed candidate");
-    harness.target.publish(2);
+fn unstable_target_retry_wait_is_interruptible_before_deadline() {
+    use sky_dispatch_win32::clock::QpcClock;
+    use sky_dispatch_win32::event::OwnedEvent;
+    use sky_dispatch_win32::wait::HybridWaiter;
 
-    assert_eq!(
-        pre_wait_candidate_admission(
-            &candidate,
-            &harness.target,
-            harness.config.focus.require_focus,
-            &harness.focus_active,
-            super::FinalControlSignals {
-                quit_requested: &harness.quit_requested,
-                skip_requested: &harness.skip_requested,
-                panic_requested: &harness.panic_requested,
-                desired_pause: &harness.desired_pause,
-                supervisor_expired: &harness.supervisor_expired,
-                system_power: None,
-            },
-            &mut harness.runtime,
-        ),
-        super::StagedDispatchOutcome::Replan
+    let qpc = QpcClock::initialize().expect("retry wait QPC");
+    let now = qpc.now().expect("retry wait start");
+    let deadline = now
+        .checked_add_duration(qpc.duration_from_us(5_000_000).expect("retry deadline"))
+        .expect("retry deadline arithmetic");
+    let waiter = HybridWaiter::new();
+    let interrupt = OwnedEvent::new_auto_reset().expect("retry interrupt event");
+    assert!(interrupt.signal(), "pre-wait target/control event signal");
+    let mut metrics = crate::engine::telemetry::WorkerMetricsLocal::default();
+    let mut terminal_error = None;
+
+    let result = super::wait_after_unstable_target(
+        now,
+        deadline,
+        qpc,
+        &waiter,
+        &interrupt,
+        &mut metrics,
+        &mut terminal_error,
     );
-    let fallback = stage_up_only_for_stale_mixed_candidate(
-        &candidate,
-        &harness.target,
-        harness.config.focus.require_focus,
-        &harness.focus_active,
-        super::FinalControlSignals {
-            quit_requested: &harness.quit_requested,
-            skip_requested: &harness.skip_requested,
-            panic_requested: &harness.panic_requested,
-            desired_pause: &harness.desired_pause,
-            supervisor_expired: &harness.supervisor_expired,
-            system_power: None,
-        },
-        &mut harness.resources,
-        &mut harness.runtime,
-    )
-    .expect("pre-wait Mixed target fallback")
-    .expect("due A Up fallback");
-    assert_eq!(fallback.packet_masks, PhysicalPacket::new(1, 0));
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(fallback, false),
-        super::StagedDispatchOutcome::Dispatched
-    ));
-    assert_eq!(
-        packets
-            .lock()
-            .expect("pre-wait packet capture")
-            .iter()
-            .map(|(packet, _)| *packet)
-            .collect::<Vec<_>>(),
-        vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
-    );
-    assert_eq!(harness.resources.scheduler.accounting().activated, 1);
-    assert_eq!(harness.resources.scheduler.accounting().released, 1);
-    assert_eq!(
-        harness
-            .current_executor_chord_for_test()
-            .map(|chord| chord.chord_index),
-        Some(1)
-    );
-}
 
-#[test]
-fn mixed_final_gate_target_churn_replans_as_up_only() {
-    let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
-    let candidate = stage_scheduler_action(
-        next_mixed_action(&harness),
-        &harness.target,
-        &mut harness.resources,
-        &mut harness.runtime,
-    )
-    .expect("stage production Mixed candidate")
-    .expect("production Mixed candidate");
-    harness.set_post_focus_revalidation_race_hook(|_, target, _, _, _, _, _| {
-        target.publish(2);
-    });
-
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Dispatched
-    ));
-    assert_eq!(
-        packets
-            .lock()
-            .expect("final-gate packet capture")
-            .iter()
-            .map(|(packet, _)| *packet)
-            .collect::<Vec<_>>(),
-        vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
-    );
-    let accounting = harness.resources.scheduler.accounting();
-    assert_eq!(accounting.activated, 1);
-    assert_eq!(accounting.released, 1);
-    assert_eq!(accounting.active, 0);
-    assert_eq!(
-        harness
-            .current_executor_chord_for_test()
-            .map(|chord| chord.chord_index),
-        Some(1)
-    );
-}
-
-#[test]
-fn mixed_target_churn_fallback_honors_pause_stop_and_lease_controls() {
-    for signal in ["pause", "stop", "lease"] {
-        let (mut harness, packets) = mixed_scheduler_after_accepted_a_down();
-        let candidate = stage_scheduler_action(
-            next_mixed_action(&harness),
-            &harness.target,
-            &mut harness.resources,
-            &mut harness.runtime,
-        )
-        .expect("stage production Mixed candidate")
-        .expect("production Mixed candidate");
-        harness.target.publish(2);
-        match signal {
-            "pause" => harness
-                .desired_pause
-                .store(true, std::sync::atomic::Ordering::Release),
-            "stop" => harness
-                .quit_requested
-                .store(true, std::sync::atomic::Ordering::Release),
-            "lease" => harness.supervisor_expired.latch_expired(),
-            _ => unreachable!(),
-        }
-
-        assert!(
-            stage_up_only_for_stale_mixed_candidate(
-                &candidate,
-                &harness.target,
-                harness.config.focus.require_focus,
-                &harness.focus_active,
-                super::FinalControlSignals {
-                    quit_requested: &harness.quit_requested,
-                    skip_requested: &harness.skip_requested,
-                    panic_requested: &harness.panic_requested,
-                    desired_pause: &harness.desired_pause,
-                    supervisor_expired: &harness.supervisor_expired,
-                    system_power: None,
-                },
-                &mut harness.resources,
-                &mut harness.runtime,
-            )
-            .expect("control-gated Mixed fallback")
-            .is_none(),
-            "{signal}: control state must block the Up-only dispatch"
-        );
-        assert_eq!(
-            packets.lock().expect("pre-cleanup packet capture").len(),
-            1,
-            "{signal}: no fallback packet before lifecycle cleanup"
-        );
-        assert_eq!(harness.resources.scheduler.accounting().active, 1);
-        assert_ne!(harness.release_obligation_mask_for_test(), 0);
-
-        let cleanup = harness.configure_mock_cleanup_emitter_for_test();
-        if signal == "pause" {
-            harness
-                .apply_scheduler_resumable_lifecycle_transition_for_test()
-                .expect("pause cleanup uses production scheduler");
-        } else {
-            assert!(harness.process_command_control_for_test());
-            let mut observation = crate::engine::FinalizeTestObservation::default();
-            let outcome = harness.finalize_worker_for_test(false, &mut observation);
-            if signal == "stop" {
-                assert_eq!(outcome, crate::engine::OUTCOME_QUIT);
-            } else {
-                assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
-            }
-            assert_eq!(observation.release_obligation_mask, 0, "{signal}");
-            assert_eq!(observation.active_mask, 0, "{signal}");
-            assert_eq!(observation.possibly_active_mask, 0, "{signal}");
-            assert_eq!(observation.generation_accounting.active, 0, "{signal}");
-            assert_eq!(
-                cleanup.lock().expect("terminal safety Up capture").as_slice(),
-                &[(vec![0x15], true)],
-                "{signal}: terminal cleanup releases A"
-            );
-            continue;
-        }
-        assert_eq!(harness.release_obligation_mask_for_test(), 0, "{signal}");
-        assert_eq!(harness.resources.backend.active_mask, 0, "{signal}");
-        assert_eq!(
-            cleanup.lock().expect("safety Up capture").as_slice(),
-            &[(vec![0x15], true)],
-            "{signal}: accepted A Down is released by lifecycle cleanup"
-        );
-    }
+    assert!(matches!(result, super::WaitBoundary::Interrupted(..)));
+    assert!(terminal_error.is_none());
 }

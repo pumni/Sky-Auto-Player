@@ -4,7 +4,7 @@ param(
     [ValidateSet('frozen')]
     [string]$GuardMode = 'frozen',
     [switch]$QpcReadCounting,
-    [ValidateSet('DispatchCore', 'Scheduler')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot')]
     [string]$QualificationProfile = 'DispatchCore',
     [ValidateSet('Baseline', 'Candidate')]
     [string]$SourceRole,
@@ -22,18 +22,23 @@ $features = [System.Collections.Generic.List[string]]::new()
 $features.Add('real-input-acceptance')
 if ($QpcReadCounting) { $features.Add('qpc-read-counting') }
 $featureArgument = $features -join ','
-$workloadVersion = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
-$baseRevision = if ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
-$baseTree = if ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
-$expectedBranch = if ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot')
+$workloadVersion = if ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+$baseRevision = if ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
+$baseTree = if ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
+$expectedBranch = if ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+$performanceTimingMarginUs = if ($QualificationProfile -eq 'FrameSnapshot') { 0 } else { 500 }
+$safetyTimingMarginUs = 500
+$receiveOnlyObserverMode = if ($qualifiedProfile) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
+$receiveOnlyObserverVersion = if ($qualifiedProfile) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null }
 $destination = [System.IO.Path]::GetFullPath($OutputRoot)
 
-if ($QualificationProfile -eq 'Scheduler') {
+if ($qualifiedProfile) {
     if (-not $SourceRoot -or -not $SourceRole) {
-        throw 'Scheduler builds require -SourceRoot and -SourceRole Baseline|Candidate'
+        throw ($QualificationProfile + ' builds require -SourceRoot and -SourceRole Baseline|Candidate')
     }
 } elseif ($SourceRoot -or $SourceRole) {
-    throw '-SourceRoot and -SourceRole are available only with -QualificationProfile Scheduler'
+    throw '-SourceRoot and -SourceRole are available only with -QualificationProfile Scheduler or FrameSnapshot'
 }
 
 function Get-Sha256 {
@@ -51,9 +56,9 @@ function Get-SourceIdentity {
     $changes = (& git -C $sourceRootPath status --porcelain --untracked-files=all) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'could not verify source tree cleanliness' }
     if (-not [string]::IsNullOrWhiteSpace($changes)) { throw 'immutable harness builds require a clean source checkout' }
-    if ($QualificationProfile -eq 'Scheduler' -and $SourceRole -eq 'Baseline') {
+    if ($qualifiedProfile -and $SourceRole -eq 'Baseline') {
         if ($revision -ne $baseRevision -or $tree -ne $baseTree -or -not [string]::IsNullOrWhiteSpace($branch)) {
-            throw 'Scheduler baseline must be a detached checkout at the pinned base revision'
+            throw ($QualificationProfile + ' baseline must be a detached checkout at the pinned base revision')
         }
     } else {
         if ($branch -ne $expectedBranch) { throw ('expected branch ' + $expectedBranch + ', got ' + $branch) }
@@ -130,18 +135,22 @@ $manifest = [ordered]@{
     source_tree_sha = $source.tree
     source_branch = $source.branch
     qualification_profile = $QualificationProfile
-    source_role = if ($QualificationProfile -eq 'Scheduler') { $SourceRole } else { $null }
+    source_role = if ($qualifiedProfile) { $SourceRole } else { $null }
     source_root = $source.root
-    base_source_revision = if ($QualificationProfile -eq 'Scheduler') { $baseRevision } else { $null }
-    base_source_tree_sha = if ($QualificationProfile -eq 'Scheduler') { $baseTree } else { $null }
+    base_source_revision = if ($qualifiedProfile) { $baseRevision } else { $null }
+    base_source_tree_sha = if ($qualifiedProfile) { $baseTree } else { $null }
     source_tree_clean = $true
     clean_build = $true
     cargo_profile = $profile
     cargo_features = $features.ToArray()
     qpc_read_counting = [bool]$QpcReadCounting
     observer_mode = 'qualification-on'
+    receiveonly_observer_mode = $receiveOnlyObserverMode
+    receiveonly_observer_version = $receiveOnlyObserverVersion
     guard_mode = $GuardMode
     workload_version = $workloadVersion
+    performance_timing_margin_us = $performanceTimingMarginUs
+    safety_timing_margin_us = $safetyTimingMarginUs
     target = $targetTriple
     rustc_version = $rustcVersion.Trim()
     cargo_version = $cargoVersion

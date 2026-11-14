@@ -356,3 +356,484 @@ fn cleanup_transport_anomaly_and_partial_transport_fail_closed_even_if_probe_is_
     assert!(outcome.transport_anomaly);
     assert_eq!(state.release_obligation_mask(), 0x0003);
 }
+
+#[test]
+fn terminal_up_timing_failure_keeps_timestamps_unavailable_but_confirms_full_transport() {
+    let packet = super::super::outcome::PhysicalPacket::new(0b0011, 0);
+    let outcome = super::super::up_transaction::terminal_up_outcome(
+        packet,
+        super::super::outcome::TerminalUpTransportResult {
+            requested: 2,
+            inserted: 2,
+            started_ticks: None,
+            completed_ticks: Some(QpcTicks::from_raw(17)),
+            win32_error: 0,
+            timing_error: Some(QpcError::CounterUnavailable),
+        },
+    );
+
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(outcome.evidence.requested_mask, 0b0011);
+    assert_eq!(outcome.evidence.confirmed_mask, 0b0011);
+    assert_eq!(outcome.evidence.started_ticks, None);
+    assert_eq!(
+        outcome.evidence.completed_ticks,
+        Some(QpcTicks::from_raw(17))
+    );
+    assert_eq!(
+        outcome.evidence.timing_error,
+        Some(QpcError::CounterUnavailable)
+    );
+}
+
+#[test]
+fn terminal_up_after_send_qpc_failure_keeps_completion_unavailable() {
+    let packet = super::super::outcome::PhysicalPacket::new(0b0001, 0);
+    let outcome = super::super::up_transaction::terminal_up_outcome(
+        packet,
+        super::super::outcome::TerminalUpTransportResult {
+            requested: 1,
+            inserted: 1,
+            started_ticks: Some(QpcTicks::from_raw(23)),
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: Some(QpcError::CounterUnavailable),
+        },
+    );
+
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(outcome.evidence.started_ticks, Some(QpcTicks::from_raw(23)));
+    assert_eq!(outcome.evidence.completed_ticks, None);
+    assert_eq!(outcome.evidence.confirmed_mask, 1);
+}
+
+#[test]
+fn terminal_up_zero_partial_and_win32_failure_never_confirm_transport() {
+    let packet = super::super::outcome::PhysicalPacket::new(0b0011, 0);
+    for (inserted, win32_error, expected_status) in [
+        (0, 5, SendTransactionStatus::ZeroProgress),
+        (1, 5, SendTransactionStatus::IntegrityLost),
+        (2, 5, SendTransactionStatus::IntegrityLost),
+    ] {
+        let outcome = super::super::up_transaction::terminal_up_outcome(
+            packet,
+            super::super::outcome::TerminalUpTransportResult {
+                requested: 2,
+                inserted,
+                started_ticks: Some(QpcTicks::from_raw(30)),
+                completed_ticks: Some(QpcTicks::from_raw(31)),
+                win32_error,
+                timing_error: None,
+            },
+        );
+        assert_eq!(outcome.status, expected_status);
+        assert_eq!(outcome.evidence.first_inserted, inserted);
+        assert_eq!(outcome.evidence.last_win32_error, Some(5));
+        assert_eq!(outcome.evidence.confirmed_mask, 0);
+    }
+}
+
+#[test]
+fn terminal_up_qpc_pre_and_post_failures_do_not_reclassify_transport() {
+    let packet = super::super::outcome::PhysicalPacket::new(0b0011, 0);
+    for (started_ticks, completed_ticks) in [
+        (None, Some(QpcTicks::from_raw(31))),
+        (Some(QpcTicks::from_raw(30)), None),
+        (None, None),
+    ] {
+        for (inserted, win32_error, expected_status) in [
+            (0, 5, SendTransactionStatus::ZeroProgress),
+            (1, 5, SendTransactionStatus::IntegrityLost),
+            (2, 0, SendTransactionStatus::Complete),
+        ] {
+            let outcome = super::super::up_transaction::terminal_up_outcome(
+                packet,
+                super::super::outcome::TerminalUpTransportResult {
+                    requested: 2,
+                    inserted,
+                    started_ticks,
+                    completed_ticks,
+                    win32_error,
+                    timing_error: Some(QpcError::CounterUnavailable),
+                },
+            );
+
+            assert_eq!(outcome.status, expected_status);
+            assert_eq!(outcome.evidence.attempts, 1);
+            assert_eq!(outcome.evidence.first_inserted, inserted);
+            assert_eq!(
+                outcome.evidence.last_win32_error,
+                (win32_error != 0).then_some(win32_error)
+            );
+            assert_eq!(outcome.evidence.started_ticks, started_ticks);
+            assert_eq!(outcome.evidence.completed_ticks, completed_ticks);
+            assert_eq!(
+                outcome.evidence.timing_error,
+                Some(QpcError::CounterUnavailable)
+            );
+        }
+    }
+}
+
+#[test]
+fn terminal_zero_insert_with_all_up_probe_keeps_physical_verdict_and_obligation_separate() {
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 1;
+    state.set_terminal_up_emitter_for_test(|packet| {
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 0,
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 5,
+            timing_error: Some(QpcError::CounterUnavailable),
+        }
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+
+    let outcome = state.release_terminal_tracked_scope(77);
+    assert!(outcome.release_outcome.transport_anomaly);
+    assert!(!outcome.release_outcome.released_successfully);
+    assert!(outcome.release_outcome.verification_inconclusive);
+    assert_eq!(outcome.release_outcome.stuck_mask, 1);
+    assert_eq!(
+        outcome.probe_verdict,
+        super::super::outcome::TerminalProbeVerdict::AllUp
+    );
+    assert_eq!(outcome.send_attempts.len(), 4);
+    assert!(outcome.send_attempts.iter().all(|attempt| {
+        attempt.raw_calls == 1
+            && attempt.requested_events == 1
+            && attempt.inserted_events == 0
+            && attempt.win32_error == Some(5)
+            && attempt.started_ticks.is_none()
+            && attempt.completed_ticks.is_none()
+            && attempt.qpc_error == Some(QpcError::CounterUnavailable)
+    }));
+    assert_eq!(state.release_obligation_mask(), 1);
+}
+
+#[test]
+fn terminal_partial_up_reports_only_the_physical_held_mask() {
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 0b0011;
+    state.set_terminal_up_emitter_for_test(|packet| {
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 1,
+            started_ticks: Some(QpcTicks::from_raw(10)),
+            completed_ticks: Some(QpcTicks::from_raw(11)),
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::Held(vec![0x15].into()));
+
+    let outcome = state.release_terminal_tracked_scope(77);
+
+    assert_eq!(
+        outcome.probe_verdict,
+        super::super::outcome::TerminalProbeVerdict::Held(0b0001)
+    );
+    assert_eq!(outcome.release_outcome.stuck_mask, 0b0011);
+    assert!(!outcome.release_outcome.released_successfully);
+    assert!(!outcome.release_outcome.verification_inconclusive);
+    assert_eq!(state.release_obligation_mask(), 0b0011);
+}
+
+#[test]
+fn terminal_up_cleanup_retains_inconclusive_obligations_and_is_idempotent_after_probe() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let sent_for_emitter = Arc::clone(&sent);
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 0b0001;
+    state.possibly_active_mask = 0b0010;
+    state.failed_release_mask = 0b0100;
+    state.in_flight_mask = 0b1000;
+    state.set_terminal_up_emitter_for_test(move |packet| {
+        sent_for_emitter
+            .lock()
+            .expect("terminal packet lock")
+            .push(packet);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: None,
+            completed_ticks: Some(QpcTicks::from_raw(41)),
+            win32_error: 0,
+            timing_error: Some(QpcError::CounterUnavailable),
+        }
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let inconclusive = state.release_terminal_tracked_scope(77);
+    assert!(!inconclusive.release_outcome.released_successfully);
+    assert!(inconclusive.release_outcome.verification_inconclusive);
+    assert_eq!(inconclusive.release_outcome.attempted_mask, 0b1111);
+    assert_eq!(inconclusive.release_outcome.attempts, 4);
+    assert_eq!(inconclusive.send_attempts.len(), 4);
+    assert!(inconclusive.send_attempts.iter().all(|attempt| {
+        attempt.raw_calls == 1
+            && attempt.requested_events == 4
+            && attempt.inserted_events == 4
+            && attempt.win32_error.is_none()
+            && attempt.started_ticks.is_none()
+            && attempt.completed_ticks == Some(QpcTicks::from_raw(41))
+            && attempt.qpc_error == Some(QpcError::CounterUnavailable)
+    }));
+    assert_eq!(
+        inconclusive.probe_verdict,
+        super::super::outcome::TerminalProbeVerdict::Inconclusive(0b1111)
+    );
+    assert_eq!(state.release_obligation_mask(), 0b1111);
+    assert_eq!(
+        state.timing_error, None,
+        "terminal QPC errors stay separate"
+    );
+    assert!(
+        sent.lock()
+            .expect("terminal packet lock")
+            .iter()
+            .all(|packet| *packet == super::super::outcome::PhysicalPacket::new(0b1111, 0))
+    );
+
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+    let verified = state.release_terminal_tracked_scope(77);
+    assert!(verified.release_outcome.released_successfully);
+    assert!(!verified.release_outcome.transport_anomaly);
+    assert_eq!(
+        verified.probe_verdict,
+        super::super::outcome::TerminalProbeVerdict::AllUp
+    );
+    assert_eq!(state.release_obligation_mask(), 0);
+    let attempts_after_verified = sent.lock().expect("terminal packet lock").len();
+    let repeated = state.release_terminal_tracked_scope(77);
+    assert!(repeated.release_outcome.released_successfully);
+    assert_eq!(repeated.release_outcome.attempts, 0);
+    assert!(repeated.send_attempts.is_empty());
+    assert_eq!(
+        repeated.probe_verdict,
+        super::super::outcome::TerminalProbeVerdict::NotRequired
+    );
+    assert_eq!(
+        sent.lock().expect("terminal packet lock").len(),
+        attempts_after_verified
+    );
+}
+
+#[test]
+fn terminal_up_emitter_unwind_keeps_session_obligation_for_finalizer_retry() {
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 0b0100;
+    state.set_terminal_up_emitter_for_test(|_| panic!("injected terminal transport unwind"));
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state.release_terminal_tracked_scope(99)
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(state.release_attempts_total, 1);
+    assert_eq!(state.release_obligation_mask(), 0b0100);
+}
+
+#[test]
+fn resumable_release_remains_qpc_gated_while_terminal_release_uses_bounded_fallback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let terminal_calls = Arc::new(AtomicUsize::new(0));
+    let terminal_calls_for_emitter = Arc::clone(&terminal_calls);
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 1;
+    state.set_terminal_up_emitter_for_test(move |packet| {
+        terminal_calls_for_emitter.fetch_add(1, Ordering::SeqCst);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: Some(QpcError::CounterUnavailable),
+        }
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+
+    let resumable = state.release_scope(ReleaseScope::Tracked, 70);
+    assert!(!resumable.released_successfully);
+    assert!(resumable.verification_inconclusive);
+    assert_eq!(terminal_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.release_obligation_mask(), 1);
+
+    let terminal = state.release_terminal_tracked_scope(70);
+    assert!(terminal.release_outcome.released_successfully);
+    assert_eq!(terminal_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MockWindowObservation {
+    accepted_count: u8,
+    foreground_at_send: Option<isize>,
+}
+
+type MockWindowObservations = Arc<Mutex<Vec<MockWindowObservation>>>;
+
+fn mock_window_cleanup_state(
+    target_hwnd: isize,
+) -> (
+    TrackedKeyState,
+    Arc<std::sync::atomic::AtomicIsize>,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::atomic::AtomicBool>,
+    MockWindowObservations,
+) {
+    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+
+    let foreground = Arc::new(AtomicIsize::new(target_hwnd));
+    let identity_valid = Arc::new(AtomicBool::new(true));
+    let probe_verified = Arc::new(AtomicBool::new(false));
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let foreground_for_send = Arc::clone(&foreground);
+    let identity_for_send = Arc::clone(&identity_valid);
+    let observations_for_send = Arc::clone(&observations);
+    let clock = crate::clock::QpcClock::initialize().expect("mock transport QPC clock");
+    let mut backend = TrackedKeyState::with_emitter(move |scan_codes, key_up| {
+        assert!(key_up, "window cleanup sends Up only");
+        let foreground_at_send = foreground_for_send.load(Ordering::Acquire);
+        let receiver_window = identity_for_send
+            .load(Ordering::Acquire)
+            .then_some(foreground_at_send);
+        observations_for_send
+            .lock()
+            .expect("mock receiver observation lock")
+            .push(MockWindowObservation {
+                accepted_count: scan_codes.len() as u8,
+                foreground_at_send: receiver_window,
+            });
+        let started_ticks = clock.now().expect("mock transport start QPC");
+        let completed_ticks = clock.now().expect("mock transport completion QPC");
+        PlatformSendResult {
+            requested: scan_codes.len() as u8,
+            inserted: scan_codes.len() as u8,
+            started_ticks,
+            completed_ticks: Some(completed_ticks),
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    let foreground_for_probe = Arc::clone(&foreground);
+    let identity_for_probe = Arc::clone(&identity_valid);
+    let probe_for_probe = Arc::clone(&probe_verified);
+    backend.set_probe(move |unresolved, confirmed| {
+        if identity_for_probe.load(Ordering::Acquire)
+            && foreground_for_probe.load(Ordering::Acquire) == target_hwnd
+            && probe_for_probe.load(Ordering::Acquire)
+            && confirmed & unresolved == unresolved
+        {
+            InstrumentPhysicalState::AllUp
+        } else {
+            InstrumentPhysicalState::Inconclusive
+        }
+    });
+    (
+        backend,
+        foreground,
+        identity_valid,
+        probe_verified,
+        observations,
+    )
+}
+
+#[test]
+fn mock_alt_tab_resume_separates_transport_receiver_and_release_probe() {
+    use std::sync::atomic::Ordering;
+
+    const TARGET: isize = 41;
+    const OTHER: isize = 42;
+    let (mut backend, foreground, _, probe_verified, observations) =
+        mock_window_cleanup_state(TARGET);
+    backend.active_mask = 1;
+
+    foreground.store(OTHER, Ordering::Release);
+    let interrupted = backend.release_scope(ReleaseScope::Tracked, TARGET);
+    assert!(!interrupted.transport_anomaly);
+    assert!(interrupted.verification_inconclusive);
+    assert_eq!(interrupted.attempts, 4);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(
+        observations
+            .lock()
+            .expect("mock receiver observation lock")
+            .as_slice(),
+        &[MockWindowObservation {
+            accepted_count: 1,
+            foreground_at_send: Some(OTHER),
+        }; 4],
+        "the mock records foreground-at-send separately from physical verification"
+    );
+
+    foreground.store(TARGET, Ordering::Release);
+    probe_verified.store(true, Ordering::Release);
+    let resumed = backend.release_scope(ReleaseScope::Tracked, TARGET);
+    assert!(resumed.released_successfully);
+    assert_eq!(backend.release_obligation_mask(), 0);
+    assert_eq!(
+        observations
+            .lock()
+            .expect("mock receiver observation lock")
+            .last()
+            .map(|observation| observation.foreground_at_send),
+        Some(Some(TARGET))
+    );
+}
+
+#[test]
+fn mock_stop_with_other_foreground_does_not_claim_target_release() {
+    use std::sync::atomic::Ordering;
+
+    const TARGET: isize = 51;
+    const OTHER: isize = 52;
+    let (mut backend, foreground, _, _, observations) = mock_window_cleanup_state(TARGET);
+    backend.active_mask = 1;
+    foreground.store(OTHER, Ordering::Release);
+
+    let terminal = backend.release_terminal_tracked_scope(TARGET);
+    assert!(!terminal.release_outcome.transport_anomaly);
+    assert!(terminal.release_outcome.verification_inconclusive);
+    assert_eq!(terminal.release_outcome.attempts, 4);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(
+        observations
+            .lock()
+            .expect("mock receiver observation lock")
+            .as_slice(),
+        &[MockWindowObservation {
+            accepted_count: 1,
+            foreground_at_send: Some(OTHER),
+        }; 4]
+    );
+}
+
+#[test]
+fn mock_invalidated_owner_identity_keeps_release_uncertain_after_accepted_up() {
+    use std::sync::atomic::Ordering;
+
+    const TARGET: isize = 61;
+    let (mut backend, _, identity_valid, _, observations) = mock_window_cleanup_state(TARGET);
+    backend.active_mask = 1;
+    identity_valid.store(false, Ordering::Release);
+
+    let invalidated = backend.release_terminal_tracked_scope(TARGET);
+    assert!(invalidated.release_outcome.verification_inconclusive);
+    assert_eq!(invalidated.release_outcome.attempts, 4);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(
+        observations
+            .lock()
+            .expect("mock receiver observation lock")
+            .as_slice(),
+        &[MockWindowObservation {
+            accepted_count: 1,
+            foreground_at_send: None,
+        }; 4],
+        "invalid identity makes receiver attribution unavailable"
+    );
+}

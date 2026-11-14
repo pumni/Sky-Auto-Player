@@ -17,7 +17,7 @@ use super::scenarios::production_options;
 use super::release_gap_stress::{
     strict_physical_forensics_qualification, RELEASE_GAP_STRESS_MIN_SAMPLES,
 };
-use sky_dispatch_core::{coordinator::GenerationAccounting, model::MAX_KEYS};
+use sky_dispatch_core::{accounting::GenerationAccounting, model::MAX_KEYS};
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [

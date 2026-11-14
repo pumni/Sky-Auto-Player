@@ -21,9 +21,8 @@ the game samples.
   15-slot executor ([`DispatchExecutor`](../rust/crates/sky_dispatch_core/src/executor.rs)).
   There are no independent dual cursors for Down and Up events.
 - **Musical timing owner:** `DispatchExecutor` owns all 15 musical slots and
-  production Up/Down eligibility. `PhysicalTimingGuard` and its worker integration
-  are compiled only for tests and `test-support`; they do not participate in the
-  default production worker or own production floors.
+  production Up/Down eligibility. The worker stages candidates from that
+  executor and commits only confirmed packet completions back to the same owner.
 - **Pairing at compilation:** Each musical Down chord is compiled with
   paired authored Up offsets for its constituent keys. Up obligations are
   instantiated strictly upon successful Down completion.
@@ -86,20 +85,27 @@ game frame rate and user-configured timing margin:
 | --- | --- | --- |
 | Frame Interval ($T$) | Single frame duration | $\lceil 1{,}000{,}000 / \text{FPS} \rceil\ \mu\text{s}$ |
 | Hold Floor ($H$) | Minimum key-down duration | $\lceil \text{hold\_frames} \times T \rceil + \text{margin}\ \mu\text{s}$ |
-| Release Gap ($G$) | Physical same-key retrigger floor | $T\ \mu\text{s}$ |
-| Authored Gap | Authored spacing between notes | $T + \text{margin}\ \mu\text{s}$ |
+| Release Gap ($G$) | Authored and physical same-key retrigger floor | $T + \text{margin}\ \mu\text{s}$ |
+| Authored Gap | Minimum authored spacing between repeated notes | $G\ \mu\text{s}$ |
 | Structural Cycle Floor | Minimum same-key cycle | $H + G$ |
 
-Here $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$ microseconds and
-$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$.
+Here $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$ microseconds,
+$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$, and
+$G = T + \text{margin}$.
 
 - **Hold floor ($H$):** Sender policy: Up is not eligible before the later of
   authored Up time and successful Down completion plus $H$.
-- **Release floor ($G$):** Sender policy: same-key Down is not eligible before
-  successful Up completion plus $G$. These floors do not guarantee which frame
-  the game samples; Windows and game sampling are independent.
-- **Timing margin:** Protects against host scheduling jitter and Windows timer
-  granularity variations.
+- **Release floor ($G$):** Authored repeat spacing and sender policy use the same
+  value. A same-key Down is not eligible before successful Up completion plus
+  $G$. These sender-side floors do not guarantee which frame the game samples;
+  Windows and game sampling are independent.
+- **Timing margin:** Extends both $H$ and $G$ at the sender boundary. Sender
+  setup, per-input cost, and post-send cost remain separate advisory estimates.
+  For example, at 60 FPS with 1.0 hold frame and a 500 µs margin, $T$ is
+  16,667 µs and both $H$ and $G$ are 17,167 µs. At 120 FPS they are each
+  8,834 µs. The game does not acknowledge `SendInput`; sender completion alone
+  cannot attribute a missing game note. Without an operator-controlled real
+  sheet and mapped note position, gameplay evidence remains inconclusive.
 
 ## Final Down Admission and Safety Boundary
 
@@ -196,14 +202,28 @@ The bounded observation producer does not sample queue occupancy; the observer
 consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
 accounting remain off the real-time producer suffix.
 
-`MAX_EXECUTOR_BYTES` caps the estimated `DownChordTicks` backing array, while
-`MAX_RETAINED_DISPATCH_BYTES` enforces the unchanged 512 MiB (536,870,912-byte)
-combined schedule, coordinator and executor admission bound using calculated
-capacities and startup overlap. It is not a process-RSS or full-application peak
-limit. The one-million-action single-key case is rejected at its combined
-741,502,832-byte estimate; see the [pinned historical FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md).
-Allocation failures are not universally recoverable: in particular, constructing
-shared reason strings still uses infallible allocation.
+The live `DispatchExecutor` stores compact chord headers and their intents in a
+contiguous arena. `MAX_EXECUTOR_BYTES` bounds the calculated capacities of
+those two executor vectors. Production reads a borrowed `DownChordView` and
+retains only `DownChordMetadata` while staging. `DownChordTicks` is a
+self-contained fixture type with an owned `SmallVec`; it has no production
+caller. Schedule compilation has its own phase-capacity checks. There is one
+scheduler implementation in the crate: `DispatchExecutor`, including when
+`test-support` is enabled.
+
+`MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated-capacity limit used by
+the compiler's phase checks and the desktop million-action construction test.
+That test, `valid_one_million_single_key_actions_fit_compact_executor_budget`,
+builds and compiles one million single-key actions, constructs the production
+executor, and sums the measured source, compiled-schedule, and executor
+capacities across the overlapping construction phases. It does not run a
+million-action playback or measure process RSS, Windows memory peak, or
+real-time dispatch. The historical
+[FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md)
+describes a coordinator fixture at its pinned revision only; it is not evidence
+for the current executor. Allocation failures are not universally recoverable:
+in particular, constructing shared reason strings still uses infallible
+allocation.
 
 ## Implementation Map
 
@@ -211,8 +231,8 @@ shared reason strings still uses infallible allocation.
   15-slot dispatch executor, chord stream compilation, and slot state management.
 - [`rust/crates/sky_player/src/engine/worker/dispatch_loop.rs`](../rust/crates/sky_player/src/engine/worker/dispatch_loop.rs):
   Realtime worker loop, event interleaving, and admission control.
-- [`rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs`](../rust/crates/sky_player/src/engine/worker/physical_timing_guard.rs):
-  test-support sender-floor model; not compiled into the default production worker.
+- [`rust/crates/sky_player/src/engine/worker/dispatch_loop_scheduler.rs`](../rust/crates/sky_player/src/engine/worker/dispatch_loop_scheduler.rs):
+  Production executor evaluation, candidate staging, and completion-bound timing floors.
 - [`rust/crates/sky_dispatch_win32/src/wait/hybrid.rs`](../rust/crates/sky_dispatch_win32/src/wait/hybrid.rs):
   High-resolution timer and QPC spin hybrid waiter.
 - [`rust/crates/sky_dispatch_win32/src/input/packet.rs`](../rust/crates/sky_dispatch_win32/src/input/packet.rs):

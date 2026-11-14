@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('DispatchCore', 'Scheduler')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
 [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
@@ -29,7 +29,8 @@ $PSNativeCommandUseErrorActionPreference = $false
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
-$receiveOnlyObserverVersion = if ($QualificationProfile -eq 'Scheduler') {
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot')
+$receiveOnlyObserverVersion = if ($qualifiedProfile) {
     'scheduler-receiveonly-queue-v3-compat3'
 } else {
     $null
@@ -70,9 +71,9 @@ $report = $null
 $windowIntegrity = $false
 $resultCode = 2
 $head = $null
-$schedulerBaseRevision = 'b9ed666e3ddddc4952831626f1654e1cc9071a10'
-$schedulerBaseTree = 'f554c41b23a3969d02ed29842d4178f6143c9d86'
-$schedulerBranch = 'refactor/scheduler-single-owner-20261112'
+$profileBaseRevision = if ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } else { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' }
+$profileBaseTree = if ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } else { 'f554c41b23a3969d02ed29842d4178f6143c9d86' }
+$profileBranch = if ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } else { 'refactor/scheduler-single-owner-20261112' }
 
 Add-Type -TypeDefinition @"
 using System.Runtime.InteropServices;
@@ -283,6 +284,9 @@ try {
     if ([bool]$HarnessPath -ne [bool]$HarnessManifestPath) {
         throw 'immutable harness runs require both -HarnessPath and -HarnessManifestPath'
     }
+    if ($QualificationProfile -eq 'FrameSnapshot' -and -not $HarnessManifestPath) {
+        throw 'FrameSnapshot acceptance requires its immutable role-specific manifest and binary path'
+    }
     if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle', 'hol-interleaved')) {
         throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, long-idle, and hol-interleaved'
     }
@@ -308,39 +312,50 @@ try {
     if ($HarnessManifestPath) {
         if (-not $sourceTreeClean) { throw 'immutable harness acceptance requires a clean source checkout' }
         $harnessManifest = (Get-Content -LiteralPath $HarnessManifestPath -Raw) | ConvertFrom-Json
-        if ($QualificationProfile -eq 'Scheduler') {
+        if ($qualifiedProfile) {
             $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
-            if ($harnessManifest.qualification_profile -ne 'Scheduler' -or
+            if ($QualificationProfile -eq 'FrameSnapshot') {
+                $expectedRole = [string]$harnessManifest.source_role
+                if ($expectedRole -notin @('Baseline', 'Candidate')) { throw 'FrameSnapshot manifest source role is invalid' }
+                Assert-FrameSnapshotManifestIdentity -Manifest $harnessManifest -ExpectedRole $expectedRole
+            }
+            if ($harnessManifest.qualification_profile -ne $QualificationProfile -or
                 $harnessManifest.source_role -notin @('Baseline', 'Candidate') -or
                 -not [bool]$harnessManifest.source_tree_clean -or
-                $harnessManifest.base_source_revision -ne $schedulerBaseRevision -or
-                $harnessManifest.base_source_tree_sha -ne $schedulerBaseTree -or
+                $harnessManifest.base_source_revision -ne $profileBaseRevision -or
+                $harnessManifest.base_source_tree_sha -ne $profileBaseTree -or
                 -not (Test-Path -LiteralPath (Join-Path $manifestSourceRoot 'rust\Cargo.toml') -PathType Leaf)) {
-                throw 'Scheduler manifest role, pinned base, source cleanliness, or source root is invalid'
+                if ($QualificationProfile -eq 'Scheduler') {
+                    throw 'Scheduler manifest role, pinned base, source cleanliness, or source root is invalid'
+                }
+                throw 'FrameSnapshot manifest role, pinned base, source cleanliness, or source root is invalid'
             }
             $manifestSourceRevision = (& git -C $manifestSourceRoot rev-parse HEAD).Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source root is not a Git checkout' }
+            if ($LASTEXITCODE -ne 0) { throw ($QualificationProfile + ' manifest source root is not a Git checkout') }
             $manifestSourceTree = (& git -C $manifestSourceRoot rev-parse 'HEAD^{tree}').Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source tree could not be resolved' }
+            if ($LASTEXITCODE -ne 0) { throw ($QualificationProfile + ' manifest source tree could not be resolved') }
             $manifestSourceBranch = ((& git -C $manifestSourceRoot branch --show-current) -join '').Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Scheduler manifest source branch could not be resolved' }
+            if ($LASTEXITCODE -ne 0) { throw ($QualificationProfile + ' manifest source branch could not be resolved') }
             $manifestSourceChanges = (& git -C $manifestSourceRoot status --porcelain --untracked-files=all) -join ''
             if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($manifestSourceChanges) -or
                 $manifestSourceRevision -ne $harnessManifest.source_revision -or
                 $manifestSourceTree -ne $harnessManifest.source_tree_sha) {
-                throw 'Scheduler manifest SHA/tree does not match a clean source checkout'
+                throw ($QualificationProfile + ' manifest SHA/tree does not match a clean source checkout')
             }
             if ($harnessManifest.source_role -eq 'Candidate') {
-                if ($manifestSourceRoot -ne $root -or $manifestSourceRevision -ne $head -or
-                    $manifestSourceTree -ne $sourceTree -or $manifestSourceBranch -ne $schedulerBranch) {
-                    throw 'Scheduler candidate manifest must match the current clean scheduler branch'
+                if (-not [string]::Equals($manifestSourceRoot, $root, [System.StringComparison]::OrdinalIgnoreCase) -or $manifestSourceRevision -ne $head -or
+                    $manifestSourceTree -ne $sourceTree -or $manifestSourceBranch -ne $profileBranch) {
+                    throw ($QualificationProfile + ' candidate manifest must match the current clean candidate branch')
                 }
-                & git -C $manifestSourceRoot merge-base --is-ancestor $schedulerBaseRevision HEAD
-                if ($LASTEXITCODE -ne 0) { throw 'Scheduler candidate does not descend from the pinned base' }
-            } elseif ($manifestSourceRevision -ne $schedulerBaseRevision -or
-                $manifestSourceTree -ne $schedulerBaseTree -or
+                & git -C $manifestSourceRoot merge-base --is-ancestor $profileBaseRevision HEAD
+                if ($LASTEXITCODE -ne 0) { throw ($QualificationProfile + ' candidate does not descend from the pinned base') }
+            } elseif ($manifestSourceRevision -ne $profileBaseRevision -or
+                $manifestSourceTree -ne $profileBaseTree -or
                 -not [string]::IsNullOrWhiteSpace($manifestSourceBranch)) {
-                throw 'Scheduler baseline must be a detached clean checkout at the pinned base SHA/tree'
+                throw ($QualificationProfile + ' baseline must be a detached clean checkout at the pinned base SHA/tree')
+            }
+            if ($QualificationProfile -in @('Scheduler', 'FrameSnapshot')) {
+                Assert-ImmutableHarnessManifestIntegrity -Manifest $harnessManifest -ManifestPath $HarnessManifestPath | Out-Null
             }
         } else {
             $c1TimedVerified = Assert-C1TimedControlProvenance -Manifest $harnessManifest -RepositoryRoot $root -Role 'case-runner' -AllowHistoricalControl:$HistoricalSourceAllowed
@@ -356,9 +371,9 @@ try {
         if ($harnessManifest.guard_mode -eq 'adaptive') {
             throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
         }
-        $expectedSourceBranch = if ($QualificationProfile -eq 'Scheduler' -and $harnessManifest.source_role -eq 'Baseline') { '' } elseif ($QualificationProfile -eq 'Scheduler') { $schedulerBranch } else { 'perf/dispatch-core-20261109' }
-        $expectedWorkloadVersion = if ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
-        $sourceIdentityAllowed = if ($QualificationProfile -eq 'Scheduler') {
+        $expectedSourceBranch = if ($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+        $expectedWorkloadVersion = if ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+        $sourceIdentityAllowed = if ($qualifiedProfile) {
             $harnessManifest.source_role -eq 'Baseline' -or $sourceRevisionMatches
         } else {
             $HistoricalSourceAllowed -or $sourceRevisionMatches
@@ -382,6 +397,10 @@ try {
             $harnessManifest.binary_name -ne 'rt-native-acceptance.exe' -or
             $harnessManifest.binary_sha256 -ne (Get-Sha256 $harness)) {
             throw 'immutable harness manifest source, profile, features, path, name, or SHA-256 mismatch'
+        }
+        if ($QualificationProfile -eq 'FrameSnapshot') {
+            $expectedRole = [string]$harnessManifest.source_role
+            Assert-FrameSnapshotManifestIdentity -Manifest $harnessManifest -ExpectedRole $expectedRole
         }
     }
     $sessionId = (Get-Process -Id $PID).SessionId
@@ -427,6 +446,9 @@ try {
         cpu_contention_processes = $contentionProcesses.Count
         cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
+        qualification_profile = $QualificationProfile
+        performance_timing_margin_us = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'performance_timing_margin_us' } else { $null }
+        safety_timing_margin_us = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'safety_timing_margin_us' } else { $null }
         game_fps = $GameFps
         sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
         hol_stall_us = $HolStallUs
@@ -439,7 +461,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -510,10 +532,16 @@ try {
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
     }
+    if ($harnessManifest -and (Get-Sha256 $HarnessManifestPath) -ne $harnessManifestHash) {
+        throw 'immutable harness manifest changed after identity validation'
+    }
     $captured = @(& $harness @harnessArgs 2>&1)
     $nativeExit = $LASTEXITCODE
     if ($harnessManifest -and (Get-Sha256 $harness) -ne $harnessManifest.binary_sha256) {
         throw 'immutable harness binary changed during acceptance run'
+    }
+    if ($harnessManifest -and (Get-Sha256 $HarnessManifestPath) -ne $harnessManifestHash) {
+        throw 'immutable harness manifest changed during acceptance run'
     }
     $endedUtc = [DateTimeOffset]::UtcNow.ToString('O')
     $capturedText = ($captured | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
@@ -564,7 +592,9 @@ try {
 
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
     $observerSummary = $null
-    if ($receiveOnlyObserverVersion) {
+    # This scenario deliberately terminates the ReceiveOnly process before the
+    # first Down admission, so it cannot flush its post-shutdown summary.
+    if ($receiveOnlyObserverVersion -and $Scenario -ne 'owner-process-termination') {
         $observerSummary = Get-Content -LiteralPath $sinkObserverSummaryPath -Raw | ConvertFrom-Json
         Assert-SchedulerObserverEvidence -Ready $sink -Summary $observerSummary -Records $sinkRecords -ExpectedObserverVersion $receiveOnlyObserverVersion
     }
@@ -627,13 +657,19 @@ try {
     $window | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $windowPath -Encoding UTF8
     $invocation = [ordered]@{
         run_id = $runId
+        qualification_profile = $QualificationProfile
         source_revision = $head
         source_tree_sha = $sourceTree
         source_tree_clean = $sourceTreeClean
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
+        harness_source_role = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_role' } else { $null }
+        harness_binary_path = if ($harnessManifest) { $harnessManifest.binary_path } else { $null }
+        harness_binary_sha256 = if ($harnessManifest) { $harnessManifest.binary_sha256 } else { $null }
+        performance_timing_margin_us = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'performance_timing_margin_us' } else { $null }
+        safety_timing_margin_us = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'safety_timing_margin_us' } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }

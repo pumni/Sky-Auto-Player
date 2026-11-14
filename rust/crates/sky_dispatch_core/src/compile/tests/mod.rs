@@ -488,18 +488,6 @@ fn multi_up_only_packet_has_up_only_kind() {
     let packet = schedule.packets[1];
     assert_eq!(packet.up_mask, 0b11);
     assert_eq!(packet.down_mask, 0);
-    assert_eq!(
-        crate::coordinator::physical_packet_kind(packet.up_mask, packet.down_mask),
-        Ok(PhysicalPacketKind::UpOnly)
-    );
-}
-
-#[test]
-fn empty_packet_is_rejected_as_invariant_error() {
-    assert!(matches!(
-        crate::coordinator::physical_packet_kind(0, 0),
-        Err(crate::coordinator::CoordinatorError::Invariant(_))
-    ));
 }
 
 #[test]

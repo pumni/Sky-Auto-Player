@@ -21,6 +21,16 @@ match the clean checked-out head. Build manifests bind role, source SHA/tree,
 toolchain, target, profile, features, workload version, and binary hash. Keep
 all generated evidence under an `OutputRoot` outside the checkout.
 
+The opt-in `FrameSnapshot` profile uses workload `frame-snapshot-v1`, the same
+Scheduler V3 Compat3 observer, and the pinned baseline
+`8a800ff07a5dc362a5ee3aaa59204ff40b6ae327` / tree
+`48eec424c155e98fa1a81ad018bc832b6e6b964f`. Its candidate must be a clean
+descendant on `refactor/frame-snapshot-dispatch`. The role-specific manifests
+also bind source and binary hashes, the exact source identity, target, and both
+margins. Canary/Smoke and candidate safety use a 500 µs margin; Compare/Final
+performance uses margin 0 for both roles. Existing Scheduler and DispatchCore
+profile semantics are unchanged.
+
 ## Final workload
 
 The Final stage runs these five performance workloads:
@@ -30,14 +40,54 @@ The Final stage runs these five performance workloads:
 
 Each workload runs Quiet and Contention cells, with six alternating AB/BA pairs
 per cell and both Baseline and Candidate roles in every pair: 5 × 2 × 6 × 2 =
-120 sessions. Each session is 15 seconds at 60 FPS and 500 µs margin.
+120 sessions. Each session is 15 seconds at 60 FPS. Scheduler profile sessions
+use 500 µs; FrameSnapshot performance sessions use 0 µs on both roles.
 
 After performance, the runner executes all 22 native safety scenarios under
 Quiet and Contention (44 cases), then the fixed 60 FPS / margin 0 and 120 FPS /
-margin 500 boundary cases. The existing fail-stop sequence stops on the first
-failed native case. Do not retry failures to complete a matrix. Smoke, Compare,
-the six AB/BA pairs, metric filters, thresholds, and drain timeout keep their
-defined behavior.
+margin 500 boundary cases. FrameSnapshot safety scenarios use the candidate at
+500 µs; including the two boundary cases, its Final stage is 166 native
+sessions. Do not run Compare and Final sequentially by default: obtain a
+separate approved session budget and one-stage plan before native qualification.
+The existing fail-stop sequence stops on the first failed native case. Do not
+retry failures to complete a matrix. Smoke, Compare, the six AB/BA pairs, metric
+filters, thresholds, and drain timeout keep their defined behavior.
+
+## Offline lifecycle and manifest checks
+
+The current offline scheduler lifecycle report is produced and validated with:
+
+```powershell
+pwsh -NoProfile -File scripts/run_dispatch_lifecycle_evidence.ps1
+```
+
+It runs the schema-v2 probe through the live `DispatchExecutor` with deterministic
+test-support senders, validates generation accounting, captured musical packets,
+cleanup Up captures, and the completion + G resume barrier, then writes the report
+outside the checkout. It performs no native `SendInput` calls and does not qualify
+foreground delivery or gameplay reception. The P0-P5 publication helper is
+historical metadata only; it is not a producer or validator for this report.
+
+For an offline FrameSnapshot binary/manifest build, first use a detached worktree
+at the pinned baseline and the clean candidate checkout, each with a new empty
+output directory outside both checkouts:
+
+```powershell
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile FrameSnapshot -SourceRole Baseline `
+  -SourceRoot <detached-pinned-baseline> -OutputRoot <new-baseline-output>
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile FrameSnapshot -SourceRole Candidate `
+  -SourceRoot <clean-candidate-checkout> -OutputRoot <new-candidate-output>
+```
+
+The build emits the binary and immutable manifest but does not execute the
+acceptance harness or send keys. Verify each manifest offline with
+`Assert-FrameSnapshotManifestIdentity` for its role and
+`Assert-ImmutableHarnessManifestIntegrity` before any later approved native
+qualification. Physical qualification uses `qualify_dispatch_core.ps1` and its
+`run_native_acceptance_case.ps1` route only after a separately approved session
+budget; building or validating a manifest is not a native test.
 
 ## Verdict and evidence
 

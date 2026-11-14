@@ -82,10 +82,37 @@ fn evaluate_scheduler_action(
     }
 }
 
+fn project_scheduler_action_for_staging(
+    executor: &sky_dispatch_core::executor::DispatchExecutor,
+    action: SchedulerAction,
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<
+    (
+        sky_dispatch_win32::clock::QpcTicks,
+        Option<SchedulerAction>,
+    ),
+    String,
+> {
+    match action {
+        send @ SchedulerAction::Send { .. } => Ok((now_qpc, Some(send))),
+        SchedulerAction::Finished => Ok((now_qpc, None)),
+        SchedulerAction::Wait { deadline_qpc } if deadline_qpc > now_qpc => {
+            let at_deadline = evaluate_scheduler_action(executor, deadline_qpc, epoch_qpc)?;
+            let action_to_stage = match at_deadline {
+                send @ SchedulerAction::Send { .. } => Some(send),
+                SchedulerAction::Wait { .. } | SchedulerAction::Finished => None,
+            };
+            Ok((deadline_qpc, action_to_stage))
+        }
+        SchedulerAction::Wait { .. } => Ok((now_qpc, None)),
+    }
+}
+
 fn resolve_scheduler_down_chord(
     executor: &sky_dispatch_core::executor::DispatchExecutor,
     expected_index: Option<usize>,
-) -> Result<Option<sky_dispatch_core::executor::DownChordTicks>, String> {
+) -> Result<Option<sky_dispatch_core::executor::DownChordMetadata>, String> {
     let Some(expected_index) = expected_index else {
         return Ok(None);
     };
@@ -98,26 +125,7 @@ fn resolve_scheduler_down_chord(
             chord.chord_index
         ));
     }
-    Ok(Some(chord.clone()))
-}
-
-#[cfg(test)]
-fn stage_scheduler_action(
-    action: SchedulerAction,
-    target: &SessionTarget,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-) -> Result<Option<StagedCandidate>, String> {
-    let SchedulerAction::Send {
-        up_mask,
-        down_chord_index,
-        timing_window,
-    } = action
-    else {
-        return Ok(None);
-    };
-    let down_chord = resolve_scheduler_down_chord(&resources.scheduler, down_chord_index)?;
-    stage_candidate(up_mask, down_chord, timing_window, target, resources, runtime)
+    Ok(Some(chord.into()))
 }
 
 struct UpOnlyTargetReplanAdmission<'a> {

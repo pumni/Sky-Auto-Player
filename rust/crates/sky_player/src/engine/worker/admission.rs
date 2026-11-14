@@ -7,8 +7,6 @@ use crate::engine::shared::{
 };
 use crate::engine::target::OwnerIdentityStatus;
 use crate::engine::telemetry::WorkerMetricsLocal;
-#[cfg(any(test, feature = "test-support"))]
-use crate::engine::telemetry::{TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP};
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcError, QpcTicks};
@@ -60,31 +58,6 @@ pub(crate) fn final_down_lease_age_proof(
     Ok(lease.prove_down_age(now, timeout_ticks))
 }
 
-#[cfg(any(test, feature = "test-support"))]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn invoke_final_gate_race_hook(
-    hook: Option<&super::super::config::FinalGateRaceHook>,
-    focus_active: &AtomicBool,
-    target: &SessionTarget,
-    quit_requested: &AtomicBool,
-    skip_requested: &AtomicBool,
-    panic_requested: &AtomicBool,
-    desired_pause: &AtomicBool,
-    system_power: &super::super::SystemPowerState,
-) {
-    if let Some(hook) = hook {
-        hook(
-            focus_active,
-            target,
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            system_power,
-        );
-    }
-}
-
 pub(crate) fn record_final_gate_rejection(
     local_metrics: &mut WorkerMetricsLocal,
     reason: FinalGateRejection,
@@ -120,17 +93,6 @@ pub(crate) fn record_final_gate_rejection(
             local_metrics.final_gate_lease_expirations =
                 local_metrics.final_gate_lease_expirations.saturating_add(1)
         }
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) fn trace_kind_for_packet_kind(
-    packet_kind: sky_dispatch_core::model::PhysicalPacketKind,
-) -> u8 {
-    match packet_kind {
-        sky_dispatch_core::model::PhysicalPacketKind::UpOnly => TRACE_KIND_UP,
-        sky_dispatch_core::model::PhysicalPacketKind::DownOnly => TRACE_KIND_DOWN,
-        sky_dispatch_core::model::PhysicalPacketKind::Mixed => TRACE_KIND_MIXED,
     }
 }
 
@@ -348,21 +310,9 @@ pub(crate) fn final_down_fresh_target_admission(
     )
 }
 
-/// Compatibility helper for callers that need the complete target gate in
-/// one call. Precision dispatch uses the two stages explicitly so modifiers
-/// precede the fresh foreground query.
-#[allow(dead_code)]
-pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> FinalDownVerdict {
-    let hint = final_down_target_hint(&target);
-    if hint != FinalDownVerdict::Allowed {
-        return hint;
-    }
-    final_down_fresh_target_admission(target)
-}
-
 /// Recheck only bounded atomic target, focus, and owner state after the
 /// modifier queries. The fresh foreground/process proof remains owned by
-/// `final_down_target_admission` immediately before this final suffix.
+/// `verify_final_down_admission` immediately before this final suffix.
 #[inline(always)]
 pub(crate) fn final_down_atomic_revalidation(
     target: &SessionTarget,
@@ -512,27 +462,14 @@ pub(crate) fn apply_final_down_rejection(
     }
 }
 
-pub(crate) fn owner_rejection_reason(
-    failure: OwnerAdmissionFailure,
-    prepared_normal: bool,
-) -> &'static str {
-    match (prepared_normal, failure) {
-        (true, OwnerAdmissionFailure::Mismatch) => "prepared_down_owner_mismatch",
-        (true, OwnerAdmissionFailure::QueryUnavailable) => "prepared_down_owner_query_unavailable",
-        (true, OwnerAdmissionFailure::IdentityAbsent) => "prepared_down_owner_identity_absent",
-        (true, OwnerAdmissionFailure::IdentityStale) => "prepared_down_owner_identity_stale",
-        (true, OwnerAdmissionFailure::ProcessTerminated) => {
-            "prepared_down_owner_process_terminated"
-        }
-        (true, OwnerAdmissionFailure::IdentityDrift) => "prepared_down_owner_identity_drift",
-        (false, OwnerAdmissionFailure::Mismatch) => "authored_down_owner_mismatch",
-        (false, OwnerAdmissionFailure::QueryUnavailable) => "authored_down_owner_query_unavailable",
-        (false, OwnerAdmissionFailure::IdentityAbsent) => "authored_down_owner_identity_absent",
-        (false, OwnerAdmissionFailure::IdentityStale) => "authored_down_owner_identity_stale",
-        (false, OwnerAdmissionFailure::ProcessTerminated) => {
-            "authored_down_owner_process_terminated"
-        }
-        (false, OwnerAdmissionFailure::IdentityDrift) => "authored_down_owner_identity_drift",
+pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static str {
+    match failure {
+        OwnerAdmissionFailure::Mismatch => "prepared_down_owner_mismatch",
+        OwnerAdmissionFailure::QueryUnavailable => "prepared_down_owner_query_unavailable",
+        OwnerAdmissionFailure::IdentityAbsent => "prepared_down_owner_identity_absent",
+        OwnerAdmissionFailure::IdentityStale => "prepared_down_owner_identity_stale",
+        OwnerAdmissionFailure::ProcessTerminated => "prepared_down_owner_process_terminated",
+        OwnerAdmissionFailure::IdentityDrift => "prepared_down_owner_identity_drift",
     }
 }
 
@@ -643,8 +580,6 @@ pub(crate) fn verify_final_down_admission(
                 DispatchStep::TerminateStatic(err) => {
                     FinalDownAdmissionResult::Terminal(err.to_string())
                 }
-                #[cfg(any(test, feature = "test-support"))]
-                _ => FinalDownAdmissionResult::Replan,
             };
         }
         return FinalDownAdmissionResult::Replan;
@@ -660,8 +595,6 @@ pub(crate) fn verify_final_down_admission(
                     DispatchStep::TerminateStatic(err) => {
                         FinalDownAdmissionResult::Terminal(err.to_string())
                     }
-                    #[cfg(any(test, feature = "test-support"))]
-                    _ => FinalDownAdmissionResult::Replan,
                 };
             }
             _ => return FinalDownAdmissionResult::Replan,
@@ -690,14 +623,12 @@ pub(crate) fn verify_final_down_admission(
                         DispatchStep::TerminateStatic(err) => {
                             FinalDownAdmissionResult::Terminal(err.to_string())
                         }
-                        #[cfg(any(test, feature = "test-support"))]
-                        _ => FinalDownAdmissionResult::Replan,
                     };
                 }
             }
             FinalDownVerdict::OwnerRejected(failure) => {
                 return FinalDownAdmissionResult::Terminal(
-                    owner_rejection_reason(failure, true).to_string(),
+                    owner_rejection_reason(failure).to_string(),
                 );
             }
             _ => {}

@@ -1,10 +1,10 @@
 use crate::engine::config::{EffectiveRuntimePolicy, WorkerConfig};
 use crate::engine::worker::WorkerTimingState;
-use crate::engine::{DurationTicks, PAUSED_POLL_US, QpcClock};
+use crate::engine::{DurationTicks, QpcClock};
 
 pub(super) struct ConvertedTiming {
     pub(super) min_hold_ticks: DurationTicks,
-    pub(super) frame_ticks: DurationTicks,
+    pub(super) min_release_gap_ticks: DurationTicks,
     pub(super) worker_timing: WorkerTimingState,
 }
 
@@ -19,9 +19,9 @@ pub(super) fn convert(
     let min_hold_ticks = qpc_clock
         .duration_from_us(effective_min_hold_us)
         .map_err(|error| format!("min-hold conversion failed: {error:?}"))?;
-    let frame_ticks = qpc_clock
-        .duration_from_us(config.timing.frame_us)
-        .map_err(|error| format!("frame-gap conversion failed: {error:?}"))?;
+    let min_release_gap_ticks = qpc_clock
+        .duration_from_us(config.timing.min_release_gap_us)
+        .map_err(|error| format!("minimum release-gap conversion failed: {error:?}"))?;
     let timing_margin_ticks = qpc_clock
         .duration_from_us(config.timing.timing_margin_us)
         .map_err(|error| format!("timing-margin conversion failed: {error:?}"))?;
@@ -34,9 +34,6 @@ pub(super) fn convert(
     let focus_restore_grace_ticks = qpc_clock
         .duration_from_us(config.focus.focus_restore_grace_us)
         .map_err(|error| format!("focus grace conversion failed: {error:?}"))?;
-    let paused_poll_ticks = qpc_clock
-        .duration_from_us(PAUSED_POLL_US)
-        .map_err(|error| format!("paused polling conversion failed: {error:?}"))?;
     let lease_timeout_ticks = qpc_clock
         .duration_from_us(config.wait.supervisor_lease_timeout_us)
         .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
@@ -73,14 +70,13 @@ pub(super) fn convert(
 
     Ok(ConvertedTiming {
         min_hold_ticks,
-        frame_ticks,
+        min_release_gap_ticks,
         worker_timing: WorkerTimingState {
             strict_timing: effective_policy.strict_failure_policy,
             timing_margin_ticks,
             strict_down_completion_late_ticks,
             strict_up_completion_late_ticks,
             focus_restore_grace_ticks,
-            paused_poll_ticks,
             lease_timeout_ticks,
             effective_spin_threshold_ticks: DurationTicks::ZERO,
             pre_call_250us_ticks,

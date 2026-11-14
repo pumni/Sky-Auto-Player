@@ -94,32 +94,6 @@ pub(crate) enum ReconciledRelease {
     Inconclusive(u16),
 }
 
-/// Typed final verdict of the cleanup FSM after all retry attempts.
-///
-/// The cleanup path must never conflate the two independent evidence
-/// dimensions: a transport anomaly (unexpected `SendInput` outcome) and a
-/// physical-verification failure (probe could not confirm all-up). Mapping the
-/// final observation through this enum keeps `verification_inconclusive`
-/// purely probe-derived.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CleanupVerification {
-    AllUp,
-    Held(u16),
-    Inconclusive(u16),
-}
-
-impl CleanupVerification {
-    pub(crate) fn is_success(&self) -> bool {
-        matches!(self, Self::AllUp)
-    }
-
-    /// `true` only when the physical probe itself could not decide, never when
-    /// the transport path reported an anomaly.
-    pub(crate) fn is_inconclusive(&self) -> bool {
-        matches!(self, Self::Inconclusive(_))
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn reconcile_release_observation(
     requested_mask: u16,

@@ -70,7 +70,8 @@ $requiredFunctions = @(
     'Get-TimingMetrics',
     'Invoke-NativeCaseFailStopSequence',
     'Assert-SchedulerManifestIdentity',
-    'Assert-SchedulerObserverPairMode'
+    'Assert-SchedulerObserverPairMode',
+    'Assert-QualificationTimingMargin'
 )
 foreach ($name in $requiredFunctions) {
     $functionAst = $ast.Find({
@@ -288,6 +289,7 @@ $wrongVersionSummary = $observerSummary | Select-Object *
 $wrongVersionSummary.observer_version = 'scheduler-receiveonly-queue-v2'
 & $assertObserverRejected $observerReady $wrongVersionSummary $observerRecords $observerVersion 'historical v2 observer version'
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 
 $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
 if ([regex]::Matches($runnerSource, 'Invoke-NativeCaseFailStopSequence').Count -lt 3) {
@@ -380,6 +382,104 @@ $caseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_nativ
 if (-not $caseRunnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$harnessManifest") -or
     -not $runnerSource.Contains("Assert-C1TimedControlProvenance -Manifest `$manifest")) {
     throw 'Scheduler profile changes removed the established #646 provenance validation path'
+}
+if (-not $caseRunnerSource.Contains("if (`$receiveOnlyObserverVersion -and `$Scenario -ne 'owner-process-termination')")) {
+    throw 'owner-process-termination must not require a ReceiveOnly observer shutdown summary after terminating that observer process'
+}
+
+$frameBaseRevision = '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327'
+$frameBaseTree = '48eec424c155e98fa1a81ad018bc832b6e6b964f'
+$validFrameCandidate = [pscustomobject]@{
+    qualification_profile = 'FrameSnapshot'; source_role = 'Candidate'; source_branch = 'refactor/frame-snapshot-dispatch'
+    source_tree_clean = $true; clean_build = $true; source_revision = ('a' * 40); source_tree_sha = ('b' * 40)
+    base_source_revision = $frameBaseRevision; base_source_tree_sha = $frameBaseTree; workload_version = 'frame-snapshot-v1'
+    receiveonly_observer_mode = 'SchedulerQueuedV3Compat3'; receiveonly_observer_version = 'scheduler-receiveonly-queue-v3-compat3'
+    performance_timing_margin_us = 0; safety_timing_margin_us = 500; target = 'x86_64-pc-windows-msvc'; binary_sha256 = ('c' * 64)
+}
+$validFrameBaseline = $validFrameCandidate | Select-Object *
+$validFrameBaseline.source_role = 'Baseline'; $validFrameBaseline.source_branch = ''
+$validFrameBaseline.source_revision = $frameBaseRevision; $validFrameBaseline.source_tree_sha = $frameBaseTree
+Assert-FrameSnapshotManifestIdentity -Manifest $validFrameBaseline -ExpectedRole Baseline
+Assert-FrameSnapshotManifestIdentity -Manifest $validFrameCandidate -ExpectedRole Candidate
+
+$frameInvalidCases = @(
+    @{ name = 'branch'; mutate = { param($m) $m.source_branch = 'wrong-branch' } },
+    @{ name = 'base'; mutate = { param($m) $m.base_source_revision = ('0' * 40) } },
+    @{ name = 'source hash'; mutate = { param($m) $m.source_tree_sha = 'not-a-tree-hash' } },
+    @{ name = 'role'; mutate = { param($m) $m.source_role = 'Baseline' } },
+    @{ name = 'dirty source'; mutate = { param($m) $m.source_tree_clean = $false } }
+)
+foreach ($case in $frameInvalidCases) {
+    $invalidFrame = $validFrameCandidate | Select-Object *
+    & $case.mutate $invalidFrame
+    $rejected = $false
+    try { Assert-FrameSnapshotManifestIdentity -Manifest $invalidFrame -ExpectedRole Candidate } catch { $rejected = $true }
+    if (-not $rejected) { throw ('FrameSnapshot accepted invalid manifest ' + $case.name) }
+}
+$wrongFramePinnedHash = $validFrameBaseline | Select-Object *
+$wrongFramePinnedHash.source_tree_sha = ('0' * 40)
+$wrongFrameHashRejected = $false
+try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -ExpectedRole Baseline } catch { $wrongFrameHashRejected = $true }
+if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
+
+$frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
+if ($frameBuilderSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)" -or
+    $acceptanceSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)") {
+    throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
+}
+$qualifierSource = Get-Content -LiteralPath $runnerPath -Raw
+if ($qualifierSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)") {
+    throw 'FrameSnapshot profile is missing from qualification runner'
+}
+Assert-QualificationTimingMargin -RequestedStage Canary -Profile FrameSnapshot -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Smoke -Profile FrameSnapshot -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Compare -Profile FrameSnapshot -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Final -Profile FrameSnapshot -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Compare -Profile Scheduler -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+$wrongFrameMarginRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Compare -Profile FrameSnapshot -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 } catch { $wrongFrameMarginRejected = $true }
+if (-not $wrongFrameMarginRejected) { throw 'FrameSnapshot Compare accepted a nonzero performance margin' }
+$wrongFrameCanaryRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Canary -Profile FrameSnapshot -MarginUs 0 -PairCount 1 -SampleDurationSeconds 0 } catch { $wrongFrameCanaryRejected = $true }
+if (-not $wrongFrameCanaryRejected) { throw 'FrameSnapshot safety canary accepted a non-safety margin' }
+if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Final'\)" -or
+    -not $qualifierSource.Contains("if (`$Stage -eq 'Canary' -and `$QualificationProfile -ne 'FrameSnapshot')")) {
+    throw 'FrameSnapshot canary stage is missing its opt-in stage and profile boundary'
+}
+
+$integrityRoot = Join-Path $env:TEMP ('dispatch-manifest-integrity-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $integrityRoot | Out-Null
+try {
+    $integrityBinary = Join-Path $integrityRoot 'rt-native-acceptance.exe'
+    $integrityManifestPath = Join-Path $integrityRoot 'manifest.json'
+    $integrityBuilder = Join-Path $integrityRoot 'build_dispatch_core_harness.ps1'
+    $integrityBuildLog = Join-Path $integrityRoot 'build.log'
+    $integrityCleanLog = Join-Path $integrityRoot 'clean.log'
+    [System.IO.File]::WriteAllBytes($integrityBinary, [byte[]](1, 2, 3, 4))
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Destination $integrityBuilder
+    [System.IO.File]::WriteAllText($integrityBuildLog, 'build fixture')
+    [System.IO.File]::WriteAllText($integrityCleanLog, 'clean fixture')
+    $integrityManifest = [pscustomobject]@{
+        binary_name = 'rt-native-acceptance.exe'; binary_path = $integrityBinary
+        binary_sha256 = (Get-FileHash -LiteralPath $integrityBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+        builder_script_sha256 = (Get-FileHash -LiteralPath $integrityBuilder -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $integrityManifest | ConvertTo-Json | Set-Content -LiteralPath $integrityManifestPath -Encoding UTF8
+    $integrityRows = @(
+        ((Get-FileHash -LiteralPath $integrityManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() + '  manifest.json'),
+        ($integrityManifest.binary_sha256 + '  rt-native-acceptance.exe'),
+        ($integrityManifest.builder_script_sha256 + '  build_dispatch_core_harness.ps1'),
+        ((Get-FileHash -LiteralPath $integrityBuildLog -Algorithm SHA256).Hash.ToLowerInvariant() + '  build.log'),
+        ((Get-FileHash -LiteralPath $integrityCleanLog -Algorithm SHA256).Hash.ToLowerInvariant() + '  clean.log')
+    )
+    Set-Content -LiteralPath (Join-Path $integrityRoot 'SHA256SUMS.txt') -Value $integrityRows -Encoding UTF8
+    Assert-ImmutableHarnessManifestIntegrity -Manifest $integrityManifest -ManifestPath $integrityManifestPath | Out-Null
+    [System.IO.File]::WriteAllBytes($integrityBinary, [byte[]](4, 3, 2, 1))
+    $integrityRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $integrityManifest -ManifestPath $integrityManifestPath | Out-Null } catch { $integrityRejected = $true }
+    if (-not $integrityRejected) { throw 'immutable harness manifest integrity accepted a changed binary' }
+} finally {
+    Remove-Item -LiteralPath $integrityRoot -Recurse -Force
 }
 
 $smokeRuns = [System.Collections.Generic.List[string]]::new()
@@ -565,6 +665,175 @@ try {
     }
 } finally {
     Remove-Item -LiteralPath $pairedCsv -Force -ErrorAction SilentlyContinue
+}
+
+Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+if (-not $qualifierSource.Contains('New-QualificationReportProjection') -or
+    -not $qualifierSource.Contains('Get-QualificationReportRowLabel')) {
+    throw 'qualification runner is not using the tested report projection and role-label functions'
+}
+
+# Historical Scheduler/DispatchCore manifests predate the separate margin
+# fields. They must still reach report serialization under strict mode.
+$legacyCandidate = [pscustomobject]@{
+    qualification_profile = 'Scheduler'; source_role = 'Candidate';
+    workload_version = 'scheduler-single-owner-v1'; observer_mode = 'SchedulerQueuedV3Compat3';
+    guard_mode = 'frozen';
+}
+$legacyControl = [pscustomobject]@{
+    qualification_profile = 'Scheduler'; source_role = 'Baseline';
+    workload_version = 'scheduler-single-owner-v1'; observer_mode = 'SchedulerQueuedV3Compat3';
+    guard_mode = 'frozen';
+}
+$legacyProjection = New-QualificationReportProjection -Profile Scheduler -Candidate $legacyCandidate `
+    -Control $legacyControl -Stage Compare -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500
+$legacySummaryJson = [ordered]@{
+    candidate_label = $legacyProjection.CandidateLabel
+    control_label = $legacyProjection.ControlLabel
+    parameters = $legacyProjection.SummaryParameters
+} | ConvertTo-Json -Depth 8
+$legacyManifestJson = [ordered]@{
+    candidate_label = $legacyProjection.CandidateLabel
+    control_label = $legacyProjection.ControlLabel
+    parameters = $legacyProjection.ManifestParameters
+} | ConvertTo-Json -Depth 8
+$legacySummary = $legacySummaryJson | ConvertFrom-Json
+$legacyResultManifest = $legacyManifestJson | ConvertFrom-Json
+if ($null -ne $legacySummary.parameters.performance_timing_margin_us -or
+    $null -ne $legacySummary.parameters.safety_timing_margin_us -or
+    $null -ne $legacyResultManifest.parameters.performance_timing_margin_us -or
+    $null -ne $legacyResultManifest.parameters.safety_timing_margin_us) {
+    throw 'legacy report projection fabricated missing timing margins instead of preserving null'
+}
+
+$historicalDispatchCoreManifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\dispatch-core-c0-b52106b4.manifest.json') -Raw | ConvertFrom-Json
+if ($historicalDispatchCoreManifest.PSObject.Properties['qualification_profile'] -or
+    $historicalDispatchCoreManifest.PSObject.Properties['performance_timing_margin_us'] -or
+    $historicalDispatchCoreManifest.PSObject.Properties['safety_timing_margin_us']) {
+    throw 'pinned historical DispatchCore fixture unexpectedly contains the new optional qualification fields'
+}
+$historicalProjection = New-QualificationReportProjection -Profile DispatchCore `
+    -Candidate $historicalDispatchCoreManifest -Control $historicalDispatchCoreManifest `
+    -Stage Compare -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500
+$historicalSummaryJson = [ordered]@{
+    candidate = [ordered]@{
+        label = $historicalProjection.CandidateLabel
+        qualification_profile = $historicalProjection.CandidateQualificationProfile
+        performance_timing_margin_us = $historicalProjection.CandidateMargins.performance_timing_margin_us
+        safety_timing_margin_us = $historicalProjection.CandidateMargins.safety_timing_margin_us
+    }
+    control = [ordered]@{
+        control_label = $historicalProjection.ControlLabel
+        qualification_profile = $historicalProjection.ControlQualificationProfile
+        performance_timing_margin_us = $historicalProjection.ControlMargins.performance_timing_margin_us
+        safety_timing_margin_us = $historicalProjection.ControlMargins.safety_timing_margin_us
+    }
+    parameters = $historicalProjection.SummaryParameters
+} | ConvertTo-Json -Depth 8
+$historicalResultManifestJson = [ordered]@{
+    candidate_manifest = [ordered]@{
+        label = $historicalProjection.CandidateLabel
+        qualification_profile = $historicalProjection.CandidateQualificationProfile
+    }
+    control_manifest = [ordered]@{
+        control_label = $historicalProjection.ControlLabel
+        qualification_profile = $historicalProjection.ControlQualificationProfile
+    }
+    parameters = $historicalProjection.ManifestParameters
+} | ConvertTo-Json -Depth 8
+$historicalSummary = $historicalSummaryJson | ConvertFrom-Json
+$historicalResultManifest = $historicalResultManifestJson | ConvertFrom-Json
+if ($historicalSummary.candidate.label -ne 'Candidate-R2' -or
+    $historicalSummary.control.control_label -ne 'C0' -or
+    $null -ne $historicalSummary.candidate.qualification_profile -or
+    $null -ne $historicalSummary.control.qualification_profile -or
+    $null -ne $historicalSummary.candidate.performance_timing_margin_us -or
+    $null -ne $historicalSummary.candidate.safety_timing_margin_us -or
+    $null -ne $historicalSummary.control.performance_timing_margin_us -or
+    $null -ne $historicalSummary.control.safety_timing_margin_us -or
+    $historicalResultManifest.candidate_manifest.label -ne 'Candidate-R2' -or
+    $historicalResultManifest.control_manifest.control_label -ne 'C0') {
+    throw 'historical DispatchCore report projection failed strict-mode provenance serialization'
+}
+if (-not $qualifierSource.Contains('report_projection_sha256') -or
+    -not $qualifierSource.Contains('dispatch_qualification_report.psm1')) {
+    throw 'qualification evidence package does not hash and preserve the report projection module'
+}
+
+# Exercise the same role/margin projection consumed by sessions.csv,
+# summary.json, summary.md, and the run result manifest for a FrameSnapshot
+# baseline/candidate pair.
+$frameProjection = New-QualificationReportProjection -Profile FrameSnapshot -Candidate $validFrameCandidate `
+    -Control $validFrameBaseline -Stage Final -Pairs 6 -SampleSeconds 15 -TimingMarginUs 0
+$frameRows = @(
+    [pscustomobject]@{ role = 'control'; control_label = $frameProjection.CsvRoleLabels.control },
+    [pscustomobject]@{ role = 'candidate'; control_label = $frameProjection.CsvRoleLabels.candidate }
+)
+$reportRoot = Join-Path $env:TEMP ('qualification-report-projection-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $reportRoot | Out-Null
+try {
+    $frameRows | Export-Csv -LiteralPath (Join-Path $reportRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    [ordered]@{
+        candidate = [ordered]@{
+            label = $frameProjection.CandidateLabel
+            performance_timing_margin_us = $frameProjection.CandidateMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.CandidateMargins.safety_timing_margin_us
+        }
+        control = [ordered]@{
+            control_label = $frameProjection.ControlLabel
+            performance_timing_margin_us = $frameProjection.ControlMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.ControlMargins.safety_timing_margin_us
+        }
+        parameters = $frameProjection.SummaryParameters
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $reportRoot 'summary.json') -Encoding UTF8
+    @(
+        '- Candidate: ' + $frameProjection.MarkdownCandidatePrefix.TrimEnd()
+        '- Control: ' + $frameProjection.MarkdownControlLabel
+    ) |
+        Set-Content -LiteralPath (Join-Path $reportRoot 'summary.md') -Encoding UTF8
+    [ordered]@{
+        control_manifest = [ordered]@{
+            control_label = $frameProjection.ControlLabel
+            performance_timing_margin_us = $frameProjection.ControlMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.ControlMargins.safety_timing_margin_us
+        }
+        candidate_manifest = [ordered]@{
+            label = $frameProjection.CandidateLabel
+            performance_timing_margin_us = $frameProjection.CandidateMargins.performance_timing_margin_us
+            safety_timing_margin_us = $frameProjection.CandidateMargins.safety_timing_margin_us
+        }
+        parameters = $frameProjection.ManifestParameters
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $reportRoot 'manifest.json') -Encoding UTF8
+
+    $csvReport = @(Import-Csv -LiteralPath (Join-Path $reportRoot 'sessions.csv'))
+    $summaryReport = Get-Content -LiteralPath (Join-Path $reportRoot 'summary.json') -Raw | ConvertFrom-Json
+    $markdownReport = Get-Content -LiteralPath (Join-Path $reportRoot 'summary.md') -Raw
+    $manifestReport = Get-Content -LiteralPath (Join-Path $reportRoot 'manifest.json') -Raw | ConvertFrom-Json
+    if ($csvReport[0].control_label -ne 'FrameSnapshot-Baseline' -or
+        $csvReport[1].control_label -ne 'FrameSnapshot-Candidate' -or
+        $summaryReport.candidate.label -ne 'FrameSnapshot-Candidate' -or
+        $summaryReport.control.control_label -ne 'FrameSnapshot-Baseline' -or
+        $manifestReport.candidate_manifest.label -ne 'FrameSnapshot-Candidate' -or
+        $manifestReport.control_manifest.control_label -ne 'FrameSnapshot-Baseline' -or
+        -not $markdownReport.Contains('- Candidate: FrameSnapshot-Candidate') -or
+        -not $markdownReport.Contains('- Control: FrameSnapshot-Baseline')) {
+        throw 'FrameSnapshot role labels differ between CSV, summary JSON, Markdown, and result manifest'
+    }
+    foreach ($report in @($summaryReport, $manifestReport)) {
+        if ($report.parameters.performance_timing_margin_us -ne 0 -or
+            $report.parameters.safety_timing_margin_us -ne 500) {
+            throw 'FrameSnapshot report parameters lost the performance/safety margin distinction'
+        }
+    }
+    if ($summaryReport.control.performance_timing_margin_us -ne 0 -or
+        $summaryReport.control.safety_timing_margin_us -ne 500 -or
+        $manifestReport.control_manifest.performance_timing_margin_us -ne 0 -or
+        $manifestReport.control_manifest.safety_timing_margin_us -ne 500) {
+        throw 'FrameSnapshot baseline report margin provenance is incorrect'
+    }
+} finally {
+    Remove-Item -LiteralPath $reportRoot -Recurse -Force
 }
 
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

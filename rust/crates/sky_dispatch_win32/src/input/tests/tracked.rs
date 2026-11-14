@@ -5,6 +5,29 @@ use super::super::tracked::TrackedKeyState;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+fn capture_terminal_up_packets(
+    state: &mut TrackedKeyState,
+) -> Arc<std::sync::Mutex<Vec<PhysicalPacket>>> {
+    let packets = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&packets);
+    state.set_terminal_up_emitter_for_test(move |packet| {
+        captured
+            .lock()
+            .expect("terminal packet capture")
+            .push(packet);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
+    packets
+}
+
 #[test]
 fn same_key_retrigger_packet_is_rejected_at_preparation_boundary() {
     let error =
@@ -160,6 +183,106 @@ fn deferred_partial_packet_keeps_its_journal_for_cleanup() {
     assert_eq!(cleanup.attempted_mask, packet.down_mask);
     assert!(cleanup.released_successfully);
     assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
+fn deferred_mixed_pre_call_qpc_failure_preserves_only_prior_up_obligation() {
+    struct ResetQpcFault;
+    impl Drop for ResetQpcFault {
+        fn drop(&mut self) {
+            crate::clock::set_qpc_now_fault_for_test(false);
+        }
+    }
+
+    let _reset_fault = ResetQpcFault;
+    crate::clock::set_qpc_now_fault_for_test(true);
+    let clock = crate::clock::QpcClock::initialize().expect("QPC frequency available");
+    let packet = PhysicalPacket::new(0b01, 0b10);
+    let prepared =
+        super::super::packet::PreparedPhysicalPacket::try_new(packet).expect("valid Mixed packet");
+    let mut state = TrackedKeyState::with_qpc_clock(clock);
+    state.active_mask = packet.up_mask;
+    let terminal_packets = capture_terminal_up_packets(&mut state);
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(
+        outcome.status,
+        SendTransactionStatus::ClockFailureBeforeSend
+    );
+    assert_eq!(outcome.evidence.attempts, 0);
+    assert_eq!(outcome.evidence.first_inserted, 0);
+    assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.active_mask, packet.up_mask);
+    assert_eq!(state.release_obligation_mask(), packet.up_mask);
+
+    let cleanup = state.release_terminal_tracked_scope(0);
+    assert!(cleanup.release_outcome.released_successfully);
+    assert_eq!(cleanup.release_outcome.attempts, 1);
+    assert_eq!(cleanup.release_outcome.attempted_mask, packet.up_mask);
+    assert_eq!(
+        *terminal_packets.lock().expect("terminal packet capture"),
+        vec![PhysicalPacket::new(packet.up_mask, 0)],
+        "a Down with no SendInput call must not become a cleanup Up obligation"
+    );
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
+fn deferred_mixed_zero_insert_preserves_only_prior_up_obligation() {
+    let packet = PhysicalPacket::new(0b01, 0b10);
+    let prepared =
+        super::super::packet::PreparedPhysicalPacket::try_new(packet).expect("valid Mixed packet");
+    let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_attempts = Arc::clone(&attempts);
+    let mut state = TrackedKeyState::with_packet_emitter(move |sent| {
+        captured_attempts
+            .lock()
+            .expect("packet attempt capture")
+            .push(sent);
+        SendTransactionOutcome {
+            status: SendTransactionStatus::ZeroProgress,
+            evidence: SendEvidence {
+                requested_mask: sent.up_mask | sent.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::ZeroProgress,
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                completed_ticks: Some(crate::clock::QpcTicks::from_raw(101)),
+                timing_error: None,
+            },
+        }
+    });
+    state.active_mask = packet.up_mask;
+    let terminal_packets = capture_terminal_up_packets(&mut state);
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
+    assert_eq!(outcome.evidence.first_inserted, 0);
+    assert_eq!(outcome.evidence.last_win32_error, Some(5));
+    assert_eq!(
+        *attempts.lock().expect("packet attempt capture"),
+        vec![packet]
+    );
+    assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.active_mask, packet.up_mask);
+    assert_eq!(state.release_obligation_mask(), packet.up_mask);
+
+    let cleanup = state.release_terminal_tracked_scope(0);
+    assert!(cleanup.release_outcome.released_successfully);
+    assert_eq!(cleanup.release_outcome.attempted_mask, packet.up_mask);
+    assert_eq!(
+        *terminal_packets.lock().expect("terminal packet capture"),
+        vec![PhysicalPacket::new(packet.up_mask, 0)],
+        "zero inserted events must leave the existing Up obligation only"
+    );
     assert_eq!(state.release_obligation_mask(), 0);
 }
 

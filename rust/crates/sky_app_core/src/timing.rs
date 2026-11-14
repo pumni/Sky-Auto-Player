@@ -98,6 +98,7 @@ mod tests {
             (zero.min_hold_us, zero.min_release_gap_us),
             (16_667, 16_667)
         );
+        assert_eq!(zero.min_release_gap_us, zero.frame_us);
         assert_eq!(eight_hundred.min_hold_us, 17_467);
         assert_eq!(eight_hundred.min_release_gap_us, 17_467);
         assert_eq!(nine_hundred.min_hold_us - eight_hundred.min_hold_us, 100);
@@ -110,6 +111,19 @@ mod tests {
                 - (eight_hundred.min_hold_us + eight_hundred.min_release_gap_us),
             200
         );
+    }
+
+    #[test]
+    fn frame_snapshot_policy_uses_the_same_margin_extended_g_at_60_and_120_fps() {
+        let cases = [(60, 16_667, 17_167, 34_334), (120, 8_334, 8_834, 17_668)];
+        for (fps, frame_us, floor_us, cycle_us) in cases {
+            let policy =
+                MaterializedTimingPolicy::from_user_margin(fps, 1.0, 500).expect("valid policy");
+            assert_eq!(policy.frame_us, frame_us);
+            assert_eq!(policy.min_hold_us, floor_us);
+            assert_eq!(policy.min_release_gap_us, floor_us);
+            assert_eq!(policy.min_hold_us + policy.min_release_gap_us, cycle_us);
+        }
     }
 
     #[test]

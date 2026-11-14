@@ -1,3 +1,5 @@
+# Historical P0-P5 publication metadata only; this is not the schema-v2
+# lifecycle report contract.
 function Get-EvidencePublicationProfile {
     param([Parameter(Mandatory)][string]$EvidenceKind)
 

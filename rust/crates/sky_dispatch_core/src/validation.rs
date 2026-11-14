@@ -395,7 +395,7 @@ mod tests {
             (ActionKind::Up, 399, 1),
         ]);
         let error = validate_min_hold_and_release_gap_feasibility(&schedule, 100, 100)
-            .expect_err("same-key retrigger must leave one frame of release gap");
+            .expect_err("same-key retrigger must leave the configured release gap");
         assert_eq!(
             error,
             ScheduleTimingError::SameKeyReleaseGapTooShort {
@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_same_key_retrigger_after_one_frame_release_gap() {
+    fn accepts_same_key_retrigger_after_required_release_gap() {
         let schedule = schedule(&[
             (ActionKind::Down, 100, 1),
             (ActionKind::Up, 200, 1),
@@ -422,6 +422,38 @@ mod tests {
             (ActionKind::Up, 400, 1),
         ]);
         assert!(validate_min_hold_and_release_gap_feasibility(&schedule, 100, 100).is_ok());
+    }
+
+    #[test]
+    fn authored_repeat_admission_rejects_g_minus_one_and_accepts_exact_g() {
+        let release_gap_us = 17_167; // T = 16,667 us plus a 500 us margin.
+        let one_tick_short = schedule(&[
+            (ActionKind::Down, 100, 1),
+            (ActionKind::Up, 200, 1),
+            (ActionKind::Down, 200 + release_gap_us - 1, 1),
+            (ActionKind::Up, 200 + release_gap_us + 99, 1),
+        ]);
+        let error =
+            validate_min_hold_and_release_gap_feasibility(&one_tick_short, 100, release_gap_us)
+                .expect_err("G - 1 must be rejected");
+        assert!(matches!(
+            error,
+            ScheduleTimingError::SameKeyReleaseGapTooShort {
+                release_gap_us: 17_166,
+                required_release_gap_us: 17_167,
+                ..
+            }
+        ));
+
+        let exact = schedule(&[
+            (ActionKind::Down, 100, 1),
+            (ActionKind::Up, 200, 1),
+            (ActionKind::Down, 200 + release_gap_us, 1),
+            (ActionKind::Up, 200 + release_gap_us + 100, 1),
+        ]);
+        assert!(
+            validate_min_hold_and_release_gap_feasibility(&exact, 100, release_gap_us,).is_ok()
+        );
     }
 
     #[test]

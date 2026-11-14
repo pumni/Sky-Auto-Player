@@ -92,9 +92,8 @@ impl KeyRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeKeyIntent {
-    /// Index into `RuntimeSchedule::batches`, assigned during preparation.
-    /// This is the only storage index used by the coordinator; authored
-    /// source IDs remain identity/telemetry metadata.
+    /// Index into `RuntimeSchedule::batches`; authored source IDs remain
+    /// identity and telemetry metadata.
     pub compiled_batch_index: usize,
     pub source_action_index: u32,
     pub generation_id: Option<GenerationId>,
@@ -108,9 +107,10 @@ pub struct RuntimeKeyIntent {
 
 /// Compact immutable intent stored in the schedule arena.
 ///
-/// The batch header owns the fields shared by every intent in a chord.  The
-/// full `RuntimeKeyIntent` remains the short-lived materialized view consumed
-/// by the coordinator and worker, so the million-action schedule does not
+/// The batch header owns the fields shared by every intent in a chord. The
+/// full `RuntimeKeyIntent` is materialized only for diagnostics and
+/// test-support callers. Production `DispatchExecutor` consumes the compact
+/// schedule representation directly, so a million-action schedule does not
 /// inline fifteen copies of those fields for every action.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -1,82 +1,49 @@
 #![cfg(any(test, feature = "test-support"))]
 
-//! Test harness for production dispatch paths (DownOnly, Mixed, UpOnly release).
-//!
-//! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
-//! verification of production dispatch functions.
+//! Deterministic test harness for the production DispatchExecutor and worker
+//! staging/send path. It owns one compiled schedule and one live executor.
 
-#[path = "dispatch_harness/scheduler.rs"]
-mod scheduler;
-#[path = "dispatch_harness/wait_boundary.rs"]
-mod wait_boundary;
-
-use crate::engine::config::{DispatchProfile, WorkerConfig};
+use crate::engine::SystemPowerState;
+use crate::engine::config::WorkerConfig;
 use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
-    RtTraceRecord, SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
+    SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
-use crate::engine::worker::dispatch::{
-    AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
-    publish_pending_wait_observation, record_wait_attempt,
-};
-use crate::engine::worker::dispatch::{DispatchObservation, PendingObservationQueue};
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts,
-    PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundaryInput, WaitDeadline,
-    WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState, WorkerResources,
-    WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan,
-    dispatch_prepared_normal_frame, physical_wait_target_for_plan, plan_next_dispatch,
-    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
-    publish_live_metrics_after_dispatch, target_stamp_still_current, wait_for_next_boundary,
+    StagedCandidate, StagedControlSignals, StagedDispatchContext, StagedDispatchOutcome,
+    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
+    dispatch_staged_candidate, stage_candidate,
 };
-use crate::engine::{SystemPowerEndpoint, SystemPowerState};
-use sky_dispatch_core::clock::{PauseReason, PlaybackClockState};
-use sky_dispatch_core::coordinator::{
-    CoordinatorError, GenerationAccounting, RuntimeDispatchCoordinator, physical_packet_kind,
+use sky_dispatch_core::accounting::GenerationAccounting;
+use sky_dispatch_core::clock::PlaybackClockState;
+use sky_dispatch_core::compile::compile_runtime_intents;
+use sky_dispatch_core::executor::{
+    DispatchDecision, DispatchExecutor, DispatchTimingWindow, DownChordMetadata,
 };
-use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind, RuntimeSchedule};
-use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
+use sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility;
+use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PHYSICAL_INSTRUMENT_SCAN_CODES, PacketRetryReason, PhysicalPacket,
-    PlatformSendResult, PreparedPhysicalPacket, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, TrackedKeyState,
+    PlatformSendResult, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+    TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-const DISPATCH_FRAME_US: u64 = 16_667;
-const DISPATCH_MARGIN_US: u64 = 500;
-const DISPATCH_EFFECTIVE_HOLD_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
-#[cfg(test)]
-const DISPATCH_RELEASE_GAP_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedBoundaryEvidence {
-    pub source_action_index: u32,
-    pub compiled_packet_index: Option<u64>,
-    pub packet: PhysicalPacket,
-    pub physical_target_qpc: QpcTicks,
-    pub authored_ticks: TimelineTicks,
-    pub effective_deadline_ticks: TimelineTicks,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PhysicalFloorEvidence {
-    pub authored_target_qpc: QpcTicks,
-    pub musical_up_not_before_qpc: QpcTicks,
-    pub down_not_before_qpc: QpcTicks,
-    pub packet_not_before_qpc: QpcTicks,
-    pub hold_floor_mask: u16,
-    pub release_floor_mask: u16,
-}
+pub const DISPATCH_FRAME_US: u64 = 16_667;
+pub const DISPATCH_MARGIN_US: u64 = 500;
+pub const DISPATCH_EFFECTIVE_HOLD_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
+pub const DISPATCH_RELEASE_GAP_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchTimingConfigEvidence {
     pub frame_us: u64,
-    pub frame_ticks: u64,
+    pub frame_interval_ticks: u64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
     pub timing_margin_ticks: u64,
@@ -88,86 +55,6 @@ pub struct DispatchTimingConfigEvidence {
     pub lease_timeout_us: u64,
     pub lease_timeout_ticks: u64,
     pub native_admission_passed: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedStartupEvidence {
-    pub prepared_entry_count: usize,
-    pub physical_entry_count: usize,
-    pub metadata_entry_count: usize,
-    pub prepared_entry_type_size_bytes: usize,
-    pub prepared_entry_array_bytes: usize,
-    pub prepared_entry_allocation: (usize, usize),
-    pub physical_input_event_histogram: [usize; sky_dispatch_win32::input::MAX_PACKET_EVENTS + 1],
-    pub cancellation_ledger_bytes: usize,
-    pub rebuilt_coordinator_heap_payload_bytes: usize,
-}
-pub struct PreparedStartupBuilder {
-    pub(super) coordinator: RuntimeDispatchCoordinator,
-    pub(super) qpc_clock: QpcClock,
-}
-impl PreparedStartupBuilder {
-    pub fn clone_coordinator_for_test(&self) -> Self {
-        Self {
-            coordinator: self.coordinator.clone(),
-            qpc_clock: self.qpc_clock,
-        }
-    }
-
-    pub fn prepare(self) -> Result<PreparedStartupEvidence, String> {
-        let probe = crate::engine::worker::DispatchPreparationProbe::default();
-        let profile = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
-        let (stream, coordinator) =
-            PreparedDispatchStream::build(self.coordinator, self.qpc_clock, &probe, &profile)?;
-        let (entry_count, physical_count, metadata_count, used_bytes) =
-            stream.prepared_storage_evidence_for_test();
-        Ok(PreparedStartupEvidence {
-            prepared_entry_count: entry_count,
-            physical_entry_count: physical_count,
-            metadata_entry_count: metadata_count,
-            prepared_entry_type_size_bytes: std::mem::size_of::<PreparedDispatchEntry>(),
-            prepared_entry_array_bytes: used_bytes,
-            prepared_entry_allocation: stream.prepared_entry_allocation_for_test(),
-            physical_input_event_histogram: stream.physical_input_event_histogram_for_test(),
-            cancellation_ledger_bytes: stream.cancellation_ledger_bytes_for_test(),
-            rebuilt_coordinator_heap_payload_bytes: coordinator
-                .heap_payload_bytes_for_test_support(),
-        })
-    }
-}
-
-#[allow(dead_code)]
-pub struct ProductionDispatchTestHarness {
-    pub(crate) config: WorkerConfig,
-    pub(crate) resources: WorkerResources,
-    pub(crate) legacy_coordinator_fixture: RuntimeDispatchCoordinator,
-    pub(crate) health: WorkerHealthState,
-    pub(crate) timing: WorkerTimingState,
-    pub(crate) runtime: WorkerRuntime,
-    pub(crate) local_metrics: WorkerMetricsLocal,
-    pub(crate) focus_active: AtomicBool,
-    pub(crate) target: Arc<SessionTarget>,
-    pub(crate) quit_requested: AtomicBool,
-    pub(crate) skip_requested: AtomicBool,
-    pub(crate) panic_requested: AtomicBool,
-    pub(crate) supervisor_expired: SupervisorLeaseState,
-    pub(crate) desired_pause: AtomicBool,
-    pub(super) system_power: Arc<SystemPowerState>,
-    pub(crate) metrics: SharedMetrics,
-    pub(crate) progress_clock: SharedProgressClock,
-    pub(crate) observer: PendingObservationQueue,
-    pub(crate) interrupt: Arc<OwnedEvent>,
-    pub(crate) last_wait_result: Option<WaitResult>,
-    pub(crate) last_wait_observation: Option<WaitObservation>,
-    effective_now_ticks: TimelineTicks,
-    prepared_stream_for_test: Option<PreparedDispatchStream>,
-    prepared_stream_built_qpc: Option<QpcTicks>,
-    prepared_stream_build_duration_us: Option<u64>,
-    prepared_alignment_qpc: Option<QpcTicks>,
-    prepared_target_qpc: Option<QpcTicks>,
-    prepared_wait_entry_qpc: Option<QpcTicks>,
-    mock_sender_start_qpc: Arc<AtomicU64>,
-    native_admission_passed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -186,70 +73,316 @@ pub struct FinalizeEvidence {
 }
 
 pub type CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
+pub type PacketCapture = Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>>;
 
-#[allow(dead_code)]
+pub struct ProductionDispatchTestHarness {
+    pub(crate) config: WorkerConfig,
+    pub(crate) resources: WorkerResources,
+    pub(crate) timing: WorkerTimingState,
+    pub(crate) runtime: WorkerRuntime,
+    pub(crate) local_metrics: WorkerMetricsLocal,
+    pub(crate) focus_active: AtomicBool,
+    pub(crate) target: Arc<SessionTarget>,
+    pub(crate) quit_requested: AtomicBool,
+    pub(crate) skip_requested: AtomicBool,
+    pub(crate) panic_requested: AtomicBool,
+    pub(crate) supervisor_expired: SupervisorLeaseState,
+    pub(crate) desired_pause: AtomicBool,
+    pub(super) system_power: Arc<SystemPowerState>,
+    pub(crate) metrics: SharedMetrics,
+    pub(crate) progress_clock: SharedProgressClock,
+    pub(crate) observer: crate::engine::worker::dispatch::PendingObservationQueue,
+    pub(crate) interrupt: Arc<OwnedEvent>,
+    mock_sender_start_qpc: Arc<AtomicU64>,
+}
+
 impl ProductionDispatchTestHarness {
-    pub fn new_diagnostics_sequence_for_test(
-        actions: &[KeyActionInput],
+    pub fn create_harness(actions: &[KeyActionInput]) -> Self {
+        Self::create(actions)
+    }
+
+    pub fn new_down_only() -> Self {
+        Self::create(&[
+            action(0, ActionKind::Down, 0, &[0x15]),
+            action(1, ActionKind::Up, 10_000_000, &[0x15]),
+        ])
+    }
+
+    pub fn new_down_chord(key_count: usize) -> Self {
+        assert!((1..=PHYSICAL_INSTRUMENT_SCAN_CODES.len()).contains(&key_count));
+        let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count];
+        Self::create(&[
+            action(0, ActionKind::Down, 0, scan_codes),
+            action(1, ActionKind::Up, 1_000_000, scan_codes),
+        ])
+    }
+
+    pub fn new_mixed() -> Self {
+        Self::create(&[
+            action(0, ActionKind::Down, 0, &[0x15]),
+            action(1, ActionKind::Up, 20_000, &[0x15]),
+            action(2, ActionKind::Down, 20_000, &[0x16]),
+            action(3, ActionKind::Up, 40_000, &[0x16]),
+        ])
+    }
+
+    pub fn new_lifecycle_sequence_for_test(
         qpc_frequency_hz: u64,
-        frame_us: u64,
-        frame_base_hold_us: u64,
-        timing_margin_us: u64,
+        odd_frequency_vector: bool,
     ) -> Result<Self, String> {
-        let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
-            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
-        let qpc_clock = QpcClock::from_frequency_hz(frequency);
-        let effective_hold_us = frame_base_hold_us
-            .checked_add(timing_margin_us)
-            .ok_or_else(|| "diagnostic effective hold overflows".to_string())?;
-        let mut harness = Self::create_harness_with_clock(actions, effective_hold_us, qpc_clock);
-        harness.configure_diagnostic_timing_for_test(
-            actions,
-            frame_us,
-            frame_base_hold_us,
-            timing_margin_us,
+        let offsets = if odd_frequency_vector {
+            [0, 17_168, 34_336, 51_504]
+        } else {
+            [0, 17_167, 34_334, 51_501]
+        };
+        let harness = Self::create_with_frequency(
+            &[
+                action(0, ActionKind::Down, offsets[0], &[0x15]),
+                action(1, ActionKind::Up, offsets[1], &[0x15]),
+                action(2, ActionKind::Down, offsets[2], &[0x15]),
+                action(3, ActionKind::Up, offsets[3], &[0x15]),
+            ],
+            qpc_frequency_hz,
         )?;
         Ok(harness)
     }
 
-    pub fn new_prepared_startup_builder_for_test(
-        schedule: RuntimeSchedule,
-        qpc_frequency_hz: u64,
-        min_hold_us: u64,
-    ) -> Result<PreparedStartupBuilder, String> {
-        let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
-            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
-        let qpc_clock = QpcClock::from_frequency_hz(frequency);
-        let min_hold_ticks = qpc_clock
-            .duration_from_us(min_hold_us)
-            .map_err(|error| format!("diagnostic startup hold conversion: {error:?}"))?;
-        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-            schedule,
-            min_hold_us,
-            min_hold_ticks,
-            |microseconds| {
-                qpc_clock
-                    .timeline_from_us(microseconds)
-                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
-            },
+    pub fn new_hol_sequence_for_test(qpc_frequency_hz: u64) -> Result<Self, String> {
+        Self::create_with_frequency(
+            &[
+                action(0, ActionKind::Down, 0, &[0x15]),
+                action(1, ActionKind::Down, 10_000, &[0x16]),
+                action(2, ActionKind::Up, 30_000, &[0x15]),
+                action(3, ActionKind::Up, 40_000, &[0x16]),
+            ],
+            qpc_frequency_hz,
         )
-        .map_err(|error| format!("diagnostic startup coordinator construction: {error}"))?;
-        Ok(PreparedStartupBuilder {
-            coordinator,
-            qpc_clock,
+    }
+
+    fn create(actions: &[KeyActionInput]) -> Self {
+        Self::create_with_frequency(actions, qpc_frequency_checked().expect("QPC frequency"))
+            .expect("production executor fixture admission")
+    }
+
+    fn create_with_frequency(
+        actions: &[KeyActionInput],
+        qpc_frequency_hz: u64,
+    ) -> Result<Self, String> {
+        let frequency = NonZeroU64::new(qpc_frequency_hz)
+            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
+        let clock = QpcClock::from_frequency_hz(frequency);
+        let mut scan_codes = actions
+            .iter()
+            .flat_map(|entry| entry.scan_codes.iter().copied())
+            .collect::<Vec<_>>();
+        scan_codes.sort_unstable();
+        scan_codes.dedup();
+        let schedule = compile_runtime_intents(actions, &scan_codes)
+            .map_err(|error| format!("production schedule compilation failed: {error}"))?;
+
+        let mut config = WorkerConfig::default();
+        config.timing.frame_us = DISPATCH_FRAME_US;
+        config.timing.frame_base_hold_us = DISPATCH_FRAME_US;
+        config.timing.timing_margin_us = DISPATCH_MARGIN_US;
+        config.timing.min_hold_us = DISPATCH_EFFECTIVE_HOLD_US;
+        config.timing.min_release_gap_us = DISPATCH_RELEASE_GAP_US;
+        validate_min_hold_and_release_gap_feasibility(
+            &schedule,
+            config.timing.min_hold_us,
+            config.timing.min_release_gap_us,
+        )
+        .map_err(|error| format!("production scheduler admission failed: {error}"))?;
+        let min_hold_ticks = clock
+            .duration_from_us(config.timing.min_hold_us)
+            .map_err(|error| format!("minimum hold conversion failed: {error:?}"))?;
+        let min_release_gap_ticks = clock
+            .duration_from_us(config.timing.min_release_gap_us)
+            .map_err(|error| format!("minimum release gap conversion failed: {error:?}"))?;
+        let scheduler = DispatchExecutor::new(
+            &schedule,
+            DurationTicks::from_raw(min_hold_ticks.as_u64()),
+            DurationTicks::from_raw(min_release_gap_ticks.as_u64()),
+            |us| {
+                clock
+                    .timeline_from_us(us)
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )?;
+
+        let mut backend = TrackedKeyState::with_qpc_clock(clock);
+        backend.set_test_emitters();
+        backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+        backend.set_modifier_key_state_query_for_test(|_| 0);
+
+        let test_epoch_margin = clock
+            .duration_from_us(500_000)
+            .map_err(|error| format!("test epoch margin conversion failed: {error:?}"))?;
+        let epoch = clock
+            .now()
+            .map_err(|error| format!("test QPC sample failed: {error:?}"))?
+            .checked_add_duration(test_epoch_margin)
+            .map_err(|error| format!("test epoch overflow: {error}"))?;
+        let playback = PlaybackClockState::new(epoch, DurationTicks::ZERO)
+            .map_err(|error| format!("test playback clock: {error}"))?;
+        let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
+        let resources = WorkerResources {
+            clock,
+            waiter: HybridWaiter::new(),
+            backend,
+            scheduler,
+            playback,
+            telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
+            scheduling: WorkerSchedulingGuards::create_test_guards(),
+        };
+        let progress_clock = SharedProgressClock::default();
+        progress_clock.publish(&resources.playback);
+
+        let mut timing = WorkerTimingState::create_test_timing();
+        timing.timing_margin_ticks = clock
+            .duration_from_us(DISPATCH_MARGIN_US)
+            .map_err(|error| format!("Timing Margin conversion failed: {error:?}"))?;
+        timing.effective_spin_threshold_ticks = clock
+            .duration_from_us(20_000)
+            .map_err(|error| format!("test spin threshold conversion failed: {error:?}"))?;
+        let target = Arc::new(SessionTarget::new(1, 0));
+        let runtime =
+            WorkerRuntime::create_test_runtime(Some(crate::engine::worker::TargetStamp {
+                hwnd: 1,
+                generation: 0,
+            }));
+
+        Ok(Self {
+            config,
+            resources,
+            timing,
+            runtime,
+            local_metrics: WorkerMetricsLocal::default(),
+            focus_active: AtomicBool::new(true),
+            target,
+            quit_requested: AtomicBool::new(false),
+            skip_requested: AtomicBool::new(false),
+            panic_requested: AtomicBool::new(false),
+            supervisor_expired: SupervisorLeaseState::new(QpcTicks::from_raw(1)),
+            desired_pause: AtomicBool::new(false),
+            system_power: Arc::new(SystemPowerState::default()),
+            metrics: SharedMetrics::default(),
+            progress_clock,
+            observer: crate::engine::worker::dispatch::PendingObservationQueue::default(),
+            interrupt: Arc::new(
+                OwnedEvent::new_auto_reset()
+                    .ok_or_else(|| "failed to create test interrupt event".to_string())?,
+            ),
+            mock_sender_start_qpc: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    pub fn evaluate_live_scheduler_for_test(
+        &self,
+        now: QpcTicks,
+        epoch: QpcTicks,
+    ) -> Result<DispatchDecision<'_>, String> {
+        self.resources
+            .scheduler
+            .evaluate_at(now, epoch)
+            .map_err(|error| format!("live scheduler QPC evaluation failed: {error}"))
+    }
+
+    pub fn current_executor_chord_for_test(&self) -> Option<DownChordMetadata> {
+        self.resources.scheduler.current_chord().map(Into::into)
+    }
+
+    pub fn resume_barrier_qpc_for_test(&self) -> Option<QpcTicks> {
+        self.resources.scheduler.resume_barrier_qpc()
+    }
+
+    pub fn stage_candidate_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<DownChordMetadata>,
+        fallback_ticks: TimelineTicks,
+    ) -> Result<Option<StagedCandidate>, String> {
+        let epoch = self.resources.playback.epoch;
+        let requested_qpc = epoch
+            .checked_add_duration(DurationTicks::from_raw(fallback_ticks.as_u64()))
+            .map_err(|error| format!("live staging target overflow: {error}"))?;
+        let decision = self
+            .resources
+            .scheduler
+            .evaluate_at(requested_qpc, epoch)
+            .map_err(|error| format!("live staging scheduler evaluation failed: {error}"))?;
+        let decision = match decision {
+            DispatchDecision::Wait { deadline_qpc } if deadline_qpc > requested_qpc => self
+                .resources
+                .scheduler
+                .evaluate_at(deadline_qpc, epoch)
+                .map_err(|error| format!("live staging deadline evaluation failed: {error}"))?,
+            decision => decision,
+        };
+        let (actual_up_mask, actual_chord, timing_window): (
+            u16,
+            Option<DownChordMetadata>,
+            DispatchTimingWindow,
+        ) = match decision {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => (up_mask, down_chord.map(Into::into), timing_window),
+            decision => {
+                return Err(format!(
+                    "production executor did not offer Send: {decision:?}"
+                ));
+            }
+        };
+        if actual_up_mask != up_mask
+            || actual_chord.map(|chord| chord.down_mask) != down_chord.map(|chord| chord.down_mask)
+        {
+            return Err(format!(
+                "staged masks do not match the live executor decision: requested up={up_mask:#06x}, down={:?}; live up={actual_up_mask:#06x}, down={:?}",
+                down_chord.map(|chord| chord.down_mask),
+                actual_chord.map(|chord| chord.down_mask),
+            ));
+        }
+        self.stage_candidate_with_scheduler_window_for_test(
+            actual_up_mask,
+            actual_chord,
+            timing_window,
+        )
+    }
+
+    pub fn stage_candidate_with_scheduler_window_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<DownChordMetadata>,
+        timing_window: DispatchTimingWindow,
+    ) -> Result<Option<StagedCandidate>, String> {
+        stage_candidate(
+            up_mask,
+            down_chord,
+            timing_window,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
+        )
+    }
+
+    pub fn staged_candidate_timing_window_for_test(
+        &self,
+        candidate: &StagedCandidate,
+    ) -> DispatchTimingWindow {
+        candidate.timing_window
     }
 
     pub fn dispatch_staged_candidate_for_test(
         &mut self,
-        candidate: crate::engine::worker::StagedCandidate,
+        candidate: StagedCandidate,
         with_observer: bool,
-    ) -> crate::engine::worker::StagedDispatchOutcome {
+    ) -> StagedDispatchOutcome {
         let qpc_clock = self.resources.clock;
-        let ctx = crate::engine::worker::StagedDispatchContext {
+        let context = StagedDispatchContext {
             target: &self.target,
             config: &self.config,
-            control: crate::engine::worker::StagedControlSignals {
+            control: StagedControlSignals {
                 focus_active: &self.focus_active,
                 quit_requested: &self.quit_requested,
                 skip_requested: &self.skip_requested,
@@ -263,2039 +396,28 @@ impl ProductionDispatchTestHarness {
             progress_clock: &self.progress_clock,
             metrics: &self.metrics,
         };
-
-        let observer_ref = if with_observer {
-            Some(&self.observer)
-        } else {
-            None
-        };
-
-        crate::engine::worker::dispatch_staged_candidate(
+        dispatch_staged_candidate(
             candidate,
-            ctx,
+            context,
             &mut self.resources,
             &mut self.runtime,
             &mut self.local_metrics,
-            observer_ref,
+            with_observer.then_some(&self.observer),
         )
     }
 
-    pub fn execute_shipping_b_sendinput_suffix_for_test(
-        &mut self,
-        prepared_packet: &sky_dispatch_win32::input::PreparedPhysicalPacket,
-        up_mask: u16,
-        down_chord: Option<&sky_dispatch_core::executor::DownChordTicks>,
-        target_qpc: QpcTicks,
-    ) -> Result<(), String> {
-        let completion_qpc = target_qpc;
-        let completion_ticks = TimelineTicks::from_raw(completion_qpc.as_u64());
-        let send_result = self
-            .resources
-            .backend
-            .send_prepared_physical_packet_at_final_boundary(prepared_packet, None);
-        if !send_result.is_success() {
-            return Err("send failed".to_string());
-        }
-        let down_mask = down_chord.as_ref().map_or(0, |c| c.down_mask);
-        let confirmed_up_mask = send_result.evidence.confirmed_mask & up_mask;
-        let confirmed_down_mask = send_result.evidence.confirmed_mask & down_mask;
-        if let Some(exec) = self.legacy_coordinator_fixture.executor.as_mut() {
-            exec.on_send_completed(confirmed_up_mask, confirmed_down_mask, completion_ticks)?;
-        }
-        self.legacy_coordinator_fixture
-            .record_executor_completion(confirmed_up_mask, down_chord);
-        Ok(())
-    }
-
-    pub fn new_down_only() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 10_000,
-                scan_codes: vec![0x15].into(),
-                reason: "up".into(),
-            },
-        ])
-    }
-
-    /// Valid four-event lifecycle sequence. The malformed duplicate-Up
-    /// control is validated separately by the probe. The supplied QPC
-    /// frequency controls each authored and guard conversion.
-    pub fn new_lifecycle_sequence_for_test(
-        qpc_frequency_hz: u64,
-        odd_frequency_vector: bool,
-    ) -> Result<Self, String> {
-        let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
-            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
-        let qpc_clock = QpcClock::from_frequency_hz(frequency);
-        let offsets = if odd_frequency_vector {
-            [0, 17_168, 34_336, 51_504]
-        } else {
-            [0, 17_167, 34_334, 51_501]
-        };
-        let actions = [
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: offsets[0],
-                scan_codes: vec![0x15].into(),
-                reason: "vector-a-down-0".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: offsets[1],
-                scan_codes: vec![0x15].into(),
-                reason: "vector-a-up-17167".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: offsets[2],
-                scan_codes: vec![0x15].into(),
-                reason: "vector-a-down-34334".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: offsets[3],
-                scan_codes: vec![0x15].into(),
-                reason: "vector-a-up-51501".into(),
-            },
-        ];
-        let mut harness =
-            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, qpc_clock);
-        harness.configure_native_admission_for_test(&actions)?;
-        Ok(harness)
-    }
-
-    pub fn new_hol_sequence_for_test(qpc_frequency_hz: u64) -> Result<Self, String> {
-        let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
-            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
-        let qpc_clock = QpcClock::from_frequency_hz(frequency);
-        let actions = [
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 100_000,
-                scan_codes: vec![0x15].into(),
-                reason: "head-of-line-a-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 117_167,
-                scan_codes: vec![0x15].into(),
-                reason: "head-of-line-a-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 118_000,
-                scan_codes: vec![0x16].into(),
-                reason: "head-of-line-b-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 135_167,
-                scan_codes: vec![0x16].into(),
-                reason: "head-of-line-b-up".into(),
-            },
-        ];
-        let mut harness =
-            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, qpc_clock);
-        harness.configure_native_admission_for_test(&actions)?;
-        Ok(harness)
-    }
-
-    /// Prepared Down, UpOnly, or Mixed workload fixtures for the precision
-    /// probe. Setup packets are separate prepared frames and are dispatched
-    /// outside the probe's timed admission interval.
-    pub fn new_prepared_mixed_for_test(
-        up_count: usize,
-        down_count: usize,
-        gap_us: u64,
-    ) -> Result<Self, String> {
-        if up_count == 0 || down_count == 0 || up_count + down_count > 15 {
-            return Err("Mixed fixture requires 1..15 disjoint keys".to_string());
-        }
-        let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES;
-        let up_codes = scan_codes[..up_count].to_vec();
-        let down_codes = scan_codes[up_count..up_count + down_count].to_vec();
-        let actions = [
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: up_codes.clone().into(),
-                reason: "mixed-setup-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: gap_us,
-                scan_codes: up_codes.into(),
-                reason: "mixed-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: gap_us,
-                scan_codes: down_codes.clone().into(),
-                reason: "mixed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: gap_us.saturating_mul(2),
-                scan_codes: down_codes.into(),
-                reason: "mixed-cleanup".into(),
-            },
-        ];
-        let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
-        let mut harness =
-            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, clock);
-        harness.configure_native_admission_for_test(&actions)?;
-        Ok(harness)
-    }
-
-    pub fn new_prepared_down_or_uponly_for_test(
-        key_count: usize,
-        gap_us: u64,
-    ) -> Result<Self, String> {
-        if !(1..=15).contains(&key_count) {
-            return Err("Down/UpOnly fixture requires 1..=15 keys".to_string());
-        }
-        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
-        let actions = [
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: scan_codes.clone().into(),
-                reason: "down-or-up-only-setup".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: gap_us,
-                scan_codes: scan_codes.into(),
-                reason: "down-or-up-only-release".into(),
-            },
-        ];
-        let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
-        let mut harness =
-            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, clock);
-        harness.configure_native_admission_for_test(&actions)?;
-        Ok(harness)
-    }
-
-    fn configure_native_admission_for_test(
-        &mut self,
-        actions: &[KeyActionInput],
-    ) -> Result<(), String> {
-        self.configure_diagnostic_timing_for_test(
-            actions,
-            DISPATCH_FRAME_US,
-            DISPATCH_FRAME_US,
-            DISPATCH_MARGIN_US,
-        )
-    }
-
-    pub fn configure_diagnostic_timing_for_test(
-        &mut self,
-        actions: &[KeyActionInput],
-        frame_us: u64,
-        frame_base_hold_us: u64,
-        timing_margin_us: u64,
-    ) -> Result<(), String> {
-        let effective_hold_us = frame_base_hold_us
-            .checked_add(timing_margin_us)
-            .ok_or_else(|| "dispatch effective hold overflows".to_string())?;
-        let min_release_gap_us = frame_us
-            .checked_add(timing_margin_us)
-            .ok_or_else(|| "dispatch minimum release gap overflows".to_string())?;
-        self.config.timing.min_hold_us = effective_hold_us;
-        self.config.timing.min_release_gap_us = min_release_gap_us;
-        self.config.timing.frame_us = frame_us;
-        self.config.timing.frame_base_hold_us = frame_base_hold_us;
-        self.config.timing.timing_margin_us = timing_margin_us;
-
-        let clock = self.resources.clock;
-        let hold_ticks = clock
-            .duration_from_us(effective_hold_us)
-            .map_err(|error| format!("dispatch effective hold conversion: {error:?}"))?;
-        let frame_ticks = clock
-            .duration_from_us(frame_us)
-            .map_err(|error| format!("dispatch frame conversion: {error:?}"))?;
-        let margin_ticks = clock
-            .duration_from_us(timing_margin_us)
-            .map_err(|error| format!("dispatch margin conversion: {error:?}"))?;
-        self.timing.timing_margin_ticks = margin_ticks;
-        self.runtime
-            .set_physical_timing_guard_for_test(hold_ticks, frame_ticks);
-
-        let mut scan_codes: Vec<u16> = actions
-            .iter()
-            .flat_map(|action| action.scan_codes.iter().copied())
-            .collect();
-        scan_codes.sort_unstable();
-        scan_codes.dedup();
-        let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &scan_codes)
-            .map_err(|error| format!("dispatch fixture compilation failed: {error:?}"))?;
-        super::super::session::validate_native_timing_contract(&self.config.timing)?;
-        super::super::session::validate_native_schedule_timing_with_release_gap(
-            &schedule,
-            self.config.timing.min_hold_us,
-            self.config.timing.min_release_gap_us,
-            clock,
-        )?;
-        self.native_admission_passed = true;
-        Ok(())
-    }
-
-    pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {
-        let clock = self.resources.clock;
-        let frame_ticks = clock
-            .duration_from_us(self.config.timing.frame_us)
-            .map_err(|error| format!("dispatch frame metadata conversion: {error:?}"))?;
-        let margin_ticks = clock
-            .duration_from_us(self.config.timing.timing_margin_us)
-            .map_err(|error| format!("dispatch margin metadata conversion: {error:?}"))?;
-        let hold_ticks = clock
-            .duration_from_us(self.config.timing.min_hold_us)
-            .map_err(|error| format!("dispatch hold metadata conversion: {error:?}"))?;
-        let release_gap_ticks = clock
-            .duration_from_us(self.config.timing.min_release_gap_us)
-            .map_err(|error| format!("dispatch release-gap metadata conversion: {error:?}"))?;
-        Ok(DispatchTimingConfigEvidence {
-            frame_us: self.config.timing.frame_us,
-            frame_ticks: frame_ticks.as_u64(),
-            frame_base_hold_us: self.config.timing.frame_base_hold_us,
-            timing_margin_us: self.config.timing.timing_margin_us,
-            timing_margin_ticks: margin_ticks.as_u64(),
-            effective_hold_us: self.config.timing.min_hold_us,
-            effective_hold_ticks: hold_ticks.as_u64(),
-            min_release_gap_us: self.config.timing.min_release_gap_us,
-            min_release_gap_ticks: release_gap_ticks.as_u64(),
-            lease_enabled: self.config.wait.supervisor_lease_timeout_us != 0,
-            lease_timeout_us: self.config.wait.supervisor_lease_timeout_us,
-            lease_timeout_ticks: self.timing.lease_timeout_ticks.as_u64(),
-            native_admission_passed: self.native_admission_passed,
-        })
-    }
-
-    /// Prepared normal stream used to prove that the shared suspension path
-    /// reconciles a frozen Up before the following sentinel Down.
-    pub fn new_prepared_resumable_suspension_sequence_for_test() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "prepared-suspension-down-k".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "prepared-suspension-up-k".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 40_000,
-                scan_codes: vec![0x16].into(),
-                reason: "prepared-suspension-sentinel-j".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 60_000,
-                scan_codes: vec![0x16].into(),
-                reason: "prepared-suspension-cleanup-j".into(),
-            },
-        ])
-    }
-
-    pub fn new_prepared_resumable_suspension_mixed_miss_for_test() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "prepared-suspension-down-a".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "prepared-suspension-up-a".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x16].into(),
-                reason: "prepared-suspension-down-b".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 40_000,
-                scan_codes: vec![0x16].into(),
-                reason: "prepared-suspension-cleanup".into(),
-            },
-        ])
-    }
-
-    pub fn new_prepared_late_causality_sequence_for_test() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "prepared-causality-first".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x16].into(),
-                reason: "prepared-causality-unseen-backlog-a".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x17].into(),
-                reason: "prepared-causality-unseen-backlog-b".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Down,
-                scheduled_us: 100_000,
-                scan_codes: vec![0x18].into(),
-                reason: "prepared-causality-next-future".into(),
-            },
-            KeyActionInput {
-                source_action_index: 4,
-                kind: ActionKind::Up,
-                scheduled_us: 120_000,
-                scan_codes: vec![0x15, 0x16, 0x17, 0x18].into(),
-                reason: "prepared-causality-cleanup".into(),
-            },
-        ])
-    }
-
-    pub fn new_prepared_zero_slack_down_up_for_test(min_hold_us: u64) -> Self {
-        Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 0,
-                    scan_codes: vec![0x15].into(),
-                    reason: "prepared-zero-slack-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: min_hold_us,
-                    scan_codes: vec![0x15].into(),
-                    reason: "prepared-zero-slack-up".into(),
-                },
-            ],
-            min_hold_us,
-        )
-    }
-
-    pub fn new_prepared_materialized_causality_sequence_for_test(min_hold_us: u64) -> Self {
-        Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 0,
-                    scan_codes: vec![0x15].into(),
-                    reason: "prepared-materialized-causality-first".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Down,
-                    scheduled_us: 1_000,
-                    scan_codes: vec![0x16].into(),
-                    reason: "prepared-materialized-causality-unseen-a".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 2,
-                    kind: ActionKind::Down,
-                    scheduled_us: 2_000,
-                    scan_codes: vec![0x17].into(),
-                    reason: "prepared-materialized-causality-unseen-b".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 3,
-                    kind: ActionKind::Down,
-                    scheduled_us: 200_000,
-                    scan_codes: vec![0x18].into(),
-                    reason: "prepared-materialized-causality-later".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 4,
-                    kind: ActionKind::Up,
-                    scheduled_us: 220_000,
-                    scan_codes: vec![0x15, 0x16, 0x17, 0x18].into(),
-                    reason: "prepared-materialized-causality-cleanup".into(),
-                },
-            ],
-            min_hold_us,
-        )
-    }
-
-    pub fn new_prepared_unpaired_down_for_test() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15, 0x16].into(),
-                reason: "prepared-unpaired-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15, 0x16].into(),
-                reason: "prepared-unpaired-down-cleanup".into(),
-            },
-        ])
-    }
-
-    /// Build two independent Down boundaries five milliseconds apart.  The
-    /// first boundary is used for a controlled late send; the second proves
-    /// that its authored target remains unchanged.
-    pub fn new_dense_future_boundary_for_test() -> Self {
-        Self::new_dense_future_boundary_with_gap_for_test(5_000)
-    }
-
-    /// Build two independent Down boundaries with a caller-selected authored
-    /// gap.  This keeps dense-boundary qualification on the same production
-    /// dispatch path while allowing the next target to be placed immediately
-    /// after a synthetic first-note wake slip.
-    pub fn new_dense_future_boundary_with_gap_for_test(gap_us: u64) -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "dense-a-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: gap_us,
-                scan_codes: vec![0x16].into(),
-                reason: "dense-b-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: gap_us.saturating_add(20_000),
-                scan_codes: vec![0x15, 0x16].into(),
-                reason: "dense-cleanup".into(),
-            },
-        ])
-    }
-
-    /// Same-key retrigger with a caller-selected authored gap between
-    /// the release (Up) and the second Down.
-    pub fn new_same_key_retrigger_with_gap_for_test(gap_us: u64) -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "same-key-down1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "same-key-up1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 20_000 + gap_us,
-                scan_codes: vec![0x15].into(),
-                reason: "same-key-down2".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000 + gap_us + 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "same-key-cleanup".into(),
-            },
-        ])
-    }
-
-    /// Build a DownOnly chord whose physical deadline is at 1 ms.
-    pub fn new_down_chord(key_count: usize) -> Self {
-        Self::new_down_chord_with_gap(key_count, 1_000)
-    }
-
-    pub fn new_down_chord_with_gap(key_count: usize, gap_us: u64) -> Self {
-        assert!((1..=15).contains(&key_count), "key count must be 1..=15");
-        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: gap_us,
-                scan_codes: scan_codes.clone().into(),
-                reason: "bench-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: gap_us.saturating_mul(2),
-                scan_codes: scan_codes.into(),
-                reason: "bench-up".into(),
-            },
-        ])
-    }
-
-    pub fn new_mixed() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "down1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1000,
-                scan_codes: vec![0x15].into(),
-                reason: "up1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 1000,
-                scan_codes: vec![0x16].into(),
-                reason: "down2".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x16].into(),
-                reason: "up2".into(),
-            },
-        ])
-    }
-
-    pub fn new_mixed_then_future_down() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "down1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x15].into(),
-                reason: "up1".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x16].into(),
-                reason: "missed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Down,
-                scheduled_us: 5_000,
-                scan_codes: vec![0x17].into(),
-                reason: "fresh-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 4,
-                kind: ActionKind::Up,
-                scheduled_us: 10_000,
-                scan_codes: vec![0x16, 0x17].into(),
-                reason: "final-up".into(),
-            },
-        ])
-    }
-
-    /// Two independent physical Down boundaries used by the deterministic
-    /// pre-wait stall/backlog regression.
-    pub fn new_two_down_boundaries() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "backlog-a-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x16].into(),
-                reason: "backlog-b-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x15, 0x16].into(),
-                reason: "backlog-cleanup".into(),
-            },
-        ])
-    }
-
-    /// Three overdue Down boundaries followed by a future Down. This keeps
-    /// the no-catch-up proof separate from the two-boundary timing race.
-    pub fn new_three_overdue_then_future() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "stall-a-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x16].into(),
-                reason: "stall-b-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x17].into(),
-                reason: "stall-c-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Down,
-                scheduled_us: 3_000,
-                scan_codes: vec![0x18].into(),
-                reason: "stall-d-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 4,
-                kind: ActionKind::Down,
-                scheduled_us: 100_000,
-                scan_codes: vec![0x19].into(),
-                reason: "stall-e-future-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 5,
-                kind: ActionKind::Up,
-                scheduled_us: 101_000,
-                scan_codes: vec![0x15, 0x16, 0x17, 0x18, 0x19].into(),
-                reason: "stall-cleanup".into(),
-            },
-        ])
-    }
-
-    /// Build an exact-size deterministic DownOnly burst for the active
-    /// no-catch-up matrix. Each Down owns a distinct physical key, so every
-    /// overdue boundary remains an independent prepared frame.
-    pub fn new_overdue_down_burst_for_test(boundary_count: usize) -> Self {
-        assert!((2..=15).contains(&boundary_count));
-        let mut actions = Vec::with_capacity(boundary_count + 1);
-        for (index, scan_code) in PHYSICAL_INSTRUMENT_SCAN_CODES
-            .iter()
-            .copied()
-            .take(boundary_count)
-            .enumerate()
-        {
-            actions.push(KeyActionInput {
-                source_action_index: index as u32,
-                kind: ActionKind::Down,
-                scheduled_us: (index as u64).saturating_mul(1_000),
-                scan_codes: vec![scan_code].into(),
-                reason: format!("prepared-overdue-down-{index}").into(),
-            });
-        }
-        let all_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..boundary_count].to_vec();
-        actions.push(KeyActionInput {
-            source_action_index: boundary_count as u32,
-            kind: ActionKind::Up,
-            scheduled_us: (boundary_count as u64).saturating_mul(1_000),
-            scan_codes: all_scan_codes.into(),
-            reason: "prepared-overdue-cleanup".into(),
-        });
-        Self::create_harness(&actions)
-    }
-
-    /// A deferred release for key A shares an authored timestamp with an
-    /// unrelated Down chord on keys B/C. Production must send B/C at their
-    /// authored boundary and retain A as an independent pending release.
-    pub fn new_deferred_release_with_unrelated_down() -> Self {
-        // Leave enough slack for direct-dispatch tests to exercise ordering
-        // without racing worker-startup wall clock. The overdue guard has
-        // separate controlled-clock coverage.
-        Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 100_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "deferred-seed".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: 500_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "deferred-release".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 2,
-                    kind: ActionKind::Down,
-                    scheduled_us: 500_000,
-                    scan_codes: vec![0x16, 0x17].into(),
-                    reason: "unrelated-chord".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 3,
-                    kind: ActionKind::Up,
-                    scheduled_us: 1_000_000,
-                    scan_codes: vec![0x16, 0x17].into(),
-                    reason: "unrelated-cleanup".into(),
-                },
-            ],
-            0,
-        )
-    }
-
-    /// Build a healthy authored hold for lifecycle tests that explicitly seed
-    /// a pending safety release after the Down has been committed.
-    pub fn new_admissible_dynamic_pending_release() -> Self {
-        Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 100_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "dynamic-pending-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: 200_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "dynamic-pending-up".into(),
-                },
-            ],
-            0,
-        )
-    }
-
-    pub fn seed_pending_release_for_test(&mut self, scan_code: u16, due_us: u64) {
-        let slot = PHYSICAL_INSTRUMENT_SCAN_CODES
-            .iter()
-            .position(|candidate| *candidate == scan_code)
-            .expect("test scan code is an instrument key") as u8;
-        let due_ticks = self
-            .resources
-            .clock
-            .duration_from_us(due_us)
-            .expect("pending release due conversion");
-        self.legacy_coordinator_fixture
-            .seed_pending_release_for_test(slot, TimelineTicks::from_raw(due_ticks.as_u64()))
-            .expect("seed pending release");
-    }
-
-    /// Build a pending release whose due boundary is shared with an authored
-    /// metadata-only deferred Up.  The packet emitter uses deterministic QPC
-    /// completion samples so the equality is a state-machine property rather
-    /// than a wall-clock coincidence.
-    pub fn new_pending_release_with_metadata_boundary() -> Self {
-        let mut harness = Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 100_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "equal-boundary-a-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Down,
-                    scheduled_us: 200_000,
-                    scan_codes: vec![0x16].into(),
-                    reason: "equal-boundary-b-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 2,
-                    kind: ActionKind::Up,
-                    scheduled_us: 220_000,
-                    scan_codes: vec![0x16].into(),
-                    reason: "equal-boundary-b-up".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 3,
-                    kind: ActionKind::Up,
-                    scheduled_us: 300_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "equal-boundary-a-up".into(),
-                },
-            ],
-            0,
-        );
-        harness.align_next_plan_to_future_for_test(500_000);
-        let epoch = harness.resources.playback.epoch;
-        let one_us = harness
-            .resources
-            .clock
-            .duration_from_us(1)
-            .expect("one microsecond");
-        let base_completion_us = harness
-            .resources
-            .clock
-            .duration_from_us(200_000)
-            .expect("base completion boundary");
-        let equal_boundary_us = harness
-            .resources
-            .clock
-            .duration_from_us(220_000)
-            .expect("equal completion boundary");
-        let completion_clock = harness.resources.clock;
-        let call_index = Arc::new(AtomicU64::new(0));
-        let emitter_index = Arc::clone(&call_index);
-        harness.resources.backend.set_packet_emitter(move |packet| {
-            let index = emitter_index.fetch_add(1, Ordering::Relaxed);
-            let completion_offset = match index {
-                0 => base_completion_us,
-                1 => base_completion_us
-                    .checked_add(one_us)
-                    .expect("base completion plus one microsecond"),
-                _ => equal_boundary_us,
-            };
-            let boundary = epoch
-                .checked_add_duration(completion_offset)
-                .expect("deterministic completion boundary");
-            let started = completion_clock.now().expect("completion QPC sample");
-            let completed = boundary.max(started);
-            let requested_mask = packet.up_mask | packet.down_mask;
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(started),
-                    completed_ticks: Some(completed),
-                    timing_error: None,
-                },
-            }
-        });
-        harness
-    }
-
-    /// Build a schedule with a trailing stale Up boundary.  The stale batch
-    /// is metadata-only and exercises the frozen commit path without relying
-    /// on completion-derived hold deferral.
-    pub fn new_stale_metadata_boundary() -> Self {
-        Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Up,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "metadata-leading-stale".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 100_000,
-                scan_codes: vec![0x15].into(),
-                reason: "metadata-seed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 200_000,
-                scan_codes: vec![0x15].into(),
-                reason: "metadata-seed-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 300_000,
-                scan_codes: vec![0x15].into(),
-                reason: "metadata-trailing-stale".into(),
-            },
-        ])
-    }
-
-    /// Deterministic coalesced Mixed boundary: a seeded pending A Up and an
-    /// authored B Down must be transported by one physical packet.
-    pub fn new_coalesced_pending_release_with_unrelated_down() -> Self {
-        Self::create_harness_with_min_hold(
-            &[
-                KeyActionInput {
-                    source_action_index: 0,
-                    kind: ActionKind::Down,
-                    scheduled_us: 0,
-                    scan_codes: vec![0x15].into(),
-                    reason: "coalesced-a-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 1,
-                    kind: ActionKind::Down,
-                    scheduled_us: 21_000,
-                    scan_codes: vec![0x16].into(),
-                    reason: "coalesced-b-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 2,
-                    kind: ActionKind::Up,
-                    scheduled_us: 30_000,
-                    scan_codes: vec![0x16].into(),
-                    reason: "coalesced-b-up".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 3,
-                    kind: ActionKind::Up,
-                    scheduled_us: 40_000,
-                    scan_codes: vec![0x15].into(),
-                    reason: "coalesced-a-up".into(),
-                },
-            ],
-            1_000,
-        )
-    }
-
-    /// Seed a Down observation while leaving a future Mixed packet for the
-    /// planner.  This keeps the observer-drain replan test on the production
-    /// authored path instead of testing only the boolean drain helper.
-    pub fn new_down_then_mixed() -> Self {
-        let mut harness = Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "seed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x15].into(),
-                reason: "mixed-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 1_000,
-                scan_codes: vec![0x16].into(),
-                reason: "mixed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 2_000,
-                scan_codes: vec![0x16].into(),
-                reason: "mixed-cleanup".into(),
-            },
-        ]);
-        let plan = harness.plan_current_dispatch();
-        let step = harness.dispatch_at_plan_target_for_test(&plan);
-        assert!(
-            matches!(step, DispatchStep::Dispatched),
-            "initial harness dispatch failed: {step:?}"
-        );
-        harness
-    }
-
-    /// Build a mixed packet with `event_count` physical INPUT events at one
-    /// deadline (half Up, half Down). The two directions use disjoint scan
-    /// codes because a physical key cannot be requested in both directions.
-    pub fn new_mixed_events(event_count: usize) -> Self {
-        Self::new_mixed_events_with_gap(event_count, 1_000)
-    }
-
-    pub fn new_mixed_events_with_gap(event_count: usize, gap_us: u64) -> Self {
-        Self::try_new_mixed_events_with_gap(event_count, gap_us)
-            .expect("initial mixed benchmark dispatch")
-    }
-
-    pub fn try_new_mixed_events_with_gap(event_count: usize, gap_us: u64) -> Result<Self, String> {
-        assert!(
-            event_count.is_multiple_of(2) && (2..=15).contains(&event_count),
-            "mixed event count must be an even value in 2..=15"
-        );
-        let key_count = event_count / 2;
-        let up_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
-        let down_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[key_count..event_count].to_vec();
-        let mut actions = Vec::with_capacity(1 + event_count);
-        actions.push(KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: up_scan_codes.clone().into(),
-            reason: "bench-seed".into(),
-        });
-        actions.push(KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: gap_us,
-            scan_codes: up_scan_codes.into(),
-            reason: "bench-up".into(),
-        });
-        actions.push(KeyActionInput {
-            source_action_index: 2,
-            kind: ActionKind::Down,
-            scheduled_us: gap_us,
-            scan_codes: down_scan_codes.clone().into(),
-            reason: "bench-down".into(),
-        });
-        actions.push(KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: gap_us.saturating_add(1_000),
-            scan_codes: down_scan_codes.into(),
-            reason: "bench-down-up".into(),
-        });
-        let mut harness = Self::create_harness(&actions);
-        harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
-        let plan = harness.plan_current_dispatch();
-        let step = harness.dispatch_at_plan_target_for_test(&plan);
-        match step {
-            DispatchStep::Dispatched => Ok(harness),
-            step => Err(format!("initial mixed benchmark step: {step:?}")),
-        }
-    }
-
-    /// Build a dense alternating suffix: each future boundary releases the
-    /// prior key while pressing the next key. The initial Down is committed
-    /// during setup so the measured boundary exercises the production
-    /// coordinator path used by the other production-path matrix scenarios.
-    pub fn try_new_dense_alternating_with_gap_for_test(
-        event_count: usize,
-        gap_us: u64,
-    ) -> Result<Self, String> {
-        assert!(
-            event_count.is_multiple_of(2) && (2..=14).contains(&event_count),
-            "dense alternating event count must be an even value in 2..=14"
-        );
-        let transition_count = event_count / 2;
-        let mut actions = Vec::with_capacity(event_count + 2);
-        actions.push(KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[0]].into(),
-            reason: "dense-alternating-seed-down".into(),
-        });
-        for transition in 0..transition_count {
-            let scheduled_us = (transition as u64 + 1).saturating_mul(gap_us);
-            actions.push(KeyActionInput {
-                source_action_index: (transition * 2 + 1) as u32,
-                kind: ActionKind::Up,
-                scheduled_us,
-                scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[transition]].into(),
-                reason: "dense-alternating-up".into(),
-            });
-            actions.push(KeyActionInput {
-                source_action_index: (transition * 2 + 2) as u32,
-                kind: ActionKind::Down,
-                scheduled_us,
-                scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[transition + 1]].into(),
-                reason: "dense-alternating-down".into(),
-            });
-        }
-        actions.push(KeyActionInput {
-            source_action_index: (transition_count * 2 + 1) as u32,
-            kind: ActionKind::Up,
-            scheduled_us: (transition_count as u64 + 1).saturating_mul(gap_us),
-            scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[transition_count]].into(),
-            reason: "dense-alternating-final-up".into(),
-        });
-        let mut harness = Self::create_harness(&actions);
-        harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
-        let plan = harness.plan_current_dispatch();
-        let step = harness.dispatch_at_plan_target_for_test(&plan);
-        match step {
-            DispatchStep::Dispatched => Ok(harness),
-            step => Err(format!(
-                "initial dense alternating benchmark step: {step:?}"
-            )),
-        }
-    }
-
-    pub fn new_uponly_release() -> Self {
-        Self::new_uponly_release_with_gap(100_000)
-    }
-
-    pub fn new_uponly_release_with_gap(gap_us: u64) -> Self {
-        Self::new_uponly_release_chord_with_gap(1, gap_us)
-    }
-
-    pub fn new_uponly_release_chord_with_gap(key_count: usize, gap_us: u64) -> Self {
-        Self::try_new_uponly_release_chord_with_gap(key_count, gap_us)
-            .expect("initial UpOnly benchmark dispatch")
-    }
-
-    pub fn try_new_uponly_release_chord_with_gap(
-        key_count: usize,
-        gap_us: u64,
-    ) -> Result<Self, String> {
-        assert!((1..=15).contains(&key_count), "key count must be 1..=15");
-        let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
-        let mut harness = Self::create_harness(&[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 200_000,
-                scan_codes: scan_codes.clone().into(),
-                reason: "down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 200_000 + gap_us,
-                scan_codes: scan_codes.into(),
-                reason: "up".into(),
-            },
-        ]);
-        // Dispatch Down outside window
-        harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
-        let plan = harness.plan_current_dispatch();
-        let step = harness.dispatch_at_plan_target_for_test(&plan);
-        match step {
-            DispatchStep::Dispatched => Ok(harness),
-            step => Err(format!("initial UpOnly benchmark step: {step:?}")),
-        }
-    }
-
-    pub(crate) fn create_harness(actions: &[KeyActionInput]) -> Self {
-        Self::create_harness_with_min_hold(actions, 0)
-    }
-
-    fn create_harness_with_min_hold(actions: &[KeyActionInput], min_hold_us: u64) -> Self {
-        let qpc_clock = QpcClock::initialize().expect("qpc_clock");
-        Self::create_harness_with_clock(actions, min_hold_us, qpc_clock)
-    }
-
-    fn create_harness_with_clock(
-        actions: &[KeyActionInput],
-        min_hold_us: u64,
-        qpc_clock: QpcClock,
-    ) -> Self {
-        let mut scan_codes: Vec<u16> = actions
-            .iter()
-            .flat_map(|action| action.scan_codes.iter().copied())
-            .collect();
-        scan_codes.sort_unstable();
-        scan_codes.dedup();
-        let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &scan_codes)
-            .expect("schedule");
-        let min_hold_ticks = qpc_clock
-            .duration_from_us(min_hold_us)
-            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
-            .expect("test min-hold conversion");
-        // Generic fixtures pass zero to disable coordinator hold validation;
-        // the worker still uses the materialized default effective hold.
-        let effective_min_hold_ticks = if min_hold_us == 0 {
-            qpc_clock
-                .duration_from_us(WorkerConfig::default().timing.min_hold_us)
-                .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
-                .expect("test effective min-hold conversion")
-        } else {
-            min_hold_ticks
-        };
-        let frame_ticks = qpc_clock
-            .duration_from_us(16_667)
-            .expect("test frame conversion");
-        let scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
-            &schedule,
-            effective_min_hold_ticks,
-            frame_ticks,
-            |us| {
-                qpc_clock
-                    .timeline_from_us(us)
-                    .map_err(|error| format!("{error:?}"))
-            },
-        )
-        .expect("scheduler");
-        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-            schedule,
-            min_hold_us,
-            min_hold_ticks,
-            |us| {
-                qpc_clock
-                    .duration_from_us(us)
-                    .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
-                    .map_err(|error| {
-                        sky_dispatch_core::coordinator::CoordinatorError::TimeConversion(format!(
-                            "{error:?}"
-                        ))
-                    })
-            },
-        )
-        .expect("coordinator");
-        let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
-        backend.set_test_emitters();
-        backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
-        // Keep generic mock dispatch tests independent from the host user's
-        // physical modifier state. Guard-specific tests install explicit
-        // observations through `set_modifier_key_state_query_for_test`.
-        backend.set_modifier_key_state_query_for_test(|_| 0);
-        let waiter = HybridWaiter::new();
-        let test_margin = qpc_clock
-            .duration_from_us(500_000)
-            .expect("test epoch margin conversion");
-        let test_epoch = qpc_clock
-            .now()
-            .expect("qpc now")
-            .checked_add_duration(test_margin)
-            .expect("test epoch margin overflow");
-        let playback = PlaybackClockState::new(test_epoch, DurationTicks::ZERO).expect("playback");
-        let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
-        let scheduling = WorkerSchedulingGuards::create_test_guards();
-
-        let resources = WorkerResources {
-            clock: qpc_clock,
-            waiter,
-            backend,
-            scheduler,
-            playback,
-            telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
-            scheduling,
-        };
-        let progress_clock = SharedProgressClock::default();
-        progress_clock.publish(&resources.playback);
-
-        let health_options = DispatchHealthOptions::default();
-        let health = WorkerHealthState::new(health_options);
-        let mut timing = WorkerTimingState::create_test_timing();
-        timing.timing_margin_ticks = qpc_clock
-            .duration_from_us(500)
-            .expect("test Timing Margin conversion");
-        timing.pre_call_250us_ticks = qpc_clock
-            .duration_from_us(250)
-            .expect("test pre-call 250us conversion");
-        timing.pre_call_500us_ticks = qpc_clock
-            .duration_from_us(500)
-            .expect("test pre-call 500us conversion");
-        timing.pre_call_750us_ticks = qpc_clock
-            .duration_from_us(750)
-            .expect("test pre-call 750us conversion");
-        timing.pre_call_1000us_ticks = qpc_clock
-            .duration_from_us(1_000)
-            .expect("test pre-call 1000us conversion");
-        timing.pre_call_1500us_ticks = qpc_clock
-            .duration_from_us(1_500)
-            .expect("test pre-call 1500us conversion");
-        timing.pre_call_2000us_ticks = qpc_clock
-            .duration_from_us(2_000)
-            .expect("test pre-call 2000us conversion");
-        timing.effective_spin_threshold_ticks = qpc_clock
-            .duration_from_us(20_000)
-            .expect("test spin threshold conversion");
-
-        let mut runtime = WorkerRuntime::create_test_runtime(Some(TargetStamp {
-            hwnd: 1,
-            generation: 0,
-        }));
-        runtime.set_physical_timing_guard_for_test(
-            effective_min_hold_ticks,
-            qpc_clock.duration_from_us(16_667).expect("test frame"),
-        );
-        Self {
-            config: WorkerConfig::default(),
-            resources,
-            legacy_coordinator_fixture: coordinator,
-            health,
-            timing,
-            runtime,
-            local_metrics: WorkerMetricsLocal::default(),
-            focus_active: AtomicBool::new(true),
-            target: Arc::new(SessionTarget::new(1, 0)),
-            quit_requested: AtomicBool::new(false),
-            skip_requested: AtomicBool::new(false),
-            panic_requested: AtomicBool::new(false),
-            supervisor_expired: SupervisorLeaseState::new(QpcTicks::from_raw(1)),
-            desired_pause: AtomicBool::new(false),
-            system_power: Arc::new(SystemPowerState::default()),
-            metrics: SharedMetrics::default(),
-            progress_clock,
-            observer: PendingObservationQueue::default(),
-            interrupt: Arc::new(OwnedEvent::new_auto_reset().expect("test interrupt event")),
-            last_wait_result: None,
-            last_wait_observation: None,
-            effective_now_ticks: TimelineTicks::ZERO,
-            prepared_stream_for_test: None,
-            prepared_stream_built_qpc: None,
-            prepared_stream_build_duration_us: None,
-            prepared_alignment_qpc: None,
-            prepared_target_qpc: None,
-            prepared_wait_entry_qpc: None,
-            mock_sender_start_qpc: Arc::new(AtomicU64::new(0)),
-            native_admission_passed: false,
-        }
-    }
-
-    /// Use the endpoint's process-stable state and event in production-path
-    /// worker dispatch tests that coordinate stale callbacks across sessions.
-    pub fn attach_system_power_endpoint_for_test(&mut self, endpoint: &SystemPowerEndpoint) {
-        self.system_power = endpoint.state();
-        self.interrupt = endpoint.interrupt();
-    }
-
-    /// Configure the real HybridWaiter and tick-domain spin threshold used by
-    /// the production wait boundary. This is benchmark-only setup; it does
-    /// not alter the production worker configuration.
-    pub fn configure_wait_policy(
-        &mut self,
-        waitable_timer_enabled: bool,
-        event_wait_enabled: bool,
-        spin_threshold_us: u64,
-    ) -> Result<(), String> {
-        self.resources.waiter =
-            HybridWaiter::with_options(waitable_timer_enabled, event_wait_enabled);
-        self.timing.effective_spin_threshold_ticks = self
-            .resources
-            .clock
-            .duration_from_us(spin_threshold_us)
-            .map_err(|error| format!("benchmark spin threshold conversion: {error:?}"))?;
-        Ok(())
-    }
-
-    /// Configure the shipping waitable-timer constructor for benchmark
-    /// qualification while retaining the harness's injected transport.
-    pub fn configure_production_wait_policy(
-        &mut self,
-        spin_threshold_us: u64,
-    ) -> Result<(), String> {
-        self.resources.waiter = HybridWaiter::production();
-        self.timing.effective_spin_threshold_ticks = self
-            .resources
-            .clock
-            .duration_from_us(spin_threshold_us)
-            .map_err(|error| format!("benchmark spin threshold conversion: {error:?}"))?;
-        Ok(())
-    }
-
-    /// Enable the shipping focus requirement for benchmark qualification.
-    /// This only changes the test harness configuration; production callers
-    /// continue to receive focus policy from the application configuration.
-    pub fn set_require_focus_for_benchmark(&mut self, require_focus: bool) {
-        self.config.focus.require_focus = require_focus;
-    }
-
-    /// Set the expected target sampled by a real-foreground benchmark. This
-    /// is setup-only; admission still performs its normal production checks.
-    pub fn set_target_hwnd_for_benchmark(&self, hwnd: isize) {
-        assert_ne!(hwnd, 0, "benchmark target HWND must be nonzero");
-        self.target.publish(hwnd);
-    }
-
-    /// Bind the benchmark target to an owner PID outside the timed suffix.
-    pub fn bind_owner_identity_for_benchmark(&self, owner_pid: u32) -> bool {
-        let Some((hwnd, generation)) = self.target.load_stable() else {
-            return false;
-        };
-        self.target.require_owner_identity();
-        self.target.bind_owner_identity(hwnd, generation, owner_pid)
-    }
-
-    fn target_stamp_for_test(&self) -> TargetStamp {
-        let (hwnd, generation) = self
-            .target
-            .load_stable()
-            .expect("test target publication is stable");
-        TargetStamp { hwnd, generation }
-    }
-
-    pub fn is_physically_feasible_for_test(
-        &self,
-        target: QpcTicks,
-        up_mask: u16,
-        down_mask: u16,
-    ) -> Result<bool, String> {
-        let guard = self
-            .runtime
-            .physical_timing_guard
-            .as_ref()
-            .ok_or_else(|| "missing physical timing guard".to_string())?;
-        guard
-            .query(target, up_mask, down_mask)
-            .map(|_| true)
-            .map_err(|e| format!("timing guard query failed: {e:?}"))
-    }
-
-    pub fn set_strict_timing_for_test(&mut self, strict: bool) {
-        self.config.timing.strict_timing = strict;
-        self.timing.strict_timing = strict;
-    }
-
-    pub fn set_strict_down_completion_late_us_for_test(&mut self, us: u64) {
-        self.timing.strict_down_completion_late_ticks = self
-            .resources
-            .clock
-            .duration_from_us(us)
-            .expect("strict completion allowance conversion");
-    }
-
-    pub fn timing_margin_us_for_benchmark(&self) -> Result<u64, String> {
-        self.resources
-            .clock
-            .duration_to_us(self.timing.timing_margin_ticks)
-            .map_err(|error| format!("benchmark Timing Margin conversion: {error:?}"))
-    }
-
-    /// Enable the test-only observer profile so timing benchmarks can report
-    /// the post-SendInput ready boundary without changing production policy.
-    pub fn enable_dispatch_ready_timing_for_benchmark(&mut self) {
-        self.config.profile = DispatchProfile::MockTest;
-    }
-
-    pub fn last_wait_result(&self) -> Option<WaitResult> {
-        self.last_wait_result
-    }
-
-    pub fn last_wait_observation(&self) -> Option<WaitObservation> {
-        self.last_wait_observation
-    }
-
-    pub fn last_wait_spin_us(&self) -> Result<u64, String> {
-        let Some(wait_result) = self.last_wait_result else {
-            // A target that was already due takes the production overdue
-            // path and performs no blocking wait or precision spin.
-            return Ok(0);
-        };
-        let spin_ticks = wait_result.spin_ticks;
-        self.resources
-            .clock
-            .duration_to_us(spin_ticks)
-            .map_err(|error| format!("benchmark spin-duration conversion: {error:?}"))
-    }
-    /// Advance simulated playback time by `us` microseconds and return effective now ticks.
-    pub fn advance_playback_time_us(&mut self, us: u64) -> TimelineTicks {
-        let advance_qpc = self.resources.clock.duration_from_us(us).unwrap();
-        self.effective_now_ticks = self
-            .effective_now_ticks
-            .checked_add_duration(advance_qpc)
-            .unwrap();
-        self.effective_now_ticks
-    }
-    /// Return the deterministic effective playback time used by test setup.
-    pub fn current_effective_time(&self) -> TimelineTicks {
-        self.effective_now_ticks
-    }
-    pub fn set_effective_time_for_test(&mut self, ticks: TimelineTicks) {
-        self.effective_now_ticks = ticks;
-    }
-
-    pub fn playback_epoch_qpc_for_test(&self) -> QpcTicks {
-        self.resources.playback.epoch
-    }
-
-    pub fn set_playback_epoch_qpc_for_test(&mut self, epoch: QpcTicks) {
-        self.resources.playback.epoch = epoch;
+    pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
+        self.resources.scheduler.check_invariants()
     }
 
     pub fn reanchor_playback_clock_for_test(&mut self, epoch: QpcTicks) -> Result<(), String> {
-        self.resources.playback = PlaybackClockState::new(epoch, DurationTicks::ZERO)
-            .map_err(|error| format!("playback clock anchor: {error}"))?;
+        self.resources.playback.start_perf = epoch;
+        self.resources.playback.epoch = epoch;
         self.progress_clock.publish(&self.resources.playback);
         Ok(())
     }
 
-    /// Test-only clock setup: place the next authored boundary a fixed margin
-    /// into the future before the plan is frozen.  This removes harness
-    /// startup jitter without changing an already-frozen target.
-    pub fn align_next_plan_to_future_for_test(&mut self, margin_us: u64) {
-        let authored = self
-            .legacy_coordinator_fixture
-            .prepare_current_authored_frame()
-            .expect("authored frame")
-            .map(|frame| frame.authored_ticks);
-        let pending = self
-            .legacy_coordinator_fixture
-            .earliest_pending_release_ticks();
-        let Some(deadline) = (match (authored, pending) {
-            (Some(authored), Some(pending)) => Some(authored.min(pending)),
-            (Some(authored), None) => Some(authored),
-            (None, Some(pending)) => Some(pending),
-            (None, None) => None,
-        }) else {
-            return;
-        };
-        let now = self.resources.clock.now().expect("qpc now");
-        let margin = self
-            .resources
-            .clock
-            .duration_from_us(margin_us)
-            .expect("test epoch margin conversion");
-        // Keep direct frozen-plan sends out of the host's ordinary scheduler
-        // jitter window. This changes only the test epoch before planning;
-        // it never rewrites a plan after it has been frozen.
-        let epoch = now
-            .as_u64()
-            .saturating_sub(deadline.as_u64())
-            .saturating_add(margin.as_u64().max(2_000_000));
-        self.resources.playback.epoch = QpcTicks::from_raw(epoch);
-    }
-
-    /// Benchmark-only alignment that keeps the same frozen absolute-target
-    /// semantics while avoiding the long startup margin used by unit tests.
-    pub fn align_next_plan_to_benchmark_margin_for_test(&mut self, margin_us: u64) {
-        let authored = self
-            .legacy_coordinator_fixture
-            .prepare_current_authored_frame()
-            .expect("authored frame")
-            .map(|frame| frame.authored_ticks);
-        let pending = self
-            .legacy_coordinator_fixture
-            .earliest_pending_release_ticks();
-        let Some(deadline) = (match (authored, pending) {
-            (Some(authored), Some(pending)) => Some(authored.min(pending)),
-            (Some(authored), None) => Some(authored),
-            (None, Some(pending)) => Some(pending),
-            (None, None) => None,
-        }) else {
-            return;
-        };
-        let now = self.resources.clock.now().expect("qpc now");
-        let margin = self
-            .resources
-            .clock
-            .duration_from_us(margin_us)
-            .expect("benchmark margin conversion");
-        let epoch = now
-            .as_u64()
-            .saturating_sub(deadline.as_u64())
-            .saturating_add(margin.as_u64());
-        // A zero benchmark margin is the production-boundary mode. Keep the
-        // authored target 100 us in the past so both senders sample
-        // immediately instead of spending milliseconds spinning on a future
-        // target.
-        let epoch = if margin_us == 0 {
-            let past_boundary = self
-                .resources
-                .clock
-                .duration_from_us(100)
-                .expect("benchmark past-boundary conversion");
-            epoch.saturating_sub(past_boundary.as_u64())
-        } else {
-            epoch
-        };
-        self.resources.playback.epoch = QpcTicks::from_raw(epoch);
-    }
-
-    /// Benchmark-only alignment for the already materialized normal stream.
-    /// The current immutable frame supplies the offset; no coordinator
-    /// planning or mutable schedule traversal is performed here.
-    pub fn align_prepared_current_to_benchmark_margin_for_test(
-        &mut self,
-        margin_us: u64,
-    ) -> Result<(), String> {
-        let frame_offset_ticks = self
-            .prepared_stream_for_test
-            .as_ref()
-            .and_then(PreparedDispatchStream::current)
-            .and_then(|entry| match entry {
-                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks().as_u64()),
-                PreparedDispatchEntry::Metadata { .. } => None,
-            })
-            .ok_or_else(|| "prepared benchmark alignment requires a physical frame".to_string())?;
-        let alignment_qpc = self
-            .resources
-            .clock
-            .now()
-            .map_err(|error| format!("prepared benchmark alignment QPC: {error:?}"))?;
-        let margin = self
-            .resources
-            .clock
-            .duration_from_us(margin_us)
-            .map_err(|error| format!("prepared benchmark margin conversion: {error:?}"))?;
-        let target_qpc = alignment_qpc
-            .as_u64()
-            .checked_add(margin.as_u64())
-            .ok_or_else(|| "prepared benchmark target overflow".to_string())?;
-        let epoch = target_qpc
-            .checked_sub(frame_offset_ticks)
-            .ok_or_else(|| "prepared benchmark epoch underflow".to_string())?;
-        self.resources.playback.epoch = QpcTicks::from_raw(epoch);
-        self.prepared_alignment_qpc = Some(alignment_qpc);
-        self.prepared_target_qpc = Some(QpcTicks::from_raw(target_qpc));
-        self.prepared_wait_entry_qpc = None;
-        Ok(())
-    }
-
-    pub fn set_deadline_wake_for_test(&mut self, ticks: QpcTicks) {
-        self.runtime.set_deadline_wake_qpc_for_test(Some(ticks));
-    }
-
-    pub fn set_deadline_wake_for_plan_for_test(&mut self, plan: &NextDispatchPlan) {
-        let target = plan.physical_target_qpc().expect("physical plan target");
-        self.runtime
-            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
-    }
-    /// Query whether coordinator has active generation for `scan_code`.
-    pub fn has_active_generation(&self, scan_code: u16) -> bool {
-        let slot = match scan_code {
-            0x15 => 0,
-            0x16 => 1,
-            _ => return false,
-        };
-        (self.legacy_coordinator_fixture.active_mask & (1 << slot)) != 0
-    }
-
-    /// Query coordinator chord integrity lost count.
-    pub fn chord_integrity_lost_count(&self) -> u64 {
-        self.runtime.chord_integrity_lost_count()
-    }
-
-    pub fn final_gate_control_rejections_for_test(&self) -> u64 {
-        self.local_metrics.final_gate_control_rejections
-    }
-
-    pub fn missed_unobserved_backlog_boundaries_for_test(&self) -> u64 {
-        self.local_metrics.missed_unobserved_backlog_boundaries
-    }
-
-    pub fn prepared_up_prefix_recovery_sends_for_test(&self) -> u64 {
-        self.local_metrics.prepared_up_prefix_recovery_sends
-    }
-
-    pub fn prepared_normal_backlog_count_for_test(&self) -> u64 {
-        self.local_metrics.prepared_normal_backlog_boundaries
-    }
-
-    pub fn observer_loss_counts_for_test(&self) -> (u64, u64, u64, u64) {
-        (
-            self.local_metrics.observer_dropped_samples,
-            self.local_metrics.spin_observation_expected_samples,
-            self.local_metrics.spin_observation_dropped_samples,
-            self.local_metrics.spin_observation_missing_samples,
-        )
-    }
-
-    pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
-        publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
-        (
-            self.local_metrics.sendinput_partial_events,
-            self.local_metrics.sendinput_zero_progress_failures,
-            self.local_metrics.chord_integrity_lost,
-        )
-    }
-
-    pub fn timeline_rebase_count_for_test(&self) -> u64 {
-        self.local_metrics.timeline_rebase_count
-    }
-
-    pub fn telemetry_records_for_test(&self) -> Vec<RtTraceRecord> {
-        self.resources
-            .telemetry
-            .lock()
-            .output
-            .records
-            .iter()
-            .copied()
-            .collect()
-    }
-
-    pub fn fine_pre_call_bucket_counts_for_test(&self) -> [u64; 7] {
-        [
-            self.local_metrics.pre_call_lt_250us,
-            self.local_metrics.pre_call_250_500us,
-            self.local_metrics.pre_call_500_750us,
-            self.local_metrics.pre_call_750_1000us,
-            self.local_metrics.pre_call_1000_1500us,
-            self.local_metrics.pre_call_1500_2000us,
-            self.local_metrics.pre_call_ge_2000us,
-        ]
-    }
-
-    pub fn set_live_diagnostics_enabled_for_test(&self, enabled: bool) {
-        if enabled {
-            self.metrics.last_publish_us.store(0, Ordering::Relaxed);
-        }
-        self.metrics
-            .live_diagnostics_enabled
-            .store(enabled, Ordering::Relaxed);
-    }
-
-    pub fn publish_live_diagnostics_for_test(&mut self) {
-        if !self
-            .metrics
-            .live_diagnostics_enabled
-            .load(Ordering::Relaxed)
-        {
-            return;
-        }
-        publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
-        let now_qpc = self
-            .resources
-            .clock
-            .duration_from_us(50_000)
-            .expect("diagnostics test QPC conversion");
-        publish_live_metrics_after_dispatch(
-            &self.local_metrics,
-            &self.metrics,
-            self.resources.clock,
-            QpcTicks::from_raw(now_qpc.as_u64()),
-        );
-    }
-
-    pub fn published_sender_sample_count_for_test(&self) -> u64 {
-        let snapshot = self.metrics.snapshot.load();
-        snapshot.pre_call_lt_250us
-            + snapshot.pre_call_250_500us
-            + snapshot.pre_call_500_750us
-            + snapshot.pre_call_750_1000us
-            + snapshot.pre_call_1000_1500us
-            + snapshot.pre_call_1500_2000us
-            + snapshot.pre_call_ge_2000us
-    }
-
-    pub fn backend_active_mask(&self) -> u16 {
-        self.resources.backend.active_mask
-    }
-
-    pub fn backend_possibly_active_mask(&self) -> u16 {
-        self.resources.backend.possibly_active_mask
-    }
-
-    pub fn release_obligation_mask_for_test(&self) -> u16 {
-        self.resources.backend.release_obligation_mask()
-    }
-
-    pub fn generation_accounting_for_test(&self) -> GenerationAccounting {
-        self.resources.scheduler.accounting()
-    }
-
-    /// Exercise the production command-control owner used by the worker loop.
-    /// The wrapper only supplies test-owned scratch diagnostics.
-    pub fn process_command_control_for_test(&mut self) -> bool {
-        super::super::worker::process_command_control_for_test(
-            &mut self.runtime.terminal_trigger,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.supervisor_expired,
-            &self.system_power,
-        )
-    }
-
-    /// Exercise verified resumable cleanup against the worker's live scheduler.
-    pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
-        &mut self,
-    ) -> Result<(), String> {
-        let qpc_clock = self.resources.clock;
-        self.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            qpc_clock
-                .now()
-                .map_err(|error| format!("test cleanup QPC: {error:?}"))
-        })
-    }
-
-    pub fn apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
-        &mut self,
-        post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
-    ) -> Result<(), String> {
-        super::super::worker::apply_scheduler_resumable_lifecycle_transition_for_test(
-            &mut self.resources.backend,
-            &mut self.resources.scheduler,
-            &mut self.runtime,
-            self.target.hwnd_for_safety_release(),
-            post_cleanup_qpc,
-        )
-    }
-
-    /// Exercise the historical coordinator fixture used by prepared-stream
-    /// tests. Production scheduler cleanup has a separate explicit wrapper.
-    pub fn apply_legacy_resumable_lifecycle_transition_for_test(&mut self) -> Result<(), String> {
-        let qpc_clock = self.resources.clock;
-        self.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            qpc_clock
-                .now()
-                .map_err(|error| format!("test cleanup QPC: {error:?}"))
-        })
-    }
-
-    pub fn apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
-        &mut self,
-        post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
-    ) -> Result<(), String> {
-        let effective_now_ticks = self.effective_now_ticks;
-        let target_hwnd = self.target.hwnd_for_safety_release();
-        let playback = self.resources.playback.clone();
-        super::super::worker::suspend_live_input(
-            &mut self.resources.backend,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.runtime,
-            Ok(effective_now_ticks),
-            target_hwnd,
-            post_cleanup_qpc,
-            move |qpc| {
-                if qpc < playback.epoch {
-                    Ok(TimelineTicks::ZERO)
-                } else {
-                    playback
-                        .get_elapsed(qpc)
-                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
-                }
-            },
-        )
-        .map(|_| ())
-    }
-
-    /// Exercise the same verified-release/cancel seam used by manual pause
-    /// and focus suspension.  The harness keeps this call explicit so tests
-    /// cannot accidentally replace the production cleanup path with a direct
-    /// coordinator mutation.
-    pub fn suspend_live_input_for_test(&mut self) -> Result<usize, String> {
-        let effective_now_ticks = self.effective_now_ticks;
-        let target_hwnd = self.target.hwnd_for_safety_release();
-        let qpc_clock = self.resources.clock;
-        let playback = self.resources.playback.clone();
-        super::super::worker::suspend_live_input(
-            &mut self.resources.backend,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.runtime,
-            Ok(effective_now_ticks),
-            target_hwnd,
-            || {
-                qpc_clock
-                    .now()
-                    .map_err(|error| format!("test cleanup QPC: {error:?}"))
-            },
-            move |qpc| {
-                if qpc < playback.epoch {
-                    Ok(sky_dispatch_core::time::TimelineTicks::ZERO)
-                } else {
-                    playback
-                        .get_elapsed(qpc)
-                        .map_err(|error| format!("test cleanup timeline: {error:?}"))
-                }
-            },
-        )
-    }
-
-    /// Drive the same verified cleanup and playback-clock transitions used by
-    /// the dispatch loop's manual pause/resume branches. The synthetic
-    /// monitor-progress timeline supplies a post-cleanup QPC from the callback after release
-    /// returns.
-    pub fn manual_pause_resume_for_test(
-        &mut self,
-        pause_qpc: QpcTicks,
-        resume_qpc: QpcTicks,
-    ) -> Result<(), String> {
-        let effective_now = self
-            .resources
-            .playback
-            .get_elapsed_allow_pre_epoch(pause_qpc, false)
-            .map_err(|error| format!("manual pause probe clock: {error}"))?;
-        self.effective_now_ticks = effective_now;
-        self.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            Ok(pause_qpc)
-        })?;
-        self.resources
-            .playback
-            .enter_pause(PauseReason::Manual, pause_qpc)
-            .map_err(|error| format!("manual pause probe transition: {error}"))?;
-        self.progress_clock.publish(&self.resources.playback);
-        self.resources
-            .playback
-            .exit_pause(PauseReason::Manual, resume_qpc)
-            .map_err(|error| format!("manual resume probe transition: {error}"))?;
-        self.progress_clock.publish(&self.resources.playback);
-        Ok(())
-    }
-
-    /// Enter the production focus-pause transition without releasing an owned
-    /// key. Restoration uses the dispatch loop's shared verified cleanup path.
-    pub fn lose_focus_for_test(&mut self, focus_qpc: QpcTicks) -> Result<(), String> {
-        self.focus_active.store(false, Ordering::Release);
-        super::super::worker::enter_focus_pause(
-            &mut self.resources.playback,
-            &mut self.runtime,
-            focus_qpc,
-            &self.progress_clock,
-        )?;
-        Ok(())
-    }
-
-    pub fn restore_focus_for_test(&mut self, restore_qpc: QpcTicks) -> Result<(), String> {
-        self.focus_active.store(true, Ordering::Release);
-        let effective_now = self
-            .resources
-            .playback
-            .get_elapsed_allow_pre_epoch(restore_qpc, false)
-            .map_err(|error| format!("focus restore probe clock: {error}"))?;
-        self.effective_now_ticks = effective_now;
-        let qpc_clock = self.resources.clock;
-        self.apply_legacy_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            qpc_clock
-                .now()
-                .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
-        })?;
-        self.resources
-            .playback
-            .exit_pause(PauseReason::Focus, restore_qpc)
-            .map_err(|error| format!("focus restore probe transition: {error}"))?;
-        self.progress_clock.publish(&self.resources.playback);
-        Ok(())
-    }
-
-    pub fn configure_mock_packet_sender_for_test(
-        &mut self,
-        latency_us: &[u64],
-    ) -> Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>> {
+    pub fn configure_mock_packet_sender_for_test(&mut self, latency_us: &[u64]) -> PacketCapture {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(8)));
         let capture = Arc::clone(&captured);
         let sender_start = Arc::clone(&self.mock_sender_start_qpc);
@@ -2374,96 +496,154 @@ impl ProductionDispatchTestHarness {
         (captured, completion)
     }
 
-    pub fn down_floor_for_test(
-        &self,
-        authored_target_qpc: QpcTicks,
-        down_mask: u16,
-    ) -> Option<QpcTicks> {
-        self.runtime
-            .physical_timing_window_for_test(authored_target_qpc, 0, down_mask)
-            .map(|window| window.down_not_before_qpc)
-    }
-
-    pub fn establish_resume_barrier_for_test(
-        &mut self,
-        cleanup_completed_qpc: QpcTicks,
-    ) -> Result<(), String> {
-        self.runtime
-            .establish_resume_down_barrier_for_test(cleanup_completed_qpc)
-    }
-
-    pub fn configure_precision_mock_sender_for_test(
-        &mut self,
-    ) -> Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>> {
-        let captured = Arc::new(Mutex::new(Vec::with_capacity(8)));
-        let capture = Arc::clone(&captured);
-        let clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let started_ticks = clock.now().expect("precision mock pre-call QPC");
-            let requested_mask = packet.up_mask | packet.down_mask;
-            let evidence = SendEvidence {
-                requested_mask,
-                confirmed_mask: requested_mask,
-                skipped_mask: 0,
-                first_inserted: packet.event_count(),
-                attempts: 1,
-                zero_progress_retries: 0,
-                retry_reason: PacketRetryReason::None,
-                first_win32_error: None,
-                last_win32_error: None,
-                started_ticks: Some(started_ticks),
-                // This QPC sample occurs inside the mock emitter. The backend
-                // overwrites started_ticks with its authoritative pre-call;
-                // the resulting delta includes test-seam/QPC overhead, not
-                // SendInput execution or downstream receipt.
-                completed_ticks: Some(started_ticks),
-                timing_error: None,
-            };
-            capture
-                .lock()
-                .expect("precision packet capture lock")
-                .push((packet, evidence));
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence,
-            }
-        });
-        captured
-    }
-
     pub fn set_mock_sender_start_qpc_for_test(&self, start_qpc: QpcTicks) {
         self.mock_sender_start_qpc
             .store(start_qpc.as_u64(), Ordering::Release);
     }
 
-    pub fn pop_send_observation_for_test(
-        &mut self,
-    ) -> Option<(PhysicalPacket, Option<QpcTicks>, QpcTicks, u8)> {
-        match self.observer.pop_front()? {
-            DispatchObservation::Down(observation) => Some((
-                observation.requested_packet,
-                observation.pre_call_qpc,
-                observation.sendinput_completion_qpc,
-                observation.trace.send_attempts,
-            )),
-            DispatchObservation::Up(observation) => Some((
-                PhysicalPacket::new(observation.requested_mask, 0),
-                Some(observation.pre_call_qpc),
-                observation.sendinput_completion_qpc,
-                observation.trace.send_attempts,
-            )),
-            _ => None,
-        }
+    pub fn set_pause_requested_for_test(&self, requested: bool) {
+        self.desired_pause.store(requested, Ordering::Release);
+        self.interrupt.signal();
     }
 
-    pub fn release_all_for_test(&mut self) -> sky_dispatch_win32::input::ReleaseAllOutcome {
+    pub fn generation_accounting_for_test(&self) -> GenerationAccounting {
+        self.resources.scheduler.accounting()
+    }
+
+    pub fn release_obligation_mask_for_test(&self) -> u16 {
+        self.resources.backend.release_obligation_mask()
+    }
+
+    pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
+        &mut self,
+    ) -> Result<(), String> {
+        let clock = self.resources.clock;
+        self.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            clock
+                .now()
+                .map_err(|error| format!("test cleanup QPC: {error:?}"))
+        })
+    }
+
+    pub fn apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
+        &mut self,
+        post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
+    ) -> Result<(), String> {
+        crate::engine::worker::apply_scheduler_resumable_lifecycle_transition_for_test(
+            &mut self.resources.backend,
+            &mut self.resources.scheduler,
+            &mut self.runtime,
+            self.target.hwnd_for_safety_release(),
+            post_cleanup_qpc,
+        )
+    }
+
+    pub fn process_command_control_for_test(&mut self) -> bool {
+        crate::engine::worker::process_command_control_for_test(
+            &mut self.runtime.terminal_trigger,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.supervisor_expired,
+            &self.system_power,
+        )
+    }
+
+    pub fn notify_system_power_for_test(&self, suspended: bool) -> bool {
+        self.system_power.notify(suspended, &self.interrupt)
+    }
+
+    pub fn system_power_down_blocked_for_test(&self) -> bool {
+        self.system_power.down_blocked()
+    }
+
+    pub fn set_preflight_physical_mask_probe_for_test<F>(&mut self, probe: F)
+    where
+        F: Fn() -> u16 + Send + Sync + 'static,
+    {
         self.resources
             .backend
-            .release_all(self.target.hwnd_for_safety_release())
+            .set_preflight_physical_mask_probe(probe);
+    }
+
+    pub fn set_post_focus_revalidation_race_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(
+                &AtomicBool,
+                &SessionTarget,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &SystemPowerState,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        self.runtime.final_gate_post_focus_race_hook = Some(Arc::new(hook));
+    }
+
+    pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {
+        let timing = self.config.timing;
+        let frame_interval_ticks = self
+            .resources
+            .clock
+            .duration_from_us(timing.frame_us)
+            .map_err(|error| format!("frame conversion: {error:?}"))?;
+        let timing_margin_ticks = self
+            .resources
+            .clock
+            .duration_from_us(timing.timing_margin_us)
+            .map_err(|error| format!("margin conversion: {error:?}"))?;
+        let effective_hold_ticks = self
+            .resources
+            .clock
+            .duration_from_us(timing.min_hold_us)
+            .map_err(|error| format!("hold conversion: {error:?}"))?;
+        let min_release_gap_ticks = self
+            .resources
+            .clock
+            .duration_from_us(timing.min_release_gap_us)
+            .map_err(|error| format!("release gap conversion: {error:?}"))?;
+        let lease_timeout_ticks = self
+            .resources
+            .clock
+            .duration_from_us(self.config.wait.supervisor_lease_timeout_us)
+            .map_err(|error| format!("lease timeout conversion: {error:?}"))?;
+        Ok(DispatchTimingConfigEvidence {
+            frame_us: timing.frame_us,
+            frame_interval_ticks: frame_interval_ticks.as_u64(),
+            frame_base_hold_us: timing.frame_base_hold_us,
+            timing_margin_us: timing.timing_margin_us,
+            timing_margin_ticks: timing_margin_ticks.as_u64(),
+            effective_hold_us: timing.min_hold_us,
+            effective_hold_ticks: effective_hold_ticks.as_u64(),
+            min_release_gap_us: timing.min_release_gap_us,
+            min_release_gap_ticks: min_release_gap_ticks.as_u64(),
+            lease_enabled: self.config.wait.supervisor_lease_timeout_us > 0,
+            lease_timeout_us: self.config.wait.supervisor_lease_timeout_us,
+            lease_timeout_ticks: lease_timeout_ticks.as_u64(),
+            native_admission_passed: true,
+        })
+    }
+
+    pub fn qpc_now_for_test(&self) -> Result<QpcTicks, String> {
+        self.resources
+            .clock
+            .now()
+            .map_err(|error| format!("test QPC sample: {error:?}"))
+    }
+
+    pub fn qpc_duration_from_us_for_test(&self, us: u64) -> Result<DurationTicks, String> {
+        self.resources
+            .clock
+            .duration_from_us(us)
+            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+            .map_err(|error| format!("test QPC conversion: {error:?}"))
     }
 
     pub fn finalize_for_test(self) -> FinalizeEvidence {
-        let mut observation = super::super::worker::FinalizeTestObservation::default();
+        let mut observation = crate::engine::worker::FinalizeTestObservation::default();
         let outcome_code = self.finalize_worker_for_test(false, &mut observation);
         FinalizeEvidence {
             outcome_code,
@@ -2483,9 +663,9 @@ impl ProductionDispatchTestHarness {
     pub(crate) fn finalize_worker_for_test(
         self,
         worker_panicked: bool,
-        cleanup_observation: &mut super::super::worker::FinalizeTestObservation,
+        cleanup_observation: &mut crate::engine::worker::FinalizeTestObservation,
     ) -> u8 {
-        let ProductionDispatchTestHarness {
+        let Self {
             resources,
             runtime,
             target,
@@ -2498,7 +678,7 @@ impl ProductionDispatchTestHarness {
             progress_clock,
             ..
         } = self;
-        super::super::worker::finalize_worker_for_test(
+        crate::engine::worker::finalize_worker_for_test(
             resources,
             &target,
             &skip_requested,
@@ -2514,1903 +694,30 @@ impl ProductionDispatchTestHarness {
             cleanup_observation,
         )
     }
-
-    pub fn notify_system_power_for_test(&self, suspended: bool) -> bool {
-        self.system_power.notify(suspended, &self.interrupt)
-    }
-
-    pub fn notify_system_power_at_for_test(
-        &self,
-        suspended: bool,
-        suspend_boundary_qpc: Option<QpcTicks>,
-    ) -> bool {
-        self.system_power
-            .notify_at(suspended, suspend_boundary_qpc, &self.interrupt)
-    }
-
-    pub fn take_system_power_pending_for_test(&self) -> u8 {
-        self.system_power.take_pending()
-    }
-
-    pub fn system_power_down_blocked_for_test(&self) -> bool {
-        self.system_power.down_blocked()
-    }
-
-    pub fn complete_system_resume_for_test(&self) -> bool {
-        self.system_power.complete_resume()
-    }
-
-    pub fn set_supervisor_heartbeat_for_test(&self, ticks: QpcTicks) {
-        self.supervisor_expired.reset(ticks);
-    }
-
-    pub fn supervisor_lease_expired_for_test(&self) -> bool {
-        self.supervisor_expired.is_expired()
-    }
-
-    #[cfg(test)]
-    pub fn set_final_lease_qpc_sample_override_for_test(
-        &mut self,
-        sample: Result<QpcTicks, sky_dispatch_win32::clock::QpcError>,
-    ) {
-        self.runtime.final_lease_qpc_sample_override_for_test = Some(sample);
-    }
-
-    #[cfg(test)]
-    pub fn final_lease_qpc_sample_count_for_test(&self) -> u64 {
-        self.runtime.final_lease_qpc_sample_count_for_test
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_final_lease_age_hook_for_test<F>(&mut self, hook: F)
-    where
-        F: Fn(&SupervisorLeaseState) + Send + Sync + 'static,
-    {
-        self.runtime.final_lease_age_hook_for_test = Some(Arc::new(hook));
-    }
-
-    pub fn set_supervisor_lease_timeout_for_test(&mut self, timeout_us: u64) -> Result<(), String> {
-        self.config.wait.supervisor_lease_timeout_us = timeout_us;
-        let timeout_ticks = self
-            .resources
-            .clock
-            .duration_from_us(timeout_us)
-            .map_err(|error| format!("lease timeout conversion: {error:?}"))?;
-        self.timing.lease_timeout_ticks = DurationTicks::from_raw(timeout_ticks.as_u64());
-        Ok(())
-    }
-
-    /// Number of full-instrument cleanup operations performed by terminal
-    /// cleanup. This is a test-support observation of the backend, not a
-    /// replacement for the production cleanup call.
-    pub fn full_instrument_release_calls(&self) -> u64 {
-        self.resources.backend.full_instrument_release_calls
-    }
-
-    pub fn configure_send_counter(&mut self) -> Arc<AtomicU64> {
-        let calls = Arc::new(AtomicU64::new(0));
-        let counter = Arc::clone(&calls);
-        let packet_counter = Arc::clone(&calls);
-        let clock = self.resources.clock;
-        self.resources
-            .backend
-            .set_emitter(move |scan_codes, _key_up| {
-                counter.fetch_add(1, Ordering::SeqCst);
-                let now = clock.now().expect("test QPC");
-                PlatformSendResult {
-                    requested: scan_codes.len() as u8,
-                    inserted: scan_codes.len() as u8,
-                    started_ticks: now,
-                    completed_ticks: Some(now),
-                    win32_error: 0,
-                    timing_error: None,
-                }
-            });
-        let packet_clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            packet_counter.fetch_add(1, Ordering::SeqCst);
-            let now = packet_clock.now().expect("test QPC");
-            let requested_mask = packet.up_mask | packet.down_mask;
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(now),
-                    completed_ticks: Some(now),
-                    timing_error: None,
-                },
-            }
-        });
-        calls
-    }
-
-    pub fn configure_prepared_zero_progress_sender_for_test(&mut self) -> Arc<AtomicU64> {
-        let calls = Arc::new(AtomicU64::new(0));
-        let counter = Arc::clone(&calls);
-        let clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            let now = clock.now().expect("prepared zero-progress QPC");
-            SendTransactionOutcome {
-                status: SendTransactionStatus::ZeroProgress,
-                evidence: SendEvidence {
-                    requested_mask: packet.up_mask | packet.down_mask,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(now),
-                    completed_ticks: Some(now),
-                    timing_error: None,
-                },
-            }
-        });
-        calls
-    }
-
-    pub fn configure_prepared_transport_outcome_for_test(
-        &mut self,
-        status: SendTransactionStatus,
-    ) -> Arc<Mutex<Vec<SendEvidence>>> {
-        let evidence = Arc::new(Mutex::new(Vec::with_capacity(2)));
-        let captured = Arc::clone(&evidence);
-        let clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let requested_mask = packet.up_mask | packet.down_mask;
-            let started_ticks = clock.now().ok();
-            let (confirmed_mask, first_inserted, attempts, completed_ticks, timing_error) =
-                match status {
-                    SendTransactionStatus::Complete => {
-                        (requested_mask, packet.event_count(), 1, started_ticks, None)
-                    }
-                    SendTransactionStatus::ZeroProgress => (0, 0, 1, started_ticks, None),
-                    SendTransactionStatus::PartialProgress => (
-                        packet.up_mask | (packet.down_mask & packet.down_mask.wrapping_sub(1)),
-                        1,
-                        1,
-                        started_ticks,
-                        None,
-                    ),
-                    SendTransactionStatus::IntegrityLost => (0, 1, 1, started_ticks, None),
-                    SendTransactionStatus::ClockFailureBeforeSend => (
-                        0,
-                        0,
-                        0,
-                        None,
-                        Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
-                    ),
-                    SendTransactionStatus::ClockFailureAfterSend => (
-                        0,
-                        packet.event_count(),
-                        1,
-                        None,
-                        Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
-                    ),
-                    SendTransactionStatus::PreparationRejected => (0, 0, 0, None, None),
-                };
-            let outcome = SendTransactionOutcome {
-                status,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask,
-                    skipped_mask: 0,
-                    first_inserted,
-                    attempts,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks,
-                    completed_ticks,
-                    timing_error,
-                },
-            };
-            captured
-                .lock()
-                .expect("prepared transport evidence lock")
-                .push(outcome.evidence);
-            outcome
-        });
-        evidence
-    }
-
-    /// Capture the exact directional packet masks presented to the production
-    /// packet emitter.  This is intentionally a test-support seam: assertions
-    /// can distinguish an authored Down chord from a deferred Up or a
-    /// coalesced Mixed transaction without inferring packet identity from a
-    /// final coordinator snapshot.
-    pub fn configure_packet_capture(&mut self) -> Arc<Mutex<Vec<PhysicalPacket>>> {
-        self.configure_prepared_packet_capture_with_evidence_for_test()
-            .0
-    }
-
-    #[allow(clippy::type_complexity)]
-    pub fn configure_prepared_packet_capture_with_evidence_for_test(
-        &mut self,
-    ) -> (
-        Arc<Mutex<Vec<PhysicalPacket>>>,
-        Arc<Mutex<Vec<SendEvidence>>>,
-    ) {
-        let packets = Arc::new(Mutex::new(Vec::with_capacity(32)));
-        let evidence = Arc::new(Mutex::new(Vec::with_capacity(32)));
-        let captured = Arc::clone(&packets);
-        let captured_evidence = Arc::clone(&evidence);
-        let clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            captured.lock().expect("packet capture lock").push(packet);
-            let now = clock.now().expect("test QPC");
-            let requested_mask = packet.up_mask | packet.down_mask;
-            let outcome = SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(now),
-                    completed_ticks: Some(now),
-                    timing_error: None,
-                },
-            };
-            captured_evidence
-                .lock()
-                .expect("packet evidence capture lock")
-                .push(outcome.evidence);
-            outcome
-        });
-        (packets, evidence)
-    }
-
-    /// Run production `plan_next_dispatch` for the harness state.
-    pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
-        self.align_epoch_to_selected_boundary_before_planning();
-        let mut plan = plan_next_dispatch(
-            &self.legacy_coordinator_fixture,
-            self.resources.playback.epoch,
-            self.resources.clock,
-            &self.config.timing,
-            &self.runtime.preparation_probe,
-            self.resources.backend.instrument_key_profile(),
-        )
-        .expect("plan_next_dispatch");
-        preflight_prepared_plan(
-            &mut plan,
-            &mut self.resources.backend,
-            &mut self.runtime,
-            &self.target,
-        )
-        .expect("preflight prepared dispatch plan");
-        self.refresh_physical_target_for_test(&mut plan);
-        plan
-    }
-
-    pub fn plan_current_dispatch_projected(&mut self) -> NextDispatchPlan {
-        let mut plan = NextDispatchPlan::default();
-        self.plan_current_dispatch_projected_into(&mut plan);
-        plan
-    }
-
-    /// Build the projected plan directly into caller-owned storage so the
-    /// benchmark uses the same ABI shape as the production worker.
-    pub fn plan_current_dispatch_projected_into(&mut self, plan: &mut NextDispatchPlan) {
-        self.align_epoch_to_selected_boundary_before_planning();
-        plan_next_dispatch_projected(
-            crate::engine::worker::PlanningInput {
-                coordinator: &self.legacy_coordinator_fixture,
-                epoch_qpc: self.resources.playback.epoch,
-                preparation_probe: &self.runtime.preparation_probe,
-                instrument_key_profile: self.resources.backend.instrument_key_profile(),
-            },
-            plan,
-        )
-        .expect("projected dispatch plan");
-        preflight_prepared_plan(
-            plan,
-            &mut self.resources.backend,
-            &mut self.runtime,
-            &self.target,
-        )
-        .expect("preflight prepared projected plan");
-        self.refresh_physical_target_for_test(plan);
-    }
-
-    pub fn preparation_counts(&self) -> PreparationCounts {
-        self.runtime.preparation_probe.counts()
-    }
-
-    pub fn reset_preparation_counts_for_test(&mut self) {
-        self.runtime.preparation_probe.reset();
-    }
-
-    pub(crate) fn build_prepared_stream_for_test(&self) -> PreparedDispatchStream {
-        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
-            self.legacy_coordinator_fixture.schedule.clone(),
-            self.legacy_coordinator_fixture.min_hold_us,
-            self.legacy_coordinator_fixture.min_hold_ticks,
-            |microseconds| {
-                self.resources
-                    .clock
-                    .timeline_from_us(microseconds)
-                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
-            },
-        )
-        .expect("prepared stream test coordinator");
-        PreparedDispatchStream::build(
-            coordinator,
-            self.resources.clock,
-            &self.runtime.preparation_probe,
-            self.resources.backend.instrument_key_profile(),
-        )
-        .expect("prepared stream construction")
-        .0
-    }
-
-    pub fn prepared_stream_counts_for_test(&self) -> (usize, usize) {
-        let stream = self.build_prepared_stream_for_test();
-        (stream.len(), stream.physical_count())
-    }
-
-    pub fn prepared_suspension_cancellation_count_for_test(&self) -> usize {
-        self.legacy_coordinator_fixture
-            .cancelled_up_token_count_for_test_support()
-    }
-
-    pub fn prepared_cursor_for_test(&self) -> usize {
-        self.prepared_stream_for_test
-            .as_ref()
-            .map_or(0, PreparedDispatchStream::cursor_for_test)
-    }
-
-    pub fn prepared_frame_offsets_for_test(&self) -> Vec<u64> {
-        self.prepared_stream_for_test
-            .as_ref()
-            .expect("prepared stream test setup")
-            .entries()
-            .iter()
-            .filter_map(|entry| match entry {
-                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks().as_u64()),
-                PreparedDispatchEntry::Metadata { .. } => None,
-            })
-            .collect()
-    }
-
-    pub fn prepare_prepared_stream_for_test(&mut self) {
-        let started_qpc = self
-            .resources
-            .clock
-            .now()
-            .expect("prepared stream build start QPC");
-        let stream = self.build_prepared_stream_for_test();
-        let finished_qpc = self
-            .resources
-            .clock
-            .now()
-            .expect("prepared stream build end QPC");
-        self.prepared_stream_built_qpc = Some(finished_qpc);
-        self.prepared_stream_build_duration_us = Some(
-            self.resources
-                .clock
-                .duration_to_us(
-                    finished_qpc
-                        .checked_duration_since(started_qpc)
-                        .expect("prepared stream build QPC ordering"),
-                )
-                .expect("prepared stream build duration conversion"),
-        );
-        self.prepared_alignment_qpc = None;
-        self.prepared_target_qpc = None;
-        self.prepared_wait_entry_qpc = None;
-        self.prepared_stream_for_test = Some(stream);
-    }
-
-    pub fn dispatch_prepared_current_after_stall_for_test(
-        &mut self,
-        stall_us: u64,
-    ) -> DispatchStep {
-        let stall_ticks = self
-            .resources
-            .clock
-            .duration_from_us(stall_us)
-            .expect("prepared stall conversion");
-        self.dispatch_prepared_current_after_stall_ticks_for_test(stall_ticks)
-    }
-
-    pub fn dispatch_prepared_current_after_stall_ticks_for_test(
-        &mut self,
-        stall_ticks: DurationTicks,
-    ) -> DispatchStep {
-        let mut stream = self
-            .prepared_stream_for_test
-            .take()
-            .expect("prepared stream test setup");
-        let frame = match stream.current() {
-            Some(PreparedDispatchEntry::Physical(frame)) => frame,
-            Some(PreparedDispatchEntry::Metadata { .. }) => {
-                panic!("prepared stall test requires a physical frame")
-            }
-            None => panic!("prepared stream is exhausted"),
-        };
-        let physical_target_qpc = self
-            .resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
-            .expect("prepared target arithmetic");
-        let stalled_target_qpc = physical_target_qpc
-            .checked_add_duration(stall_ticks)
-            .expect("prepared stalled target arithmetic");
-        while self.resources.clock.now().expect("prepared stall wait QPC") < stalled_target_qpc {
-            std::hint::spin_loop();
-        }
-        let wall_now = self.resources.clock.now().expect("prepared stall QPC");
-        assert!(
-            wall_now >= stalled_target_qpc,
-            "prepared physical stall did not cross target + stall: now={wall_now:?} target={stalled_target_qpc:?}"
-        );
-        let elapsed_from_epoch = wall_now
-            .checked_duration_since(self.resources.playback.epoch)
-            .expect("prepared stalled QPC precedes playback epoch");
-        let effective_now_ticks = TimelineTicks::from_raw(elapsed_from_epoch.as_u64());
-        let preflight_target =
-            (frame.view.packet_masks.down_mask != 0).then(|| self.target_stamp_for_test());
-        let physical_timing_window = self
-            .runtime
-            .physical_timing_window_for_test(
-                physical_target_qpc,
-                frame.view.packet_masks.up_mask,
-                frame.view.packet_masks.down_mask,
-            )
-            .expect("prepared timing window");
-        let step = dispatch_prepared_normal_frame(
-            frame,
-            None,
-            &self.config,
-            &mut self.resources,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &self.focus_active,
-            &self.target,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.desired_pause,
-            &self.supervisor_expired,
-            &self.system_power,
-            &self.progress_clock,
-            Some(&self.observer),
-            preflight_target,
-            physical_target_qpc,
-            physical_timing_window,
-            effective_now_ticks,
-            wall_now,
-            false,
-            Some(wall_now),
-            false,
-        );
-        publish_pending_wait_observation(
-            &mut self.runtime,
-            Some(&self.observer),
-            &mut self.local_metrics,
-        );
-        if matches!(step, DispatchStep::Dispatched) {
-            stream.advance().expect("prepared stream advance");
-        }
-        self.prepared_stream_for_test = Some(stream);
-        step
-    }
-
-    /// Dispatch the current prepared frame at a synthetic authored-target
-    /// lateness without changing the frozen playback epoch. This keeps
-    /// backlog rows on the same prepared stream while making each boundary
-    /// independently overdue in a deterministic test.
-    pub fn dispatch_prepared_current_at_synthetic_lateness_ticks_for_test(
-        &mut self,
-        lateness_ticks: DurationTicks,
-    ) -> DispatchStep {
-        let physical_target_qpc = {
-            let stream = self
-                .prepared_stream_for_test
-                .as_ref()
-                .expect("prepared stream test setup");
-            let frame = match stream.current() {
-                Some(PreparedDispatchEntry::Physical(frame)) => frame,
-                Some(PreparedDispatchEntry::Metadata { .. }) => {
-                    panic!("prepared synthetic lateness test requires a physical frame")
-                }
-                None => panic!("prepared stream is exhausted"),
-            };
-            self.resources
-                .playback
-                .epoch
-                .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
-                .expect("prepared synthetic target arithmetic")
-        };
-        let wall_now = physical_target_qpc
-            .checked_add_duration(lateness_ticks)
-            .expect("prepared synthetic lateness arithmetic");
-        self.dispatch_prepared_current_at_synthetic_wall_qpc_for_test(wall_now)
-    }
-
-    /// Dispatch the current prepared frame at a fixed synthetic wall QPC
-    /// without changing the frozen playback epoch. This lets a regression
-    /// prove that multiple unseen boundaries are overdue at one observation
-    /// point, rather than advancing the test timeline between boundaries.
-    pub fn dispatch_prepared_current_at_synthetic_wall_qpc_for_test(
-        &mut self,
-        wall_now: QpcTicks,
-    ) -> DispatchStep {
-        self.dispatch_prepared_current_at_synthetic_wall_qpc_inner_for_test(wall_now, false)
-    }
-
-    /// Test-only exact QPC replay through the same prepared admission function.
-    /// The final sender receives `wall_now` as its injected start sample.
-    pub fn dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
-        &mut self,
-        wall_now: QpcTicks,
-    ) -> DispatchStep {
-        self.dispatch_prepared_current_at_synthetic_wall_qpc_inner_for_test(wall_now, true)
-    }
-
-    pub fn prepared_physical_floor_for_test(&self) -> Result<PhysicalFloorEvidence, String> {
-        let stream = self
-            .prepared_stream_for_test
-            .as_ref()
-            .ok_or_else(|| "dispatch prepared stream has not been built".to_string())?;
-        let frame = match stream.current() {
-            Some(PreparedDispatchEntry::Physical(frame)) => frame,
-            Some(PreparedDispatchEntry::Metadata { .. }) => {
-                return Err("dispatch physical-floor query reached a metadata entry".to_string());
-            }
-            None => return Err("dispatch prepared stream is exhausted".to_string()),
-        };
-        let authored_target_qpc = self
-            .resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
-            .map_err(|error| format!("dispatch physical target overflow: {error}"))?;
-        let window = self
-            .runtime
-            .physical_timing_window_for_test(
-                authored_target_qpc,
-                frame.view.packet_masks.up_mask,
-                frame.view.packet_masks.down_mask,
-            )
-            .ok_or_else(|| {
-                "dispatch production physical timing window is unavailable".to_string()
-            })?;
-        Ok(PhysicalFloorEvidence {
-            authored_target_qpc: window.authored_target_qpc,
-            musical_up_not_before_qpc: window.musical_up_not_before_qpc,
-            down_not_before_qpc: window.down_not_before_qpc,
-            packet_not_before_qpc: window.packet_not_before_qpc,
-            hold_floor_mask: window.hold_floor_mask,
-            release_floor_mask: window.release_floor_mask,
-        })
-    }
-
-    /// Contract seam for scheduler floor behavior. It reads the current
-    /// production timing window for the current prepared packet on every call,
-    /// leaves the cursor and sender untouched before that floor, and enters
-    /// the existing suffix only once the synthetic QPC is due.
-    pub fn dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(
-        &mut self,
-        wall_now: QpcTicks,
-    ) -> Result<Option<DispatchStep>, String> {
-        let physical_floor = self.prepared_physical_floor_for_test()?;
-        if wall_now < physical_floor.packet_not_before_qpc {
-            return Ok(None);
-        }
-        Ok(Some(
-            self.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
-                wall_now,
-            ),
-        ))
-    }
-
-    fn dispatch_prepared_current_at_synthetic_wall_qpc_inner_for_test(
-        &mut self,
-        wall_now: QpcTicks,
-        test_inject_sender_start: bool,
-    ) -> DispatchStep {
-        let mut stream = self
-            .prepared_stream_for_test
-            .take()
-            .expect("prepared stream test setup");
-        let frame = match stream.current() {
-            Some(PreparedDispatchEntry::Physical(frame)) => frame,
-            Some(PreparedDispatchEntry::Metadata { .. }) => {
-                panic!("prepared synthetic lateness test requires a physical frame")
-            }
-            None => panic!("prepared stream is exhausted"),
-        };
-        let physical_target_qpc = self
-            .resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
-            .expect("prepared synthetic target arithmetic");
-        let effective_now_ticks = TimelineTicks::from_raw(
-            wall_now
-                .checked_duration_since(self.resources.playback.epoch)
-                .expect("prepared synthetic elapsed time")
-                .as_u64(),
-        );
-        let preflight_target =
-            (frame.view.packet_masks.down_mask != 0).then(|| self.target_stamp_for_test());
-        let physical_timing_window = self
-            .runtime
-            .physical_timing_window_for_test(
-                physical_target_qpc,
-                frame.view.packet_masks.up_mask,
-                frame.view.packet_masks.down_mask,
-            )
-            .expect("prepared synthetic timing window");
-        let step = dispatch_prepared_normal_frame(
-            frame,
-            None,
-            &self.config,
-            &mut self.resources,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &self.focus_active,
-            &self.target,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.desired_pause,
-            &self.supervisor_expired,
-            &self.system_power,
-            &self.progress_clock,
-            Some(&self.observer),
-            preflight_target,
-            physical_target_qpc,
-            physical_timing_window,
-            effective_now_ticks,
-            wall_now,
-            false,
-            Some(wall_now),
-            test_inject_sender_start,
-        );
-        if matches!(step, DispatchStep::Dispatched) {
-            stream.advance().expect("prepared stream advance");
-        }
-        self.prepared_stream_for_test = Some(stream);
-        step
-    }
-
-    pub fn prepared_stream_built_qpc_for_test(&self) -> Option<QpcTicks> {
-        self.prepared_stream_built_qpc
-    }
-
-    pub fn prepared_stream_build_duration_us_for_test(&self) -> Option<u64> {
-        self.prepared_stream_build_duration_us
-    }
-
-    pub fn prepared_target_qpc_for_test(&self) -> Option<QpcTicks> {
-        self.prepared_target_qpc
-    }
-
-    pub fn prepared_current_target_qpc_for_test(&self) -> Option<QpcTicks> {
-        let frame = self
-            .prepared_stream_for_test
-            .as_ref()
-            .and_then(PreparedDispatchStream::current)
-            .and_then(|entry| match entry {
-                PreparedDispatchEntry::Physical(frame) => Some(frame),
-                PreparedDispatchEntry::Metadata { .. } => None,
-            })?;
-        self.resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
-            .ok()
-    }
-
-    pub fn prepared_alignment_qpc_for_test(&self) -> Option<QpcTicks> {
-        self.prepared_alignment_qpc
-    }
-
-    pub fn prepared_benchmark_qpc_evidence_for_test(
-        &self,
-    ) -> Option<(QpcTicks, QpcTicks, QpcTicks)> {
-        Some((
-            self.prepared_alignment_qpc?,
-            self.prepared_target_qpc?,
-            self.prepared_wait_entry_qpc?,
-        ))
-    }
-
-    pub fn dispatch_prepared_current_at_lateness_without_stream_for_test(
-        &mut self,
-        lateness_us: u64,
-    ) -> DispatchStep {
-        self.dispatch_prepared_current_at_lateness_without_stream_inner_for_test(lateness_us)
-    }
-
-    fn dispatch_prepared_current_at_lateness_without_stream_inner_for_test(
-        &mut self,
-        lateness_us: u64,
-    ) -> DispatchStep {
-        let mut stream = self
-            .prepared_stream_for_test
-            .take()
-            .expect("prepared stream test setup");
-        let step =
-            self.dispatch_prepared_current_at_lateness_inner_for_test(&mut stream, lateness_us);
-        self.prepared_stream_for_test = Some(stream);
-        step
-    }
-
-    pub fn wait_and_dispatch_prepared_current_for_test(&mut self) -> Result<DispatchStep, String> {
-        self.last_wait_result = None;
-        self.last_wait_observation = None;
-        let mut stream = self
-            .prepared_stream_for_test
-            .take()
-            .ok_or_else(|| "prepared stream test setup".to_string())?;
-        let frame = match stream.current() {
-            Some(PreparedDispatchEntry::Physical(frame)) => frame,
-            Some(PreparedDispatchEntry::Metadata { .. }) => {
-                return Err("prepared wait test requires a physical frame".to_string());
-            }
-            None => return Err("prepared stream test is exhausted".to_string()),
-        };
-        let target_qpc = self
-            .resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks().as_u64()))
-            .map_err(|error| format!("prepared wait target arithmetic: {error}"))?;
-        let preflight_target = if frame.view.packet_masks.down_mask == 0 {
-            None
-        } else {
-            let target = self.target_stamp_for_test();
-            if !target_stamp_still_current(&self.target, target) {
-                return Err("prepared wait target changed before wait".to_string());
-            }
-            Some(target)
-        };
-        let wait_entry_qpc = self
-            .resources
-            .clock
-            .now()
-            .map_err(|error| format!("prepared benchmark wait-entry QPC: {error:?}"))?;
-        self.prepared_target_qpc = Some(target_qpc);
-        self.prepared_wait_entry_qpc = Some(wait_entry_qpc);
-        let boundary = wait_for_next_boundary(WaitBoundaryInput {
-            deadline: WaitDeadline {
-                physical_target_qpc: Some(target_qpc),
-                spin_threshold_ticks: self.timing.effective_spin_threshold_ticks,
-                qpc_clock: self.resources.clock,
-            },
-            signals: WaitSignals {
-                waiter: &self.resources.waiter,
-                interrupt: &self.interrupt,
-            },
-            mutable: WaitMutable {
-                local_metrics: &mut self.local_metrics,
-                terminal_error: &mut self.runtime.terminal_error,
-            },
-        });
-        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = self
-            .resolve_wait_boundary(
-                boundary,
-                frame.view.prepared_batch.effective_scheduled_ticks,
-                "prepared wait interrupted and was published independently",
-                "prepared wait exited",
-            )?;
-        self.last_wait_result = wait_result;
-        self.last_wait_observation = record_wait_attempt(
-            Some(&self.observer),
-            wait_result,
-            wait_target_qpc,
-            planned_wait_ticks,
-            frame.view.prepared_batch.effective_scheduled_ticks,
-            self.resources.playback.epoch,
-            Some(dispatch_qpc),
-            &mut self.local_metrics,
-        );
-        self.runtime.pending_wait_observation = self.last_wait_observation;
-        self.runtime.set_deadline_wait_evidence_for_test(
-            wait_result.and_then(|result| result.wake_qpc),
-            Some(target_qpc),
-        );
-        let effective_now_ticks = self
-            .resources
-            .playback
-            .get_elapsed_allow_pre_epoch(dispatch_qpc, true)
-            .map_err(|error| format!("prepared wait timeline: {error}"))?;
-        self.effective_now_ticks = effective_now_ticks;
-        let physical_timing_window = self
-            .runtime
-            .physical_timing_window_for_test(
-                target_qpc,
-                frame.view.packet_masks.up_mask,
-                frame.view.packet_masks.down_mask,
-            )
-            .expect("prepared timing window");
-        let step = dispatch_prepared_normal_frame(
-            frame,
-            None,
-            &self.config,
-            &mut self.resources,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &self.focus_active,
-            &self.target,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.desired_pause,
-            &self.supervisor_expired,
-            &self.system_power,
-            &self.progress_clock,
-            Some(&self.observer),
-            preflight_target,
-            target_qpc,
-            physical_timing_window,
-            effective_now_ticks,
-            dispatch_qpc,
-            false,
-            Some(dispatch_qpc),
-            false,
-        );
-        if matches!(step, DispatchStep::Dispatched) {
-            stream.advance().map_err(str::to_owned)?;
-        }
-        self.prepared_stream_for_test = Some(stream);
-        Ok(step)
-    }
-
-    /// Dispatch the current prepared physical frame after a deterministic
-    /// authored-target lateness interval. The sender still owns its real
-    /// authoritative pre-call QPC; only the target/epoch are arranged by the
-    /// test before entering the precision helper.
-    pub(crate) fn dispatch_prepared_current_at_lateness_for_test(
-        &mut self,
-        stream: &mut PreparedDispatchStream,
-        lateness_us: u64,
-    ) -> DispatchStep {
-        self.bind_default_test_owner_if_needed();
-        self.dispatch_prepared_current_at_lateness_inner_for_test(stream, lateness_us)
-    }
-
-    fn bind_default_test_owner_if_needed(&self) {
-        if !self.config.focus.require_focus {
-            return;
-        }
-        let Some((hwnd, generation)) = self.target.load_stable() else {
-            return;
-        };
-        if self.target.owner_identity_status(generation)
-            == super::super::target::OwnerIdentityStatus::NotRequired
-        {
-            self.target.require_owner_identity();
-            let _ = self.target.bind_owner_identity(hwnd, generation, 1);
-        }
-    }
-
-    fn dispatch_prepared_current_at_lateness_inner_for_test(
-        &mut self,
-        stream: &mut PreparedDispatchStream,
-        lateness_us: u64,
-    ) -> DispatchStep {
-        let frame = match stream.current() {
-            Some(PreparedDispatchEntry::Physical(frame)) => frame,
-            Some(PreparedDispatchEntry::Metadata { .. }) => {
-                panic!("prepared lateness test requires a physical frame")
-            }
-            None => panic!("prepared stream is exhausted"),
-        };
-        let lateness_ticks = self
-            .resources
-            .clock
-            .duration_from_us(lateness_us)
-            .expect("prepared lateness conversion");
-        let wall_now = self.resources.clock.now().expect("prepared lateness QPC");
-        let physical_target_qpc = QpcTicks::from_raw(
-            wall_now
-                .as_u64()
-                .checked_sub(lateness_ticks.as_u64())
-                .expect("prepared lateness target underflow"),
-        );
-        let epoch = QpcTicks::from_raw(
-            physical_target_qpc
-                .as_u64()
-                .checked_sub(frame.offset_ticks().as_u64())
-                .expect("prepared stream epoch underflow"),
-        );
-        self.resources.playback.epoch = epoch;
-        let effective_now_ticks = TimelineTicks::from_raw(
-            wall_now
-                .as_u64()
-                .checked_sub(epoch.as_u64())
-                .expect("prepared effective now"),
-        );
-        let preflight_target =
-            (frame.view.packet_masks.down_mask != 0).then(|| self.target_stamp_for_test());
-        let physical_timing_window = self
-            .runtime
-            .physical_timing_window_for_test(
-                physical_target_qpc,
-                frame.view.packet_masks.up_mask,
-                frame.view.packet_masks.down_mask,
-            )
-            .expect("prepared timing window");
-        let step = dispatch_prepared_normal_frame(
-            frame,
-            None,
-            &self.config,
-            &mut self.resources,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &self.focus_active,
-            &self.target,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.desired_pause,
-            &self.supervisor_expired,
-            &self.system_power,
-            &self.progress_clock,
-            Some(&self.observer),
-            preflight_target,
-            physical_target_qpc,
-            physical_timing_window,
-            effective_now_ticks,
-            wall_now,
-            false,
-            Some(wall_now),
-            false,
-        );
-        if matches!(step, DispatchStep::Dispatched) {
-            stream.advance().expect("prepared stream advance");
-        }
-        step
-    }
-
-    pub fn set_force_preflight_failure(&mut self, flag: Arc<AtomicBool>) {
-        self.resources.backend.set_force_preflight_failure(flag);
-    }
-
-    pub fn set_physical_study_hook_for_test<F>(&mut self, hook: F)
-    where
-        F: Fn(u16) + Send + Sync + 'static,
-    {
-        self.resources.backend.set_physical_study_hook(hook);
-    }
-
-    pub fn set_modifier_key_state_query_for_test<F>(&mut self, query: F)
-    where
-        F: Fn(i32) -> i16 + Send + Sync + 'static,
-    {
-        self.resources
-            .backend
-            .set_modifier_key_state_query_for_test(query);
-    }
-
-    pub fn use_actual_pre_call_clock_for_physical_study_for_test(&mut self) {
-        self.resources.backend.use_actual_pre_call_clock_for_test();
-    }
-
-    pub fn set_preflight_physical_mask_probe_for_test<F>(&mut self, probe: F)
-    where
-        F: Fn() -> u16 + Send + Sync + 'static,
-    {
-        self.resources
-            .backend
-            .set_preflight_physical_mask_probe(probe);
-    }
-
-    /// Inject a deterministic mutation immediately after worker target
-    /// crossing and before the final control/target/focus gate. This is a
-    /// runtime integration seam, not a production synchronization path.
-    pub fn set_final_gate_race_hook<F>(&mut self, hook: F)
-    where
-        F: Fn(
-                &AtomicBool,
-                &SessionTarget,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &SystemPowerState,
-            ) + Send
-            + Sync
-            + 'static,
-    {
-        self.runtime.final_gate_race_hook = Some(Arc::new(hook));
-    }
-
-    /// Inject a deterministic mutation after fresh foreground proof and
-    /// before the cheap final atomic revalidation. This is test-only evidence
-    /// for the post-focus TOCTOU seam.
-    pub fn set_post_focus_revalidation_race_hook<F>(&mut self, hook: F)
-    where
-        F: Fn(
-                &AtomicBool,
-                &SessionTarget,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &SystemPowerState,
-            ) + Send
-            + Sync
-            + 'static,
-    {
-        self.runtime.final_gate_post_focus_race_hook = Some(Arc::new(hook));
-    }
-
-    /// Inject a mutation after the five modifier queries and before the final
-    /// bounded target/owner/control revalidation.
-    pub fn set_post_modifier_revalidation_race_hook<F>(&mut self, hook: F)
-    where
-        F: Fn(
-                &AtomicBool,
-                &SessionTarget,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &SystemPowerState,
-            ) + Send
-            + Sync
-            + 'static,
-    {
-        self.runtime.final_gate_post_modifier_race_hook = Some(Arc::new(hook));
-    }
-
-    /// Inject a hard-stop transition after the final lease proof and before
-    /// the last control check. The seam exists only in test-support builds.
-    pub fn set_post_lease_revalidation_race_hook<F>(&mut self, hook: F)
-    where
-        F: Fn(
-                &AtomicBool,
-                &SessionTarget,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &AtomicBool,
-                &SystemPowerState,
-            ) + Send
-            + Sync
-            + 'static,
-    {
-        self.runtime.final_gate_post_lease_race_hook = Some(Arc::new(hook));
-    }
-
-    pub fn set_require_focus_for_test(&mut self, require_focus: bool) {
-        self.config.focus.require_focus = require_focus;
-    }
-
-    pub fn bind_owner_identity_for_test(&self, owner_pid: u32) {
-        self.target.require_owner_identity();
-        assert!(self.target.bind_owner_identity(1, 0, owner_pid));
-    }
-
-    /// Run the production wait boundary and direct frozen-plan dispatch path.
-    pub fn wait_and_dispatch_current_plan(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> Result<DispatchStep, String> {
-        self.last_wait_observation = None;
-        let pre_wait_qpc = self
-            .resources
-            .clock
-            .now()
-            .map_err(|error| format!("benchmark pre-wait QPC: {error:?}"))?;
-        let pre_wait_effective = self
-            .resources
-            .playback
-            .get_elapsed_allow_pre_epoch(pre_wait_qpc, true)
-            .map_err(|error| format!("benchmark pre-wait timeline: {error}"))?;
-        let pre_wait_step = self.dispatch_plan_at_with_sender_option(
-            plan,
-            pre_wait_effective,
-            pre_wait_qpc,
-            false,
-            None,
-            None,
-            false,
-        );
-        if !matches!(pre_wait_step, DispatchStep::NoWork) {
-            return Ok(pre_wait_step);
-        }
-        let physical_wait_target_qpc = physical_wait_target_for_plan(plan, &self.runtime)?
-            .or_else(|| plan.physical_target_qpc());
-        let boundary = wait_for_next_boundary(WaitBoundaryInput {
-            deadline: WaitDeadline {
-                physical_target_qpc: physical_wait_target_qpc,
-                spin_threshold_ticks: if matches!(plan, NextDispatchPlan::Physical(_)) {
-                    self.timing.effective_spin_threshold_ticks
-                } else {
-                    DurationTicks::ZERO
-                },
-                qpc_clock: self.resources.clock,
-            },
-            signals: WaitSignals {
-                waiter: &self.resources.waiter,
-                interrupt: &self.interrupt,
-            },
-            mutable: WaitMutable {
-                local_metrics: &mut self.local_metrics,
-                terminal_error: &mut self.runtime.terminal_error,
-            },
-        });
-        let wait_deadline_ticks = plan
-            .deadline_ticks()
-            .ok_or_else(|| "benchmark wait plan has no deadline".to_string())?;
-        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = self
-            .resolve_wait_boundary(
-                boundary,
-                wait_deadline_ticks,
-                "benchmark wait interrupted and was published independently",
-                "benchmark wait exited",
-            )?;
-        self.last_wait_result = wait_result;
-        self.last_wait_observation = record_wait_attempt(
-            Some(&self.observer),
-            wait_result,
-            wait_target_qpc,
-            planned_wait_ticks,
-            wait_deadline_ticks,
-            self.resources.playback.epoch,
-            Some(dispatch_qpc),
-            &mut self.local_metrics,
-        );
-        self.runtime.pending_wait_observation = self.last_wait_observation;
-        self.runtime.set_deadline_wait_evidence_for_test(
-            wait_result.and_then(|result| result.wake_qpc),
-            plan.physical_target_qpc(),
-        );
-        let now_ticks = wait_result
-            .and_then(|result| result.wake_qpc)
-            .unwrap_or(dispatch_qpc);
-        let effective_now_ticks = self
-            .resources
-            .playback
-            .get_elapsed_allow_pre_epoch(now_ticks, true)
-            .map_err(|error| format!("benchmark timeline: {error}"))?;
-        self.effective_now_ticks = effective_now_ticks;
-        let step = self.dispatch_plan_at_with_sender_option(
-            plan,
-            effective_now_ticks,
-            now_ticks,
-            true,
-            Some(now_ticks),
-            None,
-            false,
-        );
-        publish_pending_wait_observation(
-            &mut self.runtime,
-            Some(&self.observer),
-            &mut self.local_metrics,
-        );
-        Ok(step)
-    }
-    fn align_epoch_to_deadline_for_test(&mut self, deadline: TimelineTicks, now_ticks: QpcTicks) {
-        if self.runtime.down_boundary_state.awaiting_future() {
-            return;
-        }
-        let current_target = self
-            .resources
-            .playback
-            .epoch
-            .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
-            .expect("test target arithmetic");
-        if current_target > now_ticks {
-            return;
-        }
-        // Direct harness dispatch must exercise the same pre-deadline
-        // admission window as the worker. Keep the frozen target at least
-        // two seconds in the future; this is test-only epoch setup for a
-        // non-controlled QPC host. Tests that need an overdue boundary set
-        // that condition explicitly through their dedicated race helper.
-        let margin = self
-            .resources
-            .clock
-            .duration_from_us(500_000)
-            .expect("test dispatch margin conversion");
-        let raw = now_ticks
-            .as_u64()
-            .saturating_sub(deadline.as_u64())
-            .checked_add(margin.as_u64().max(2_000_000))
-            .expect("test epoch margin overflow");
-        self.resources.playback.epoch = QpcTicks::from_raw(raw);
-    }
-    fn align_epoch_to_selected_boundary_before_planning(&mut self) {
-        let authored = self
-            .legacy_coordinator_fixture
-            .prepare_current_authored_frame()
-            .expect("authored frame")
-            .map(|frame| frame.authored_ticks);
-        let pending = self
-            .legacy_coordinator_fixture
-            .earliest_pending_release_ticks();
-        let selected_deadline = match (authored, pending) {
-            (Some(authored), Some(pending)) => Some(authored.min(pending)),
-            (Some(authored), None) => Some(authored),
-            (None, Some(pending)) => Some(pending),
-            (None, None) => None,
-        }
-        .filter(|deadline| self.effective_now_ticks >= *deadline);
-        if let Some(deadline) = selected_deadline {
-            self.align_epoch_to_deadline_for_test(
-                deadline,
-                self.resources.clock.now().expect("qpc now"),
-            );
-        }
-    }
-    fn refresh_physical_target_for_test(&self, _plan: &mut NextDispatchPlan) {
-        // The production plan owns one frozen absolute QPC target. Tests may
-        // align the synthetic epoch, but must not reconstruct that target.
-    }
-    fn dispatch_plan_at(
-        &mut self,
-        plan: &NextDispatchPlan,
-        effective_now_ticks: TimelineTicks,
-        now_ticks: QpcTicks,
-        allow_pre_deadline: bool,
-        test_physical_target_qpc: Option<QpcTicks>,
-    ) -> DispatchStep {
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            effective_now_ticks,
-            now_ticks,
-            allow_pre_deadline,
-            None,
-            test_physical_target_qpc,
-            test_physical_target_qpc.is_some(),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn dispatch_plan_at_with_sender_option(
-        &mut self,
-        plan: &NextDispatchPlan,
-        effective_now_ticks: TimelineTicks,
-        now_ticks: QpcTicks,
-        allow_pre_deadline: bool,
-        boundary_crossing_qpc: Option<QpcTicks>,
-        test_physical_target_qpc: Option<QpcTicks>,
-        test_inject_sender_start: bool,
-    ) -> DispatchStep {
-        self.bind_default_test_owner_if_needed();
-        self.effective_now_ticks = effective_now_ticks;
-        dispatch_due_from_plan(
-            plan,
-            effective_now_ticks,
-            now_ticks,
-            false,
-            &self.config,
-            &mut self.resources,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &self.focus_active,
-            &self.target,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.supervisor_expired,
-            &self.desired_pause,
-            &self.system_power,
-            &self.progress_clock,
-            Some(&self.observer),
-            boundary_crossing_qpc,
-            allow_pre_deadline,
-            test_physical_target_qpc,
-            test_inject_sender_start,
-        )
-    }
-    /// Invoke the production frozen-plan helper without the kernel wait.
-    /// Tests use this to cover all structural plan states directly.
-    pub fn dispatch_due_from_plan_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
-        let now_ticks = self.resources.clock.now().expect("qpc now");
-        let allow_pre_deadline = !self.runtime.down_boundary_state.awaiting_future();
-        let boundary_crossing_qpc = if allow_pre_deadline {
-            // The old direct test seam performed the now-removed inner wait;
-            // represent its completed crossing with the frozen target.
-            plan.physical_target_qpc()
-        } else {
-            plan.physical_target_qpc()
-                .filter(|target| *target <= now_ticks)
-                .map(|_| now_ticks)
-        };
-        let dispatch_now_ticks = boundary_crossing_qpc.unwrap_or(now_ticks);
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            self.effective_now_ticks,
-            dispatch_now_ticks,
-            allow_pre_deadline,
-            boundary_crossing_qpc,
-            None,
-            boundary_crossing_qpc.is_some(),
-        )
-    }
-
-    /// Invoke the production due-plan admission path at a caller-controlled
-    /// QPC sample. This lets tests cross authored or physical floors without
-    /// sleeping, while the production dispatcher still decides whether the
-    /// frozen plan is due and physically feasible.
-    pub fn dispatch_at_qpc_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-        now_ticks: QpcTicks,
-    ) -> DispatchStep {
-        let target = plan
-            .physical_target_qpc()
-            .expect("plan target required for synthetic QPC boundary");
-        let deadline = plan
-            .deadline_ticks()
-            .expect("plan deadline required for synthetic QPC boundary");
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            deadline,
-            now_ticks,
-            false,
-            Some(target),
-            None,
-            true,
-        )
-    }
-
-    pub fn physical_wait_target_for_test(
-        &self,
-        plan: &NextDispatchPlan,
-    ) -> Result<Option<QpcTicks>, String> {
-        physical_wait_target_for_plan(plan, &self.runtime)
-    }
-
-    /// Classify a frozen Down plan one QPC tick before its target without the
-    /// test-only direct-boundary authorization shortcut. This exercises the
-    /// production future-observation branch against the current runtime state.
-    pub fn classify_future_plan_without_authorization_shortcut_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> DispatchStep {
-        let target = plan
-            .physical_target_qpc()
-            .expect("future classification requires a physical target");
-        let before_target = QpcTicks::from_raw(
-            target
-                .as_u64()
-                .checked_sub(1)
-                .expect("physical target must be nonzero"),
-        );
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            TimelineTicks::ZERO,
-            before_target,
-            false,
-            None,
-            None,
-            false,
-        )
-    }
-
-    /// Invoke a frozen plan at its exact synthetic QPC boundary.  This keeps
-    /// metadata-only commit allocation tests independent of waiter setup and
-    /// wall-clock timer state.
-    pub fn dispatch_at_plan_target_for_test(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
-        let target = plan
-            .physical_target_qpc()
-            .expect("plan target required for synthetic boundary");
-        let wait_target = physical_wait_target_for_plan(plan, &self.runtime)
-            .expect("physical timing window")
-            .unwrap_or(target);
-        let deadline = plan
-            .deadline_ticks()
-            .expect("plan deadline required for synthetic boundary");
-        self.runtime
-            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
-        // Use the frozen target as a test-controlled exact-boundary sample;
-        // this never re-anchors or rewrites the plan after it is frozen.
-        self.dispatch_plan_at(plan, deadline, wait_target, true, Some(target))
-    }
-
-    pub fn physical_target_qpc_for_test(&self, plan: &NextDispatchPlan) -> Option<QpcTicks> {
-        plan.physical_target_qpc()
-    }
-
-    /// Return the identity and frozen target of the prepared physical
-    /// boundary. This is qualification evidence only; production dispatch
-    /// already carries the same values in the frozen plan and observation.
-    pub fn prepared_boundary_evidence_for_test(
-        &self,
-        plan: &NextDispatchPlan,
-    ) -> Option<PreparedBoundaryEvidence> {
-        let physical = plan.physical()?;
-        Some(PreparedBoundaryEvidence {
-            source_action_index: physical.authored_view.batch_source_action_index,
-            compiled_packet_index: u64::try_from(
-                physical.authored_view.prepared_batch.packet_index,
-            )
-            .ok(),
-            packet: physical.authored_view.packet_masks,
-            physical_target_qpc: physical.physical_target_qpc,
-            authored_ticks: physical.authored_view.authored_batch_scheduled_ticks,
-            effective_deadline_ticks: physical.authored_view.batch_scheduled_ticks,
-        })
-    }
-
-    /// Read the production physical timing projection for a frozen plan
-    /// without mutating the guard. This is benchmark evidence only.
-    pub fn physical_floor_evidence_for_test(
-        &self,
-        plan: &NextDispatchPlan,
-    ) -> Option<PhysicalFloorEvidence> {
-        let physical = plan.physical()?;
-        let target = physical.physical_target_qpc;
-        let packet = physical.authored_view.packet_masks;
-        let guard = self.runtime.physical_timing_guard.as_ref()?;
-        let window = guard
-            .query(target, packet.up_mask, packet.down_mask)
-            .expect("physical timing window evidence");
-        Some(PhysicalFloorEvidence {
-            authored_target_qpc: window.authored_target_qpc,
-            musical_up_not_before_qpc: window.musical_up_not_before_qpc,
-            down_not_before_qpc: window.down_not_before_qpc,
-            packet_not_before_qpc: window.packet_not_before_qpc,
-            hold_floor_mask: window.hold_floor_mask,
-            release_floor_mask: window.release_floor_mask,
-        })
-    }
-
-    pub fn qpc_now_for_test(&self) -> Result<QpcTicks, String> {
-        self.resources
-            .clock
-            .now()
-            .map_err(|error| format!("test QPC now: {error:?}"))
-    }
-
-    pub fn qpc_duration_from_us_for_test(&self, us: u64) -> Result<DurationTicks, String> {
-        self.resources
-            .clock
-            .duration_from_us(us)
-            .map_err(|error| format!("test QPC duration conversion: {error:?}"))
-    }
-
-    pub fn qpc_duration_to_us_for_test(&self, duration: DurationTicks) -> Result<u64, String> {
-        self.resources
-            .clock
-            .duration_to_us(duration)
-            .map_err(|error| format!("test QPC duration conversion: {error:?}"))
-    }
-
-    pub fn send_packet_for_test(
-        &mut self,
-        packet: PhysicalPacket,
-    ) -> (QpcTicks, SendTransactionOutcome) {
-        let prepared = PreparedPhysicalPacket::try_new_with_profile(
-            packet,
-            self.resources.backend.instrument_key_profile(),
-        )
-        .expect("prepared benchmark packet");
-        self.send_prepared_packet_for_test(&prepared)
-    }
-
-    pub fn send_prepared_packet_for_test(
-        &mut self,
-        prepared: &PreparedPhysicalPacket,
-    ) -> (QpcTicks, SendTransactionOutcome) {
-        let target = self.resources.clock.now().expect("benchmark sender QPC");
-        let outcome = self
-            .resources
-            .backend
-            .send_prepared_physical_packet_with_start(prepared, target);
-        (target, outcome)
-    }
-
-    /// Invoke the frozen production-path sender boundary with a deterministic first
-    /// sample one QPC tick after the target and a deterministic completion
-    /// delay. This keeps baseline and candidate A/B runs on the same sender
-    /// path without waiting on wall-clock time.
-    pub fn dispatch_at_benchmark_boundary_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-        completion_delay_us: u64,
-    ) -> DispatchStep {
-        let authored_target = plan
-            .physical_target_qpc()
-            .expect("plan target required for production-path benchmark boundary");
-        let physical_wait_target = self
-            .physical_wait_target_for_test(plan)
-            .expect("production-path physical timing window")
-            .unwrap_or(authored_target);
-        let benchmark_now = physical_wait_target
-            .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("production-path benchmark boundary arithmetic");
-        let deadline = plan
-            .deadline_ticks()
-            .expect("plan deadline required for production-path benchmark boundary");
-        let completion_delay = self
-            .resources
-            .clock
-            .duration_from_us(completion_delay_us)
-            .expect("production-path benchmark completion delay conversion");
-        let completed_ticks = benchmark_now
-            .checked_add_duration(completion_delay)
-            .expect("production-path benchmark completion boundary arithmetic");
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let requested_mask = packet.up_mask | packet.down_mask;
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(benchmark_now),
-                    completed_ticks: Some(completed_ticks),
-                    timing_error: None,
-                },
-            }
-        });
-        self.runtime
-            .set_deadline_wait_evidence_for_test(Some(authored_target), Some(authored_target));
-        self.dispatch_plan_at(plan, deadline, benchmark_now, true, Some(authored_target))
-    }
-
-    /// Invoke the coordinator dispatch boundary at a frozen crossing. The
-    /// test transport records its own immediate QPC sample for sender timing;
-    /// production builds take that sample inside the native sender.
-    pub fn dispatch_at_production_boundary_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> DispatchStep {
-        let target = plan
-            .physical_target_qpc()
-            .expect("plan target required for production-path production boundary");
-        let deadline = plan
-            .deadline_ticks()
-            .expect("plan deadline required for production-path production boundary");
-        let clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let requested_mask = packet.up_mask | packet.down_mask;
-            let started_ticks = clock.now().expect("production-boundary pre-call QPC");
-            let completed_ticks = clock.now().expect("production-boundary completion QPC");
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(started_ticks),
-                    completed_ticks: Some(completed_ticks),
-                    timing_error: None,
-                },
-            }
-        });
-        self.runtime
-            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            deadline,
-            target,
-            true,
-            None,
-            Some(target),
-            false,
-        )
-    }
-
-    /// Invoke one frozen physical boundary at a deterministic target-relative
-    /// crossing. The returned sender outcome is qualification evidence for
-    /// this test-support seam; the worker still runs its normal admission,
-    /// sender, commit, and observer paths.
-    pub fn dispatch_at_baseline_boundary_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-        crossing_lateness_us: u64,
-        completion_delay_us: u64,
-        inject_zero_progress_drop: bool,
-    ) -> (DispatchStep, Option<SendTransactionOutcome>) {
-        let target = plan
-            .physical_target_qpc()
-            .expect("baseline boundary requires a physical plan target");
-        let crossing = target
-            .checked_add_duration(
-                self.resources
-                    .clock
-                    .duration_from_us(crossing_lateness_us)
-                    .expect("baseline crossing lateness conversion"),
-            )
-            .expect("baseline crossing arithmetic");
-        self.dispatch_at_baseline_boundary_at_qpc_for_test(
-            plan,
-            crossing,
-            crossing,
-            completion_delay_us,
-            inject_zero_progress_drop,
-        )
-    }
-
-    /// Variant of the baseline seam where the worker's current QPC and the
-    /// target-crossing QPC are supplied independently. This models a later
-    /// boundary that became overdue while a previous boundary was handled.
-    pub fn dispatch_at_baseline_boundary_at_qpc_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-        now_qpc: QpcTicks,
-        crossing_qpc: QpcTicks,
-        completion_delay_us: u64,
-        inject_zero_progress_drop: bool,
-    ) -> (DispatchStep, Option<SendTransactionOutcome>) {
-        let target = plan
-            .physical_target_qpc()
-            .expect("baseline boundary requires a physical plan target");
-        let completion = crossing_qpc
-            .checked_add_duration(
-                self.resources
-                    .clock
-                    .duration_from_us(completion_delay_us)
-                    .expect("baseline completion delay conversion"),
-            )
-            .expect("baseline completion arithmetic");
-        let captured = Arc::new(Mutex::new(None));
-        let captured_by_emitter = Arc::clone(&captured);
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let requested_mask = packet.up_mask | packet.down_mask;
-            let outcome = if inject_zero_progress_drop {
-                SendTransactionOutcome {
-                    status: SendTransactionStatus::ZeroProgress,
-                    evidence: SendEvidence {
-                        requested_mask,
-                        confirmed_mask: 0,
-                        skipped_mask: 0,
-                        first_inserted: 0,
-                        attempts: 1,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        first_win32_error: None,
-                        last_win32_error: None,
-                        started_ticks: Some(crossing_qpc),
-                        completed_ticks: Some(completion),
-                        timing_error: None,
-                    },
-                }
-            } else {
-                SendTransactionOutcome {
-                    status: SendTransactionStatus::Complete,
-                    evidence: SendEvidence {
-                        requested_mask,
-                        confirmed_mask: requested_mask,
-                        skipped_mask: 0,
-                        first_inserted: packet.event_count(),
-                        attempts: 1,
-                        zero_progress_retries: 0,
-                        retry_reason: PacketRetryReason::None,
-                        first_win32_error: None,
-                        last_win32_error: None,
-                        started_ticks: Some(crossing_qpc),
-                        completed_ticks: Some(completion),
-                        timing_error: None,
-                    },
-                }
-            };
-            *captured_by_emitter
-                .lock()
-                .expect("baseline sender evidence lock") = Some(outcome);
-            outcome
-        });
-        self.runtime
-            .set_deadline_wait_evidence_for_test(Some(crossing_qpc), Some(target));
-        let step = self.dispatch_plan_at_with_sender_option(
-            plan,
-            TimelineTicks::ZERO,
-            now_qpc,
-            true,
-            Some(crossing_qpc),
-            Some(target),
-            true,
-        );
-        let outcome = captured
-            .lock()
-            .expect("baseline sender evidence lock")
-            .take();
-        (step, outcome)
-    }
-
-    /// Inject the exact waiter-entry race for a still-frozen physical plan:
-    /// it was future when classified, the worker stalled before the waiter's
-    /// first QPC read, and the waiter therefore returned `Due(None)` at an
-    /// already-overdue target.  No wall-clock sleep or replan is involved.
-    pub fn dispatch_same_frozen_plan_after_due_without_wait_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> DispatchStep {
-        let target = plan
-            .physical_target_qpc()
-            .expect("waiter-entry race requires a physical target");
-        let authored_overdue_now = target
-            .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("overdue test target arithmetic");
-        let physical_wait_target = physical_wait_target_for_plan(plan, &self.runtime)
-            .expect("physical timing window")
-            .unwrap_or(target);
-        let overdue_now = core::cmp::max(authored_overdue_now, physical_wait_target);
-        self.runtime.record_due_without_wait_for_test();
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            plan.deadline_ticks().expect("physical deadline"),
-            overdue_now,
-            false,
-            None,
-            None,
-            true,
-        )
-    }
-
-    pub fn dispatch_with_strict_admission_late_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> DispatchStep {
-        let view = plan
-            .physical()
-            .expect("strict admission requires physical plan");
-        let target = plan
-            .physical_target_qpc()
-            .expect("strict admission requires physical target");
-        let late = self
-            .timing
-            .timing_margin_ticks
-            .checked_add(DurationTicks::from_raw(1))
-            .expect("strict admission lateness arithmetic");
-        let effective_now_ticks = TimelineTicks::from_raw(
-            view.authored_view
-                .authored_batch_scheduled_ticks
-                .as_u64()
-                .saturating_add(late.as_u64()),
-        );
-        let now_ticks = target
-            .checked_add_duration(late)
-            .expect("strict admission QPC lateness arithmetic");
-        self.config.timing.strict_timing = true;
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            effective_now_ticks,
-            now_ticks,
-            false,
-            None,
-            Some(target),
-            false,
-        )
-    }
-    /// Query the current authored packet path without mutating state.
-    pub fn current_authored_path(&self) -> Option<DispatchPath> {
-        let (up_mask, down_mask) = self
-            .legacy_coordinator_fixture
-            .next_authored_packet_masks()?;
-        let up_count = up_mask.count_ones() as usize;
-        let down_count = down_mask.count_ones() as usize;
-        match physical_packet_kind(up_mask, down_mask) {
-            Ok(PhysicalPacketKind::UpOnly) => Some(DispatchPath::UpOnly { up_count }),
-            Ok(PhysicalPacketKind::DownOnly) => Some(DispatchPath::DownOnly { down_count }),
-            Ok(PhysicalPacketKind::Mixed) => Some(DispatchPath::Mixed {
-                up_count,
-                down_count,
-            }),
-            Err(_) => None,
-        }
-    }
-    /// Dispatch authored packet using an explicit production `NextDispatchPlan`.
-    pub fn dispatch_authored_with_plan(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
-        let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
-        let physical = plan.physical().expect("physical dispatch plan");
-        let physical_timing_window = self
-            .runtime
-            .physical_timing_window_for_test(
-                physical_target_qpc,
-                physical.authored_view.packet_masks.up_mask,
-                physical.authored_view.packet_masks.down_mask,
-            )
-            .expect("physical timing window");
-        // This direct helper represents the old inner wait with a synthetic
-        // exact-boundary sample. The production worker supplies the real
-        // crossing from its single wait before entering this function.
-        let now_ticks = physical_target_qpc;
-        let ctx = AuthoredPacketContext {
-            dispatch_plan: plan,
-            effective_now_ticks: self.effective_now_ticks,
-            now_ticks,
-            physical_timing_window,
-            down_admission: DownBoundaryAdmission::Authorized,
-            focus_loss_fault: false,
-            supervisor_expired: &self.supervisor_expired,
-            // This helper dispatches a frozen plan at its synthetic exact
-            // boundary; the worker loop normally supplies this sample from
-            // its single wait.
-            boundary_crossing_qpc: Some(physical_target_qpc),
-            test_direct_boundary: false,
-            test_inject_sender_start: true,
-        };
-        dispatch_authored_packet(
-            ctx,
-            &self.config,
-            &mut self.resources,
-            &mut self.legacy_coordinator_fixture,
-            &mut self.health,
-            &self.timing,
-            &mut self.runtime,
-            &mut self.local_metrics,
-            &self.focus_active,
-            &self.target,
-            &self.quit_requested,
-            &self.skip_requested,
-            &self.panic_requested,
-            &self.desired_pause,
-            &self.system_power,
-            &self.progress_clock,
-            Some(&self.observer),
-        )
-    }
-    pub fn drain_observer(&mut self) -> Result<Option<u64>, DispatchStep> {
-        super::super::worker::drain_one_observer(
-            &mut self.observer,
-            &mut self.health,
-            &mut self.local_metrics,
-            &self.metrics,
-            &mut self.resources.telemetry.lock(),
-            self.resources.clock,
-            sky_dispatch_win32::clock::QpcTicks::ZERO,
-            &mut self.timing,
-        )
-    }
-    pub fn pop_observation(
-        &mut self,
-    ) -> Option<super::super::worker::dispatch::DispatchObservation> {
-        self.observer.pop_front()
-    }
-    pub fn pending_observation_count(&self) -> usize {
-        self.observer.len()
+}
+
+fn action(index: u32, kind: ActionKind, scheduled_us: u64, scan_codes: &[u16]) -> KeyActionInput {
+    KeyActionInput {
+        source_action_index: index,
+        kind,
+        scheduled_us,
+        scan_codes: scan_codes.iter().copied().collect(),
+        reason: Arc::from("production executor fixture"),
     }
 }
 
 #[cfg(test)]
 #[path = "dispatch_harness_tests.rs"]
-mod lifecycle_dispatch_tests;
+mod dispatch_harness_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_harness_has_one_live_executor_owner() {
+        let harness = ProductionDispatchTestHarness::new_down_only();
+        assert_eq!(harness.resources.scheduler.down_chord_count(), 1);
+        assert_eq!(harness.resources.scheduler.accounting().total, 1);
+    }
+}

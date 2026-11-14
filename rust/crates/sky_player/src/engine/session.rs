@@ -9,7 +9,7 @@ use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_t
 use crate::engine::target::OwnerIdentityFailure;
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
-use sky_dispatch_core::coordinator::GenerationAccounting;
+use sky_dispatch_core::accounting::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -56,16 +56,6 @@ fn timeline_rebase_reason(_code: u8) -> Option<String> {
     // Compatibility field only: authored dispatch no longer rebases its
     // timeline and therefore never emits a reason.
     None
-}
-
-fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
-    if !valid {
-        return None;
-    }
-    match reason_code {
-        1 => Some("down_unobserved_backlog".to_string()),
-        _ => None,
-    }
 }
 
 fn signal_supervisor_expiry(shared: &SessionShared) {
@@ -162,15 +152,6 @@ fn wait_for_watchdog_release_or_completion(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn validate_native_schedule_timing(
-    schedule: &sky_dispatch_core::model::RuntimeSchedule,
-    effective_min_hold_us: u64,
-    qpc_clock: QpcClock,
-) -> Result<(), String> {
-    validate_native_schedule_timing_with_release_gap(schedule, effective_min_hold_us, 0, qpc_clock)
-}
-
 pub(crate) fn validate_native_schedule_timing_with_release_gap(
     schedule: &sky_dispatch_core::model::RuntimeSchedule,
     effective_min_hold_us: u64,
@@ -235,6 +216,7 @@ pub struct NativeDispatchSession {
     observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
+    effective_min_release_gap_us: u64,
     shared: Arc<SessionShared>,
     supervisor_lease_timeout_us: u64,
     supervisor_lease_timeout_ticks: AtomicU64,
@@ -242,16 +224,6 @@ pub struct NativeDispatchSession {
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     window_identity_authority:
         Mutex<Option<(sky_dispatch_win32::focus::WindowIdentityAuthority, u64)>>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(super) struct JoinStateForTest {
-    pub(super) completion_signaled: Option<bool>,
-    pub(super) worker_handle_present: bool,
-    pub(super) worker_handle_finished: Option<bool>,
-    pub(super) watchdog_handle_present: bool,
-    pub(super) watchdog_handle_finished: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +347,7 @@ impl NativeDispatchSession {
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
+            effective_min_release_gap_us: min_release_gap_us,
             shared,
             supervisor_lease_timeout_us,
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
@@ -382,6 +355,11 @@ impl NativeDispatchSession {
             watchdog_handle: Mutex::new(None),
             window_identity_authority: Mutex::new(None),
         })
+    }
+
+    /// Effective same-key release floor admitted for this session.
+    pub fn effective_min_release_gap_us(&self) -> u64 {
+        self.effective_min_release_gap_us
     }
 
     fn live_projection(&self) -> (((u64, bool), u64), super::shared::StartupSnapshot) {
@@ -743,16 +721,6 @@ impl NativeDispatchSession {
     }
 
     #[cfg(test)]
-    pub(crate) fn supervisor_heartbeat_qpc_for_test(&self) -> QpcTicks {
-        QpcTicks::from_raw(
-            self.shared
-                .commands
-                .supervisor_expired
-                .last_progress_ticks(),
-        )
-    }
-
-    #[cfg(test)]
     pub(crate) fn spawn_handles_present_for_test(&self) -> (bool, bool) {
         (
             self.thread_handle.lock().is_some(),
@@ -1051,6 +1019,7 @@ impl NativeDispatchSession {
             return Err("window identity could not bind to the current target generation".into());
         }
         *retained = Some((authority, generation));
+        let _ = self.shared.commands.interrupt.signal();
         Ok(())
     }
 
@@ -1063,6 +1032,7 @@ impl NativeDispatchSession {
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
         self.shared.target.invalidate_owner_identity();
+        let _ = self.shared.commands.interrupt.signal();
     }
 
     /// Poll the retained process object and exact target HWND on the desktop
@@ -1081,6 +1051,7 @@ impl NativeDispatchSession {
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
             self.shared.target.invalidate_owner_identity();
+            let _ = self.shared.commands.interrupt.signal();
             return false;
         };
         if target != (authority.identity().hwnd, *bound_generation) {
@@ -1090,6 +1061,7 @@ impl NativeDispatchSession {
                     .system_power
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
+            let _ = self.shared.commands.interrupt.signal();
             return false;
         }
         let failure = match authority.continuity() {
@@ -1117,6 +1089,7 @@ impl NativeDispatchSession {
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
         self.shared.target.invalidate_owner_identity_with(failure);
+        let _ = self.shared.commands.interrupt.signal();
         false
     }
 
@@ -1333,9 +1306,10 @@ impl NativeDispatchSession {
             authored_conflict_events: local.authored_conflict_events,
             authored_chords_rejected: local.authored_chords_rejected,
             authored_keys_rejected: local.authored_keys_rejected,
-            missed_down_boundaries: local.missed_down_boundaries,
-            missed_down_keys: local.missed_down_keys,
-            missed_unobserved_backlog_boundaries: local.missed_unobserved_backlog_boundaries,
+            // Compatibility-only DTO fields; the live DispatchExecutor has no missed-Down path.
+            missed_down_boundaries: 0,
+            missed_down_keys: 0,
+            missed_unobserved_backlog_boundaries: 0,
             missed_physical_window_boundaries: 0,
             final_gate_control_rejections: local.final_gate_control_rejections,
             final_gate_target_changes: local.final_gate_target_changes,
@@ -1347,7 +1321,7 @@ impl NativeDispatchSession {
             max_hold_floor_delay_us: local.max_hold_floor_delay_us,
             release_floor_delay_boundaries: local.release_floor_delay_boundaries,
             max_release_floor_delay_us: local.max_release_floor_delay_us,
-            max_missed_lateness_ticks: local.max_missed_lateness_ticks,
+            max_missed_lateness_ticks: 0,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
             rollback_residue_keys: local.rollback_residue_keys,

@@ -6,12 +6,13 @@
 
 use smallvec::SmallVec;
 
-use crate::coordinator::{GenerationAccounting, GenerationCounters};
+use crate::accounting::{GenerationAccounting, GenerationCounters};
 use crate::model::{GenerationId, KeyRegistry, KeySlot, MAX_KEYS, RuntimeSchedule};
 use crate::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 mod memory;
 pub use memory::MAX_EXECUTOR_BYTES;
-use memory::{checked_executor_storage_bytes, reserve_executor_chords};
+pub(crate) use memory::checked_executor_storage_bytes;
+use memory::{reserve_executor_chords, reserve_executor_intents};
 
 /// Per-slot musical ownership state for the 15 instrument keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +23,7 @@ pub struct MusicalSlot {
     pub authored_up_offset_ticks: TimelineTicks,
     /// Physical hold floor: successful Down completion QPC + H.
     pub release_not_before_qpc: QpcTicks,
-    /// Physical repress floor: previous Up completion QPC + T.
+    /// Physical repress floor: previous Up completion QPC + G.
     pub next_down_not_before_qpc: QpcTicks,
     /// Exact authored source action index of the paired Up.
     pub paired_up_source_action_index: u32,
@@ -53,7 +54,9 @@ pub struct DownIntentTicks {
     pub paired_up_source_action_index: u32,
 }
 
-/// An immutable Down chord with timeline tick offsets.
+/// An owned Down chord fixture. The live executor stores its chord header and
+/// intents in separate contiguous vectors; this owned form remains useful to
+/// compile/test-support paths that need a self-contained fixture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownChordTicks {
     pub chord_index: usize,
@@ -65,13 +68,87 @@ pub struct DownChordTicks {
     pub intents: SmallVec<[DownIntentTicks; MAX_KEYS]>,
 }
 
+/// Borrowed view over one compact live-executor chord and its contiguous intents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownChordView<'a> {
+    pub chord_index: usize,
+    pub scheduled_ticks: TimelineTicks,
+    pub scheduled_us: u64,
+    pub down_mask: u16,
+    pub source_action_index: u32,
+    pub reason_id: crate::model::ReasonId,
+    pub intents: &'a [DownIntentTicks],
+}
+
+/// Small, copyable provenance retained by the worker while a packet is staged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownChordMetadata {
+    pub chord_index: usize,
+    pub scheduled_ticks: TimelineTicks,
+    pub scheduled_us: u64,
+    pub down_mask: u16,
+    pub source_action_index: u32,
+    pub reason_id: crate::model::ReasonId,
+}
+
+impl From<DownChordTicks> for DownChordMetadata {
+    fn from(chord: DownChordTicks) -> Self {
+        Self {
+            chord_index: chord.chord_index,
+            scheduled_ticks: chord.scheduled_ticks,
+            scheduled_us: chord.scheduled_us,
+            down_mask: chord.down_mask,
+            source_action_index: chord.source_action_index,
+            reason_id: chord.reason_id,
+        }
+    }
+}
+
+impl From<&DownChordTicks> for DownChordMetadata {
+    fn from(chord: &DownChordTicks) -> Self {
+        Self {
+            chord_index: chord.chord_index,
+            scheduled_ticks: chord.scheduled_ticks,
+            scheduled_us: chord.scheduled_us,
+            down_mask: chord.down_mask,
+            source_action_index: chord.source_action_index,
+            reason_id: chord.reason_id,
+        }
+    }
+}
+
+impl From<DownChordView<'_>> for DownChordMetadata {
+    fn from(chord: DownChordView<'_>) -> Self {
+        Self {
+            chord_index: chord.chord_index,
+            scheduled_ticks: chord.scheduled_ticks,
+            scheduled_us: chord.scheduled_us,
+            down_mask: chord.down_mask,
+            source_action_index: chord.source_action_index,
+            reason_id: chord.reason_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DownChordHeaderTicks {
+    chord_index: usize,
+    scheduled_ticks: TimelineTicks,
+    scheduled_us: u64,
+    down_mask: u16,
+    source_action_index: u32,
+    reason_id: crate::model::ReasonId,
+    intent_start: usize,
+    intent_count: usize,
+}
+
 /// Absolute-QPC decision made by the production scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchDecision<'a> {
     /// Ready physical packet to stage and send.
     Send {
         up_mask: u16,
-        down_chord: Option<&'a DownChordTicks>,
+        down_chord: Option<DownChordView<'a>>,
         timing_window: DispatchTimingWindow,
     },
     /// No physical work ready; wait until the specified deadline.
@@ -87,7 +164,7 @@ pub enum DispatchDecision<'a> {
 pub enum DispatchAction<'a> {
     Send {
         up_mask: u16,
-        down_chord: Option<&'a DownChordTicks>,
+        down_chord: Option<DownChordView<'a>>,
     },
     Wait {
         deadline_ticks: TimelineTicks,
@@ -109,7 +186,8 @@ pub struct DispatchTimingWindow {
 /// Bounded 15-slot musical executor.
 #[derive(Debug, Clone)]
 pub struct DispatchExecutor {
-    down_chords: Vec<DownChordTicks>,
+    down_chords: Vec<DownChordHeaderTicks>,
+    down_intents: Vec<DownIntentTicks>,
     schedule_end_offset_ticks: TimelineTicks,
     schedule_end_offset_us: u64,
     key_registry: KeyRegistry,
@@ -117,7 +195,7 @@ pub struct DispatchExecutor {
     slots: [MusicalSlot; MAX_KEYS],
     resume_barrier_qpc: Option<QpcTicks>,
     min_hold_ticks: DurationTicks,
-    frame_ticks: DurationTicks,
+    min_release_gap_ticks: DurationTicks,
     counters: GenerationCounters,
     total_generations: u64,
     activated_generations: u64,
@@ -130,6 +208,11 @@ pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
 pub struct ExecutorMemoryMetrics {
     pub chord_count: usize,
     pub chord_capacity: usize,
+    pub intent_count: usize,
+    pub intent_capacity: usize,
+    pub chord_header_heap_bytes: usize,
+    pub intent_heap_bytes: usize,
+    /// Total capacity bytes for both executor-owned vectors.
     pub chord_heap_bytes: usize,
     pub struct_bytes: usize,
     pub total_bytes: usize,
@@ -160,7 +243,7 @@ impl DispatchExecutor {
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, String>
     where
@@ -170,7 +253,7 @@ impl DispatchExecutor {
         Self::new_with_cancellation(
             schedule,
             min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             us_to_ticks,
             || Ok(()),
         )
@@ -180,7 +263,7 @@ impl DispatchExecutor {
     pub fn new_with_cancellation<F, E, C>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        frame_ticks: DurationTicks,
+        min_release_gap_ticks: DurationTicks,
         mut us_to_ticks: F,
         mut checkpoint: C,
     ) -> Result<Self, String>
@@ -190,12 +273,23 @@ impl DispatchExecutor {
         C: FnMut() -> Result<(), String>,
     {
         let chord_count = schedule.down_chords.len();
-        checked_executor_storage_bytes(chord_count)?;
+        let mut intent_count = 0usize;
+        for (idx, chord) in schedule.down_chords.iter().enumerate() {
+            if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            intent_count = intent_count
+                .checked_add(chord.intents.len())
+                .ok_or_else(|| "executor Down intent count overflow".to_string())?;
+        }
+        checked_executor_storage_bytes(chord_count, intent_count)?;
 
         checkpoint()?;
 
         let mut down_chords = Vec::new();
         reserve_executor_chords(&mut down_chords, chord_count)?;
+        let mut down_intents = Vec::new();
+        reserve_executor_intents(&mut down_intents, intent_count)?;
 
         for (idx, chord) in schedule.down_chords.iter().enumerate() {
             if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
@@ -207,7 +301,7 @@ impl DispatchExecutor {
                     chord.scheduled_us
                 )
             })?;
-            let mut intents = SmallVec::new();
+            let intent_start = down_intents.len();
             for intent in &chord.intents {
                 let paired_up_offset_ticks =
                     us_to_ticks(intent.paired_up_offset_us).map_err(|e| {
@@ -216,7 +310,7 @@ impl DispatchExecutor {
                             intent.paired_up_offset_us
                         )
                     })?;
-                intents.push(DownIntentTicks {
+                down_intents.push(DownIntentTicks {
                     generation_id: intent.generation_id,
                     key_slot: intent.key_slot,
                     scan_code: intent.scan_code,
@@ -227,16 +321,32 @@ impl DispatchExecutor {
                     paired_up_source_action_index: intent.paired_up_source_action_index,
                 });
             }
-            down_chords.push(DownChordTicks {
+            let intent_count = down_intents
+                .len()
+                .checked_sub(intent_start)
+                .ok_or_else(|| "executor Down intent range underflow".to_string())?;
+            let range_end = intent_start
+                .checked_add(intent_count)
+                .ok_or_else(|| "executor Down intent range overflow".to_string())?;
+            if range_end != down_intents.len() || range_end > down_intents.capacity() {
+                return Err("executor Down intent range exceeds reserved arena".to_string());
+            }
+            down_chords.push(DownChordHeaderTicks {
                 chord_index: chord.chord_index,
                 scheduled_ticks,
                 scheduled_us: chord.scheduled_us,
                 down_mask: chord.down_mask,
                 source_action_index: chord.source_action_index,
                 reason_id: chord.reason_id,
-                intents,
+                intent_start,
+                intent_count,
             });
         }
+
+        if down_intents.len() != intent_count {
+            return Err("executor Down intent count changed during compilation".to_string());
+        }
+        checked_executor_storage_bytes(down_chords.capacity(), down_intents.capacity())?;
 
         checkpoint()?;
 
@@ -250,6 +360,7 @@ impl DispatchExecutor {
 
         Ok(Self {
             down_chords,
+            down_intents,
             schedule_end_offset_ticks,
             schedule_end_offset_us: schedule.schedule_end_offset_us,
             key_registry: schedule.key_registry.clone(),
@@ -257,7 +368,7 @@ impl DispatchExecutor {
             slots: [MusicalSlot::default(); MAX_KEYS],
             resume_barrier_qpc: None,
             min_hold_ticks,
-            frame_ticks,
+            min_release_gap_ticks,
             counters: GenerationCounters::default(),
             total_generations: schedule.generation_count,
             activated_generations: 0,
@@ -271,7 +382,20 @@ impl DispatchExecutor {
     }
 
     pub fn try_memory_metrics(&self) -> Result<ExecutorMemoryMetrics, String> {
-        let chord_heap_bytes = checked_executor_storage_bytes(self.down_chords.capacity())?;
+        let chord_header_heap_bytes = self
+            .down_chords
+            .capacity()
+            .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
+            .ok_or_else(|| "executor chord-header capacity size overflow".to_string())?;
+        let intent_heap_bytes = self
+            .down_intents
+            .capacity()
+            .checked_mul(std::mem::size_of::<DownIntentTicks>())
+            .ok_or_else(|| "executor intent-arena capacity size overflow".to_string())?;
+        let chord_heap_bytes = chord_header_heap_bytes
+            .checked_add(intent_heap_bytes)
+            .ok_or_else(|| "executor vector capacity size overflow".to_string())?;
+        checked_executor_storage_bytes(self.down_chords.capacity(), self.down_intents.capacity())?;
         let struct_bytes = std::mem::size_of::<Self>();
         let total_bytes = chord_heap_bytes
             .checked_add(struct_bytes)
@@ -279,6 +403,10 @@ impl DispatchExecutor {
         Ok(ExecutorMemoryMetrics {
             chord_count: self.down_chords.len(),
             chord_capacity: self.down_chords.capacity(),
+            intent_count: self.down_intents.len(),
+            intent_capacity: self.down_intents.capacity(),
+            chord_header_heap_bytes,
+            intent_heap_bytes,
             chord_heap_bytes,
             struct_bytes,
             total_bytes,
@@ -362,8 +490,30 @@ impl DispatchExecutor {
     }
 
     #[inline]
-    pub fn current_chord(&self) -> Option<&DownChordTicks> {
-        self.down_chords.get(self.chord_cursor)
+    pub fn current_chord(&self) -> Option<DownChordView<'_>> {
+        self.down_chords
+            .get(self.chord_cursor)
+            .map(|chord| self.chord_view(chord))
+    }
+
+    fn chord_view(&self, chord: &DownChordHeaderTicks) -> DownChordView<'_> {
+        let intent_end = chord
+            .intent_start
+            .checked_add(chord.intent_count)
+            .expect("executor chord range was checked at construction");
+        let intents = self
+            .down_intents
+            .get(chord.intent_start..intent_end)
+            .expect("executor chord range is contained in its intent arena");
+        DownChordView {
+            chord_index: chord.chord_index,
+            scheduled_ticks: chord.scheduled_ticks,
+            scheduled_us: chord.scheduled_us,
+            down_mask: chord.down_mask,
+            source_action_index: chord.source_action_index,
+            reason_id: chord.reason_id,
+            intents,
+        }
     }
 
     #[inline]
@@ -416,7 +566,7 @@ impl DispatchExecutor {
             }
         }
 
-        let chord_opt = self.down_chords.get(self.chord_cursor);
+        let chord_opt = self.current_chord();
         let mut chord_eligible = false;
         let mut chord_earliest_due_qpc = QpcTicks::ZERO;
         let mut chord_authored_target_qpc = None;
@@ -441,7 +591,7 @@ impl DispatchExecutor {
                 }
             }
 
-            for intent in &chord.intents {
+            for intent in chord.intents {
                 let k = intent.key_slot as usize;
                 let slot = &self.slots[k];
                 if slot.active_generation.is_some() {
@@ -451,7 +601,7 @@ impl DispatchExecutor {
                     )?;
                     let key_release_due = authored_up_qpc.max(slot.release_not_before_qpc);
                     let key_next_down_min =
-                        key_release_due.checked_add_duration(self.frame_ticks)?;
+                        key_release_due.checked_add_duration(self.min_release_gap_ticks)?;
                     chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_next_down_min);
                     if key_next_down_min > authored_down_qpc {
                         down_release_floor_mask |= 1 << k;
@@ -565,7 +715,7 @@ impl DispatchExecutor {
         let new_down_floor = if confirmed_up_mask != 0 {
             Some(
                 completion_qpc
-                    .checked_add_duration(self.frame_ticks)
+                    .checked_add_duration(self.min_release_gap_ticks)
                     .map_err(|error| format!("Up completion G floor overflow: {error}"))?,
             )
         } else {
@@ -594,6 +744,7 @@ impl DispatchExecutor {
             let chord = self
                 .down_chords
                 .get(self.chord_cursor)
+                .copied()
                 .ok_or_else(|| "confirmed Down chord when chord cursor is exhausted".to_string())?;
             if chord.down_mask != confirmed_down_mask {
                 return Err(format!(
@@ -601,7 +752,7 @@ impl DispatchExecutor {
                     confirmed_down_mask, chord.down_mask
                 ));
             }
-            for intent in &chord.intents {
+            for intent in self.chord_view(&chord).intents {
                 if self.slots[intent.key_slot as usize]
                     .active_generation
                     .is_some()
@@ -624,7 +775,7 @@ impl DispatchExecutor {
             .released
             .checked_add(u64::from(confirmed_up_mask.count_ones()))
             .ok_or("released counter overflow")?;
-        let activated_count = chord.map_or(0, |chord| chord.intents.len() as u64);
+        let activated_count = chord.map_or(0, |chord| chord.intent_count as u64);
         let next_activated = self
             .activated_generations
             .checked_add(activated_count)
@@ -647,7 +798,15 @@ impl DispatchExecutor {
             slot.next_down_not_before_qpc = new_down_floor.unwrap_or(QpcTicks::ZERO);
         }
         if let Some(chord) = chord {
-            for intent in &chord.intents {
+            let intent_start = chord.intent_start;
+            let intent_end = intent_start
+                .checked_add(chord.intent_count)
+                .ok_or_else(|| "executor Down intent range overflow at commit".to_string())?;
+            let chord_intents = self
+                .down_intents
+                .get(intent_start..intent_end)
+                .ok_or_else(|| "executor Down intent range invalid at commit".to_string())?;
+            for intent in chord_intents {
                 let slot = &mut self.slots[intent.key_slot as usize];
                 slot.active_generation = Some(intent.generation_id);
                 slot.authored_up_offset_ticks = intent.paired_up_offset_ticks;
@@ -696,7 +855,7 @@ impl DispatchExecutor {
     ///
     /// Clears active musical owners in all 15 slots without physical replay,
     /// marks cancelled generations in accounting, and sets the session-wide
-    /// resume barrier to `completion_ticks + T`.
+    /// resume barrier to `completion_ticks + G`.
     pub fn on_verified_cleanup_at(&mut self, completion_qpc: QpcTicks) -> Result<u64, String> {
         let active_count = self
             .slots
@@ -709,7 +868,7 @@ impl DispatchExecutor {
             .checked_add(active_count)
             .ok_or("cancelled counter overflow")?;
         let barrier = completion_qpc
-            .checked_add_duration(self.frame_ticks)
+            .checked_add_duration(self.min_release_gap_ticks)
             .map_err(|error| format!("resume barrier overflow: {error}"))?;
         for slot in &mut self.slots {
             slot.active_generation = None;
@@ -724,9 +883,9 @@ impl DispatchExecutor {
         Ok(active_count)
     }
 
-    /// Cancel every remaining generation after verified terminal cleanup.
-    /// Scheduled generations are included because the session will not resume.
-    pub fn on_verified_terminal_cleanup(&mut self) -> Result<u64, String> {
+    /// Cancel every remaining generation after the terminal cleanup attempt.
+    /// Scheduled generations are included because terminal shutdown cannot resume.
+    pub fn cancel_remaining_generations_for_terminal_shutdown(&mut self) -> Result<u64, String> {
         let accounting = self.accounting();
         let cancelled_count = accounting
             .active
@@ -879,9 +1038,6 @@ mod memory_tests;
 #[cfg(test)]
 mod absolute_tests;
 
-#[cfg(test)]
-#[path = "executor/metadata_tests.rs"]
-mod metadata_tests;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use super::{ACCEPTANCE_HOLD_FRAMES, ACCEPTANCE_FRAME_US, Scenario, ScenarioPlan, Verdict, action};
-use sky_dispatch_core::coordinator::GenerationAccounting;
+use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_player::adapter_support::compile_runtime_intents;

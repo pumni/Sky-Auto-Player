@@ -26,7 +26,7 @@ async function openSongDetails(page: Page, title: string) {
   const row = page.getByRole('row', { name: new RegExp(title, 'i') });
   await expect(row).toBeVisible();
   await expect(page.getByText(/Showing 1–1 of 1 songs/)).toBeVisible();
-  await row.click();
+  await row.getByText(title, { exact: true }).click();
   await expect(row).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Utility: Song Details' })).toBeVisible();

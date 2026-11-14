@@ -3,53 +3,272 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'lib/evidence_runner_contract.ps1')
 . (Join-Path $PSScriptRoot 'lib/evidence_publication_contract.ps1')
+. (Join-Path $PSScriptRoot 'lib/dispatch_lifecycle_report_contract.ps1')
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 
 function Assert-Contract([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "Evidence contract self-test failed: $Message" }
 }
 
-$runnerCases = @(
-    @{ EvidenceMode = 'baseline'; RunnerStage = 'baseline'; Prefix = 'dispatch-baseline-'; NeedsControl = $false },
-    @{ EvidenceMode = 'release-barrier'; RunnerStage = 'release-barrier'; Prefix = 'lifecycle-release-barrier-'; NeedsControl = $false },
-    @{ EvidenceMode = 'lease-age'; RunnerStage = 'lease-age'; Prefix = 'lifecycle-lease-age-'; NeedsControl = $true },
-    @{ EvidenceMode = 'diagnostics'; RunnerStage = 'diagnostics'; Prefix = 'dispatch-diagnostics-'; NeedsControl = $false },
-    @{ EvidenceMode = 'final'; RunnerStage = 'final'; Prefix = 'lifecycle-qualification-'; NeedsControl = $true }
-)
-foreach ($case in $runnerCases) {
-    $contract = Get-EvidenceRunnerContract -EvidenceMode $case.EvidenceMode -HasControlRevision $case.NeedsControl
-    Assert-Contract ($contract.RunIdPrefix -ceq $case.Prefix) "$($case.EvidenceMode) run prefix changed"
-    Assert-Contract ($contract.RunnerStage -ceq $case.RunnerStage) "$($case.EvidenceMode) runner stage changed"
-    Assert-Contract ($contract.RequiresControlRevision -eq $case.NeedsControl) "$($case.EvidenceMode) control requirement changed"
+$historicalV1 = [ordered]@{
+    schema_version = 1
+    source_revision = 'historical-source'
+    transport_kind = 'deterministic-mock'
+}
+$historicalResult = Test-DispatchLifecycleReport -Report $historicalV1
+Assert-Contract ($historicalResult.EvidenceClass -ceq 'historical') 'schema v1 reports must remain readable as historical evidence'
+
+function New-LiveAccountingStage {
+    param([string]$Phase, [long]$Scheduled, [long]$Activated, [long]$Released, [long]$Cancelled, [long]$Active)
+    return [ordered]@{
+        phase = $Phase
+        generation_accounting_owner = 'live_scheduler'
+        total = 2
+        scheduled = $Scheduled
+        activated = $Activated
+        released = $Released
+        cancelled = $Cancelled
+        active = $Active
+    }
 }
 
-$runnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -Raw
-Assert-Contract ($runnerSource -match '\$runnerStage = \$evidenceModeContract\.RunnerStage') 'the runner must consume its validated semantic stage'
-Assert-Contract ($runnerSource -notmatch '\$Stage\b') 'the runner retained a call site for the removed Stage parameter'
-Assert-Contract ($runnerSource -notmatch 'production_changes_permitted_by_phase') 'the runner retained a phase-specific output identifier'
-
-$legacyStages = @(('phase' + '1'), ('phase' + '2'), ('phase' + '-1'), ('r' + '3-final'))
-foreach ($legacyStage in $legacyStages) {
-    $rejected = $false
-    try { [void](Get-EvidenceRunnerContract -EvidenceMode $legacyStage -HasControlRevision $false) }
-    catch { $rejected = $true }
-    Assert-Contract $rejected "legacy or unknown stage '$legacyStage' was accepted"
+function New-DispatchPacket {
+    param([long]$UpMask, [long]$DownMask, [long]$Started, [long]$Completed)
+    $mask = $UpMask -bor $DownMask
+    return [ordered]@{
+        up_mask = $UpMask
+        down_mask = $DownMask
+        requested_mask = $mask
+        confirmed_mask = $mask
+        first_inserted = 1
+        attempts = 1
+        started_qpc_ticks = $Started
+        completed_qpc_ticks = $Completed
+        worker_outcome = 'dispatched'
+    }
 }
 
-foreach ($stage in @('lease-age', 'final')) {
-    $rejected = $false
-    try { [void](Get-EvidenceRunnerContract -EvidenceMode $stage -HasControlRevision $false) }
-    catch { $rejected = $true }
-    Assert-Contract $rejected "$stage accepted a missing control revision"
+function New-DispatchCleanupCapture {
+    param([long]$CompletionQpcTicks)
+    return [ordered]@{
+        attempts = 1
+        up_attempts = 1
+        down_attempts = 0
+        up_events = 1
+        down_events = 0
+        completion_qpc_ticks = $CompletionQpcTicks
+        packets = @([ordered]@{ scan_codes = @(21); key_up = $true })
+    }
 }
-foreach ($stage in @('baseline', 'release-barrier', 'diagnostics')) {
-    $rejected = $false
-    try { [void](Get-EvidenceRunnerContract -EvidenceMode $stage -HasControlRevision $true) }
-    catch { $rejected = $true }
-    Assert-Contract $rejected "$stage accepted a control revision"
+
+$liveV2 = [ordered]@{
+    schema_version = 2
+    report_kind = 'dispatch_lifecycle'
+    result = 'PASS'
+    provenance = [ordered]@{
+        source_sha = 'a' * 40
+        source_tree_sha = 'b' * 40
+        execution = 'offline_test_support'
+        transport_kind = 'deterministic_mock'
+        native_sendinput_calls = 0
+    }
+    timing = [ordered]@{
+        fps = 60
+        frame_us = 16667
+        hold_frames = 1
+        timing_margin_us = 500
+        min_hold_us = 17167
+        min_release_gap_us = 17167
+        qpc_frequency_hz = 10000003
+        min_release_gap_ticks = 171671
+    }
+    live_scheduler = [ordered]@{
+        generation_accounting_owner = 'live_scheduler'
+        no_pause_control = [ordered]@{
+            pause_requested = $false
+            sender_attempts = 4
+            musical_sender_attempts = 4
+            cleanup_sender_attempts = 0
+            total_mock_send_attempts = 4
+            final_release_obligation_mask = 0
+            passed = $true
+            generation_accounting_owner = 'live_scheduler'
+            accounting_stages = @(
+                (New-LiveAccountingStage 'before_first_down' 2 0 0 0 0),
+                (New-LiveAccountingStage 'after_first_down' 1 1 0 0 1),
+                (New-LiveAccountingStage 'after_first_up' 1 1 1 0 0),
+                (New-LiveAccountingStage 'after_second_down' 0 2 1 0 1),
+                (New-LiveAccountingStage 'after_final_up' 0 2 2 0 0)
+            )
+            packets = @(
+                (New-DispatchPacket 0 1 100000 110000),
+                (New-DispatchPacket 1 0 281671 290000),
+                (New-DispatchPacket 0 1 461671 470000),
+                (New-DispatchPacket 1 0 641671 650000)
+            )
+        }
+        pause_cleanup_resume = [ordered]@{
+            pause_requested = $true
+            sender_attempts = 2
+            musical_sender_attempts = 2
+            cleanup_sender_attempts = 2
+            total_mock_send_attempts = 4
+            final_release_obligation_mask = 0
+            passed = $true
+            generation_accounting_owner = 'live_scheduler'
+            accounting_stages = @(
+                (New-LiveAccountingStage 'before_first_down' 2 0 0 0 0),
+                (New-LiveAccountingStage 'after_initial_down' 1 1 0 0 1),
+                (New-LiveAccountingStage 'after_pause_cleanup' 1 1 0 1 0),
+                (New-LiveAccountingStage 'after_resumed_down' 0 2 0 1 1),
+                (New-LiveAccountingStage 'after_final_cleanup' 0 2 0 2 0)
+            )
+            packets = @(
+                (New-DispatchPacket 0 1 100 150),
+                (New-DispatchPacket 0 1 171871 171881)
+            )
+            cleanup_captures = [ordered]@{
+                pause = New-DispatchCleanupCapture 200
+                final = New-DispatchCleanupCapture 171882
+                total_attempts = 2
+            }
+            cleanup_completion_qpc_ticks = 200
+            min_release_gap_us = 17167
+            min_release_gap_ticks = 171671
+            resume_barrier_qpc_ticks = 171871
+            candidate_packet_not_before_qpc_ticks = 171871
+            resumed_sender_start_qpc_ticks = 171871
+            g_minus_one_decision = 'wait'
+            exact_g_decision = 'send'
+        }
+    }
 }
+$liveResult = Test-DispatchLifecycleReport -Report $liveV2
+Assert-Contract ($liveResult.EvidenceClass -ceq 'live_scheduler') 'schema v2 must prove the live scheduler owner'
+
+$badAccountingV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$badFinalStage = $badAccountingV2.live_scheduler.pause_cleanup_resume.accounting_stages[4]
+$badFinalStage.cancelled = 0
+$badFinalStage.active = 2
+$badAccountingRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $badAccountingV2) } catch { $badAccountingRejected = $true }
+Assert-Contract $badAccountingRejected 'schema v2 accepted an active generation after final cleanup'
+
+$duplicatePhaseV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$duplicatePhaseV2.live_scheduler.pause_cleanup_resume.accounting_stages[3].phase = 'after_pause_cleanup'
+$duplicatePhaseRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $duplicatePhaseV2) } catch { $duplicatePhaseRejected = $true }
+Assert-Contract $duplicatePhaseRejected 'schema v2 accepted a duplicate accounting phase'
+
+$badTotalV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$badTotalV2.live_scheduler.no_pause_control.accounting_stages[4].total = 1
+$badTotalRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $badTotalV2) } catch { $badTotalRejected = $true }
+Assert-Contract $badTotalRejected 'schema v2 accepted accounting with total != scheduled + activated'
+
+$fractionalHoldV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$fractionalHoldV2.timing.hold_frames = 1.25
+$fractionalHoldRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $fractionalHoldV2) } catch { $fractionalHoldRejected = $true }
+Assert-Contract $fractionalHoldRejected 'schema v2 accepted hold_frames=1.25 with the one-frame H value'
+
+$missingV2 = $liveV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable
+$missingV2.Remove('timing')
+$missingRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $missingV2) } catch { $missingRejected = $true }
+Assert-Contract $missingRejected 'schema v2 accepted a report missing timing evidence'
+
+$mixedOwnerV2 = $liveV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable
+$mixedOwnerV2.live_scheduler.pause_cleanup_resume.accounting_stages[1].generation_accounting_owner = 'legacy_fixture'
+$mixedOwnerRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $mixedOwnerV2) } catch { $mixedOwnerRejected = $true }
+Assert-Contract $mixedOwnerRejected 'schema v2 accepted mixed accounting owners'
+
+$wrongBarrierV2 = $liveV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable
+$wrongBarrierV2.live_scheduler.pause_cleanup_resume.resume_barrier_qpc_ticks++
+$wrongBarrierRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $wrongBarrierV2) } catch { $wrongBarrierRejected = $true }
+Assert-Contract $wrongBarrierRejected 'schema v2 accepted a barrier other than cleanup completion + G'
+
+$earlyResumedSendV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.packets[1].started_qpc_ticks = 171870
+$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.packets[1].completed_qpc_ticks = 171870
+$earlyResumedSendV2.live_scheduler.pause_cleanup_resume.resumed_sender_start_qpc_ticks = 171870
+$earlyResumedSendRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $earlyResumedSendV2) } catch { $earlyResumedSendRejected = $true }
+Assert-Contract $earlyResumedSendRejected 'schema v2 accepted a resumed Down capture at G-1'
+
+$captureAliasMismatchV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$captureAliasMismatchV2.live_scheduler.pause_cleanup_resume.packets[1].started_qpc_ticks = 171870
+$captureAliasMismatchV2.live_scheduler.pause_cleanup_resume.packets[1].completed_qpc_ticks = 171870
+$captureAliasMismatchRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $captureAliasMismatchV2) } catch { $captureAliasMismatchRejected = $true }
+Assert-Contract $captureAliasMismatchRejected 'schema v2 accepted a packet capture that disagrees with the summary sender-start alias'
+
+$holdOneTickEarlyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$holdOneTickEarlyV2.live_scheduler.no_pause_control.packets[1].started_qpc_ticks = 281670
+$holdOneTickEarlyV2.live_scheduler.no_pause_control.packets[1].completed_qpc_ticks = 281670
+$holdOneTickEarlyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $holdOneTickEarlyV2) } catch { $holdOneTickEarlyRejected = $true }
+Assert-Contract $holdOneTickEarlyRejected 'schema v2 accepted Up one QPC tick before Down completion + H'
+
+$gapOneTickEarlyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$gapOneTickEarlyV2.live_scheduler.no_pause_control.packets[2].started_qpc_ticks = 461670
+$gapOneTickEarlyV2.live_scheduler.no_pause_control.packets[2].completed_qpc_ticks = 470000
+$gapOneTickEarlyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $gapOneTickEarlyV2) } catch { $gapOneTickEarlyRejected = $true }
+Assert-Contract $gapOneTickEarlyRejected 'schema v2 accepted Down one QPC tick before Up completion + G'
+
+$cleanupBeforeDownV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$cleanupBeforeDown = $cleanupBeforeDownV2.live_scheduler.pause_cleanup_resume
+$cleanupBeforeDown.cleanup_captures.pause.completion_qpc_ticks = 149
+$cleanupBeforeDown.cleanup_completion_qpc_ticks = 149
+$cleanupBeforeDown.resume_barrier_qpc_ticks = 171820
+$cleanupBeforeDown.candidate_packet_not_before_qpc_ticks = 171820
+$cleanupBeforeDown.packets[1].started_qpc_ticks = 171820
+$cleanupBeforeDown.packets[1].completed_qpc_ticks = 171830
+$cleanupBeforeDown.resumed_sender_start_qpc_ticks = 171820
+$cleanupBeforeDown.cleanup_captures.final.completion_qpc_ticks = 171831
+$cleanupBeforeDownRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $cleanupBeforeDownV2) } catch { $cleanupBeforeDownRejected = $true }
+Assert-Contract $cleanupBeforeDownRejected 'schema v2 accepted cleanup completion before the initial Down completion'
+
+$cleanupDownV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$cleanupDownV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.packets[0].key_up = $false
+$cleanupDownRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $cleanupDownV2) } catch { $cleanupDownRejected = $true }
+Assert-Contract $cleanupDownRejected 'schema v2 accepted a Down in the cleanup capture'
+
+$extraCleanupUpV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$extraCleanupUpV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.up_events = 2
+$extraCleanupUpRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $extraCleanupUpV2) } catch { $extraCleanupUpRejected = $true }
+Assert-Contract $extraCleanupUpRejected 'schema v2 accepted an extra cleanup Up outside the one-key lifecycle fixture'
+
+$cleanupStampV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$cleanupStampV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.completion_qpc_ticks = 99
+$cleanupStampRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $cleanupStampV2) } catch { $cleanupStampRejected = $true }
+Assert-Contract $cleanupStampRejected 'schema v2 accepted cleanup capture with a completion stamp different from its resume barrier source'
+
+$wrongCleanupKeyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$wrongCleanupKeyV2.live_scheduler.pause_cleanup_resume.cleanup_captures.pause.packets[0].scan_codes[0] = 0x39
+$wrongCleanupKeyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $wrongCleanupKeyV2) } catch { $wrongCleanupKeyRejected = $true }
+Assert-Contract $wrongCleanupKeyRejected 'schema v2 accepted a cleanup Up for a scan code outside the fixture slot'
+
+$finalCleanupTooEarlyV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$finalCleanupTooEarlyV2.live_scheduler.pause_cleanup_resume.cleanup_captures.final.completion_qpc_ticks = 1
+$finalCleanupTooEarlyRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $finalCleanupTooEarlyV2) } catch { $finalCleanupTooEarlyRejected = $true }
+Assert-Contract $finalCleanupTooEarlyRejected 'schema v2 accepted final cleanup completion before the resumed Down completion'
+
+Assert-DispatchReportSourceIdentity -Report $liveV2 -SourceSha ('a' * 40) -SourceTreeSha ('b' * 40)
+$sourceMismatchRejected = $false
+try { Assert-DispatchReportSourceIdentity -Report $liveV2 -SourceSha ('c' * 40) -SourceTreeSha ('b' * 40) }
+catch { $sourceMismatchRejected = $true }
+Assert-Contract $sourceMismatchRejected 'runner source identity validator accepted a report from a different HEAD'
 
 $publicationCases = @(
     @{ Kind = 'baseline'; ExternalId = 'P0'; Stage = 'baseline'; Branch = 'rt-r3/p0-baseline' },
@@ -76,11 +295,6 @@ foreach ($legacyKind in $legacyKinds) {
 }
 
 $invalidRunnerOutputRoot = Join-Path ([IO.Path]::GetTempPath()) ('sky-invalid-evidence-mode-' + [guid]::NewGuid().ToString('N'))
-$runnerOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -EvidenceMode ('phase' + '4') -OutputRoot $invalidRunnerOutputRoot 2>&1)
-$runnerExitCode = $LASTEXITCODE
-Assert-Contract ($runnerExitCode -ne 0) 'the evidence runner accepted a legacy phase argument'
-Assert-Contract (($runnerOutput -join "`n").Contains('unsupported evidence mode')) 'legacy runner rejection did not report the evidence mode contract'
-
 $publisherOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish_rt_dispatch_evidence.ps1') -EvidenceKind 'P0' -HeadSha ('0' * 40) -EvidenceRoot $invalidRunnerOutputRoot 2>&1)
 $publisherExitCode = $LASTEXITCODE
 Assert-Contract ($publisherExitCode -ne 0) 'the evidence publisher accepted an external phase identifier as an evidence kind'
@@ -95,4 +309,4 @@ Assert-Contract ($p99TailPairs -eq $true) 'four p99 regression pairs must prompt
 $incompletePairs = Get-DispatchPairLeaderReviewPrompt -AttemptedPairs 6 -AvailablePairs 5 -P95RegressionPairs 4 -P99RegressionPairs 4
 Assert-Contract ($null -eq $incompletePairs) 'incomplete paired data must remain inconclusive'
 
-Write-Output 'Evidence runner and publication contracts: PASS'
+Write-Output 'Lifecycle report and historical publication contracts: PASS'

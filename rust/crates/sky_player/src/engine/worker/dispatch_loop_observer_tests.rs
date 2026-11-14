@@ -531,14 +531,14 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 1_000,
+            scheduled_us: 20_000,
             scan_codes: vec![0x15].into(),
             reason: "first-up".into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Up,
-            scheduled_us: 2_000,
+            scheduled_us: 21_000,
             scan_codes: vec![0x16].into(),
             reason: "second-up".into(),
         },
@@ -555,8 +555,16 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
         harness.dispatch_staged_candidate_for_test(first, false),
         super::StagedDispatchOutcome::Dispatched
     ));
+    let both_ups_due = TimelineTicks::from_raw(
+        harness
+            .resources
+            .clock
+            .duration_from_us(22_000)
+            .expect("coalesced Up due time")
+            .as_u64(),
+    );
     let up = harness
-        .stage_candidate_for_test(3, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_for_test(3, None, both_ups_due)
         .expect("stage Up")
         .expect("Up");
     assert!(matches!(
@@ -571,15 +579,24 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
     let mut collector =
         crate::engine::TelemetryCollector::new(crate::engine::TelemetryMode::Ring, 1);
     collector.output.accepted = 1;
-    crate::engine::worker::dispatch::attach_up_slot_traces(&mut collector, &packet)
+    crate::engine::worker::dispatch::observer_trace::attach_up_slot_traces(
+        &mut collector,
+        &packet,
+    )
         .expect("consume Up evidence");
     let slots = &collector.output.up_slot_records;
     assert_eq!(slots.len(), 2);
-    let one_millisecond_ticks = harness
+    let first_up_ticks = harness
         .resources
         .clock
-        .duration_from_us(1_000)
-        .expect("one millisecond QPC duration")
+        .duration_from_us(20_000)
+        .expect("first authored Up QPC offset")
+        .as_u64();
+    let second_up_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(21_000)
+        .expect("second authored Up QPC offset")
         .as_u64();
     assert_eq!(
         (
@@ -587,7 +604,7 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
             slots[0].scan_code,
             slots[0].authored_offset_ticks
         ),
-        (1, 0x15, one_millisecond_ticks)
+        (1, 0x15, first_up_ticks)
     );
     assert_eq!(
         (
@@ -595,7 +612,7 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
             slots[1].scan_code,
             slots[1].authored_offset_ticks
         ),
-        (2, 0x16, one_millisecond_ticks * 2)
+        (2, 0x16, second_up_ticks)
     );
     assert_ne!(
         slots[0].authored_offset_ticks,
@@ -630,14 +647,14 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 1_000,
+            scheduled_us: 20_000,
             scan_codes: vec![0x15].into(),
             reason: "first-up".into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Up,
-            scheduled_us: 2_000,
+            scheduled_us: 21_000,
             scan_codes: vec![0x16].into(),
             reason: "second-up".into(),
         },
@@ -654,6 +671,14 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
         harness.dispatch_staged_candidate_for_test(first, false),
         super::StagedDispatchOutcome::Dispatched
     ));
+    let both_ups_due = TimelineTicks::from_raw(
+        harness
+            .resources
+            .clock
+            .duration_from_us(22_000)
+            .expect("coalesced Up due time")
+            .as_u64(),
+    );
     for index in 0..crate::engine::worker::dispatch::observation::OBSERVATION_QUEUE_CAPACITY {
         harness.observer.push(
             crate::engine::worker::dispatch::observation::DispatchObservation::StaleMetadata(
@@ -668,7 +693,7 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     }
 
     let up = harness
-        .stage_candidate_for_test(3, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_for_test(3, None, both_ups_due)
         .expect("stage coalesced Up")
         .expect("Up");
     assert!(matches!(

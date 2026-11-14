@@ -20,7 +20,19 @@ serde_json = "1"
 [[bench]]
 name = "soak_benchmark"
 harness = false
+required-features = ["test-support"]
+
+[[test]]
+name = "golden"
+path = "tests/golden.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "executor_properties"
+path = "tests/executor_properties.rs"
+required-features = ["test-support"]
 
 [[bench]]
 name = "commit_scaling"
 harness = false
+required-features = ["test-support"]

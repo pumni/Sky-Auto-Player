@@ -33,23 +33,12 @@ sky_dispatch_win32 = { path = "../sky_dispatch_win32", features = ["test-support
 name = "rt_dispatch_no_alloc"
 required-features = ["test-support"]
 
-[[example]]
-name = "rt_handoff_bench"
-required-features = ["test-support"]
-
-[[example]]
-name = "rt_dispatch_probe"
-required-features = ["test-support"]
-
-[[example]]
-name = "rt_corpus_packet_probe"
-required-features = ["test-support"]
-
-[[example]]
-name = "rt_prepared_acceptance"
-required-features = ["test-support"]
-
 [[bin]]
 name = "rt-native-acceptance"
 path = "src/bin/rt_native_acceptance.rs"
 required-features = ["real-input-acceptance"]
+
+[[example]]
+name = "dispatch_lifecycle_evidence"
+path = "examples/dispatch_lifecycle_evidence.rs"
+required-features = ["test-support"]

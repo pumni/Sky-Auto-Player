@@ -1,3 +1,5 @@
+# Historical P0-P5 publication tool. It does not produce schema-v2 lifecycle
+# reports; current offline lifecycle evidence uses run_dispatch_lifecycle_evidence.ps1.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]

@@ -2,7 +2,7 @@ use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::collections::HashMap;
 
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
-use sky_dispatch_core::coordinator::GenerationAccounting;
+use sky_dispatch_core::accounting::GenerationAccounting;
 
 /// Lifecycle values for the allocation-free supervisor poll path.
 #[repr(u8)]

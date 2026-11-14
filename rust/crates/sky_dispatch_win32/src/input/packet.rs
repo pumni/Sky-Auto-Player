@@ -3,10 +3,12 @@ use super::outcome::{
     SendTransactionOutcome, SendTransactionStatus, classify_send_status,
 };
 use super::profile::MaterializedInstrumentKeyProfile;
+use super::raw::terminal_up_send_with;
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
-use crate::clock::{QpcClock, QpcTicks};
+use super::up_transaction::terminal_up_outcome;
+use crate::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_core::model::MAX_KEYS;
 #[cfg(windows)]
 use std::mem::MaybeUninit;
@@ -28,7 +30,7 @@ pub struct PreparedPhysicalPacket {
 /// Borrowed view over an already materialized physical packet.
 ///
 /// The view never owns or rebuilds Win32 `INPUT` values. It is used for the
-/// canonical Up prefix of a Mixed packet during missed-Down recovery.
+/// final sender boundary to borrow the prepared packet without allocating.
 #[derive(Clone, Copy)]
 pub struct PreparedPacketView<'a> {
     packet: PhysicalPacket,
@@ -119,37 +121,6 @@ impl PreparedPhysicalPacket {
         // writes every element in the prefix. The length is bounded by the
         // fixed array capacity, so no uninitialized element is exposed.
         unsafe { std::slice::from_raw_parts(self.inputs.as_ptr().cast(), length) }
-    }
-
-    /// Borrow the canonical Up prefix for Mixed missed-Down recovery.
-    ///
-    /// The constructor guarantees that all Up events precede all Down
-    /// events. The length check keeps this seam fail-closed if that invariant
-    /// ever changes.
-    pub fn up_recovery_view(&self) -> Option<PreparedPacketView<'_>> {
-        let up_mask = self.packet.up_mask;
-        let down_mask = self.packet.down_mask;
-        if up_mask == 0 || down_mask == 0 {
-            return None;
-        }
-        let up_len = usize::from(up_mask.count_ones() as u8);
-        let expected_len = up_len.saturating_add(down_mask.count_ones() as usize);
-        if usize::from(self.length) != expected_len {
-            return None;
-        }
-        #[cfg(windows)]
-        {
-            Some(PreparedPacketView {
-                packet: PhysicalPacket::new(up_mask, 0),
-                inputs: self.initialized_inputs().get(..up_len)?,
-            })
-        }
-        #[cfg(not(windows))]
-        {
-            Some(PreparedPacketView {
-                packet: PhysicalPacket::new(up_mask, 0),
-            })
-        }
     }
 }
 
@@ -245,13 +216,13 @@ impl PreparedTaggedCalibrationPacket {
 
         match result {
             Ok(result) => result,
-            Err(PreparedSendFailure::Clock(started, error, _)) => PlatformSendResult {
+            Err(PreparedSendFailure::Clock(failure)) => PlatformSendResult {
                 requested: self.requested,
-                inserted: 0,
-                started_ticks: started.unwrap_or(QpcTicks::ZERO),
+                inserted: failure.inserted,
+                started_ticks: failure.started_ticks.unwrap_or(QpcTicks::ZERO),
                 completed_ticks: None,
-                win32_error: 0,
-                timing_error: Some(error),
+                win32_error: failure.win32_error,
+                timing_error: Some(failure.error),
             },
         }
     }
@@ -354,12 +325,12 @@ fn send_once(
     packet: PhysicalPacket,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
-) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
+) -> Result<PlatformSendResult, SendClockFailure> {
     let prepared = PreparedPhysicalPacket::try_new(packet)
         .expect("send_once receives a validated physical packet");
     match send_once_prepared(&prepared, clock, supplied_started_ticks) {
         Ok(result) => Ok(result),
-        Err(PreparedSendFailure::Clock(start, error, called)) => Err((start, error, called)),
+        Err(PreparedSendFailure::Clock(failure)) => Err(failure),
     }
 }
 
@@ -383,8 +354,111 @@ pub(crate) fn invalid_packet_outcome(packet: PhysicalPacket) -> SendTransactionO
     }
 }
 
+/// Send one already-validated Up-only packet for terminal cleanup. Timing is
+/// sampled when available, but a missing pre-call QPC sample cannot block this
+/// bounded safety send. The caller retains ownership of retry and verification.
+pub(crate) fn send_prepared_terminal_up_once(
+    prepared: &PreparedPhysicalPacket,
+    clock: Option<QpcClock>,
+) -> SendTransactionOutcome {
+    let packet = prepared.packet();
+    if !packet.is_up_only() || packet.up_mask == 0 {
+        return invalid_packet_outcome(packet);
+    }
+
+    let clock = clock.or_else(|| QpcClock::initialize().ok());
+    let initialization_error = clock.is_none().then_some(QpcError::FrequencyUnavailable);
+    let mut sample_qpc = || match clock {
+        Some(clock) => clock.now(),
+        None => Err(initialization_error.unwrap_or(QpcError::FrequencyUnavailable)),
+    };
+
+    #[cfg(windows)]
+    let transport = {
+        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+
+        let requested = prepared.event_count();
+        let cb_size =
+            std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32;
+        terminal_up_send_with(requested, &mut sample_qpc, || {
+            // Clear stale thread-local state after the optional start
+            // sample and immediately before the authoritative syscall.
+            unsafe { SetLastError(0) };
+            let inserted = unsafe {
+                SendInput(
+                    u32::from(requested),
+                    prepared.initialized_inputs().as_ptr(),
+                    cb_size,
+                )
+            }
+            .min(u32::from(requested)) as u8;
+            let win32_error = if inserted != requested {
+                unsafe { GetLastError() }
+            } else {
+                0
+            };
+            (inserted, win32_error)
+        })
+    };
+
+    #[cfg(not(windows))]
+    let transport = terminal_up_send_with(prepared.event_count(), &mut sample_qpc, || {
+        (prepared.event_count(), 0)
+    });
+
+    terminal_up_outcome(packet, transport)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SendClockFailure {
+    started_ticks: Option<QpcTicks>,
+    error: crate::clock::QpcError,
+    sendinput_called: bool,
+    inserted: u8,
+    win32_error: u32,
+}
+
+impl SendClockFailure {
+    fn before_send(error: crate::clock::QpcError) -> Self {
+        Self {
+            started_ticks: None,
+            error,
+            sendinput_called: false,
+            inserted: 0,
+            win32_error: 0,
+        }
+    }
+
+    fn after_send(
+        started_ticks: QpcTicks,
+        error: crate::clock::QpcError,
+        inserted: u8,
+        win32_error: u32,
+    ) -> Self {
+        Self {
+            started_ticks: Some(started_ticks),
+            error,
+            sendinput_called: true,
+            inserted,
+            win32_error,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn after_pre_call_without_send(started_ticks: QpcTicks, error: crate::clock::QpcError) -> Self {
+        Self {
+            started_ticks: Some(started_ticks),
+            error,
+            sendinput_called: false,
+            inserted: 0,
+            win32_error: 0,
+        }
+    }
+}
+
 enum PreparedSendFailure {
-    Clock(Option<QpcTicks>, crate::clock::QpcError, bool),
+    Clock(SendClockFailure),
 }
 
 #[cfg(windows)]
@@ -416,7 +490,9 @@ fn send_input_view_at_target(
         let ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(error) => {
-                return Err(PreparedSendFailure::Clock(None, error, false));
+                return Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
+                    error,
+                )));
             }
         };
         if ticks >= physical_target_qpc {
@@ -435,7 +511,12 @@ fn send_input_view_at_target(
     let completed_ticks = match clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
-            return Err(PreparedSendFailure::Clock(Some(started_ticks), error, true));
+            return Err(PreparedSendFailure::Clock(SendClockFailure::after_send(
+                started_ticks,
+                error,
+                inserted,
+                win32_error,
+            )));
         }
     };
 
@@ -459,7 +540,9 @@ fn send_input_view_at_target(
         let ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(error) => {
-                return Err(PreparedSendFailure::Clock(None, error, false));
+                return Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
+                    error,
+                )));
             }
         };
         if ticks >= physical_target_qpc {
@@ -471,9 +554,7 @@ fn send_input_view_at_target(
         Ok(ticks) => ticks,
         Err(error) => {
             return Err(PreparedSendFailure::Clock(
-                Some(started_ticks),
-                error,
-                false,
+                SendClockFailure::after_pre_call_without_send(started_ticks, error),
             ));
         }
     };
@@ -517,12 +598,16 @@ fn send_once_prepared_view(
             Some(ticks) => ticks,
             None => match clock.now() {
                 Ok(ticks) => ticks,
-                Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
+                Err(error) => {
+                    return Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
+                        error,
+                    )));
+                }
             },
         };
         let inserted =
             unsafe { SendInput(length as u32, inputs, cb_size) }.min(length as u32) as u8;
-        let error = if usize::from(inserted) < length {
+        let win32_error = if usize::from(inserted) < length {
             unsafe { GetLastError() }
         } else {
             0
@@ -530,7 +615,12 @@ fn send_once_prepared_view(
         let completed_ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(error) => {
-                return Err(PreparedSendFailure::Clock(Some(started_ticks), error, true));
+                return Err(PreparedSendFailure::Clock(SendClockFailure::after_send(
+                    started_ticks,
+                    error,
+                    inserted,
+                    win32_error,
+                )));
             }
         };
         Ok(PlatformSendResult {
@@ -538,7 +628,7 @@ fn send_once_prepared_view(
             inserted,
             started_ticks,
             completed_ticks: Some(completed_ticks),
-            win32_error: error,
+            win32_error,
             timing_error: None,
         })
     }
@@ -549,16 +639,18 @@ fn send_once_prepared_view(
             Some(ticks) => ticks,
             None => match clock.now() {
                 Ok(ticks) => ticks,
-                Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
+                Err(error) => {
+                    return Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
+                        error,
+                    )));
+                }
             },
         };
         let completed_ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(error) => {
                 return Err(PreparedSendFailure::Clock(
-                    Some(started_ticks),
-                    error,
-                    false,
+                    SendClockFailure::after_pre_call_without_send(started_ticks, error),
                 ));
             }
         };
@@ -579,7 +671,7 @@ fn send_once_prepared_view(
 #[allow(dead_code)]
 enum PacketSendAttempt {
     Outcome(PlatformSendResult),
-    ClockFailure(Option<QpcTicks>, crate::clock::QpcError, bool),
+    ClockFailure(SendClockFailure),
 }
 
 fn run_send_attempt(
@@ -589,7 +681,7 @@ fn run_send_attempt(
 ) -> PacketSendAttempt {
     match send_once(packet, clock, supplied_started_ticks) {
         Ok(res) => PacketSendAttempt::Outcome(res),
-        Err((start, err, called)) => PacketSendAttempt::ClockFailure(start, err, called),
+        Err(failure) => PacketSendAttempt::ClockFailure(failure),
     }
 }
 
@@ -600,9 +692,7 @@ fn run_prepared_send_attempt(
 ) -> PacketSendAttempt {
     match send_once_prepared_view(prepared, clock, supplied_started_ticks) {
         Ok(res) => PacketSendAttempt::Outcome(res),
-        Err(PreparedSendFailure::Clock(start, err, called)) => {
-            PacketSendAttempt::ClockFailure(start, err, called)
-        }
+        Err(PreparedSendFailure::Clock(failure)) => PacketSendAttempt::ClockFailure(failure),
     }
 }
 
@@ -613,9 +703,9 @@ fn prepared_send_outcome(
     let requested_mask = packet.up_mask | packet.down_mask;
     let first = match first {
         Ok(res) => res,
-        Err(PreparedSendFailure::Clock(start, error, called)) => {
+        Err(PreparedSendFailure::Clock(failure)) => {
             return SendTransactionOutcome {
-                status: if called {
+                status: if failure.sendinput_called {
                     SendTransactionStatus::ClockFailureAfterSend
                 } else {
                     SendTransactionStatus::ClockFailureBeforeSend
@@ -624,15 +714,15 @@ fn prepared_send_outcome(
                     requested_mask,
                     confirmed_mask: 0,
                     skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: u8::from(called),
+                    first_inserted: failure.inserted,
+                    attempts: u8::from(failure.sendinput_called),
                     zero_progress_retries: 0,
                     retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: start,
+                    first_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
+                    last_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
+                    started_ticks: failure.started_ticks,
                     completed_ticks: None,
-                    timing_error: Some(error),
+                    timing_error: Some(failure.error),
                 },
             };
         }
@@ -691,9 +781,9 @@ fn send_physical_packet_once_impl(
 
     let first = match send_one(packet) {
         PacketSendAttempt::Outcome(res) => res,
-        PacketSendAttempt::ClockFailure(start, err, called) => {
+        PacketSendAttempt::ClockFailure(failure) => {
             return SendTransactionOutcome {
-                status: if called {
+                status: if failure.sendinput_called {
                     SendTransactionStatus::ClockFailureAfterSend
                 } else {
                     SendTransactionStatus::ClockFailureBeforeSend
@@ -702,15 +792,15 @@ fn send_physical_packet_once_impl(
                     requested_mask,
                     confirmed_mask: 0,
                     skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: u8::from(called),
+                    first_inserted: failure.inserted,
+                    attempts: u8::from(failure.sendinput_called),
                     zero_progress_retries: 0,
                     retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: start,
+                    first_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
+                    last_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
+                    started_ticks: failure.started_ticks,
                     completed_ticks: None,
-                    timing_error: Some(err),
+                    timing_error: Some(failure.error),
                 },
             };
         }
@@ -775,9 +865,7 @@ fn send_prepared_physical_packet_once_impl(
     let packet = prepared.packet();
     let first = match run_prepared_send_attempt(prepared, clock, started_ticks) {
         PacketSendAttempt::Outcome(res) => Ok(res),
-        PacketSendAttempt::ClockFailure(start, error, called) => {
-            Err(PreparedSendFailure::Clock(start, error, called))
-        }
+        PacketSendAttempt::ClockFailure(failure) => Err(PreparedSendFailure::Clock(failure)),
     };
     prepared_send_outcome(packet, first)
 }
@@ -797,9 +885,9 @@ fn send_physical_packet_retry_policy_impl(
 
     let first = match send_one(packet) {
         PacketSendAttempt::Outcome(res) => res,
-        PacketSendAttempt::ClockFailure(start, err, called) => {
+        PacketSendAttempt::ClockFailure(failure) => {
             return SendTransactionOutcome {
-                status: if called {
+                status: if failure.sendinput_called {
                     SendTransactionStatus::ClockFailureAfterSend
                 } else {
                     SendTransactionStatus::ClockFailureBeforeSend
@@ -808,15 +896,15 @@ fn send_physical_packet_retry_policy_impl(
                     requested_mask,
                     confirmed_mask: 0,
                     skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: u8::from(called),
+                    first_inserted: failure.inserted,
+                    attempts: u8::from(failure.sendinput_called),
                     zero_progress_retries: 0,
                     retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: start,
+                    first_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
+                    last_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
+                    started_ticks: failure.started_ticks,
                     completed_ticks: None,
-                    timing_error: Some(err),
+                    timing_error: Some(failure.error),
                 },
             };
         }
@@ -895,7 +983,7 @@ fn send_physical_packet_retry_policy_impl(
     // is only retried after guaranteed zero progress (no chord was split).
     let second = match send_one(packet) {
         PacketSendAttempt::Outcome(res) => res,
-        PacketSendAttempt::ClockFailure(start, err, called) => {
+        PacketSendAttempt::ClockFailure(failure) => {
             return SendTransactionOutcome {
                 status: SendTransactionStatus::ClockFailureAfterSend,
                 evidence: SendEvidence {
@@ -903,14 +991,16 @@ fn send_physical_packet_retry_policy_impl(
                     confirmed_mask: 0,
                     skipped_mask: 0,
                     first_inserted: first.inserted,
-                    attempts: u8::from(called).saturating_add(1),
+                    attempts: u8::from(failure.sendinput_called).saturating_add(1),
                     zero_progress_retries: u8::from(first.inserted == 0),
                     retry_reason,
                     first_win32_error: first_win32,
-                    last_win32_error: first_win32,
-                    started_ticks: start,
+                    last_win32_error: (failure.win32_error != 0)
+                        .then_some(failure.win32_error)
+                        .or(first_win32),
+                    started_ticks: failure.started_ticks,
                     completed_ticks: None,
-                    timing_error: Some(err),
+                    timing_error: Some(failure.error),
                 },
             };
         }
@@ -1045,7 +1135,7 @@ fn send_prepared_physical_packet_once_at_target_scripted(
     prepared: &PreparedPhysicalPacket,
     physical_target_qpc: QpcTicks,
     mut qpc_now: impl FnMut() -> Result<QpcTicks, crate::clock::QpcError>,
-    mut send_one: impl FnMut(QpcTicks) -> Result<PlatformSendResult, crate::clock::QpcError>,
+    mut send_one: impl FnMut(QpcTicks) -> Result<PlatformSendResult, (u8, u32, crate::clock::QpcError)>,
 ) -> SendTransactionOutcome {
     let packet = prepared.packet();
     let started_ticks = loop {
@@ -1054,7 +1144,9 @@ fn send_prepared_physical_packet_once_at_target_scripted(
             Err(error) => {
                 return prepared_send_outcome(
                     packet,
-                    Err(PreparedSendFailure::Clock(None, error, false)),
+                    Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
+                        error,
+                    ))),
                 );
             }
         };
@@ -1063,8 +1155,14 @@ fn send_prepared_physical_packet_once_at_target_scripted(
         }
         std::hint::spin_loop();
     };
-    let first = send_one(started_ticks)
-        .map_err(|error| PreparedSendFailure::Clock(Some(started_ticks), error, true));
+    let first = send_one(started_ticks).map_err(|(inserted, win32_error, error)| {
+        PreparedSendFailure::Clock(SendClockFailure::after_send(
+            started_ticks,
+            error,
+            inserted,
+            win32_error,
+        ))
+    });
     prepared_send_outcome(packet, first)
 }
 
@@ -1203,6 +1301,75 @@ mod tests {
     }
 
     #[test]
+    fn post_send_qpc_failure_preserves_insert_count_and_win32_error() {
+        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b001, 0b010))
+            .expect("prepared Mixed packet");
+
+        for (inserted, win32_error) in [(0, 5), (1, 5), (2, 0)] {
+            let send_calls = Cell::new(0);
+            let outcome = send_prepared_physical_packet_once_at_target_scripted(
+                &prepared,
+                QpcTicks::from_raw(100),
+                || Ok(QpcTicks::from_raw(100)),
+                |started_ticks| {
+                    send_calls.set(send_calls.get() + 1);
+                    assert_eq!(started_ticks, QpcTicks::from_raw(100));
+                    Err((inserted, win32_error, QpcError::CounterUnavailable))
+                },
+            );
+
+            assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+            assert_eq!(outcome.evidence.attempts, 1);
+            assert_eq!(outcome.evidence.first_inserted, inserted);
+            assert_eq!(
+                outcome.evidence.first_win32_error,
+                (win32_error != 0).then_some(win32_error)
+            );
+            assert_eq!(
+                outcome.evidence.last_win32_error,
+                (win32_error != 0).then_some(win32_error)
+            );
+            assert_eq!(
+                outcome.evidence.started_ticks,
+                Some(QpcTicks::from_raw(100))
+            );
+            assert_eq!(outcome.evidence.completed_ticks, None);
+            assert_eq!(
+                outcome.evidence.timing_error,
+                Some(QpcError::CounterUnavailable)
+            );
+            assert_eq!(send_calls.get(), 1);
+        }
+    }
+
+    #[test]
+    fn pre_send_qpc_failure_never_calls_the_scripted_sender() {
+        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001))
+            .expect("prepared Down packet");
+        let outcome = send_prepared_physical_packet_once_at_target_scripted(
+            &prepared,
+            QpcTicks::from_raw(100),
+            || Err(QpcError::CounterUnavailable),
+            |_| panic!("pre-call QPC failure must not reach the sender"),
+        );
+
+        assert_eq!(
+            outcome.status,
+            SendTransactionStatus::ClockFailureBeforeSend
+        );
+        assert_eq!(outcome.evidence.attempts, 0);
+        assert_eq!(outcome.evidence.first_inserted, 0);
+        assert_eq!(outcome.evidence.first_win32_error, None);
+        assert_eq!(outcome.evidence.last_win32_error, None);
+        assert_eq!(outcome.evidence.started_ticks, None);
+        assert_eq!(outcome.evidence.completed_ticks, None);
+        assert_eq!(
+            outcome.evidence.timing_error,
+            Some(QpcError::CounterUnavailable)
+        );
+    }
+
+    #[test]
     fn target_crossing_late_down_is_still_sent() {
         let prepared =
             PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b001)).expect("prepared");
@@ -1294,44 +1461,6 @@ mod tests {
                 .expect("fifteen-key packet prepares");
             assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
         }
-    }
-
-    #[test]
-    fn mixed_prepared_packet_exposes_only_its_up_prefix() {
-        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b101, 0b11000))
-            .expect("mixed packet prepares");
-        let recovery = prepared
-            .up_recovery_view()
-            .expect("mixed packet has Up prefix");
-        assert_eq!(recovery.packet(), PhysicalPacket::new(0b101, 0));
-        assert_eq!(recovery.packet().event_count(), 2);
-        assert_eq!(prepared.event_count(), 4);
-        #[cfg(windows)]
-        assert_eq!(prepared.initialized_inputs().len(), 4);
-    }
-
-    #[test]
-    fn maximum_valid_mixed_recovery_view_contains_all_up_events() {
-        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x01ff, 0x7e00))
-            .expect("full mixed packet prepares");
-        let recovery = prepared.up_recovery_view().expect("full mixed Up prefix");
-
-        assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
-        assert_eq!(recovery.packet(), PhysicalPacket::new(0x01ff, 0));
-        assert_eq!(recovery.packet().event_count(), 9);
-        #[cfg(windows)]
-        assert_eq!(prepared.initialized_inputs().len(), 15);
-    }
-
-    #[test]
-    fn non_mixed_prepared_packets_have_no_recovery_view() {
-        let up_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b11, 0))
-            .expect("Up-only packet prepares");
-        let down_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b11))
-            .expect("Down-only packet prepares");
-
-        assert!(up_only.up_recovery_view().is_none());
-        assert!(down_only.up_recovery_view().is_none());
     }
 
     #[test]

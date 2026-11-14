@@ -1,8 +1,8 @@
-use super::outcome::PlatformSendResult;
+use super::outcome::{PlatformSendResult, TerminalUpTransportResult};
 use super::scan_code::{
     PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE, valid_instrument_scan_code,
 };
-use crate::clock::{QpcClock, QpcTicks};
+use crate::clock::{QpcClock, QpcError, QpcTicks};
 
 pub(crate) fn no_syscall_boundary_with_clock(
     clock: Option<QpcClock>,
@@ -26,6 +26,38 @@ pub(crate) fn no_syscall_boundary_with_clock(
     match clock.now() {
         Ok(ticks) => (ticks, Some(ticks), None),
         Err(error) => (QpcTicks::ZERO, None, Some(error)),
+    }
+}
+
+/// Run one terminal Up send with optional timing samples around the transport.
+/// A failed pre-call sample is evidence loss only: it must not suppress the
+/// caller's bounded safety send. The cleanup state machine owns all retries.
+pub(crate) fn terminal_up_send_with<Qpc, Send>(
+    requested: u8,
+    mut sample_qpc: Qpc,
+    mut send_input: Send,
+) -> TerminalUpTransportResult
+where
+    Qpc: FnMut() -> Result<QpcTicks, QpcError>,
+    Send: FnMut() -> (u8, u32),
+{
+    let (started_ticks, start_error) = match sample_qpc() {
+        Ok(ticks) => (Some(ticks), None),
+        Err(error) => (None, Some(error)),
+    };
+    let (inserted, win32_error) = send_input();
+    let (completed_ticks, completion_error) = match sample_qpc() {
+        Ok(ticks) => (Some(ticks), None),
+        Err(error) => (None, Some(error)),
+    };
+
+    TerminalUpTransportResult {
+        requested,
+        inserted: inserted.min(requested),
+        started_ticks,
+        completed_ticks,
+        win32_error,
+        timing_error: start_error.or(completion_error),
     }
 }
 
@@ -217,5 +249,68 @@ mod tests {
 
         assert!(reset < start);
         assert!(start < syscall);
+    }
+}
+
+#[cfg(test)]
+mod terminal_up_tests {
+    use super::terminal_up_send_with;
+    use crate::clock::{QpcError, QpcTicks};
+    use std::cell::Cell;
+
+    #[test]
+    fn pre_call_qpc_failure_does_not_skip_terminal_up_send() {
+        let sample_count = Cell::new(0);
+        let send_count = Cell::new(0);
+        let result = terminal_up_send_with(
+            2,
+            || {
+                let sample = sample_count.get();
+                sample_count.set(sample + 1);
+                if sample == 0 {
+                    Err(QpcError::CounterUnavailable)
+                } else {
+                    Ok(QpcTicks::from_raw(17))
+                }
+            },
+            || {
+                send_count.set(send_count.get() + 1);
+                (2, 0)
+            },
+        );
+
+        assert_eq!(send_count.get(), 1);
+        assert_eq!(result.requested, 2);
+        assert_eq!(result.inserted, 2);
+        assert_eq!(result.started_ticks, None);
+        assert_eq!(result.completed_ticks, Some(QpcTicks::from_raw(17)));
+        assert_eq!(result.timing_error, Some(QpcError::CounterUnavailable));
+    }
+
+    #[test]
+    fn post_send_qpc_failure_keeps_start_and_marks_completion_unavailable() {
+        let sample_count = Cell::new(0);
+        let send_count = Cell::new(0);
+        let result = terminal_up_send_with(
+            1,
+            || {
+                let sample = sample_count.get();
+                sample_count.set(sample + 1);
+                if sample == 0 {
+                    Ok(QpcTicks::from_raw(23))
+                } else {
+                    Err(QpcError::CounterUnavailable)
+                }
+            },
+            || {
+                send_count.set(send_count.get() + 1);
+                (1, 0)
+            },
+        );
+
+        assert_eq!(send_count.get(), 1);
+        assert_eq!(result.started_ticks, Some(QpcTicks::from_raw(23)));
+        assert_eq!(result.completed_ticks, None);
+        assert_eq!(result.timing_error, Some(QpcError::CounterUnavailable));
     }
 }

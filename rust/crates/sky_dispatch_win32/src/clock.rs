@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 #[cfg(any(test, feature = "qpc-read-counting"))]
 use std::sync::atomic::AtomicU64;
-#[cfg(any(test, feature = "qpc-read-counting", feature = "test-support"))]
+#[cfg(any(test, feature = "qpc-read-counting"))]
 use std::sync::atomic::Ordering;
 
 pub use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
@@ -28,12 +28,14 @@ pub enum TimeConversionError {
 static QPC_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(any(test, feature = "test-support"))]
-static QPC_NOW_FAULT_INJECTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+std::thread_local! {
+    static QPC_NOW_FAULT_INJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 #[cfg(any(test, feature = "test-support"))]
+/// Faults QPC reads on the calling test thread only.
 pub fn set_qpc_now_fault_for_test(fault: bool) {
-    QPC_NOW_FAULT_INJECTED.store(fault, Ordering::SeqCst);
+    QPC_NOW_FAULT_INJECTED.with(|injected| injected.set(fault));
 }
 
 #[cfg(any(test, feature = "qpc-read-counting"))]
@@ -122,7 +124,7 @@ pub fn qpc_now_ticks_checked() -> Result<QpcTicks, QpcError> {
     #[cfg(any(test, feature = "qpc-read-counting"))]
     record_qpc_read();
     #[cfg(any(test, feature = "test-support"))]
-    if QPC_NOW_FAULT_INJECTED.load(Ordering::SeqCst) {
+    if QPC_NOW_FAULT_INJECTED.with(std::cell::Cell::get) {
         return Err(QpcError::CounterUnavailable);
     }
     #[cfg(windows)]
@@ -226,6 +228,26 @@ mod tests {
         let first = qpc_now_ticks().unwrap();
         let second = qpc_now_ticks().unwrap();
         assert!(second >= first);
+    }
+
+    #[test]
+    fn qpc_fault_injection_is_local_to_the_test_thread() {
+        struct ResetFault;
+        impl Drop for ResetFault {
+            fn drop(&mut self) {
+                super::set_qpc_now_fault_for_test(false);
+            }
+        }
+
+        let _reset_fault = ResetFault;
+        super::set_qpc_now_fault_for_test(true);
+        assert_eq!(qpc_now_ticks(), Err(super::QpcError::CounterUnavailable));
+
+        std::thread::spawn(qpc_now_ticks)
+            .join()
+            .expect("QPC reader thread")
+            .expect("fault must not leak to another test thread");
+        assert_eq!(qpc_now_ticks(), Err(super::QpcError::CounterUnavailable));
     }
 
     #[test]

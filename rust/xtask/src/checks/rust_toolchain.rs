@@ -17,7 +17,7 @@ const WORKFLOWS: &[&str] = &[
 const ACTIVE_PIN_CONSUMERS: &[&str] = &[
     RESOLVER,
     SETUP_ACTION,
-    "scripts/run_rt_dispatch_evidence.ps1",
+    "scripts/run_dispatch_lifecycle_evidence.ps1",
     "apps/desktop/scripts/profile-builtin-library.mjs",
     "apps/desktop/src-tauri/src/native_runtime/tests/catalog_viewport_benchmark.rs",
     "docs/rust-toolchain-policy.md",

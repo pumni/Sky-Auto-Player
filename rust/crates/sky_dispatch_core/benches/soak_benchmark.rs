@@ -1,8 +1,7 @@
-//! Authored-packet soak simulation for `sky_dispatch_core`.
+//! Production `DispatchExecutor` soak simulation for `sky_dispatch_core`.
 //!
-//! This benchmark exercises the production coordinator lifecycle:
-//! authored packet -> final admission -> one completion -> next authored
-//! packet.  It intentionally contains no pending-release or retry model.
+//! It advances the production scheduler through its real `evaluate_at` and
+//! send-completion APIs. Worker admission and Win32 delivery are not measured.
 
 use std::env;
 use std::time::Instant;
@@ -56,13 +55,13 @@ fn main() {
     let actions = build_actions(notes);
     let started = Instant::now();
     let result = simulate_schedule(&actions, SCAN_CODES, NOTE_HOLD_US, SEND_LATENCY_US)
-        .expect("authored soak simulation must complete");
+        .expect("executor soak simulation must complete");
     let elapsed_us = started.elapsed().as_micros();
     let expected_released = (0..notes)
         .map(|note| POLYPHONY[note % POLYPHONY.len()])
         .sum::<usize>() as u64;
 
-    assert!(result.is_finished, "authored lifecycle did not finish");
+    assert!(result.is_finished, "executor lifecycle did not finish");
     assert_eq!(result.status_counts.get("active"), Some(&0));
     assert_eq!(
         result.status_counts.get("released"),
@@ -74,15 +73,16 @@ fn main() {
     );
 
     let report = serde_json::json!({
-        "benchmark": "authored_packet_soak",
-        "lifecycle": "authored_packet_to_one_sendinput_completion",
+        "benchmark": "dispatch_executor_soak",
+        "scheduler_owner": "DispatchExecutor",
+        "lifecycle": "executor_decision_to_mock_send_completion",
         "notes": notes,
         "events": result.events.len(),
         "status_counts": result.status_counts,
         "elapsed_us": elapsed_us,
         "send_latency_us": SEND_LATENCY_US,
         "min_hold_us": NOTE_HOLD_US,
-        "production_dispatch": false,
+        "worker_admission_and_win32_delivery": "not_measured",
     });
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
 }

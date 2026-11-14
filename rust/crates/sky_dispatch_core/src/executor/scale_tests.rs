@@ -54,8 +54,9 @@ fn generate_scale_schedule(
 
 fn execute_scale_scenario(schedule: &RuntimeSchedule) {
     let min_hold = DurationTicks::from_raw(20_000); // 20 ms
-    let frame_time = DurationTicks::from_raw(16_000); // 16 ms
-    let mut executor = DispatchExecutor::new(schedule, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // 16 ms
+    let mut executor =
+        DispatchExecutor::new(schedule, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     let mut sim_time = TimelineTicks::ZERO;
     let mut steps = 0usize;
@@ -189,107 +190,9 @@ fn cleanup_overflow_preflights_without_mutation() {
 }
 
 #[test]
-fn divergent_coordinator_executor_active_mask_fails_closed() {
-    let canonical = vec![0x15, 0x16];
-    let sched = generate_scale_schedule(2, 1, &canonical);
-    let mut coord = crate::coordinator::RuntimeDispatchCoordinator::new(
-        sched.clone(),
-        0,
-        0,
-        TimelineTicks::from_raw,
-    );
-    let mut exec = DispatchExecutor::new(
-        &sched,
-        DurationTicks::from_raw(500),
-        DurationTicks::from_raw(16_667),
-        test_ticks,
-    )
-    .unwrap();
-
-    exec.on_send_completed(0, 0x01, TimelineTicks::from_raw(10_000))
-        .unwrap();
-    coord.executor = Some(exec);
-
-    let res = coord.cancel_live_generations_after_verified_resumable_cleanup_with_time(
-        TimelineTicks::from_raw(20_000),
-    );
-    assert!(res.is_err(), "divergent active mask must fail closed");
-}
-
-#[test]
-fn next_stale_packet_target_ticks_is_bounded_by_32() {
-    let mut actions = Vec::with_capacity(41);
-    for chord in 0..20u32 {
-        let down_us = u64::from(chord) * 100_000;
-        actions.push(KeyActionInput {
-            source_action_index: chord * 2,
-            kind: ActionKind::Down,
-            scheduled_us: down_us,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "bounded-lookahead-down".into(),
-        });
-        actions.push(KeyActionInput {
-            source_action_index: chord * 2 + 1,
-            kind: ActionKind::Up,
-            scheduled_us: down_us + 50_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "bounded-lookahead-up".into(),
-        });
-    }
-    actions.push(KeyActionInput {
-        source_action_index: 40,
-        kind: ActionKind::Up,
-        scheduled_us: 2_000_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "bounded-lookahead-stale-up".into(),
-    });
-    let sched = compile_runtime_intents(&actions, &[0x15]).expect("bounded lookahead schedule");
-    let coord =
-        crate::coordinator::RuntimeDispatchCoordinator::new(sched, 0, 0, TimelineTicks::from_raw);
-    assert_eq!(coord.next_stale_packet_target_ticks(), Ok(None));
-}
-
-#[test]
-fn next_stale_packet_target_ticks_reports_target_and_corruption() {
-    let actions = [KeyActionInput {
-        source_action_index: 0,
-        kind: ActionKind::Up,
-        scheduled_us: 1_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "lookahead-stale-up".into(),
-    }];
-    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("stale lookahead schedule");
-    let coordinator = crate::coordinator::RuntimeDispatchCoordinator::new(
-        schedule.clone(),
-        0,
-        0,
-        TimelineTicks::from_raw,
-    );
-    assert_eq!(
-        coordinator.next_stale_packet_target_ticks(),
-        Ok(Some(TimelineTicks::from_raw(1_000)))
-    );
-
-    let mut corrupt_schedule = schedule;
-    corrupt_schedule.batches[0].packet_id = u32::MAX;
-    let corrupt = crate::coordinator::RuntimeDispatchCoordinator::new(
-        corrupt_schedule,
-        0,
-        0,
-        TimelineTicks::from_raw,
-    );
-    assert!(matches!(
-        corrupt.next_stale_packet_target_ticks(),
-        Err(crate::coordinator::CoordinatorError::Schedule(
-            crate::model::RuntimeScheduleError::InvalidPacketIndex { .. }
-        ))
-    ));
-}
-
-#[test]
 fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
     // Parameters from Leader L9:
-    // GameFps = 60, TimingMarginUs = 500, T = 16_667 us, H = 2*T + 500 = 33_834 us.
+    // GameFps = 60, TimingMarginUs = 500, T = 16_667 us, H = 2*T + 500 = 33_834 us, G = 17_167 us.
     // Repeating cycle every 100_000 us, starting at 50_000 us:
     // Key A Down @ 50_000 us (slot 0)
     // Key A Up   @ 84_000 us (slot 0, hold = 34_000 us >= H)
@@ -334,8 +237,9 @@ fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
 
     let sched = compile_runtime_intents(&actions, &allowed).expect("valid schedule");
     let min_hold = DurationTicks::from_raw(33_834);
-    let frame_time = DurationTicks::from_raw(16_667);
-    let mut exec = DispatchExecutor::new(&sched, min_hold, frame_time, test_ticks).unwrap();
+    let min_release_gap_ticks = DurationTicks::from_raw(17_167);
+    let mut exec =
+        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
 
     // 1. At 50_000 us: Key A Down is evaluated and returned for dispatch.
     let step_a_down = exec.evaluate(TimelineTicks::from_raw(50_000));

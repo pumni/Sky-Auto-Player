@@ -235,11 +235,21 @@ The documented GitHub Actions job default is described in the
 
 ## Deterministic evidence tools
 
-`rust/xtask/src/assembly_audit.rs` now owns the deterministic parsing and
-assertions for the dispatch, prepared-normal, and modifier-guard optimized
-assembly audits. The existing `scripts/audit_*_assembly.ps1` names remain as
-thin command adapters because the retained RT evidence runner calls them.
-Their Rust fixtures cover both accepted and rejected assembly shapes.
+`rust/xtask/src/assembly_audit.rs` owns deterministic checks for the live
+`DispatchExecutor::dispatch_staged_candidate` boundary and the Win32 deferred
+sender. The `dispatch` audit checks final owner/modifier rechecks, exactly one
+deferred sender, then the scheduler completion and journal commits. The
+`modifier-guard` audit checks the fixed modifier order and the scoped Win32
+send path, including one `SendInput` between pre-call and completion QPC
+samples. It deliberately does not apply copy/division thresholds to the whole
+worker function.
+
+`prepared-normal` is retained only as a command-line compatibility alias for
+the same live dispatch audit; it does not refer to the removed prepared-normal
+scheduler. The `scripts/audit_*_assembly.ps1` files are thin adapters for these
+current audits. Rust fixture tests cover accepted and rejected assembly
+shapes, and the audit has also been run against actual Windows x64 `dist`
+assembly output.
 
 `cargo xtask calibration project-evidence` owns startup calibration JSON
 projection bytes and SHA-256 sidecars. It normalizes CRLF and CR to LF, writes
