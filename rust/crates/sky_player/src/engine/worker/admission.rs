@@ -462,27 +462,14 @@ pub(crate) fn apply_final_down_rejection(
     }
 }
 
-pub(crate) fn owner_rejection_reason(
-    failure: OwnerAdmissionFailure,
-    prepared_normal: bool,
-) -> &'static str {
-    match (prepared_normal, failure) {
-        (true, OwnerAdmissionFailure::Mismatch) => "prepared_down_owner_mismatch",
-        (true, OwnerAdmissionFailure::QueryUnavailable) => "prepared_down_owner_query_unavailable",
-        (true, OwnerAdmissionFailure::IdentityAbsent) => "prepared_down_owner_identity_absent",
-        (true, OwnerAdmissionFailure::IdentityStale) => "prepared_down_owner_identity_stale",
-        (true, OwnerAdmissionFailure::ProcessTerminated) => {
-            "prepared_down_owner_process_terminated"
-        }
-        (true, OwnerAdmissionFailure::IdentityDrift) => "prepared_down_owner_identity_drift",
-        (false, OwnerAdmissionFailure::Mismatch) => "authored_down_owner_mismatch",
-        (false, OwnerAdmissionFailure::QueryUnavailable) => "authored_down_owner_query_unavailable",
-        (false, OwnerAdmissionFailure::IdentityAbsent) => "authored_down_owner_identity_absent",
-        (false, OwnerAdmissionFailure::IdentityStale) => "authored_down_owner_identity_stale",
-        (false, OwnerAdmissionFailure::ProcessTerminated) => {
-            "authored_down_owner_process_terminated"
-        }
-        (false, OwnerAdmissionFailure::IdentityDrift) => "authored_down_owner_identity_drift",
+pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static str {
+    match failure {
+        OwnerAdmissionFailure::Mismatch => "prepared_down_owner_mismatch",
+        OwnerAdmissionFailure::QueryUnavailable => "prepared_down_owner_query_unavailable",
+        OwnerAdmissionFailure::IdentityAbsent => "prepared_down_owner_identity_absent",
+        OwnerAdmissionFailure::IdentityStale => "prepared_down_owner_identity_stale",
+        OwnerAdmissionFailure::ProcessTerminated => "prepared_down_owner_process_terminated",
+        OwnerAdmissionFailure::IdentityDrift => "prepared_down_owner_identity_drift",
     }
 }
 
@@ -641,7 +628,7 @@ pub(crate) fn verify_final_down_admission(
             }
             FinalDownVerdict::OwnerRejected(failure) => {
                 return FinalDownAdmissionResult::Terminal(
-                    owner_rejection_reason(failure, true).to_string(),
+                    owner_rejection_reason(failure).to_string(),
                 );
             }
             _ => {}

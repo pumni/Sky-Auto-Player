@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { UiEvent } from './DesktopBridge';
-import { assertMissReasonAccounting } from './diagnosticsTestUtils';
 import { createMockBridge } from './mockBridge';
 
 const initialMockBridgeTestUrl = window.location.href;
@@ -94,7 +93,7 @@ describe('mock bridge timing contracts', () => {
     unsubscribe();
   });
 
-  it('emits diagnostics with mutually exclusive miss-reason accounting', async () => {
+  it('emits diagnostics with retired miss counters zeroed', async () => {
     const bridge = createMockBridge();
     const events: UiEvent[] = [];
     const unsubscribe = await bridge.subscribeUiEvents((event) => events.push(event));
@@ -104,22 +103,12 @@ describe('mock bridge timing contracts', () => {
     const event = events.find((candidate) => candidate.name === 'diagnostics.snapshot');
     expect(event).toBeDefined();
     if (!event || event.name !== 'diagnostics.snapshot') throw new Error('missing diagnostics');
-    assertMissReasonAccounting(event.payload);
-    expect(event.payload.missed_down_boundaries).toBe(2);
+    expect(event.payload.missed_down_boundaries).toBe(0);
+    expect(event.payload.missed_down_keys).toBe(0);
+    expect(event.payload.missed_unobserved_backlog_boundaries).toBe(0);
+    expect(event.payload.missed_physical_window_boundaries).toBe(0);
     await bridge.setDiagnosticsEnabled({ enabled: false });
     unsubscribe();
-  });
-
-  it('rejects impossible Down-key accounting', () => {
-    expect(() =>
-      assertMissReasonAccounting({
-        missed_down_boundaries: 2,
-        missed_down_keys: 1,
-        missed_unobserved_backlog_boundaries: 0,
-        missed_physical_window_boundaries: 1,
-        final_sender_window_expirations: 1,
-      }),
-    ).toThrow('missed Down key accounting drift');
   });
 
   it('exports the current sender-trace envelope and timing-policy schemas', async () => {

@@ -203,7 +203,7 @@ fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
 }
 
 #[test]
-fn live_scheduler_completion_gap_and_two_generation_accounting_qualify() {
+fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
     use crate::engine::worker::StagedDispatchOutcome;
     use sky_dispatch_core::executor::DispatchDecision;
 
@@ -224,6 +224,10 @@ fn live_scheduler_completion_gap_and_two_generation_accounting_qualify() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("live scheduler playback epoch");
+    assert!(
+        now > epoch,
+        "the first authored Down is already late at wake"
+    );
 
     let before_first_down = harness.generation_accounting_for_test();
     assert_eq!(before_first_down.activated, 0);
@@ -385,9 +389,22 @@ fn live_scheduler_completion_gap_and_two_generation_accounting_qualify() {
     ));
 
     let final_accounting = harness.generation_accounting_for_test();
+    let captured = packets.lock().expect("live scheduler packet capture");
+    assert_eq!(captured.len(), 4);
     assert_eq!(
-        packets.lock().expect("live scheduler packet capture").len(),
-        4,
+        captured
+            .iter()
+            .filter(|(packet, _)| packet.down_mask != 0)
+            .count(),
+        2,
+        "late wake preserves both scheduled Down packets"
+    );
+    assert_eq!(
+        captured
+            .iter()
+            .map(|(packet, _)| (packet.up_mask, packet.down_mask))
+            .collect::<Vec<_>>(),
+        [(0, 1), (1, 0), (0, 1), (1, 0)],
         "two completed generations traverse exactly Down, Up, Down, Up"
     );
     assert_eq!(final_accounting.total, 2);

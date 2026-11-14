@@ -122,37 +122,6 @@ impl PreparedPhysicalPacket {
         // fixed array capacity, so no uninitialized element is exposed.
         unsafe { std::slice::from_raw_parts(self.inputs.as_ptr().cast(), length) }
     }
-
-    /// Borrow the canonical Up prefix for Mixed missed-Down recovery.
-    ///
-    /// The constructor guarantees that all Up events precede all Down
-    /// events. The length check keeps this seam fail-closed if that invariant
-    /// ever changes.
-    pub fn up_recovery_view(&self) -> Option<PreparedPacketView<'_>> {
-        let up_mask = self.packet.up_mask;
-        let down_mask = self.packet.down_mask;
-        if up_mask == 0 || down_mask == 0 {
-            return None;
-        }
-        let up_len = usize::from(up_mask.count_ones() as u8);
-        let expected_len = up_len.saturating_add(down_mask.count_ones() as usize);
-        if usize::from(self.length) != expected_len {
-            return None;
-        }
-        #[cfg(windows)]
-        {
-            Some(PreparedPacketView {
-                packet: PhysicalPacket::new(up_mask, 0),
-                inputs: self.initialized_inputs().get(..up_len)?,
-            })
-        }
-        #[cfg(not(windows))]
-        {
-            Some(PreparedPacketView {
-                packet: PhysicalPacket::new(up_mask, 0),
-            })
-        }
-    }
 }
 
 impl<'a> PreparedPacketView<'a> {
@@ -1492,44 +1461,6 @@ mod tests {
                 .expect("fifteen-key packet prepares");
             assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
         }
-    }
-
-    #[test]
-    fn mixed_prepared_packet_exposes_only_its_up_prefix() {
-        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b101, 0b11000))
-            .expect("mixed packet prepares");
-        let recovery = prepared
-            .up_recovery_view()
-            .expect("mixed packet has Up prefix");
-        assert_eq!(recovery.packet(), PhysicalPacket::new(0b101, 0));
-        assert_eq!(recovery.packet().event_count(), 2);
-        assert_eq!(prepared.event_count(), 4);
-        #[cfg(windows)]
-        assert_eq!(prepared.initialized_inputs().len(), 4);
-    }
-
-    #[test]
-    fn maximum_valid_mixed_recovery_view_contains_all_up_events() {
-        let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0x01ff, 0x7e00))
-            .expect("full mixed packet prepares");
-        let recovery = prepared.up_recovery_view().expect("full mixed Up prefix");
-
-        assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
-        assert_eq!(recovery.packet(), PhysicalPacket::new(0x01ff, 0));
-        assert_eq!(recovery.packet().event_count(), 9);
-        #[cfg(windows)]
-        assert_eq!(prepared.initialized_inputs().len(), 15);
-    }
-
-    #[test]
-    fn non_mixed_prepared_packets_have_no_recovery_view() {
-        let up_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b11, 0))
-            .expect("Up-only packet prepares");
-        let down_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 0b11))
-            .expect("Down-only packet prepares");
-
-        assert!(up_only.up_recovery_view().is_none());
-        assert!(down_only.up_recovery_view().is_none());
     }
 
     #[test]

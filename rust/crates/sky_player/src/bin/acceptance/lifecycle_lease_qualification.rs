@@ -1,5 +1,5 @@
 use super::{
-    ACCEPTANCE_FRAME_US, NativeDispatchSession, RunArgs, Scenario, Value,
+    NativeDispatchSession, RunArgs, Scenario, Value,
     Verdict, wait_for_focus_pause, wait_for_resume, wait_for_startup_armed, write_report,
 };
 use serde_json::{Map, json};
@@ -136,7 +136,7 @@ struct PartialReleaseFloorCycle {
 }
 
 impl PartialReleaseFloorCycle {
-    fn new(cycle: u64, frame_ticks: u64) -> Self {
+    fn new(cycle: u64, release_gap_us: u64, release_gap_ticks: u64) -> Self {
         let mut fields = Map::new();
         fields.insert("cycle".into(), json!(cycle));
         fields.insert("stage".into(), json!("waiting_for_successful_up"));
@@ -165,7 +165,8 @@ impl PartialReleaseFloorCycle {
         ] {
             fields.insert(field.into(), Value::Null);
         }
-        fields.insert("frame_ticks".into(), json!(frame_ticks));
+        fields.insert("min_release_gap_us".into(), json!(release_gap_us));
+        fields.insert("min_release_gap_ticks".into(), json!(release_gap_ticks));
         fields.insert("floor_passed".into(), json!(false));
         Self { fields }
     }
@@ -203,7 +204,11 @@ fn resumed_staged_window_is_due_before_release_floor(
         && authored_target_qpc != 0
         && packet_not_before_qpc >= release_barrier_qpc
         && authored_target_qpc <= now_qpc
-        && now_qpc < release_barrier_qpc
+        && release_floor_blocks_down(now_qpc, release_barrier_qpc)
+}
+
+fn release_floor_blocks_down(now_qpc: u64, release_barrier_qpc: u64) -> bool {
+    now_qpc < release_barrier_qpc
 }
 
 fn down_sender_attempt_count_unchanged(current_attempts: u64, prior_attempts: u64) -> bool {
@@ -252,12 +257,13 @@ fn run_release_floor_cycles(
             ));
         }
     };
-    let frame_ticks = match qpc.duration_from_us(ACCEPTANCE_FRAME_US) {
+    let release_gap_us = session.effective_min_release_gap_us();
+    let release_gap_ticks = match qpc.duration_from_us(release_gap_us) {
         Ok(ticks) => ticks.as_u64(),
         Err(error) => {
             return Err(ReleaseFloorFailure::initial(
-                "frame_conversion",
-                &format!("frame conversion failed: {error:?}"),
+                "release_gap_conversion",
+                &format!("effective release-gap conversion failed: {error:?}"),
             ));
         }
     };
@@ -273,7 +279,11 @@ fn run_release_floor_cycles(
     let mut evidence = Vec::with_capacity(20);
 
     for cycle in 1..=20_u64 {
-        let mut partial = PartialReleaseFloorCycle::new(cycle, frame_ticks);
+        let mut partial = PartialReleaseFloorCycle::new(
+            cycle,
+            release_gap_us,
+            release_gap_ticks,
+        );
         macro_rules! fail_cycle {
             ($stage:expr, $reason:expr) => {
                 return Err(ReleaseFloorFailure::new(
@@ -293,7 +303,7 @@ fn run_release_floor_cycles(
         // Hold the worker after the next authored Down target is due. This
         // makes the precondition independent of machine scheduling: the
         // authored target is already in the past before cleanup establishes
-        // the new Q + T release barrier.
+        // the new verified-completion + G release barrier.
         hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 1);
         hook.release_completed_up_through(cycle);
         if !hook.wait_for_startup_checkpoint(Duration::from_secs(5)) {
@@ -377,7 +387,7 @@ fn run_release_floor_cycles(
             ));
         }
         partial.set("post_cleanup_qpc_ticks", json!(cleanup_qpc));
-        let barrier_qpc = match cleanup_qpc.checked_add(frame_ticks) {
+        let barrier_qpc = match cleanup_qpc.checked_add(release_gap_ticks) {
             Some(barrier) => barrier,
             None => fail_cycle!(
                 "release_barrier_qpc",
@@ -429,7 +439,7 @@ fn run_release_floor_cycles(
             ),
         };
         partial.set("resume_request_qpc_ticks", json!(resume_request_qpc));
-        if resume_request_qpc >= barrier_qpc {
+        if !release_floor_blocks_down(resume_request_qpc, barrier_qpc) {
             fail_cycle!("resume_request_floor_oracle", format!(
                 "CASE-NOT-EXERCISED: resume request reached/passed the cleanup release floor at cycle {cycle}"
             ));
@@ -472,7 +482,7 @@ fn run_release_floor_cycles(
                     json!(window_not_before_qpc),
                 );
             }
-            if now_qpc >= barrier_qpc {
+            if !release_floor_blocks_down(now_qpc, barrier_qpc) {
                 fail_cycle!("resumed_due_before_barrier", format!(
                     "CASE-NOT-EXERCISED: resumed authored target was not observed due before release floor at cycle {cycle} (authored={}, barrier={barrier_qpc}, now={now_qpc})",
                     if window_sequence > resume_window_baseline_sequence { window_target_qpc } else { 0 }
@@ -704,9 +714,39 @@ pub(super) fn finish_delayed_watchdog_case(
 mod release_floor_tests {
     use super::{
         PartialReleaseFloorCycle, ReleaseFloorFailure, Verdict,
-        down_sender_attempt_count_unchanged, resumed_staged_window_is_due_before_release_floor,
+        down_sender_attempt_count_unchanged, release_floor_blocks_down,
+        resumed_staged_window_is_due_before_release_floor,
     };
     use serde_json::json;
+    use sky_dispatch_win32::clock::QpcClock;
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn release_barrier_oracle_uses_effective_gap_for_60_and_120_fps() {
+        let qpc = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_003).unwrap());
+        for (fps, expected_g_us) in [(60_u64, 17_167_u64), (120, 8_834)] {
+            let frame_us = 1_000_000_u64.div_ceil(fps);
+            let effective_g_us = frame_us + 500;
+            assert_eq!(effective_g_us, expected_g_us);
+
+            let g_ticks = qpc
+                .duration_from_us(effective_g_us)
+                .expect("G conversion rounds upward at non-divisible QPC frequency")
+                .as_u64();
+            let cleanup_completion = 1_000_000_u64;
+            let barrier = cleanup_completion.checked_add(g_ticks).unwrap();
+            assert!(release_floor_blocks_down(barrier - 1, barrier), "{fps} FPS G-1");
+            assert!(!release_floor_blocks_down(barrier, barrier), "{fps} FPS exact G");
+
+            let mut cycle = PartialReleaseFloorCycle::new(1, effective_g_us, g_ticks);
+            cycle.set("post_cleanup_qpc_ticks", json!(cleanup_completion));
+            cycle.set("release_barrier_qpc_ticks", json!(barrier));
+            let report = cycle.into_value();
+            assert_eq!(report["min_release_gap_us"], expected_g_us);
+            assert_eq!(report["min_release_gap_ticks"], g_ticks);
+            assert_eq!(report["release_barrier_qpc_ticks"], barrier);
+        }
+    }
 
     #[test]
     fn resumed_authored_target_can_be_due_before_barrier_without_down_sender_attempt() {
@@ -735,7 +775,7 @@ mod release_floor_tests {
     #[test]
     fn not_exercised_failure_preserves_completed_and_partial_cycle_evidence() {
         let completed = vec![json!({"cycle": 1, "stage": "completed"})];
-        let mut partial = PartialReleaseFloorCycle::new(2, 100);
+        let mut partial = PartialReleaseFloorCycle::new(2, 100, 100);
         partial.stage("waiting_for_resumed_authored_target_due_before_barrier");
         partial.set("post_cleanup_qpc_ticks", json!(50));
         partial.set("pause_acknowledgment_qpc_ticks", json!(60));

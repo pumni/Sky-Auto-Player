@@ -5,7 +5,6 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EffectiveRuntimePolicy {
-    pub(crate) prepared_normal: bool,
     pub(crate) strict_failure_policy: bool,
     pub(crate) observer_enabled: bool,
     pub(crate) production_wait: bool,
@@ -31,7 +30,6 @@ impl EffectiveRuntimePolicy {
         };
 
         Self {
-            prepared_normal: !profile.strict_timing() && !strict_timing,
             strict_failure_policy: strict_timing,
             observer_enabled,
             production_wait: wait.production_wait_policy(backend_is_production),
@@ -199,15 +197,15 @@ mod tests {
     #[test]
     fn six_profile_strict_pairs_keep_their_existing_projection() {
         let rows = [
-            (DispatchProfile::Production, false, true, false),
-            (DispatchProfile::Production, true, false, false),
-            (DispatchProfile::StrictTimingDiagnostic, false, false, true),
-            (DispatchProfile::StrictTimingDiagnostic, true, false, true),
-            (DispatchProfile::MockTest, false, true, true),
-            (DispatchProfile::MockTest, true, false, true),
+            (DispatchProfile::Production, false, false),
+            (DispatchProfile::Production, true, false),
+            (DispatchProfile::StrictTimingDiagnostic, false, true),
+            (DispatchProfile::StrictTimingDiagnostic, true, true),
+            (DispatchProfile::MockTest, false, true),
+            (DispatchProfile::MockTest, true, true),
         ];
 
-        for (profile, strict_timing, prepared_normal, observer_enabled) in rows {
+        for (profile, strict_timing, observer_enabled) in rows {
             let config = worker_config(
                 profile,
                 strict_timing,
@@ -218,7 +216,6 @@ mod tests {
             );
             let policy = EffectiveRuntimePolicy::for_worker(&config);
 
-            assert_eq!(policy.prepared_normal, prepared_normal);
             assert_eq!(policy.strict_failure_policy, strict_timing);
             assert_eq!(policy.observer_enabled, observer_enabled);
             assert!(policy.production_wait);
@@ -246,7 +243,6 @@ mod tests {
                 );
                 let policy = EffectiveRuntimePolicy::for_worker(&config);
 
-                assert!(policy.prepared_normal);
                 assert!(!policy.strict_failure_policy);
                 assert_eq!(policy.observer_enabled, observer_enabled);
                 assert!(policy.production_wait);
@@ -290,7 +286,6 @@ mod tests {
             let policy = EffectiveRuntimePolicy::for_worker(&config);
 
             assert_eq!(policy.production_wait, production_wait);
-            assert!(policy.prepared_normal);
             assert!(!policy.strict_failure_policy);
             assert!(!policy.observer_enabled);
             assert_eq!(policy.telemetry_mode, TelemetryMode::Off);

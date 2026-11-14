@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/evidence_runner_contract.ps1')
 . (Join-Path $PSScriptRoot 'lib/evidence_publication_contract.ps1')
+. (Join-Path $PSScriptRoot 'lib/dispatch_lifecycle_report_contract.ps1')
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 
 function Assert-Contract([bool]$Condition, [string]$Message) {
@@ -25,8 +26,104 @@ foreach ($case in $runnerCases) {
     Assert-Contract ($contract.RequiresControlRevision -eq $case.NeedsControl) "$($case.EvidenceMode) control requirement changed"
 }
 
-$runnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -Raw
-Assert-Contract ($runnerSource.Contains('BLOCKED-LEGACY-DISPATCH-EVIDENCE')) 'retired dispatch evidence must fail closed until the production report contract is reviewed'
+$historicalV1 = [ordered]@{
+    schema_version = 1
+    source_revision = 'historical-source'
+    transport_kind = 'deterministic-mock'
+}
+$historicalResult = Test-DispatchLifecycleReport -Report $historicalV1
+Assert-Contract ($historicalResult.EvidenceClass -ceq 'historical') 'schema v1 reports must remain readable as historical evidence'
+
+function New-LiveAccountingStage {
+    param([string]$Phase, [long]$Activated, [long]$Released, [long]$Cancelled, [long]$Active)
+    return [ordered]@{
+        phase = $Phase
+        generation_accounting_owner = 'live_scheduler'
+        total = 2
+        scheduled = 0
+        activated = $Activated
+        released = $Released
+        cancelled = $Cancelled
+        active = $Active
+    }
+}
+
+$liveV2 = [ordered]@{
+    schema_version = 2
+    report_kind = 'dispatch_lifecycle'
+    result = 'PASS'
+    provenance = [ordered]@{
+        source_sha = 'a' * 40
+        source_tree_sha = 'b' * 40
+        execution = 'offline_test_support'
+        transport_kind = 'deterministic_mock'
+        native_sendinput_calls = 0
+    }
+    timing = [ordered]@{
+        fps = 60
+        frame_us = 16667
+        hold_frames = 1
+        timing_margin_us = 500
+        min_hold_us = 17167
+        min_release_gap_us = 17167
+        qpc_frequency_hz = 10000003
+        min_release_gap_ticks = 171671
+    }
+    live_scheduler = [ordered]@{
+        generation_accounting_owner = 'live_scheduler'
+        no_pause_control = [ordered]@{
+            pause_requested = $false
+            sender_attempts = 4
+            final_release_obligation_mask = 0
+            passed = $true
+            generation_accounting_owner = 'live_scheduler'
+            accounting_stages = @(
+                (New-LiveAccountingStage 'after_first_down' 1 0 0 1),
+                (New-LiveAccountingStage 'after_first_up' 1 1 0 0),
+                (New-LiveAccountingStage 'after_final_up' 2 2 0 0)
+            )
+        }
+        pause_cleanup_resume = [ordered]@{
+            pause_requested = $true
+            sender_attempts = 2
+            final_release_obligation_mask = 0
+            passed = $true
+            generation_accounting_owner = 'live_scheduler'
+            accounting_stages = @(
+                (New-LiveAccountingStage 'after_pause_cleanup' 1 0 1 0),
+                (New-LiveAccountingStage 'after_resumed_down' 2 0 1 1),
+                (New-LiveAccountingStage 'after_final_cleanup' 2 0 2 0)
+            )
+            cleanup_completion_qpc_ticks = 100
+            min_release_gap_us = 17167
+            min_release_gap_ticks = 171671
+            resume_barrier_qpc_ticks = 171771
+            candidate_packet_not_before_qpc_ticks = 171771
+            g_minus_one_decision = 'wait'
+            exact_g_decision = 'send'
+        }
+    }
+}
+$liveResult = Test-DispatchLifecycleReport -Report $liveV2
+Assert-Contract ($liveResult.EvidenceClass -ceq 'live_scheduler') 'schema v2 must prove the live scheduler owner'
+
+$missingV2 = $liveV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable
+$missingV2.Remove('timing')
+$missingRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $missingV2) } catch { $missingRejected = $true }
+Assert-Contract $missingRejected 'schema v2 accepted a report missing timing evidence'
+
+$mixedOwnerV2 = $liveV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable
+$mixedOwnerV2.live_scheduler.pause_cleanup_resume.accounting_stages[1].generation_accounting_owner = 'legacy_fixture'
+$mixedOwnerRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $mixedOwnerV2) } catch { $mixedOwnerRejected = $true }
+Assert-Contract $mixedOwnerRejected 'schema v2 accepted mixed accounting owners'
+
+$wrongBarrierV2 = $liveV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable
+$wrongBarrierV2.live_scheduler.pause_cleanup_resume.resume_barrier_qpc_ticks++
+$wrongBarrierRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $wrongBarrierV2) } catch { $wrongBarrierRejected = $true }
+Assert-Contract $wrongBarrierRejected 'schema v2 accepted a barrier other than cleanup completion + G'
 
 $legacyStages = @(('phase' + '1'), ('phase' + '2'), ('phase' + '-1'), ('r' + '3-final'))
 foreach ($legacyStage in $legacyStages) {
@@ -74,25 +171,6 @@ foreach ($legacyKind in $legacyKinds) {
 }
 
 $invalidRunnerOutputRoot = Join-Path ([IO.Path]::GetTempPath()) ('sky-invalid-evidence-mode-' + [guid]::NewGuid().ToString('N'))
-$runnerOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -EvidenceMode ('phase' + '4') -OutputRoot $invalidRunnerOutputRoot 2>&1)
-$runnerExitCode = $LASTEXITCODE
-Assert-Contract ($runnerExitCode -ne 0) 'the evidence runner accepted a legacy phase argument'
-Assert-Contract (($runnerOutput -join "`n").Contains('unsupported evidence mode')) 'legacy runner rejection did not report the evidence mode contract'
-
-$blockedRunnerOutputRoot = Join-Path ([IO.Path]::GetTempPath()) ('sky-retired-dispatch-evidence-' + [guid]::NewGuid().ToString('N'))
-$blockedRunnerOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_rt_dispatch_evidence.ps1') -EvidenceMode 'release-barrier' -OutputRoot $blockedRunnerOutputRoot 2>&1)
-$blockedRunnerExitCode = $LASTEXITCODE
-Assert-Contract ($blockedRunnerExitCode -ne 0) 'the old dispatch-evidence report contract ran after its coordinator probe was retired'
-Assert-Contract (($blockedRunnerOutput -join "`n").Contains('BLOCKED-LEGACY-DISPATCH-EVIDENCE')) 'retired report contract did not explain the production-path blocker'
-Assert-Contract (-not (Test-Path -LiteralPath $blockedRunnerOutputRoot)) 'blocked dispatch evidence created a partial run directory'
-
-$blockedPhysicalStudyOutput = Join-Path ([IO.Path]::GetTempPath()) ('sky-retired-physical-study-' + [guid]::NewGuid().ToString('N'))
-$blockedPhysicalStudy = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'qualify_physical_key_study.ps1') -OutputDirectory $blockedPhysicalStudyOutput 2>&1)
-$blockedPhysicalStudyExitCode = $LASTEXITCODE
-Assert-Contract ($blockedPhysicalStudyExitCode -ne 0) 'the physical study ran with the retired coordinator benchmark'
-Assert-Contract (($blockedPhysicalStudy -join "`n").Contains('BLOCKED-LEGACY-PHYSICAL-STUDY')) 'retired physical study did not explain its evidence boundary'
-Assert-Contract (-not (Test-Path -LiteralPath $blockedPhysicalStudyOutput)) 'blocked physical study created a partial output directory'
-
 $publisherOutput = @(& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish_rt_dispatch_evidence.ps1') -EvidenceKind 'P0' -HeadSha ('0' * 40) -EvidenceRoot $invalidRunnerOutputRoot 2>&1)
 $publisherExitCode = $LASTEXITCODE
 Assert-Contract ($publisherExitCode -ne 0) 'the evidence publisher accepted an external phase identifier as an evidence kind'

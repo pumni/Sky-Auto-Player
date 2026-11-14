@@ -37,3 +37,8 @@ required-features = ["test-support"]
 name = "rt-native-acceptance"
 path = "src/bin/rt_native_acceptance.rs"
 required-features = ["real-input-acceptance"]
+
+[[example]]
+name = "dispatch_lifecycle_evidence"
+path = "examples/dispatch_lifecycle_evidence.rs"
+required-features = ["test-support"]

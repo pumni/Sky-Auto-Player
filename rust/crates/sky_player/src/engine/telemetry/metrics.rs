@@ -130,16 +130,6 @@ pub struct WorkerMetricsLocal {
     pub authored_conflict_events: u64,
     pub authored_chords_rejected: u64,
     pub authored_keys_rejected: u64,
-    /// Production musical deadline recovery evidence. These are scalar-only
-    /// worker counters and never allocate on the dispatch path.
-    pub missed_down_boundaries: u64,
-    pub missed_down_keys: u64,
-    pub missed_unobserved_backlog_boundaries: u64,
-    /// Prepared-normal acceptance counters. These are distinct from
-    /// authored/dynamic recovery counters so the deterministic report can
-    /// prove the prepared miss resolver did not enter dynamic policy.
-    pub prepared_up_prefix_recovery_sends: u64,
-    pub prepared_normal_backlog_boundaries: u64,
     /// Final control and modifier gate rejections observed before the
     /// authoritative SendInput timestamp.
     pub final_gate_control_rejections: u64,
@@ -150,7 +140,6 @@ pub struct WorkerMetricsLocal {
     /// Final supervisor-lease gate rejections. The compatibility field name
     /// includes both expired and unproven lease outcomes.
     pub final_gate_lease_expirations: u64,
-    pub max_missed_lateness_ticks: u64,
     /// Counts one authored packet boundary when its fixed physical floor is
     /// later than the authored target. QPC timestamps and masks below retain
     /// the latest contributing boundary without per-note storage.
@@ -187,14 +176,6 @@ pub struct WorkerMetricsLocal {
     pub production_forensics_anomaly_count: u64,
     pub production_structural_anomaly_count: u64,
     pub production_timing_diagnostic_count: u64,
-    /// Fixed-width evidence for the most recently classified missed Down.
-    /// This is populated after classification and remains absent from the
-    /// lightweight live snapshot.
-    pub last_missed_down_valid: bool,
-    pub last_missed_down_reason_code: u8,
-    pub last_missed_down_source_action_index: u32,
-    pub last_missed_down_mask: u16,
-    pub last_missed_down_lateness_ticks: u64,
     pub keys_inserted_before_failure: u64,
     pub keys_rolled_back: u64,
     pub rollback_residue_keys: u64,

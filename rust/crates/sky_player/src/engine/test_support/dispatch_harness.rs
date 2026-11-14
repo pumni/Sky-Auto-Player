@@ -366,6 +366,13 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    pub fn staged_candidate_timing_window_for_test(
+        &self,
+        candidate: &StagedCandidate,
+    ) -> DispatchTimingWindow {
+        candidate.timing_window
+    }
+
     pub fn dispatch_staged_candidate_for_test(
         &mut self,
         candidate: StagedCandidate,
@@ -492,6 +499,11 @@ impl ProductionDispatchTestHarness {
     pub fn set_mock_sender_start_qpc_for_test(&self, start_qpc: QpcTicks) {
         self.mock_sender_start_qpc
             .store(start_qpc.as_u64(), Ordering::Release);
+    }
+
+    pub fn set_pause_requested_for_test(&self, requested: bool) {
+        self.desired_pause.store(requested, Ordering::Release);
+        self.interrupt.signal();
     }
 
     pub fn generation_accounting_for_test(&self) -> GenerationAccounting {

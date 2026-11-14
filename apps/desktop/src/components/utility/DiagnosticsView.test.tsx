@@ -1,7 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsSnapshot } from '../../bridge/DesktopBridge';
-import { assertMissReasonAccounting } from '../../bridge/diagnosticsTestUtils';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore, selectRowAtIndex } from '../../state/store';
 import { DiagnosticsView } from './DiagnosticsView';
@@ -82,7 +81,6 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     duplicate_system_power_notifications: 0,
     ...overrides,
   };
-  assertMissReasonAccounting(value);
   return value;
 }
 
@@ -212,9 +210,9 @@ describe('DiagnosticsView', () => {
           snapshot({
             session_id: sessionId,
             release_late_2ms: 0,
-            missed_down_boundaries: 5,
-            missed_down_keys: 5,
-            missed_unobserved_backlog_boundaries: 1,
+            missed_down_boundaries: 0,
+            missed_down_keys: 0,
+            missed_unobserved_backlog_boundaries: 0,
             missed_physical_window_boundaries: 2,
             final_sender_window_expirations: 2,
             hold_floor_delay_boundaries: 3,
@@ -256,13 +254,11 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('17.467 ms');
-    expect(screen.getByText('Physical-window expirations')).toBeInTheDocument();
     expect(screen.getByText('Release-floor infeasible boundaries').parentElement).toHaveTextContent(
       '1',
     );
-    expect(screen.getByText('Missed Down keys')).toBeInTheDocument();
-    expect(screen.getByText('Unobserved backlog boundaries')).toBeInTheDocument();
-    expect(screen.getByText('Sender-window expirations')).toBeInTheDocument();
+    expect(screen.queryByText('Missed Down keys')).toBeNull();
+    expect(screen.queryByText('Unobserved backlog boundaries')).toBeNull();
     expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
     expect(screen.getByText('Target / owner rejections').parentElement).toHaveTextContent('1');
     expect(screen.getByText('Lease gate rejections')).toBeInTheDocument();
@@ -569,8 +565,6 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Player attached').parentElement).toHaveTextContent('No');
     expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Error');
     for (const label of [
-      'Missed Down boundaries',
-      'Sender-window expirations',
       'SendInput partial events',
       'Dropped keys',
       'Active keys',
@@ -678,7 +672,7 @@ describe('DiagnosticsView', () => {
       screen.getByText('Last error: authored Down send integrity failure'),
     ).toBeInTheDocument();
     expect(screen.queryByText('Sender-side status: Healthy')).toBeNull();
-    expect(screen.getByText('Missed Down boundaries').nextElementSibling).toHaveTextContent('0');
+    expect(screen.queryByText('Missed Down boundaries')).toBeNull();
   });
 
   it('does not report degraded backend health as healthy when counters are zero', () => {

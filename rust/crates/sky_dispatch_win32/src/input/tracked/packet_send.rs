@@ -666,33 +666,6 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_view(prepared.as_view())
     }
 
-    /// Final authored boundary sender. Production always samples the true
-    /// pre-call QPC inside the immediate prepared sender; test support may
-    /// inject a deterministic start sample without changing that path.
-    pub fn send_prepared_physical_packet_at_final_boundary(
-        &mut self,
-        prepared: &PreparedPhysicalPacket,
-        test_started_ticks: Option<QpcTicks>,
-    ) -> SendTransactionOutcome {
-        #[cfg(any(test, feature = "test-support"))]
-        if prepared.packet().down_mask != 0
-            && let Some(hook) = self.physical_study_hook.as_ref()
-        {
-            hook(prepared.packet().down_mask);
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        if self.use_actual_pre_call_clock_for_test && self.qpc_clock.is_some() {
-            return self.send_prepared_physical_packet(prepared);
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(test_started_ticks) = test_started_ticks {
-            return self.send_prepared_physical_packet_with_start(prepared, test_started_ticks);
-        }
-        #[cfg(not(any(test, feature = "test-support")))]
-        let _ = test_started_ticks;
-        self.send_prepared_physical_packet(prepared)
-    }
-
     /// Production scheduler path: retain the in-flight transport journal until
     /// the scheduler has committed the matching physical packet.
     pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit(

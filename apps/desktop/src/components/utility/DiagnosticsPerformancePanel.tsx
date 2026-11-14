@@ -71,8 +71,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             ? 'No samples'
             : measure(value, unit, 0);
   const senderSuppressionCount = latest
-    ? latest.missed_down_boundaries +
-      latest.final_gate_control_rejections +
+    ? latest.final_gate_control_rejections +
       latest.final_gate_target_changes +
       latest.final_gate_focus_losses +
       latest.final_gate_lease_expirations
@@ -121,7 +120,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
                   ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
                   : {
                       status: 'Attention',
-                      detail: `${latest?.missed_physical_window_boundaries ?? 0} physical-window expirations; ${latest?.final_sender_window_expirations ?? 0} sender-window expirations; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+                      detail: `${latest?.final_gate_focus_losses ?? 0} focus rejections; ${latest?.final_gate_target_changes ?? 0} target / owner rejections; ${transportFailureCount} SendInput transport failures.`,
                     };
   return (
     <TabPanel id="performance" className="diagnostics-panel">
@@ -265,23 +264,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             />
           </MetricGroup>
           <MetricGroup title="Deadline admission">
-            <Metric
-              label="Missed Down boundaries"
-              value={playerMetric(latest.missed_down_boundaries)}
-            />
-            <Metric
-              label="Physical-window expirations"
-              value={playerMetric(latest.missed_physical_window_boundaries)}
-            />
-            <Metric label="Missed Down keys" value={playerMetric(latest.missed_down_keys)} />
-            <Metric
-              label="Unobserved backlog boundaries"
-              value={playerMetric(latest.missed_unobserved_backlog_boundaries)}
-            />
-            <Metric
-              label="Sender-window expirations"
-              value={playerMetric(latest.final_sender_window_expirations)}
-            />
             <Metric
               label="Focus gate rejections"
               value={playerMetric(latest.final_gate_focus_losses)}

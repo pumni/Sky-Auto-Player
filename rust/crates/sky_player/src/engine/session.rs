@@ -58,16 +58,6 @@ fn timeline_rebase_reason(_code: u8) -> Option<String> {
     None
 }
 
-fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
-    if !valid {
-        return None;
-    }
-    match reason_code {
-        1 => Some("down_unobserved_backlog".to_string()),
-        _ => None,
-    }
-}
-
 fn signal_supervisor_expiry(shared: &SessionShared) {
     shared
         .commands
@@ -226,6 +216,7 @@ pub struct NativeDispatchSession {
     observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
+    effective_min_release_gap_us: u64,
     shared: Arc<SessionShared>,
     supervisor_lease_timeout_us: u64,
     supervisor_lease_timeout_ticks: AtomicU64,
@@ -356,6 +347,7 @@ impl NativeDispatchSession {
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
+            effective_min_release_gap_us: min_release_gap_us,
             shared,
             supervisor_lease_timeout_us,
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
@@ -363,6 +355,11 @@ impl NativeDispatchSession {
             watchdog_handle: Mutex::new(None),
             window_identity_authority: Mutex::new(None),
         })
+    }
+
+    /// Effective same-key release floor admitted for this session.
+    pub fn effective_min_release_gap_us(&self) -> u64 {
+        self.effective_min_release_gap_us
     }
 
     fn live_projection(&self) -> (((u64, bool), u64), super::shared::StartupSnapshot) {
@@ -1309,9 +1306,10 @@ impl NativeDispatchSession {
             authored_conflict_events: local.authored_conflict_events,
             authored_chords_rejected: local.authored_chords_rejected,
             authored_keys_rejected: local.authored_keys_rejected,
-            missed_down_boundaries: local.missed_down_boundaries,
-            missed_down_keys: local.missed_down_keys,
-            missed_unobserved_backlog_boundaries: local.missed_unobserved_backlog_boundaries,
+            // Compatibility-only DTO fields; the live DispatchExecutor has no missed-Down path.
+            missed_down_boundaries: 0,
+            missed_down_keys: 0,
+            missed_unobserved_backlog_boundaries: 0,
             missed_physical_window_boundaries: 0,
             final_gate_control_rejections: local.final_gate_control_rejections,
             final_gate_target_changes: local.final_gate_target_changes,
@@ -1323,7 +1321,7 @@ impl NativeDispatchSession {
             max_hold_floor_delay_us: local.max_hold_floor_delay_us,
             release_floor_delay_boundaries: local.release_floor_delay_boundaries,
             max_release_floor_delay_us: local.max_release_floor_delay_us,
-            max_missed_lateness_ticks: local.max_missed_lateness_ticks,
+            max_missed_lateness_ticks: 0,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
             rollback_residue_keys: local.rollback_residue_keys,
