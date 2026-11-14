@@ -212,10 +212,10 @@ test-support/compatibility fixtures. Schedule compilation has a separate
 phase-capacity check. The legacy `RuntimeDispatchCoordinator` and simulator
 are compiled only for core unit tests or with `test-support`; production boot
 does not link them.
-`MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated overlap bound used by
-the legacy coordinator's combined schedule/coordinator/executor memory
-accounting. None of these values is a process-RSS or full-application peak
-limit.
+`MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated-capacity bound used by
+the compiler's phase-capacity checks. The legacy coordinator also uses the
+same constant for its calculated overlapping schedule/coordinator/executor
+capacity. Neither use measures process RSS or the full-application peak.
 
 Production worker boot constructs `DispatchExecutor` directly from the compiled
 schedule; it does not materialize a `RuntimeDispatchCoordinator`. The test

@@ -104,4 +104,30 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
         )
     }
+
+    /// Stage an action using the absolute timing window produced by the live
+    /// DispatchExecutor decision. This preserves the production scheduler's
+    /// deadline instead of recomputing it through the legacy timing guard.
+    pub fn stage_candidate_with_scheduler_window_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+        timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    ) -> Result<Option<crate::engine::worker::StagedCandidate>, String> {
+        crate::engine::worker::stage_candidate(
+            up_mask,
+            down_chord,
+            timing_window,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
+        )
+    }
+
+    pub fn staged_candidate_timing_window_for_test(
+        &self,
+        candidate: &crate::engine::worker::StagedCandidate,
+    ) -> sky_dispatch_core::executor::DispatchTimingWindow {
+        candidate.timing_window
+    }
 }

@@ -3011,10 +3011,9 @@ mod preparation_cancellation_tests {
     use super::super::{
         NativePreparedInput, analyze_schedule_with_context, build_schedule_with_policy,
     };
-    use super::{
-        NativePlaybackService, compile_dispatch_schedule_with_checkpoint,
-        schedule_metadata_heap_capacity_bytes,
-    };
+    use super::NativePlaybackService;
+    #[cfg(feature = "tauri-test")]
+    use super::{compile_dispatch_schedule_with_checkpoint, schedule_metadata_heap_capacity_bytes};
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
     use crate::native_runtime::NativeEventHub;
@@ -3027,6 +3026,7 @@ mod preparation_cancellation_tests {
     use std::thread;
     use std::time::Duration;
 
+    #[cfg(feature = "tauri-test")]
     #[test]
     fn valid_one_million_single_key_actions_fit_compact_executor_budget() {
         const ACTION_COUNT: usize = 1_000_000;

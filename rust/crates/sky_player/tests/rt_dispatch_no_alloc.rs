@@ -135,21 +135,21 @@ fn production_resume_barrier_fixture() -> (
         .reanchor_playback_clock_for_test(epoch)
         .expect("resume barrier playback epoch");
 
-    let (up_mask, down_chord) = match harness
+    let (up_mask, down_chord, timing_window) = match harness
         .evaluate_live_scheduler_for_test(now, epoch)
         .expect("initial live scheduler evaluation")
     {
         DispatchDecision::Send {
             up_mask,
             down_chord,
-            ..
-        } => (up_mask, down_chord.map(Into::into)),
+            timing_window,
+        } => (up_mask, down_chord.map(Into::into), timing_window),
         decision => panic!("expected initial production Down, got {decision:?}"),
     };
     assert_eq!(up_mask, 0);
     assert!(down_chord.is_some());
     let candidate = harness
-        .stage_candidate_for_test(up_mask, down_chord, TimelineTicks::ZERO)
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage initial production Down")
         .expect("initial production Down candidate");
     harness.set_mock_sender_start_qpc_for_test(now);
@@ -1004,7 +1004,7 @@ fn lifecycle_resume_barrier_healthy_down_dispatch_no_alloc() {
             .expect("G-1 production scheduler evaluation"),
         DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier
     ));
-    let (up_mask, down_chord) = {
+    let (up_mask, down_chord, timing_window) = {
         enable_counting();
         let evaluated = harness
             .evaluate_live_scheduler_for_test(barrier, epoch)
@@ -1013,8 +1013,8 @@ fn lifecycle_resume_barrier_healthy_down_dispatch_no_alloc() {
             DispatchDecision::Send {
                 up_mask,
                 down_chord,
-                ..
-            } => (up_mask, down_chord.map(Into::into)),
+                timing_window,
+            } => (up_mask, down_chord.map(Into::into), timing_window),
             decision => panic!("expected exact-G production Send, got {decision:?}"),
         };
         let allocs = disable_counting();
@@ -1023,13 +1023,22 @@ fn lifecycle_resume_barrier_healthy_down_dispatch_no_alloc() {
     };
     assert_eq!(up_mask, 0);
     assert!(down_chord.is_some());
+    assert_eq!(
+        timing_window.packet_not_before_qpc, barrier,
+        "production scheduler decision carries the cleanup completion + G floor"
+    );
     enable_counting();
     let candidate = harness
-        .stage_candidate_for_test(up_mask, down_chord, TimelineTicks::ZERO)
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage exact-G production Down")
         .expect("exact-G production Down candidate");
     let stage_allocs = disable_counting();
     assert_eq!(stage_allocs, 0, "exact-G production staging allocated");
+    let candidate_window = harness.staged_candidate_timing_window_for_test(&candidate);
+    assert_eq!(
+        candidate_window.packet_not_before_qpc, barrier,
+        "candidate retains the live scheduler cleanup completion + G floor"
+    );
 
     wait_until_qpc(barrier);
     harness.set_mock_sender_start_qpc_for_test(barrier);

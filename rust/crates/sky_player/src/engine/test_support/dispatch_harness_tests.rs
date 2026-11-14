@@ -36,23 +36,26 @@ fn dispatch_live_scheduler_next(
 ) -> (u16, u16, crate::engine::worker::StagedDispatchOutcome) {
     use sky_dispatch_core::executor::DispatchDecision;
 
-    let (up_mask, down_chord): (u16, Option<sky_dispatch_core::executor::DownChordMetadata>) =
-        match harness
-            .resources
-            .scheduler
-            .evaluate_at(now, epoch)
-            .expect("live scheduler evaluation")
-        {
-            DispatchDecision::Send {
-                up_mask,
-                down_chord,
-                ..
-            } => (up_mask, down_chord.map(Into::into)),
-            decision => panic!("expected production scheduler Send decision, got {decision:?}"),
-        };
+    let (up_mask, down_chord, timing_window): (
+        u16,
+        Option<sky_dispatch_core::executor::DownChordMetadata>,
+        sky_dispatch_core::executor::DispatchTimingWindow,
+    ) = match harness
+        .resources
+        .scheduler
+        .evaluate_at(now, epoch)
+        .expect("live scheduler evaluation")
+    {
+        DispatchDecision::Send {
+            up_mask,
+            down_chord,
+            timing_window,
+        } => (up_mask, down_chord.map(Into::into), timing_window),
+        decision => panic!("expected production scheduler Send decision, got {decision:?}"),
+    };
     let down_mask = down_chord.as_ref().map_or(0, |chord| chord.down_mask);
     let candidate = harness
-        .stage_candidate_for_test(up_mask, down_chord, TimelineTicks::ZERO)
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage live scheduler candidate")
         .expect("live scheduler Send candidate");
     let sender_start = harness
