@@ -1000,7 +1000,6 @@ try {
             $contractReport.transport_kind -ne 'deterministic-mock' -or
             $contractReport.run_id -ne $contractRunId -or
             $vectorA.hypothesis_status -ne 'NO-REPRODUCTION' -or
-            $vectorA.characterization_integrity_passed -ne $true -or
             $vectorA.normal_gap_contract_passed -ne $true -or
             $vectorCases.Count -ne 3 -or
             $contractReport.test_vectors.E_empty_cleanup.oracle_passed -ne $true -or
@@ -1008,35 +1007,90 @@ try {
             throw 'BLOCKED-CONTRACT: fixed lifecycle vector or empty-cleanup contract failed qualification'
         }
         $expectedFrequencies = @(1000000, 10000000, 10000003)
+        $expectedGUs = [long]17167
+        $accountingStages = @(
+            @{ name = 'before_first_down'; activated = 0; active = 0; released = 0; scheduled = 2 },
+            @{ name = 'after_first_down_completion'; activated = 1; active = 1; released = 0; scheduled = 1 },
+            @{ name = 'after_first_up_completion'; activated = 1; active = 0; released = 1; scheduled = 1 },
+            @{ name = 'after_verified_cleanup'; activated = 1; active = 0; released = 1; scheduled = 1 },
+            @{ name = 'after_repeated_down_completion'; activated = 2; active = 1; released = 1; scheduled = 0 },
+            @{ name = 'after_final_up_completion'; activated = 2; active = 0; released = 2; scheduled = 0 }
+        )
         for ($caseIndex = 0; $caseIndex -lt $vectorCases.Count; $caseIndex++) {
             $case = $vectorCases[$caseIndex]
             $frequency = [long]$case.qpc_frequency_hz
-            $frameTicks = [long][Math]::Ceiling([double]$frequency * 16667 / 1000000)
+            if ($frequency -le 0) { throw "BLOCKED-CONTRACT: invalid QPC frequency $frequency" }
+            $gNumerator = ([System.Numerics.BigInteger]$frequency) * ([System.Numerics.BigInteger]$expectedGUs)
+            $gTicksBig = [System.Numerics.BigInteger]::Divide($gNumerator + 999999, 1000000)
+            $maxQpcTicks = [System.Numerics.BigInteger]::Parse([string][long]::MaxValue)
+            if ($gTicksBig -gt $maxQpcTicks) { throw "BLOCKED-CONTRACT: QPC G conversion overflow at frequency $frequency" }
+            $gTicks = [long]$gTicksBig
             $upCompletion = [long]$case.events.musical_up.completion.qpc_ticks
             $pauseQpc = [long]$case.events.pause_qpc.qpc_ticks
-            $requiredDown = $upCompletion + $frameTicks
-            $postCleanupBarrier = $pauseQpc + $frameTicks
+            $requiredDownBig = ([System.Numerics.BigInteger]$upCompletion) + ([System.Numerics.BigInteger]$gTicks)
+            $postCleanupBarrierBig = ([System.Numerics.BigInteger]$pauseQpc) + ([System.Numerics.BigInteger]$gTicks)
+            if ($requiredDownBig -gt $maxQpcTicks -or $postCleanupBarrierBig -gt $maxQpcTicks) {
+                throw "BLOCKED-CONTRACT: QPC G floor overflow at frequency $frequency"
+            }
+            $requiredDown = [long]$requiredDownBig
+            $postCleanupBarrier = [long]$postCleanupBarrierBig
             $downFloor = [long]$case.production_down_floor.qpc_ticks
+            $actualNextDown = [long]$case.events.redown.pre_call.qpc_ticks
+            $failedDuePredicates = @($case.due_seam_integrity_predicates.PSObject.Properties | Where-Object { $_.Value -ne $true } | ForEach-Object { $_.Name })
+            if ($failedDuePredicates.Count -gt 0) {
+                throw "BLOCKED-CONTRACT: due-seam predicates failed at frequency $frequency`: $($failedDuePredicates -join ', ')"
+            }
             if ($frequency -ne $expectedFrequencies[$caseIndex] -or
                 $case.normal_gap_contract_passed -ne $true -or
                 $case.below_completion_plus_frame -ne $false -or
                 $case.due_seam_integrity_passed -ne $true -or
                 $case.cleanup_transport_sends -ne 0 -or
+                $case.generation_accounting_owner -ne 'legacy_coordinator_fixture' -or
+                $case.conversion.same_key_gap_g_us -ne $expectedGUs -or
+                $case.conversion.same_key_gap_g_ticks -ne $gTicks -or
+                $case.conversion.min_release_gap_us -ne $expectedGUs -or
+                $case.conversion.min_release_gap_ticks -ne $gTicks -or
+                $case.conversion.same_key_gap_g_us -ne $case.conversion.min_release_gap_us -or
+                $case.conversion.same_key_gap_g_ticks -ne $case.conversion.min_release_gap_ticks -or
                 $downFloor -lt $requiredDown -or
                 $downFloor -lt $postCleanupBarrier -or
                 [long]$case.lifecycle_snapshots.before_next_down.post_cleanup_recomputed_floor.qpc_ticks -ne $downFloor -or
-                [long]$case.events.redown.pre_call.qpc_ticks -ne $downFloor -or
+                $actualNextDown -ne $downFloor -or
+                [long]$case.required_next_down_not_before.qpc_ticks -ne $requiredDown -or
+                $actualNextDown -lt $requiredDown -or
                 $case.lifecycle_snapshots.before_next_down.dispatch_step_at_resume -ne 'None' -or
                 $case.lifecycle_snapshots.before_next_down.current_floor_was_due_at_resume -ne $false -or
                 $case.lifecycle_snapshots.before_next_down.not_due_without_send_or_advance -ne $true -or
                 $case.conversion.effective_hold_h_us -ne 17167 -or
-                $case.conversion.min_release_gap_us -ne 17167 -or
                 $case.conversion.authored_offsets_us.Count -ne 4 -or
                 $case.final_generation_accounting.activated -ne 2 -or
                 $case.final_generation_accounting.released -ne 2 -or
                 $case.final_release_obligation_mask -ne 0) {
                 throw "BLOCKED-CONTRACT: lifecycle vector failed at frequency $frequency"
             }
+            foreach ($stage in $accountingStages) {
+                $snapshot = $case.generation_accounting_trace.PSObject.Properties[$stage.name].Value
+                $legacy = $snapshot.legacy_coordinator_fixture
+                $live = $snapshot.live_scheduler
+                if ($null -eq $legacy -or $null -eq $live -or
+                    $legacy.total -ne 2 -or
+                    $legacy.activated -ne $stage.activated -or
+                    $legacy.active -ne $stage.active -or
+                    $legacy.released -ne $stage.released -or
+                    $legacy.scheduled -ne $stage.scheduled -or
+                    $legacy.cancelled -ne 0 -or
+                    $live.total -ne 2 -or
+                    $live.activated -ne 0 -or
+                    $live.active -ne 0 -or
+                    $live.released -ne 0 -or
+                    $live.scheduled -ne 2 -or
+                    $live.cancelled -ne 0) {
+                    throw "BLOCKED-CONTRACT: accounting provenance mismatch at $($stage.name), frequency $frequency"
+                }
+            }
+        }
+        if ($vectorA.characterization_integrity_passed -ne $true) {
+            throw 'BLOCKED-CONTRACT: lifecycle aggregate characterization integrity did not pass after per-predicate qualification'
         }
         if ($contractReport.test_vectors.C_serial_HOL.timing_config.native_admission -ne 'PASS' -or
             $contractReport.test_vectors.C_serial_HOL.timing_config.frame_gap_g_us -ne 17167 -or
@@ -1122,7 +1176,7 @@ try {
                 qpc_frequencies_hz = $expectedFrequencies
                 empty_cleanup_oracle = $contractReport.test_vectors.E_empty_cleanup.oracle_passed
                 retained_H_us = 17167
-                retained_G_us = 16667
+                retained_G_us = 17167
             }
             native_controls = @($nativeResults)
             native_control_count = $nativeResults.Count

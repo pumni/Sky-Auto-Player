@@ -2130,6 +2130,13 @@ impl ProductionDispatchTestHarness {
         self.resources.scheduler.accounting()
     }
 
+    /// Read accounting from the historical coordinator used by prepared-stream
+    /// dispatch tests. This is intentionally distinct from
+    /// `generation_accounting_for_test`, which reads the live scheduler.
+    pub fn legacy_coordinator_generation_accounting_for_test(&self) -> GenerationAccounting {
+        self.legacy_coordinator_fixture.generation_accounting()
+    }
+
     /// Exercise the production command-control owner used by the worker loop.
     /// The wrapper only supplies test-owned scratch diagnostics.
     pub fn process_command_control_for_test(&mut self) -> bool {

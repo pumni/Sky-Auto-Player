@@ -460,8 +460,8 @@ fn contracts_report() -> Result<Value, String> {
             "normal_gap_contract_passed": vector_a.iter().all(|case| case["normal_gap_contract_passed"].as_bool() == Some(true)),
             "vector_cases": vector_a,
             "malformed_duplicate_up_control": malformed_duplicate_up_control,
-            "path_evidence": "test-support due seam recomputes the current production physical timing window for the current prepared packet on every call, accepts wall QPC only, and enters the unchanged prepared suffix only when due; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
-            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; resumed Down must satisfy musical Up completion plus G (T + timing margin) and the absolute post-cleanup global Down barrier"
+            "path_evidence": "test-support due seam recomputes the current production physical timing window for the current prepared packet on every call, accepts wall QPC only, and enters the unchanged prepared suffix only when due; prepared packet accounting is owned by legacy_coordinator_fixture and the live resources.scheduler is separately reported, not inferred from the legacy path; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
+            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; resumed Down must satisfy musical Up completion plus G (T + timing margin) and the absolute post-cleanup global Down barrier; legacy below_completion_plus_frame field is retained but its asserted floor is G"
         },
         "F_final_lease_age_proof": final_lease_age_proof,
         "C_serial_HOL": run_hol_vector()?,
@@ -539,6 +539,9 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
     let cursor_before = harness.prepared_cursor_for_test();
     let accounting_before =
         generation_accounting_signature(harness.generation_accounting_for_test());
+    let legacy_accounting_before = generation_accounting_signature(
+        harness.legacy_coordinator_generation_accounting_for_test(),
+    );
     let step =
         harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(sample);
     let sender_attempts = packets
@@ -550,6 +553,9 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
     let cursor_after = harness.prepared_cursor_for_test();
     let accounting_after =
         generation_accounting_signature(harness.generation_accounting_for_test());
+    let legacy_accounting_after = generation_accounting_signature(
+        harness.legacy_coordinator_generation_accounting_for_test(),
+    );
     Ok(json!({
         "case": name,
         "progress_qpc_ticks": progress.as_u64(),
@@ -565,7 +571,11 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
         "cursor_advanced_once": cursor_after == cursor_before + 1,
         "generation_accounting_before": accounting_before,
         "generation_accounting_after": accounting_after,
+        "generation_accounting_owner": "live_scheduler",
+        "legacy_prepared_fixture_generation_accounting_before": legacy_accounting_before,
+        "legacy_prepared_fixture_generation_accounting_after": legacy_accounting_after,
         "generation_accounting_unchanged": accounting_after == accounting_before
+            && legacy_accounting_after == legacy_accounting_before
     }))
 }
 
@@ -640,6 +650,9 @@ struct LifecyclePrefix {
     up_observation: bool,
     down_completion: QpcTicks,
     up_completion: QpcTicks,
+    accounting_before_down: Value,
+    accounting_after_down: Value,
+    accounting_after_up: Value,
 }
 
 fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<LifecyclePrefix, String> {
@@ -651,6 +664,7 @@ fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<Lifecycle
     harness.prepare_prepared_stream_for_test();
     let epoch = ticks_at_us(clock, 82_700)?;
     harness.reanchor_playback_clock_for_test(epoch)?;
+    let accounting_before_down = lifecycle_accounting_owners_json(&harness);
 
     let down_at = ticks_at_us(clock, 100_000)?;
     let down_floor = harness.prepared_physical_floor_for_test()?;
@@ -660,6 +674,7 @@ fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<Lifecycle
         .ok_or("first lifecycle Down was unexpectedly before its physical floor")?;
     let first_observation = harness.pop_send_observation_for_test().is_some();
     let down_completion = evidence_completion(&packets, 0)?;
+    let accounting_after_down = lifecycle_accounting_owners_json(&harness);
 
     let up_floor = harness.prepared_physical_floor_for_test()?;
     harness.set_mock_sender_start_qpc_for_test(up_floor.packet_not_before_qpc);
@@ -670,6 +685,7 @@ fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<Lifecycle
         .ok_or("musical Up was unexpectedly before its physical floor")?;
     let up_observation = harness.pop_send_observation_for_test().is_some();
     let up_completion = evidence_completion(&packets, 1)?;
+    let accounting_after_up = lifecycle_accounting_owners_json(&harness);
 
     if down_floor.packet_not_before_qpc > down_at {
         return Err("initial lifecycle Down did not reach its due floor".to_string());
@@ -683,15 +699,38 @@ fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<Lifecycle
         up_observation,
         down_completion,
         up_completion,
+        accounting_before_down,
+        accounting_after_down,
+        accounting_after_up,
     })
 }
 
-fn generation_accounting_json(harness: &ProductionDispatchTestHarness) -> Value {
+fn legacy_generation_accounting_json(harness: &ProductionDispatchTestHarness) -> Value {
+    let accounting = harness.legacy_coordinator_generation_accounting_for_test();
+    json!({
+        "activated": accounting.activated,
+        "released": accounting.released,
+        "cancelled": accounting.cancelled
+    })
+}
+
+fn live_scheduler_generation_accounting_json(harness: &ProductionDispatchTestHarness) -> Value {
     let accounting = harness.generation_accounting_for_test();
     json!({
         "activated": accounting.activated,
         "released": accounting.released,
         "cancelled": accounting.cancelled
+    })
+}
+
+fn lifecycle_accounting_owners_json(harness: &ProductionDispatchTestHarness) -> Value {
+    json!({
+        "legacy_coordinator_fixture": generation_accounting_signature(
+            harness.legacy_coordinator_generation_accounting_for_test()
+        ),
+        "live_scheduler": generation_accounting_signature(
+            harness.generation_accounting_for_test()
+        )
     })
 }
 
@@ -721,7 +760,9 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let no_pause_at = ticks_at_us(clock, 118_300)?;
     let no_pause_cursor_before = no_pause.harness.prepared_cursor_for_test();
     let no_pause_attempts_before = captured_packet_count(&no_pause.packets)?;
-    let no_pause_accounting_before = generation_accounting_json(&no_pause.harness);
+    let no_pause_accounting_before = legacy_generation_accounting_json(&no_pause.harness);
+    let no_pause_live_scheduler_accounting_before =
+        live_scheduler_generation_accounting_json(&no_pause.harness);
     let no_pause_obligation_before = no_pause.harness.release_obligation_mask_for_test();
     no_pause
         .harness
@@ -731,7 +772,9 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(no_pause_at)?;
     let no_pause_attempts_after = captured_packet_count(&no_pause.packets)?;
     let no_pause_cursor_after = no_pause.harness.prepared_cursor_for_test();
-    let no_pause_accounting_after = generation_accounting_json(&no_pause.harness);
+    let no_pause_accounting_after = legacy_generation_accounting_json(&no_pause.harness);
+    let no_pause_live_scheduler_accounting_after =
+        live_scheduler_generation_accounting_json(&no_pause.harness);
     let no_pause_obligation_after = no_pause.harness.release_obligation_mask_for_test();
     let no_pause_completion_floor = no_pause
         .up_completion
@@ -745,7 +788,8 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         "floor": tick_json(clock, before_cleanup_floor.packet_not_before_qpc)?,
         "cursor": lifecycle.harness.prepared_cursor_for_test(),
         "sender_attempts": captured_packet_count(&lifecycle.packets)?,
-        "generation_accounting": generation_accounting_json(&lifecycle.harness),
+        "generation_accounting": legacy_generation_accounting_json(&lifecycle.harness),
+        "live_scheduler_generation_accounting": live_scheduler_generation_accounting_json(&lifecycle.harness),
         "release_obligation_mask": lifecycle.harness.release_obligation_mask_for_test()
     });
     let pause_at = ticks_at_us(clock, 117_300)?;
@@ -756,13 +800,17 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let after_cleanup_floor = lifecycle.harness.prepared_physical_floor_for_test()?;
     let after_cleanup_attempts = captured_packet_count(&lifecycle.packets)?;
     let after_cleanup_cursor = lifecycle.harness.prepared_cursor_for_test();
-    let after_cleanup_accounting = generation_accounting_json(&lifecycle.harness);
+    let after_cleanup_accounting = legacy_generation_accounting_json(&lifecycle.harness);
+    let after_cleanup_live_scheduler_accounting =
+        live_scheduler_generation_accounting_json(&lifecycle.harness);
+    let accounting_after_cleanup_owners = lifecycle_accounting_owners_json(&lifecycle.harness);
     let after_cleanup_obligation = lifecycle.harness.release_obligation_mask_for_test();
     let after_cleanup = json!({
         "floor": tick_json(clock, after_cleanup_floor.packet_not_before_qpc)?,
         "cursor": after_cleanup_cursor,
         "sender_attempts": after_cleanup_attempts,
         "generation_accounting": after_cleanup_accounting,
+        "live_scheduler_generation_accounting": after_cleanup_live_scheduler_accounting,
         "release_obligation_mask": after_cleanup_obligation
     });
 
@@ -771,7 +819,9 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     // alone; if resume is early, advance to that current floor and retry.
     let cursor_before_next_down = lifecycle.harness.prepared_cursor_for_test();
     let attempts_before_next_down = captured_packet_count(&lifecycle.packets)?;
-    let accounting_before_next_down = generation_accounting_json(&lifecycle.harness);
+    let accounting_before_next_down = legacy_generation_accounting_json(&lifecycle.harness);
+    let live_scheduler_accounting_before_next_down =
+        live_scheduler_generation_accounting_json(&lifecycle.harness);
     let obligation_before_next_down = lifecycle.harness.release_obligation_mask_for_test();
     let resume_gate_was_due = resume_at >= after_cleanup_floor.packet_not_before_qpc;
     lifecycle
@@ -783,7 +833,9 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let resume_step_label = format!("{resume_step:?}");
     let cursor_after_resume_gate = lifecycle.harness.prepared_cursor_for_test();
     let attempts_after_resume_gate = captured_packet_count(&lifecycle.packets)?;
-    let accounting_after_resume_gate = generation_accounting_json(&lifecycle.harness);
+    let accounting_after_resume_gate = legacy_generation_accounting_json(&lifecycle.harness);
+    let live_scheduler_accounting_after_resume_gate =
+        live_scheduler_generation_accounting_json(&lifecycle.harness);
     let obligation_after_resume_gate = lifecycle.harness.release_obligation_mask_for_test();
     let resume_gate_integrity_passed = if resume_gate_was_due {
         matches!(resume_step.as_ref(), Some(DispatchStep::Dispatched))
@@ -836,6 +888,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let next_down_observation = lifecycle.harness.pop_send_observation_for_test().is_some();
     let actual_next_down = evidence_start(&lifecycle.packets, 2)?;
     let next_down_completion = evidence_completion(&lifecycle.packets, 2)?;
+    let accounting_after_repeated_down = lifecycle_accounting_owners_json(&lifecycle.harness);
     let required_down_floor = lifecycle
         .up_completion
         .checked_add_duration(min_release_gap_ticks)
@@ -854,7 +907,10 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let final_up_observation = lifecycle.harness.pop_send_observation_for_test().is_some();
     let final_up_actual = evidence_start(&lifecycle.packets, 3)?;
     let final_up_completion = evidence_completion(&lifecycle.packets, 3)?;
-    let final_accounting = generation_accounting_json(&lifecycle.harness);
+    let final_accounting = legacy_generation_accounting_json(&lifecycle.harness);
+    let final_live_scheduler_accounting =
+        live_scheduler_generation_accounting_json(&lifecycle.harness);
+    let accounting_after_final_up = lifecycle_accounting_owners_json(&lifecycle.harness);
     let final_obligation = lifecycle.harness.release_obligation_mask_for_test();
     let config = lifecycle.harness.dispatch_timing_config_for_test()?;
     let expected_g_us = config
@@ -894,6 +950,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         && no_pause_cursor_before == no_pause_cursor_after
         && no_pause_attempts_before == no_pause_attempts_after
         && no_pause_accounting_before == no_pause_accounting_after
+        && no_pause_live_scheduler_accounting_before == no_pause_live_scheduler_accounting_after
         && no_pause_obligation_before == no_pause_obligation_after;
     let resumed_not_due = if resume_gate_was_due {
         None
@@ -903,26 +960,48 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
                 && cursor_before_next_down == cursor_after_resume_gate
                 && attempts_before_next_down == attempts_after_resume_gate
                 && accounting_before_next_down == accounting_after_resume_gate
+                && live_scheduler_accounting_before_next_down
+                    == live_scheduler_accounting_after_resume_gate
                 && obligation_before_next_down == obligation_after_resume_gate
                 && attempts_after_resume_gate == after_cleanup_attempts
                 && cursor_after_resume_gate == after_cleanup_cursor,
         )
     };
     let normal_gap_contract_passed = actual_next_down >= required_down_floor;
-    let due_seam_integrity_passed = no_pause_not_due
-        && g_conversion_contract_passed
-        && resume_gate_integrity_passed
-        && actual_next_down >= after_cleanup_floor.packet_not_before_qpc
-        && config.native_admission_passed
-        && config.frame_us == FRAME_US
-        && config.effective_hold_us == HOLD_US
-        && config.min_release_gap_us == HOLD_US
-        && actual_next_down == next_down_pre_call
-        && final_up_actual == final_up_floor.packet_not_before_qpc
-        && next_down_completion <= final_up_actual
-        && final_accounting["activated"].as_u64() == Some(2)
-        && final_accounting["released"].as_u64() == Some(2)
-        && final_obligation == 0;
+    let due_seam_integrity_predicates = json!({
+        "no_pause_negative_control_preserves_both_accounting_owners": no_pause_not_due,
+        "g_conversion_matches_min_release_gap": g_conversion_contract_passed,
+        "resume_gate_matches_current_physical_floor": resume_gate_integrity_passed,
+        "repeated_down_at_or_after_post_cleanup_floor": actual_next_down >= after_cleanup_floor.packet_not_before_qpc,
+        "native_timing_admission_passed": config.native_admission_passed,
+        "frame_interval_t_is_expected": config.frame_us == FRAME_US,
+        "hold_floor_h_is_expected": config.effective_hold_us == HOLD_US,
+        "release_gap_g_is_expected": config.min_release_gap_us == HOLD_US,
+        "repeated_down_matches_due_seam_pre_call": actual_next_down == next_down_pre_call,
+        "final_up_is_at_its_physical_floor": final_up_actual == final_up_floor.packet_not_before_qpc,
+        "final_up_follows_repeated_down_completion": next_down_completion <= final_up_actual,
+        "legacy_fixture_activated_two_generations": final_accounting["activated"].as_u64() == Some(2),
+        "legacy_fixture_released_two_generations": final_accounting["released"].as_u64() == Some(2),
+        "final_release_obligation_is_clear": final_obligation == 0
+    });
+    let due_seam_integrity_passed =
+        due_seam_integrity_predicates
+            .as_object()
+            .is_some_and(|predicates| {
+                predicates
+                    .values()
+                    .all(|value| value.as_bool() == Some(true))
+            });
+    let generation_accounting_trace = json!({
+        "prepared_path_packet_owner": "legacy_coordinator_fixture",
+        "live_scheduler_reader": "generation_accounting_for_test -> resources.scheduler.accounting()",
+        "before_first_down": lifecycle.accounting_before_down,
+        "after_first_down_completion": lifecycle.accounting_after_down,
+        "after_first_up_completion": lifecycle.accounting_after_up,
+        "after_verified_cleanup": accounting_after_cleanup_owners,
+        "after_repeated_down_completion": accounting_after_repeated_down,
+        "after_final_up_completion": accounting_after_final_up
+    });
 
     Ok(json!({
         "qpc_frequency_hz": frequency_hz,
@@ -954,6 +1033,8 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
             "cursor_after": no_pause_cursor_after,
             "generation_accounting_before": no_pause_accounting_before,
             "generation_accounting_after": no_pause_accounting_after,
+            "live_scheduler_generation_accounting_before": no_pause_live_scheduler_accounting_before,
+            "live_scheduler_generation_accounting_after": no_pause_live_scheduler_accounting_after,
             "release_obligation_before": no_pause_obligation_before,
             "release_obligation_after": no_pause_obligation_after,
             "not_due_without_send_or_advance": no_pause_not_due
@@ -974,6 +1055,8 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
                 "sender_attempts_after_gate": attempts_after_resume_gate,
                 "generation_accounting_before": accounting_before_next_down,
                 "generation_accounting_after_gate": accounting_after_resume_gate,
+                "live_scheduler_generation_accounting": live_scheduler_accounting_before_next_down,
+                "live_scheduler_generation_accounting_after_gate": live_scheduler_accounting_after_resume_gate,
                 "release_obligation_before": obligation_before_next_down,
                 "release_obligation_after_gate": obligation_after_resume_gate,
                 "not_due_without_send_or_advance": resumed_not_due
@@ -982,10 +1065,14 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         "cleanup_transport_sends": after_cleanup_attempts.saturating_sub(2),
         "required_next_down_not_before": tick_json(clock,required_down_floor)?,
         "production_down_floor": tick_json(clock,after_cleanup_floor.packet_not_before_qpc)?,
+        "generation_accounting_owner": "legacy_coordinator_fixture",
+        "generation_accounting_trace": generation_accounting_trace,
+        "live_scheduler_final_generation_accounting": final_live_scheduler_accounting,
         "normal_gap_contract_passed": normal_gap_contract_passed,
         "below_completion_plus_frame": actual_next_down < required_down_floor,
         "final_generation_accounting": final_accounting,
         "final_release_obligation_mask": final_obligation,
+        "due_seam_integrity_predicates": due_seam_integrity_predicates,
         "due_seam_integrity_passed": due_seam_integrity_passed,
         "disposition": if normal_gap_contract_passed { "NOT_REPRODUCED" } else { "REPRODUCED" }
     }))
@@ -1243,14 +1330,14 @@ fn run_hol_case(config: HolCaseConfig) -> Result<Value, String> {
             "packet_event_count": packet.event_count(),
             "transport_attempts": attempts,
             "down_replay_after_packet": down_replay,
-            "accounting": generation_accounting_json(&harness),
+            "accounting": legacy_generation_accounting_json(&harness),
             "prepared_cursor_after": harness.prepared_cursor_for_test()
         }));
         previous_completion = Some(actual_complete_qpc);
         previous_packet_mask = packet_mask;
     }
 
-    let accounting = harness.generation_accounting_for_test();
+    let accounting = harness.legacy_coordinator_generation_accounting_for_test();
     let release_obligation_mask = harness.release_obligation_mask_for_test();
     let authored_targets_unchanged = rows.len() == expected_authored_targets.len()
         && rows
@@ -1288,7 +1375,8 @@ fn run_hol_case(config: HolCaseConfig) -> Result<Value, String> {
         "down_replay": down_replay,
         "expected_down_generations": expected_generations,
         "actual_down_packets": down_packets,
-        "generation_accounting": generation_accounting_json(&harness),
+        "generation_accounting": legacy_generation_accounting_json(&harness),
+        "generation_accounting_owner": "legacy_coordinator_fixture",
         "activated_generations": accounting.activated,
         "released_generations": accounting.released,
         "active_generations": accounting.active,
