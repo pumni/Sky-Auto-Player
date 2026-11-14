@@ -43,6 +43,43 @@ pub(super) fn clock_failure_before_send_outcome(
     }
 }
 
+fn packet_outcome_proves_zero_transport(
+    packet: PhysicalPacket,
+    outcome: SendTransactionOutcome,
+) -> bool {
+    let evidence = outcome.evidence;
+    let packet_mask = packet.up_mask | packet.down_mask;
+    if packet_mask == 0
+        || evidence.requested_mask != packet_mask
+        || evidence.confirmed_mask != 0
+        || evidence.skipped_mask != 0
+        || evidence.first_inserted != 0
+    {
+        return false;
+    }
+
+    match outcome.status {
+        SendTransactionStatus::ClockFailureBeforeSend => {
+            evidence.attempts == 0
+                && evidence.timing_error.is_some()
+                && evidence.retry_reason == PacketRetryReason::None
+        }
+        SendTransactionStatus::ZeroProgress => {
+            evidence.attempts <= 1
+                && matches!(
+                    evidence.retry_reason,
+                    PacketRetryReason::None | PacketRetryReason::ZeroProgress
+                )
+        }
+        SendTransactionStatus::ClockFailureAfterSend => {
+            evidence.attempts == 1
+                && evidence.timing_error.is_some()
+                && evidence.retry_reason == PacketRetryReason::None
+        }
+        _ => false,
+    }
+}
+
 impl TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     fn apply_test_packet_ambiguity(
@@ -93,6 +130,7 @@ impl TrackedKeyState {
             };
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
+            let previous_in_flight_mask = self.in_flight_mask;
             self.in_flight_mask |= packet.up_mask | packet.down_mask;
             let mut outcome = emitter(packet);
             #[cfg(any(test, feature = "test-support"))]
@@ -111,6 +149,9 @@ impl TrackedKeyState {
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
             let outcome =
                 self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
+            if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+                self.in_flight_mask = previous_in_flight_mask;
+            }
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
             return outcome;
@@ -141,6 +182,7 @@ impl TrackedKeyState {
         };
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
+        let previous_in_flight_mask = self.in_flight_mask;
         self.in_flight_mask |= packet.up_mask | packet.down_mask;
         let outcome =
             super::super::packet::send_prepared_physical_packet_view_once(prepared, clock);
@@ -150,6 +192,9 @@ impl TrackedKeyState {
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
         let outcome =
             self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
+        if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+            self.in_flight_mask = previous_in_flight_mask;
+        }
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
@@ -749,7 +794,9 @@ impl TrackedKeyState {
             SendTransactionStatus::ClockFailureBeforeSend
             | SendTransactionStatus::ClockFailureAfterSend => {
                 self.timing_error = outcome.evidence.timing_error;
-                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend) {
+                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend)
+                    && !packet_outcome_proves_zero_transport(packet, outcome)
+                {
                     let uncertain_mask = packet.up_mask | packet.down_mask;
                     self.active_mask &= !uncertain_mask;
                     self.possibly_active_mask |= uncertain_mask;

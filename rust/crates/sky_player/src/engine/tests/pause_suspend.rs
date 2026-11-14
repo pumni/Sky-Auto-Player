@@ -1146,10 +1146,9 @@ fn focus_restore_race_after_validation_does_not_resume() {
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
     let race_hook: super::config::RestoreRaceHook = {
         let raced = Arc::clone(&raced);
-        Arc::new(move |focus_active, target| {
+        Arc::new(move |focus_active, _target| {
             if !raced.swap(true, Ordering::SeqCst) {
                 focus_active.store(false, Ordering::Release);
-                target.publish(456);
             }
         })
     };
@@ -1192,6 +1191,30 @@ fn focus_restore_race_after_validation_does_not_resume() {
         session.snapshot()
     );
     assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let resume_deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let snapshot = session.snapshot();
+        assert!(
+            !snapshot.is_finished,
+            "restored target finished the session unexpectedly: {snapshot:?}"
+        );
+        assert_eq!(snapshot.terminal_error, None);
+        if !snapshot.is_paused {
+            break;
+        }
+        assert!(
+            Instant::now() < resume_deadline,
+            "focus/target recovery did not wake the blocked resume path: {snapshot:?}"
+        );
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while target recovers");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     session.quit().expect("quit raced session");

@@ -108,6 +108,64 @@ fn paused_wait_state_is_stable(
         && interrupt.signal_generation() == expected_wake_generation
 }
 
+#[allow(clippy::too_many_arguments)]
+fn wait_for_blocked_resume_replan(
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    control_signals: FinalControlSignals<'_>,
+    expected_desired_pause: bool,
+    focus_active: &AtomicBool,
+    expected_focus_active: bool,
+    require_focus: bool,
+    target: &SessionTarget,
+    expected_target: Option<TargetStamp>,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    terminal_error: &mut Option<String>,
+) -> bool {
+    let Some(system_power) = control_signals.system_power else {
+        *terminal_error = Some("resume replan is missing system power state".to_string());
+        return false;
+    };
+    let wake_generation = interrupt.signal_generation();
+    if !paused_wait_state_is_stable(
+        control_signals.desired_pause,
+        expected_desired_pause,
+        focus_active,
+        expected_focus_active,
+        require_focus,
+        control_signals.quit_requested,
+        control_signals.skip_requested,
+        control_signals.panic_requested,
+        control_signals.supervisor_expired,
+        system_power,
+        target,
+        expected_target.map(|stamp| (stamp.hwnd, stamp.generation)),
+        interrupt,
+        wake_generation,
+    ) {
+        return true;
+    }
+
+    match wait_after_unstable_target(
+        now_qpc,
+        now_qpc,
+        qpc_clock,
+        waiter,
+        interrupt,
+        local_metrics,
+        terminal_error,
+    ) {
+        WaitBoundary::Due { .. } => true,
+        WaitBoundary::Interrupted(_, _, _) => {
+            let _ = interrupt.try_take();
+            true
+        }
+        WaitBoundary::Exit => false,
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 fn physical_target_qpc_for_work(
     target: Option<sky_dispatch_win32::clock::QpcTicks>,
@@ -1200,6 +1258,14 @@ pub(super) fn dispatch(
                 break;
             }
             let manual_pause = desired_pause.load(Ordering::Acquire);
+            let resume_wait_signals = FinalControlSignals {
+                quit_requested,
+                skip_requested,
+                panic_requested,
+                desired_pause,
+                supervisor_expired,
+                system_power: Some(system_power),
+            };
             #[cfg(any(test, feature = "test-support"))]
             if command_timing.needs_observation() {
                 let observed_ticks = match qpc_clock.now() {
@@ -1270,6 +1336,23 @@ pub(super) fn dispatch(
                     let Some(preflight_target) = load_target_stamp(target) else {
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
+                        if !wait_for_blocked_resume_replan(
+                            now_ticks,
+                            resume_wait_signals,
+                            manual_pause,
+                            focus_active,
+                            focus_matches(config.focus.require_focus, focus_active),
+                            config.focus.require_focus,
+                            target,
+                            None,
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            break;
+                        }
                         continue;
                     };
                     let manual_pause_active =
@@ -1287,6 +1370,23 @@ pub(super) fn dispatch(
                         }
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
+                        if !wait_for_blocked_resume_replan(
+                            now_ticks,
+                            resume_wait_signals,
+                            manual_pause,
+                            focus_active,
+                            focus_matches(config.focus.require_focus, focus_active),
+                            config.focus.require_focus,
+                            target,
+                            Some(preflight_target),
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            break;
+                        }
                         continue;
                     }
                     if !manual_pause_active {
@@ -1342,6 +1442,23 @@ pub(super) fn dispatch(
                     let Some(post_restore_target) = load_target_stamp(target) else {
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
+                        if !wait_for_blocked_resume_replan(
+                            now_ticks,
+                            resume_wait_signals,
+                            manual_pause,
+                            focus_active,
+                            focus_matches(config.focus.require_focus, focus_active),
+                            config.focus.require_focus,
+                            target,
+                            None,
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            break;
+                        }
                         continue;
                     };
                     if !focus_matches_hwnd(
@@ -1353,6 +1470,23 @@ pub(super) fn dispatch(
                     {
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
+                        if !wait_for_blocked_resume_replan(
+                            now_ticks,
+                            resume_wait_signals,
+                            manual_pause,
+                            focus_active,
+                            focus_matches(config.focus.require_focus, focus_active),
+                            config.focus.require_focus,
+                            target,
+                            Some(post_restore_target),
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            break;
+                        }
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
@@ -1454,6 +1588,23 @@ pub(super) fn dispatch(
                     }
                     let Some(preflight_target) = load_target_stamp(target) else {
                         core.runtime.verified_target = None;
+                        if !wait_for_blocked_resume_replan(
+                            now_ticks,
+                            resume_wait_signals,
+                            manual_pause,
+                            focus_active,
+                            focus_matches(config.focus.require_focus, focus_active),
+                            config.focus.require_focus,
+                            target,
+                            None,
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            break;
+                        }
                         continue;
                     };
                     if let Err(error) = ensure_preflight_for_target(
@@ -1474,6 +1625,23 @@ pub(super) fn dispatch(
                     ) || !target_stamp_still_current(target, preflight_target)
                     {
                         core.runtime.verified_target = None;
+                        if !wait_for_blocked_resume_replan(
+                            now_ticks,
+                            resume_wait_signals,
+                            manual_pause,
+                            focus_active,
+                            focus_matches(config.focus.require_focus, focus_active),
+                            config.focus.require_focus,
+                            target,
+                            Some(preflight_target),
+                            qpc_clock,
+                            &resources.waiter,
+                            interrupt,
+                            &mut core.metrics,
+                            &mut core.runtime.terminal_error,
+                        ) {
+                            break;
+                        }
                         continue;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
@@ -1980,6 +2148,7 @@ mod tests {
         project_scheduler_action_for_staging, publish_live_metrics_after_dispatch,
         source_action_target, stage_scheduler_action, stage_scheduler_action_preserving_due_up,
         stage_up_only_for_stale_mixed_candidate, wait_after_unstable_target,
+        wait_for_blocked_resume_replan,
     };
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
@@ -2258,6 +2427,71 @@ mod tests {
             ),
             "coalesced event wakes cannot hide independent Stop and Skip state"
         );
+    }
+
+    #[test]
+    fn blocked_resume_replan_waits_interruptibly_and_rechecks_target() {
+        use crate::engine::shared::{SupervisorLeaseState, SystemPowerState};
+        use crate::engine::target::SessionTarget;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let clock = QpcClock::initialize().expect("QPC clock");
+        let target = Arc::new(SessionTarget::new(0, 1));
+        let interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("interrupt event"));
+        let target_signaler = Arc::clone(&target);
+        let event_signaler = Arc::clone(&interrupt);
+        let signaler = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            assert!(target_signaler.publish(123));
+            assert!(event_signaler.signal());
+        });
+
+        let desired_pause = AtomicBool::new(false);
+        let focus_active = AtomicBool::new(true);
+        let quit_requested = AtomicBool::new(false);
+        let skip_requested = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(false);
+        let supervisor_expired =
+            SupervisorLeaseState::new(sky_dispatch_win32::clock::QpcTicks::ZERO);
+        let system_power = SystemPowerState::default();
+        let waiter = sky_dispatch_win32::wait::HybridWaiter::new();
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let mut terminal_error = None;
+        let deadline = Instant::now() + Duration::from_secs(1);
+
+        while local_metrics.wait_interrupted_count == 0 && Instant::now() < deadline {
+            let expected_target = target
+                .load_stable()
+                .map(|(hwnd, generation)| super::TargetStamp { hwnd, generation });
+            assert!(wait_for_blocked_resume_replan(
+                clock.now().expect("QPC now"),
+                super::FinalControlSignals {
+                    quit_requested: &quit_requested,
+                    skip_requested: &skip_requested,
+                    panic_requested: &panic_requested,
+                    desired_pause: &desired_pause,
+                    supervisor_expired: &supervisor_expired,
+                    system_power: Some(&system_power),
+                },
+                false,
+                &focus_active,
+                true,
+                false,
+                &target,
+                expected_target,
+                clock,
+                &waiter,
+                &interrupt,
+                &mut local_metrics,
+                &mut terminal_error,
+            ));
+            assert_eq!(terminal_error, None);
+        }
+
+        signaler.join().expect("target signaler");
+        assert_eq!(local_metrics.wait_interrupted_count, 1);
+        assert_eq!(target.load_stable(), Some((123, 2)));
     }
 
     #[test]

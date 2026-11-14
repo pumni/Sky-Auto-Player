@@ -160,6 +160,131 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
 }
 
 #[test]
+fn mixed_post_qpc_failure_keeps_transport_evidence_and_skips_scheduler_commit() {
+    for (inserted, requested_win32_error) in [(0, 5), (1, 5), (2, 0)] {
+        let (mut harness, _) = mixed_scheduler_after_accepted_a_down();
+        let (cleanup_calls, _) =
+            harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+        let action = next_mixed_action(&harness);
+        let candidate = stage_scheduler_action(
+            action,
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("stage live Mixed candidate")
+        .expect("live Mixed candidate");
+        let packet = PhysicalPacket::new(
+            candidate.packet_masks.up_mask,
+            candidate.packet_masks.down_mask,
+        );
+        assert_ne!(packet.up_mask, 0);
+        assert_ne!(packet.down_mask, 0);
+        assert_eq!(packet.event_count(), 2);
+
+        let accounting_before = harness.resources.scheduler.accounting();
+        let captured_failure = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let failure_capture = std::sync::Arc::clone(&captured_failure);
+        let clock = harness.resources.clock;
+        let started_ticks = clock.now().expect("mock sender start QPC");
+        harness.resources.backend.set_packet_emitter(move |sent| {
+            failure_capture
+                .lock()
+                .expect("failed packet capture")
+                .push(sent);
+            let win32_error = if inserted < sent.event_count() {
+                requested_win32_error
+            } else {
+                0
+            };
+            SendTransactionOutcome {
+                status: SendTransactionStatus::ClockFailureAfterSend,
+                evidence: SendEvidence {
+                    requested_mask: sent.up_mask | sent.down_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: inserted,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: (win32_error != 0).then_some(win32_error),
+                    last_win32_error: (win32_error != 0).then_some(win32_error),
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: None,
+                    timing_error: Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
+                },
+            }
+        });
+
+        assert!(matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            super::StagedDispatchOutcome::Exit
+        ));
+        assert_eq!(
+            *captured_failure.lock().expect("failed packet capture"),
+            vec![packet]
+        );
+        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_eq!(
+            harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
+            Some(1),
+            "post-QPC failure must not commit the scheduler cursor"
+        );
+
+        let expected_obligation = if inserted == 0 {
+            packet.up_mask
+        } else {
+            packet.up_mask | packet.down_mask
+        };
+        assert_eq!(
+            harness.resources.backend.release_obligation_mask(),
+            expected_obligation,
+            "inserted={inserted}: only a definite zero insertion may discard the new Down"
+        );
+        assert_eq!(
+            harness.resources.backend.in_flight_mask,
+            if inserted == 0 { 0 } else { packet.up_mask | packet.down_mask }
+        );
+        let error = harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .expect("post-QPC sender failure is terminal");
+        assert!(error.contains("status=ClockFailureAfterSend"), "{error}");
+        assert!(
+            error.contains(&format!("first_inserted={inserted}")),
+            "{error}"
+        );
+        assert!(
+            error.contains("completion_qpc=unavailable")
+                && error.contains("CounterUnavailable"),
+            "{error}"
+        );
+        if inserted < packet.event_count() && requested_win32_error != 0 {
+            assert!(error.contains(&format!("win32_error=Some({requested_win32_error})")), "{error}");
+        }
+
+        let finalizer = harness.finalize_for_test();
+        assert_eq!(finalizer.attempted_mask, expected_obligation);
+        assert_eq!(finalizer.release_obligation_mask, 0);
+        let mut cleanup_codes = cleanup_calls
+            .lock()
+            .expect("cleanup capture")
+            .iter()
+            .flat_map(|(scan_codes, key_up)| {
+                assert!(*key_up, "terminal mixed cleanup must send Up only");
+                scan_codes.iter().copied()
+            })
+            .collect::<Vec<_>>();
+        cleanup_codes.sort_unstable();
+        let mut expected_codes = sky_dispatch_win32::input::scan_codes_from_mask(expected_obligation)
+            .into_vec();
+        expected_codes.sort_unstable();
+        assert_eq!(cleanup_codes, expected_codes, "inserted={inserted}");
+    }
+}
+
+#[test]
 fn unstable_target_replan_wait_bounds_overdue_dispatch_retries() {
     let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
     harness.runtime.verified_target = None;
