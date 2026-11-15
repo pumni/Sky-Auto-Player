@@ -2158,6 +2158,8 @@ fn build_bridge_internal(
             crate::process::run_owned_timeout_filtered(
                 std::ffi::OsStr::new("git"),
                 &[
+                    "-c".to_owned(),
+                    "core.longpaths=true".to_owned(),
                     "worktree".to_owned(),
                     "remove".to_owned(),
                     "--force".to_owned(),
@@ -2389,6 +2391,8 @@ fn build_bridge_internal(
     let worktree_remove = crate::process::run_owned_timeout_filtered(
         std::ffi::OsStr::new("git"),
         &[
+            "-c".to_owned(),
+            "core.longpaths=true".to_owned(),
             "worktree".to_owned(),
             "remove".to_owned(),
             "--force".to_owned(),
@@ -3232,8 +3236,25 @@ mod tests {
             b"synthetic worktree fixture\n"
         );
 
+        // A generated dependency tree can exceed Windows MAX_PATH even though
+        // the worktree root itself is an ordinary, verified Git path.
+        let long_untracked_path = std::fs::canonicalize(&worktree)
+            .expect("canonicalize synthetic worktree")
+            .join("node_modules")
+            .join("nested-dependency-".repeat(8))
+            .join("generated-files-".repeat(8))
+            .join("artifact.js");
+        assert!(
+            long_untracked_path.to_string_lossy().len() > 260,
+            "fixture must exercise a path longer than Windows MAX_PATH"
+        );
+        std::fs::create_dir_all(long_untracked_path.parent().unwrap())
+            .expect("create long untracked dependency path");
+        std::fs::write(&long_untracked_path, b"generated dependency fixture\n")
+            .expect("write long untracked dependency fixture");
+
         let removed = std::process::Command::new("git")
-            .args(["worktree", "remove", "--force"])
+            .args(["-c", "core.longpaths=true", "worktree", "remove", "--force"])
             .arg(&worktree_text)
             .current_dir(&repository_cli)
             .output()
