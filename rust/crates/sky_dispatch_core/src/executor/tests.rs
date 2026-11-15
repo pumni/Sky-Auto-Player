@@ -57,6 +57,8 @@ fn prepared_plan_starts_fresh_and_matches_raw_executor_decisions() {
     ));
     assert!(!prepared.is_compatible(frequency, 1_001, 1_000));
 
+    let chord_storage = prepared.down_chords.as_ptr();
+    let intent_storage = prepared.down_intents.as_ptr();
     let mut prepared_executor = DispatchExecutor::from_prepared_schedule(prepared);
     let mut raw_executor = DispatchExecutor::new(
         &schedule,
@@ -66,6 +68,8 @@ fn prepared_plan_starts_fresh_and_matches_raw_executor_decisions() {
     )
     .expect("raw schedule executor");
     assert_eq!(prepared_executor.active_mask(), 0);
+    assert_eq!(prepared_executor.down_chords.as_ptr(), chord_storage);
+    assert_eq!(prepared_executor.down_intents.as_ptr(), intent_storage);
     assert_eq!(
         prepared_executor.total_chords(),
         raw_executor.total_chords()
@@ -106,38 +110,286 @@ fn prepared_plan_starts_fresh_and_matches_raw_executor_decisions() {
 
 #[test]
 fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
-    let allowed = vec![0x15];
+    const FREQUENCY_HZ: u64 = 3_579_545;
+    fn ceil_qpc_ticks(microseconds: u64) -> u64 {
+        let numerator = u128::from(microseconds) * u128::from(FREQUENCY_HZ) + 999_999;
+        u64::try_from(numerator / 1_000_000).expect("fixture QPC conversion")
+    }
+
+    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+    enum ObservedDecision {
+        Send {
+            up_mask: u16,
+            down_mask: u16,
+            timing_window: DispatchTimingWindow,
+        },
+        Wait {
+            deadline_qpc: u64,
+        },
+        Finished,
+    }
+
+    fn observe(decision: DispatchDecision<'_>) -> ObservedDecision {
+        match decision {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => ObservedDecision::Send {
+                up_mask,
+                down_mask: down_chord.map_or(0, |chord| chord.down_mask),
+                timing_window,
+            },
+            DispatchDecision::Wait { deadline_qpc } => ObservedDecision::Wait {
+                deadline_qpc: deadline_qpc.as_u64(),
+            },
+            DispatchDecision::Finished => ObservedDecision::Finished,
+        }
+    }
+
+    fn evaluate_decision_pair(
+        prepared: &mut DispatchExecutor,
+        raw: &mut DispatchExecutor,
+        now_qpc: u64,
+    ) -> ObservedDecision {
+        let now = crate::time::QpcTicks::from_raw(now_qpc);
+        let prepared_decision = observe(
+            prepared
+                .evaluate_at(now, crate::time::QpcTicks::ZERO)
+                .expect("prepared executor decision"),
+        );
+        let raw_decision = observe(
+            raw.evaluate_at(now, crate::time::QpcTicks::ZERO)
+                .expect("raw executor decision"),
+        );
+        assert_eq!(prepared_decision, raw_decision, "at QPC {now_qpc}");
+        prepared_decision
+    }
+
+    fn evaluate_pair(
+        prepared: &mut DispatchExecutor,
+        raw: &mut DispatchExecutor,
+        now_qpc: u64,
+        completion_qpc: Option<u64>,
+    ) -> ObservedDecision {
+        let prepared_decision = evaluate_decision_pair(prepared, raw, now_qpc);
+        match &prepared_decision {
+            ObservedDecision::Send {
+                up_mask, down_mask, ..
+            } => {
+                let completed_at = crate::time::QpcTicks::from_raw(
+                    completion_qpc.expect("Send decision has a completion timestamp"),
+                );
+                prepared
+                    .on_send_completed_at(*up_mask, *down_mask, completed_at)
+                    .expect("prepared executor completion");
+                raw.on_send_completed_at(*up_mask, *down_mask, completed_at)
+                    .expect("raw executor completion");
+            }
+            ObservedDecision::Wait { .. } | ObservedDecision::Finished => {
+                assert!(
+                    completion_qpc.is_none(),
+                    "non-Send decision has no completion"
+                );
+            }
+        }
+        prepared_decision
+    }
+
+    let allowed = vec![0x15, 0x16, 0x17, 0x18];
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
             scheduled_us: 0,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "down".into(),
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "initial chord".into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
-            scheduled_us: 1,
+            scheduled_us: 50,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "mixed packet releases".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 50,
+            scan_codes: smallvec::smallvec![0x17],
+            reason: "mixed packet independent down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Down,
+            scheduled_us: 51,
+            scan_codes: smallvec::smallvec![0x18],
+            reason: "independent key down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 4,
+            kind: ActionKind::Down,
+            scheduled_us: 57,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "up".into(),
+            reason: "same key repress".into(),
+        },
+        KeyActionInput {
+            source_action_index: 5,
+            kind: ActionKind::Up,
+            scheduled_us: 61,
+            scan_codes: smallvec::smallvec![0x18],
+            reason: "independent key release".into(),
+        },
+        KeyActionInput {
+            source_action_index: 6,
+            kind: ActionKind::Up,
+            scheduled_us: 80,
+            scan_codes: smallvec::smallvec![0x17],
+            reason: "independent down release".into(),
+        },
+        KeyActionInput {
+            source_action_index: 7,
+            kind: ActionKind::Up,
+            scheduled_us: 90,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "same key repress release".into(),
         },
     ];
     let schedule = compile_actions(&actions, &allowed);
-    let frequency = std::num::NonZeroU64::new(3_000_000).expect("QPC frequency");
-    let plan = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
-        .expect("QPC timestamp conversion rounds up");
-    let executor = DispatchExecutor::from_prepared_schedule(plan);
-    match executor
-        .evaluate_at(crate::time::QpcTicks::ZERO, crate::time::QpcTicks::ZERO)
-        .expect("first decision")
-    {
-        DispatchDecision::Send {
-            down_chord: Some(chord),
+    let frequency = std::num::NonZeroU64::new(FREQUENCY_HZ).expect("QPC frequency");
+    let min_hold_ticks = ceil_qpc_ticks(10);
+    let min_release_gap_ticks = ceil_qpc_ticks(7);
+    let plan = PreparedDispatchSchedule::prepare(&schedule, frequency, 10, 7, 0)
+        .expect("QPC timestamp and floor conversions round up");
+    assert_eq!(plan.min_hold_ticks.as_u64(), min_hold_ticks);
+    assert_eq!(plan.min_release_gap_ticks.as_u64(), min_release_gap_ticks);
+    assert_eq!(plan.min_hold_ticks.as_u64(), 36);
+    assert_eq!(plan.min_release_gap_ticks.as_u64(), 26);
+    assert_eq!(plan.down_intents[0].paired_up_offset_ticks.as_u64(), 179);
+    assert_eq!(plan.down_chords[1].scheduled_ticks.as_u64(), 179);
+    assert_eq!(plan.down_chords[2].scheduled_ticks.as_u64(), 183);
+    assert_eq!(plan.down_chords[3].scheduled_ticks.as_u64(), 205);
+
+    let mut prepared_executor = DispatchExecutor::from_prepared_schedule(plan);
+    let mut raw_executor = DispatchExecutor::new(
+        &schedule,
+        DurationTicks::from_raw(min_hold_ticks),
+        DurationTicks::from_raw(min_release_gap_ticks),
+        |microseconds| {
+            Ok::<_, std::convert::Infallible>(TimelineTicks::from_raw(ceil_qpc_ticks(microseconds)))
+        },
+    )
+    .expect("raw QPC-domain schedule executor");
+
+    assert_eq!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 0, Some(10)),
+        ObservedDecision::Send {
+            up_mask: 0,
+            down_mask: 0b0011,
+            timing_window: DispatchTimingWindow {
+                authored_target_qpc: crate::time::QpcTicks::ZERO,
+                musical_up_not_before_qpc: crate::time::QpcTicks::ZERO,
+                down_not_before_qpc: crate::time::QpcTicks::ZERO,
+                packet_not_before_qpc: crate::time::QpcTicks::ZERO,
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
+            },
+        }
+    );
+    assert_eq!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 179, Some(200)),
+        ObservedDecision::Send {
+            up_mask: 0b0011,
+            down_mask: 0b0100,
+            timing_window: DispatchTimingWindow {
+                authored_target_qpc: crate::time::QpcTicks::from_raw(179),
+                musical_up_not_before_qpc: crate::time::QpcTicks::from_raw(179),
+                down_not_before_qpc: crate::time::QpcTicks::from_raw(179),
+                packet_not_before_qpc: crate::time::QpcTicks::from_raw(179),
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
+            },
+        }
+    );
+    assert_eq!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 200, Some(205)),
+        ObservedDecision::Send {
+            up_mask: 0,
+            down_mask: 0b1000,
+            timing_window: DispatchTimingWindow {
+                authored_target_qpc: crate::time::QpcTicks::from_raw(183),
+                musical_up_not_before_qpc: crate::time::QpcTicks::from_raw(183),
+                down_not_before_qpc: crate::time::QpcTicks::from_raw(183),
+                packet_not_before_qpc: crate::time::QpcTicks::from_raw(183),
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
+            },
+        }
+    );
+    assert_eq!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 225, None),
+        ObservedDecision::Wait { deadline_qpc: 226 }
+    );
+    assert!(matches!(
+        evaluate_decision_pair(&mut prepared_executor, &mut raw_executor, 226),
+        ObservedDecision::Send { down_mask: 0b0001, timing_window: DispatchTimingWindow { packet_not_before_qpc, release_floor_mask: 0b0001, .. }, .. }
+            if packet_not_before_qpc.as_u64() == 226
+    ));
+    let prepared_past_g = evaluate_decision_pair(&mut prepared_executor, &mut raw_executor, 227);
+    assert!(matches!(
+        prepared_past_g,
+        ObservedDecision::Send {
+            down_mask: 0b0001,
             ..
-        } => assert_eq!(chord.intents[0].paired_up_offset_ticks.as_u64(), 3),
-        decision => panic!("expected initial Down, got {decision:?}"),
-    }
+        }
+    ));
+    assert!(matches!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 226, Some(230)),
+        ObservedDecision::Send { down_mask: 0b0001, timing_window: DispatchTimingWindow { down_not_before_qpc, packet_not_before_qpc, release_floor_mask: 0b0001, .. }, .. }
+            if down_not_before_qpc.as_u64() == 226 && packet_not_before_qpc.as_u64() == 226
+    ));
+    assert_eq!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 240, None),
+        ObservedDecision::Wait { deadline_qpc: 241 }
+    );
+    assert!(matches!(
+        evaluate_decision_pair(&mut prepared_executor, &mut raw_executor, 241),
+        ObservedDecision::Send { up_mask: 0b1000, timing_window: DispatchTimingWindow { musical_up_not_before_qpc, hold_floor_mask: 0b1000, .. }, .. }
+            if musical_up_not_before_qpc.as_u64() == 241
+    ));
+    let prepared_past_h = evaluate_decision_pair(&mut prepared_executor, &mut raw_executor, 242);
+    assert!(matches!(
+        prepared_past_h,
+        ObservedDecision::Send {
+            up_mask: 0b1000,
+            ..
+        }
+    ));
+    assert!(matches!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 241, Some(245)),
+        ObservedDecision::Send { up_mask: 0b1000, timing_window: DispatchTimingWindow { musical_up_not_before_qpc, hold_floor_mask: 0b1000, .. }, .. }
+            if musical_up_not_before_qpc.as_u64() == 241
+    ));
+    assert!(matches!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 287, Some(290)),
+        ObservedDecision::Send {
+            up_mask: 0b0100,
+            ..
+        }
+    ));
+    assert!(matches!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 323, Some(330)),
+        ObservedDecision::Send {
+            up_mask: 0b0001,
+            ..
+        }
+    ));
+    assert_eq!(
+        evaluate_pair(&mut prepared_executor, &mut raw_executor, 330, None),
+        ObservedDecision::Finished
+    );
+    assert_eq!(prepared_executor.active_mask(), 0);
+    assert_eq!(raw_executor.active_mask(), 0);
 
     let many_actions = (0..5_000_u32)
         .flat_map(|index| {

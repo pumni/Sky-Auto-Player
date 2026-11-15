@@ -255,6 +255,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     ) {
         return admission_failure(&mut backend, metrics, error);
     }
+    #[cfg(any(test, feature = "test-support"))]
+    let schedule_was_prepared = matches!(&schedule, NativeScheduleInput::Prepared(_));
     let prepared_schedule = match schedule {
         NativeScheduleInput::Prepared(prepared)
             if prepared.is_compatible(
@@ -274,6 +276,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
         NativeScheduleInput::Raw(raw) => {
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = startup_hook {
+                hook.record_raw_schedule_worker_materialization();
+            }
             match PreparedDispatchSchedule::prepare_with_cancellation(
                 &raw,
                 qpc_clock.frequency_hz(),
@@ -346,6 +352,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     let scheduler =
         sky_dispatch_core::executor::DispatchExecutor::from_prepared_schedule(prepared_schedule);
+    #[cfg(any(test, feature = "test-support"))]
+    if schedule_was_prepared && let Some(hook) = startup_hook {
+        hook.record_prepared_schedule_executor_consumption();
+    }
     core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
         scheduler.schedule_end_offset_ticks().as_u64(),
     )) {

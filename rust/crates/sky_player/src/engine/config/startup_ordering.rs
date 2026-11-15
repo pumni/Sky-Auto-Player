@@ -14,6 +14,36 @@ pub(crate) struct InterruptedWaitEvidence {
 }
 
 impl StartupOrderingHook {
+    pub fn raw_schedule_admission_validation_count(&self) -> u64 {
+        self.raw_schedule_admission_validation_count
+            .load(Ordering::Acquire)
+    }
+
+    pub fn raw_schedule_worker_materialization_count(&self) -> u64 {
+        self.raw_schedule_worker_materialization_count
+            .load(Ordering::Acquire)
+    }
+
+    pub fn prepared_schedule_executor_consumption_count(&self) -> u64 {
+        self.prepared_schedule_executor_consumption_count
+            .load(Ordering::Acquire)
+    }
+
+    pub(crate) fn record_raw_schedule_admission_validation(&self) {
+        self.raw_schedule_admission_validation_count
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn record_raw_schedule_worker_materialization(&self) {
+        self.raw_schedule_worker_materialization_count
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn record_prepared_schedule_executor_consumption(&self) {
+        self.prepared_schedule_executor_consumption_count
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
     pub fn last_down_window(&self) -> (u64, u64) {
         let (_, authored, not_before) = self.last_down_window_snapshot();
         (authored, not_before)

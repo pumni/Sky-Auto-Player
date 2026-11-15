@@ -541,6 +541,94 @@ fn first_down_committed_checkpoint_follows_successful_backend_send() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
+fn prepared_schedule_passes_session_admission_and_worker_arm_without_rematerializing() {
+    use crate::engine::NativeScheduleInput;
+
+    let schedule = startup_boundary_schedule();
+    let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+    let prepared = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
+        &schedule,
+        qpc.frequency_hz(),
+        500,
+        17_167,
+        0,
+    )
+    .expect("Prepare materializes the physical schedule");
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.schedule = NativeScheduleInput::Prepared(prepared);
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("prepared session admission");
+
+    assert_eq!(hook.raw_schedule_admission_validation_count(), 0);
+    session.arm(0).expect("worker arm request");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
+    assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
+    assert_eq!(hook.raw_schedule_admission_validation_count(), 0);
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+
+    session
+        .quit()
+        .expect("quit at successful Armed publication");
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(session.snapshot().outcome.as_deref(), Some("quit"));
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn raw_schedule_still_validates_and_cancellable_materialization_runs_during_arm() {
+    let schedule = large_startup_materialization_schedule(5_000);
+    let hook = Arc::new(StartupOrderingHook::default());
+    // With this fixture the eighth checkpoint follows full schedule validation
+    // and allocation of the worker-owned executor arrays, before chord copying.
+    hook.arm_startup_checkpoint(StartupCheckpoint::StreamMaterialization, 8);
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("raw session admission");
+    assert_eq!(hook.raw_schedule_admission_validation_count(), 1);
+
+    session.arm(0).expect("worker arm request");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    assert_eq!(hook.raw_schedule_worker_materialization_count(), 1);
+    session.quit().expect("cancel raw materialization");
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(hook.raw_schedule_admission_validation_count(), 1);
+    assert_eq!(hook.raw_schedule_worker_materialization_count(), 1);
+    assert_eq!(hook.prepared_schedule_executor_consumption_count(), 0);
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
 fn actual_b_worker_publishes_interrupted_wait_before_resumed_packet_dispatch() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 

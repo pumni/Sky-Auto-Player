@@ -42,6 +42,13 @@ frequency domain and validates its timestamps against the selected H/G policy.
 The plan retains compact Down chords and intents, the key registry, schedule
 metadata, and the unmatched-Up diagnostics needed by the worker. Source notes
 and the full `RuntimeSchedule` are released before the plan is published.
+Each variant's advisory applies its action, work, and memory bounds to that
+variant's authored action count. If an optional physical `UseRecommended`
+variant cannot be materialized within the retained-capacity budget, Prepare
+omits that decision, DTO variant, fingerprint, and native plan together. A
+runnable `Proceed` and any valid offered `DryRun` remain available. Cancellation
+or supersession during recommendation materialization cancels the entire
+Prepare rather than treating the recommendation as unavailable.
 
 `Start` rechecks the prepared ID and settings identity, selects the requested
 variant, and moves its plan into native session creation. It does not compile,

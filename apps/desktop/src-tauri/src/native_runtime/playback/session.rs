@@ -119,6 +119,12 @@ impl NativePlaybackService {
             #[cfg(all(test, feature = "tauri-test"))]
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
+            prepared_player_factory_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommended_plan_caller_capacity_override_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommendation_materialization_test_hook: Mutex::new(None),
+            #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
             #[cfg(all(test, feature = "tauri-test"))]
@@ -592,6 +598,7 @@ impl NativePlaybackService {
                     &recommended_schedule,
                     &recommended_policy,
                 )?;
+                let recommended_action_count = recommended_schedule.actions.len();
                 let base_runtime_schedule_capacity_bytes = base_runtime_schedule
                     .as_ref()
                     .map(|compiled| runtime_schedule_capacity_bytes(compiled, cancelled))
@@ -628,7 +635,7 @@ impl NativePlaybackService {
                 };
                 if let Some(recommended_compiled) = recommended_compiled {
                     let recommended_timing_advisory = self.analyze_timing_variant(
-                        source_action_count,
+                        recommended_action_count,
                         &recommended_compiled,
                         &recommended_config,
                         &recommended_policy,
@@ -638,12 +645,33 @@ impl NativePlaybackService {
                     let recommended_dispatch = if config.dry_run {
                         None
                     } else {
+                        #[cfg(all(test, feature = "tauri-test"))]
+                        if let Some(hook) = self
+                            .recommendation_materialization_test_hook
+                            .lock()
+                            .ok()
+                            .and_then(|mut hook| hook.take())
+                        {
+                            hook();
+                        }
+                        #[cfg(all(test, feature = "tauri-test"))]
+                        let caller_retained_capacity_bytes = self
+                            .recommended_plan_caller_capacity_override_for_test
+                            .unwrap_or(
+                                recommended_compiled
+                                    .compile_memory
+                                    .caller_retained_capacity_bytes,
+                            );
+                        #[cfg(not(all(test, feature = "tauri-test")))]
+                        let caller_retained_capacity_bytes = recommended_compiled
+                            .compile_memory
+                            .caller_retained_capacity_bytes;
                         match sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
                             &recommended_compiled,
                             qpc_frequency_hz.expect("physical recommendation requires QPC admission"),
                             recommended_policy.min_hold_us,
                             recommended_policy.min_release_gap_us,
-                            recommended_compiled.compile_memory.caller_retained_capacity_bytes,
+                            caller_retained_capacity_bytes,
                             || {
                                 if cancelled.load(Ordering::Acquire) {
                                     Err("native dispatch materialization cancelled".to_string())
@@ -1065,7 +1093,8 @@ impl NativePlaybackService {
             .and_then(|(player, target)| {
                 let result: Result<_, String> = (|| {
                     #[cfg(all(test, feature = "tauri-test"))]
-                    if self.test_player.is_some() {
+                    if self.test_player.is_some() || self.prepared_player_factory_for_test.is_some()
+                    {
                         return Ok((Some(player.clone()), Some(target)));
                     }
                     (power_request, suspend_resume_registration) =
@@ -1550,6 +1579,10 @@ impl NativePlaybackService {
         }
         if startup_context.startup_cancellation.load(Ordering::Acquire) {
             return Err("native playback startup was cancelled during shutdown".into());
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(factory) = &self.prepared_player_factory_for_test {
+            return factory(prepared_schedule, config, policy).map(|player| (player, 0));
         }
         #[cfg(all(test, feature = "tauri-test"))]
         if let Some(player) = &self.test_player {
@@ -2398,6 +2431,12 @@ impl NativePlaybackServiceHandle {
             supervisor_spawn_failure: false,
             #[cfg(all(test, feature = "tauri-test"))]
             test_player: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            prepared_player_factory_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommended_plan_caller_capacity_override_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommendation_materialization_test_hook: Mutex::new(None),
             #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
         };
@@ -3416,6 +3455,502 @@ mod preparation_cancellation_tests {
             plan_source: None,
             source_epoch: 0,
         }
+    }
+
+    fn recommendation_input(generation: u64, settings_fingerprint: &str) -> NativePreparedInput {
+        let mut prepared = input(generation, settings_fingerprint);
+        prepared.song_id = "a".repeat(32);
+        prepared.risk.severity = "medium".into();
+        prepared.risk.suggested_hold_frames = Some(1.25);
+        prepared.risk.suggested_tempo_scale = Some(0.9);
+        prepared
+    }
+
+    fn over_limit_recommendation_input(
+        generation: u64,
+        settings_fingerprint: &str,
+    ) -> NativePreparedInput {
+        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+
+        const PAIR_COUNT: u64 = 25_001;
+        let mut prepared = recommendation_input(generation, settings_fingerprint);
+        let actions = (0..PAIR_COUNT)
+            .flat_map(|index| {
+                let base = index * 40_000;
+                [
+                    KeyAction {
+                        at_us: base,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Down,
+                        reason: "variant-action-limit-down".into(),
+                    },
+                    KeyAction {
+                        at_us: base + 20_000,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Up,
+                        reason: "variant-action-limit-up".into(),
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        let duration_us = actions.last().expect("last authored action").at_us;
+        prepared.schedule.duration_us = duration_us;
+        prepared.schedule.playback_duration_us = duration_us;
+        prepared.schedule.source_duration_us = duration_us;
+        prepared.schedule.actions = actions;
+        prepared
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn prepared_mock_player_factory(
+        hook: Arc<sky_player::engine::StartupOrderingHook>,
+        send_calls: Arc<std::sync::atomic::AtomicU64>,
+    ) -> impl Fn(
+        sky_player::adapter_support::PreparedDispatchSchedule,
+        &PlaybackConfigDto,
+        &MaterializedTimingPolicy,
+    ) -> Result<Arc<sky_player::engine::NativeDispatchSession>, String>
+    + Send
+    + Sync
+    + 'static {
+        move |prepared_schedule, config, policy| {
+            use sky_player::engine::{
+                BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions,
+                NativeScheduleInput, NativeSessionOptions, PriorityOptions, TelemetryMode,
+                TelemetryOptions, TestWaitPolicy, TimingOptions, WaitGuardMode, WaitOptions,
+            };
+
+            let mut fault_script = FaultInjectionScript::none();
+            fault_script.send_call_count = Some(Arc::clone(&send_calls));
+            let options = NativeSessionOptions {
+                schedule: NativeScheduleInput::Prepared(prepared_schedule),
+                #[cfg(feature = "tauri-test")]
+                startup_calibration_placement:
+                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                #[cfg(feature = "tauri-test")]
+                timing_observer_for_qualification: false,
+                #[cfg(feature = "tauri-test")]
+                modifier_key_state_query_for_test: None,
+                backend: BackendConfig::Mock {
+                    latency_base_us: 0,
+                    latency_per_key_us: 0,
+                    fault_script,
+                },
+                profile: DispatchProfile::MockTest,
+                timing: TimingOptions {
+                    game_fps: config.fps,
+                    min_hold_us: policy.min_hold_us,
+                    min_release_gap_us: policy.min_release_gap_us,
+                    frame_us: policy.frame_us,
+                    frame_base_hold_us: policy.frame_base_hold_us,
+                    timing_margin_us: policy.timing_margin_us,
+                    strict_timing: false,
+                    strict_down_completion_late_us: 2_000,
+                    strict_up_completion_late_us: 2_000,
+                    input_path_warn_us: 300,
+                },
+                focus: FocusOptions {
+                    require_focus: false,
+                    focus_restore_grace_us: policy.focus_restore_grace_us,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us: 0,
+                    guard_mode: WaitGuardMode::Frozen,
+                    test_spin_threshold_us: Some(20_000),
+                    test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Off,
+                    capacity: 64,
+                },
+                priority: PriorityOptions {
+                    mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
+                },
+                instrument_key_profile: None,
+                startup_ordering_hook: Some(Arc::clone(&hook)),
+                restore_race_hook: None,
+                focus_pause_hook: None,
+                timer_lifecycle_context: None,
+                prepared_packet_ambiguity_mask: None,
+                preflight_user_held_mask: None,
+            };
+            sky_player::engine::NativeDispatchSession::new(options).map(Arc::new)
+        }
+    }
+
+    #[cfg(all(feature = "tauri-test", windows))]
+    #[test]
+    fn recommended_variant_starts_and_arms_its_prepared_plan() {
+        use crate::commands::{
+            PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackStartRequest,
+        };
+        use sky_player::engine::{StartupCheckpoint, StartupOrderingHook};
+
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+        let send_calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        service.prepared_player_factory_for_test = Some(Arc::new(prepared_mock_player_factory(
+            Arc::clone(&hook),
+            Arc::clone(&send_calls),
+        )));
+        let compile_checkpoints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let compile_checkpoints_hook = Arc::clone(&compile_checkpoints);
+        *service
+            .prepare_compile_test_hook
+            .lock()
+            .expect("Prepare compiler hook") = Some(Arc::new(move |action_count| {
+            if action_count == 0 {
+                compile_checkpoints_hook.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            }
+        }));
+
+        let prepared = service
+            .prepare(recommendation_input(1, &fingerprint))
+            .expect("recommended physical Prepare");
+        let recommendation = prepared
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::UseRecommended)
+            .expect("recommended DTO variant");
+        assert_eq!(recommendation.config.hold_frames, 1.25);
+        assert_eq!(recommendation.config.tempo_scale, 0.9);
+        let prepare_compile_count = compile_checkpoints.load(std::sync::atomic::Ordering::Acquire);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let started = service
+            .start(
+                PlaybackStartRequest {
+                    prepared_id: prepared.prepared_id.clone().expect("prepared identity"),
+                    decisions: vec![PlaybackDecisionAcceptanceDto {
+                        decision: PlaybackDecision::UseRecommended,
+                        accepted: true,
+                    }],
+                },
+                &settings,
+                Arc::clone(&events),
+            )
+            .expect("selected recommended Start");
+        assert_eq!(
+            started.config.hold_frames,
+            recommendation.config.hold_frames
+        );
+        assert_eq!(
+            started.config.tempo_scale,
+            recommendation.config.tempo_scale
+        );
+        assert_eq!(started.plan_fingerprint, recommendation.plan_fingerprint);
+        assert_eq!(
+            compile_checkpoints.load(std::sync::atomic::Ordering::Acquire),
+            prepare_compile_count,
+            "Start must not compile the selected variant again"
+        );
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert_eq!(hook.raw_schedule_admission_validation_count(), 0);
+        assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
+        assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
+        assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
+
+        let player = service
+            .active
+            .lock()
+            .expect("active playback")
+            .as_ref()
+            .and_then(|active| active.player.clone())
+            .expect("prepared player attached to successful Start");
+        player.quit().expect("quit at Armed checkpoint");
+        hook.release_startup_checkpoint();
+        assert!(player.join(Duration::from_secs(5)).expect("worker join"));
+        assert!(service.shutdown(events));
+        assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
+
+        let mut dry_run_service = NativePlaybackService::new(ActivityCoordinator::default());
+        dry_run_service.recommended_plan_caller_capacity_override_for_test =
+            Some(sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES);
+        let dry_run_prepared = dry_run_service
+            .prepare(recommendation_input(1, &fingerprint))
+            .expect("DryRun remains in the capacity-limited Prepare");
+        let dry_run_variant = dry_run_prepared
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::DryRun)
+            .expect("DryRun DTO variant");
+        let dry_run_events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let dry_run_started = dry_run_service
+            .start(
+                PlaybackStartRequest {
+                    prepared_id: dry_run_prepared
+                        .prepared_id
+                        .clone()
+                        .expect("DryRun prepared identity"),
+                    decisions: vec![PlaybackDecisionAcceptanceDto {
+                        decision: PlaybackDecision::DryRun,
+                        accepted: true,
+                    }],
+                },
+                &settings,
+                Arc::clone(&dry_run_events),
+            )
+            .expect("DryRun selection remains startable");
+        assert!(dry_run_started.config.dry_run);
+        assert_eq!(
+            dry_run_started.plan_fingerprint,
+            dry_run_variant.plan_fingerprint
+        );
+        assert!(dry_run_service.shutdown(dry_run_events));
+    }
+
+    #[cfg(all(feature = "tauri-test", windows))]
+    #[test]
+    fn recommendation_capacity_failure_keeps_only_runnable_proceed_and_dry_run() {
+        use crate::commands::{
+            PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackStartRequest,
+        };
+        use sky_player::engine::{StartupCheckpoint, StartupOrderingHook};
+
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+        service.recommended_plan_caller_capacity_override_for_test =
+            Some(sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES);
+        let recommendation_materialization_attempted =
+            Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let recommendation_materialization_attempted_hook =
+            Arc::clone(&recommendation_materialization_attempted);
+        *service
+            .recommendation_materialization_test_hook
+            .lock()
+            .expect("recommendation materialization hook") = Some(Arc::new(move || {
+            recommendation_materialization_attempted_hook
+                .store(true, std::sync::atomic::Ordering::Release);
+        }));
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+        let send_calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        service.prepared_player_factory_for_test = Some(Arc::new(prepared_mock_player_factory(
+            Arc::clone(&hook),
+            Arc::clone(&send_calls),
+        )));
+
+        let prepared = service
+            .prepare(recommendation_input(1, &fingerprint))
+            .expect("capacity-limited optional recommendation leaves Prepare valid");
+        assert!(
+            recommendation_materialization_attempted.load(std::sync::atomic::Ordering::Acquire)
+        );
+        let prepared_id = prepared.prepared_id.clone().expect("prepared identity");
+        assert_eq!(
+            prepared
+                .variants
+                .iter()
+                .map(|variant| variant.decision)
+                .collect::<Vec<_>>(),
+            vec![PlaybackDecision::Proceed, PlaybackDecision::DryRun]
+        );
+        assert_eq!(
+            prepared
+                .decisions
+                .iter()
+                .map(|decision| decision.decision)
+                .collect::<Vec<_>>(),
+            vec![PlaybackDecision::Proceed, PlaybackDecision::DryRun]
+        );
+        assert!(
+            prepared
+                .variants
+                .iter()
+                .all(|variant| variant.decision != PlaybackDecision::UseRecommended)
+        );
+        assert!(prepared.variants.iter().any(|variant| {
+            variant.decision == PlaybackDecision::DryRun && variant.config.dry_run
+        }));
+
+        let cache = service.prepared.lock().expect("prepared cache");
+        let record = cache
+            .iter()
+            .find(|(id, _)| id == &prepared_id)
+            .map(|(_, record)| record)
+            .expect("published Proceed record");
+        assert_eq!(
+            record
+                .variants
+                .keys()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
+            std::collections::HashSet::from([PlaybackDecision::Proceed, PlaybackDecision::DryRun])
+        );
+        assert!(
+            record
+                .variants
+                .get(&PlaybackDecision::Proceed)
+                .and_then(|variant| variant.prepared_schedule.as_ref())
+                .is_some()
+        );
+        assert!(
+            record
+                .variants
+                .get(&PlaybackDecision::DryRun)
+                .is_some_and(
+                    |variant| variant.config.dry_run && variant.prepared_schedule.is_none()
+                )
+        );
+        assert!(
+            record.retained_capacity_bytes
+                <= sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        );
+        assert!(
+            super::prepared_cache_retained_capacity_bytes(&cache, None).unwrap()
+                <= sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        );
+        drop(cache);
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let started = service
+            .start(
+                PlaybackStartRequest {
+                    prepared_id,
+                    decisions: vec![PlaybackDecisionAcceptanceDto {
+                        decision: PlaybackDecision::Proceed,
+                        accepted: true,
+                    }],
+                },
+                &settings,
+                Arc::clone(&events),
+            )
+            .expect("Proceed remains runnable after optional recommendation omission");
+        assert_eq!(started.config.hold_frames, 1.0);
+        assert_eq!(started.config.tempo_scale, 1.0);
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
+        assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
+        let player = service
+            .active
+            .lock()
+            .expect("active playback")
+            .as_ref()
+            .and_then(|active| active.player.clone())
+            .expect("Proceed session attached");
+        player.quit().expect("quit at Armed checkpoint");
+        hook.release_startup_checkpoint();
+        assert!(player.join(Duration::from_secs(5)).expect("worker join"));
+        assert!(service.shutdown(events));
+        assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn recommended_advisory_uses_recommended_variant_action_work_and_memory_budgets() {
+        use crate::commands::{PlaybackDecision, TimingAdvisoryStatus};
+
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let prepared = over_limit_recommendation_input(1, &fingerprint);
+        assert_eq!(prepared.schedule.actions.len(), 50_002);
+        let recommended_policy =
+            MaterializedTimingPolicy::from_user_margin(60, 1.25, 800).expect("recommended policy");
+        let recommended_schedule =
+            super::recommended_schedule(&prepared.song, None, 0.9, &recommended_policy)
+                .expect("recommended schedule");
+        assert_eq!(recommended_schedule.actions.len(), 2);
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let result = service
+            .prepare(prepared)
+            .expect("large Proceed and small optional recommendation Prepare");
+        let proceed = result
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::Proceed)
+            .expect("Proceed DTO");
+        let proceed_advisory = proceed.timing_advisory.as_ref().expect("Proceed advisory");
+        assert_eq!(proceed_advisory.status, TimingAdvisoryStatus::Unavailable);
+        assert!(
+            proceed_advisory
+                .explanation
+                .contains("50002 authored actions")
+        );
+
+        let recommended = result
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::UseRecommended)
+            .expect("recommended DTO remains publishable");
+        let recommended_advisory = recommended
+            .timing_advisory
+            .as_ref()
+            .expect("recommended advisory");
+        assert_ne!(
+            recommended_advisory.status,
+            TimingAdvisoryStatus::Unavailable
+        );
+        assert_eq!(
+            recommended_advisory.plan_fingerprint,
+            recommended.plan_fingerprint
+        );
+        assert_eq!(recommended.config.hold_frames, 1.25);
+        assert_eq!(recommended.config.tempo_scale, 0.9);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn cancellation_during_recommendation_materialization_fails_whole_prepare() {
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let shutdown_service = Arc::clone(&service);
+        *service
+            .recommendation_materialization_test_hook
+            .lock()
+            .expect("recommendation materialization hook") = Some(Arc::new(move || {
+            assert!(shutdown_service.shutdown(Arc::new(Mutex::new(NativeEventHub::default()))));
+        }));
+
+        let error = service
+            .prepare(over_limit_recommendation_input(1, &fingerprint))
+            .expect_err("cancellation must reject whole Prepare");
+        assert!(error.contains("cancelled") || error.contains("superseded"));
+        assert!(service.prepared.lock().expect("prepared cache").is_empty());
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn supersession_during_recommendation_materialization_fails_old_prepare() {
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let superseding_service = Arc::clone(&service);
+        let superseding_id = Arc::new(Mutex::new(None::<String>));
+        let superseding_id_for_hook = Arc::clone(&superseding_id);
+        let superseding_fingerprint = fingerprint.clone();
+        *service
+            .recommendation_materialization_test_hook
+            .lock()
+            .expect("recommendation materialization hook") = Some(Arc::new(move || {
+            let superseding = superseding_service
+                .prepare(input(1, &superseding_fingerprint))
+                .expect("new Prepare supersedes old request");
+            *superseding_id_for_hook
+                .lock()
+                .expect("superseding prepared identity") = superseding.prepared_id;
+        }));
+
+        let error = service
+            .prepare(over_limit_recommendation_input(1, &fingerprint))
+            .expect_err("superseded request must not publish partial variants");
+        assert!(error.contains("superseded") || error.contains("cancelled"));
+        let superseding_id = superseding_id
+            .lock()
+            .expect("superseding prepared identity")
+            .clone()
+            .expect("superseding Prepare published");
+        let cache = service.prepared.lock().expect("prepared cache");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache.front().map(|(id, _)| id.as_str()),
+            Some(superseding_id.as_str())
+        );
     }
 
     #[test]

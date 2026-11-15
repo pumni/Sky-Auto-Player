@@ -259,6 +259,10 @@ impl NativeDispatchSession {
         let min_release_gap_us = options.timing.min_release_gap_us;
         let (total_us, generation_count) = match &options.schedule {
             NativeScheduleInput::Raw(schedule) => {
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(hook) = &options.startup_ordering_hook {
+                    hook.record_raw_schedule_admission_validation();
+                }
                 validate_native_schedule_timing_with_release_gap(
                     schedule,
                     options.timing.min_hold_us,

@@ -47,6 +47,20 @@ pub(super) use session::{
 #[cfg(test)]
 pub(super) type PrepareCompileTestHook = Arc<dyn Fn(usize) + Send + Sync>;
 
+#[cfg(all(test, feature = "tauri-test"))]
+pub(super) type PreparedPlaybackPlayerFactory = Arc<
+    dyn Fn(
+            sky_player::adapter_support::PreparedDispatchSchedule,
+            &PlaybackConfigDto,
+            &MaterializedTimingPolicy,
+        ) -> Result<Arc<NativeDispatchSession>, String>
+        + Send
+        + Sync,
+>;
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(super) type PrepareRecommendationMaterializationTestHook = Arc<dyn Fn() + Send + Sync>;
+
 /// Application-side playback control plane.  The realtime worker remains in
 /// `sky_player`; this service owns prepared-plan admission, the single active
 /// session rule, and the bounded supervisor loop around that worker.
@@ -81,6 +95,13 @@ pub(super) struct NativePlaybackService {
     pub(super) supervisor_spawn_failure: bool,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) test_player: Option<Arc<NativeDispatchSession>>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) prepared_player_factory_for_test: Option<PreparedPlaybackPlayerFactory>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) recommended_plan_caller_capacity_override_for_test: Option<usize>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) recommendation_materialization_test_hook:
+        Mutex<Option<PrepareRecommendationMaterializationTestHook>>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) before_arm_test_hook: Option<PlaybackBeforeArmTestHook>,
     #[cfg(all(test, feature = "tauri-test"))]

@@ -65,7 +65,84 @@ one million actions through `SendInput`.
 
 Schema 25 unmatched-Up diagnostic rows are retained. Worker boot iterates only
 their precomputed metadata to emit those existing rows, so boot cost remains
-proportional to the number of unmatched-Up batches. The behavior/schema choice
-for that exceptional diagnostic path and omission of an optional recommended
-variant when its separate capacity admission fails have been raised to Leader
-on issue 666 for decision.
+proportional to the number of unmatched-Up batches. Leader decision
+`6898174730` accepts this M1 exception only for emitting existing rows from
+precomputed unmatched-Up metadata; it does not permit another whole-schedule
+walk or revalidation during Arm. The same decision requires an optional
+recommended variant that exceeds capacity to be omitted while a valid Proceed
+and offered DryRun remain selectable, and requires cancellation/supersession to
+fail the entire Prepare.
+
+## M1 review corrections
+
+The review corrections are applied to the same branch and reviewed tree. No
+public DTO, fingerprint encoding, telemetry schema, sender, focus/identity,
+lease, power, cleanup, H/G, packet ordering, error policy, or pre-roll contract
+is changed.
+
+- Recommended advisory analysis now receives
+  `recommended_schedule.actions.len()`. A regression uses 50,002 base actions
+  and the distinct two-action recommended schedule. Proceed is unavailable at
+  its advisory bound while the recommended advisory remains available and
+  retains its own fingerprint. The advisory's action/work/memory admission
+  calculation is fed the selected variant's authored action count.
+- `sky_dispatch_core` exercises QPC frequency 3,579,545 Hz. It checks ceiling
+  conversions (H = 36 ticks for 10 µs, G = 26 ticks for 7 µs, and a 50 µs
+  paired-Up offset = 179 ticks), compares prepared and raw executor decisions,
+  masks, ordering, timing windows, deadlines, and actual completion-QPC floors.
+  At G, tick 225 waits for 226, and 226/227 are eligible; at H, tick 240 waits
+  for 241, and 241/242 are eligible. The fixture includes a mixed Up/Down
+  packet and independent keys.
+- The successful service harness selects `UseRecommended`, enters session
+  admission, and reaches worker `ArmedPublished` with a mock backend. Test-only
+  counters show one prepared-plan executor consumption, zero raw admission
+  validations, zero raw worker materializations, and no compiler checkpoint
+  after Prepare. Core coverage checks that executor construction preserves the
+  prebuilt vector allocations while starting with a fresh cursor and slots.
+  Raw-caller coverage records admission validation and enters cancellable worker
+  materialization at `StreamMaterialization`, then quits before any send.
+- Recommendation capacity exhaustion is injected at its dispatch-plan
+  materialization boundary. The test asserts that `UseRecommended` has no DTO
+  decision, DTO variant, fingerprint reference, or native plan; retained cache
+  capacity stays within policy; `Proceed` reaches successful mock Arm; and a
+  valid `DryRun` remains offered and startable without a physical plan.
+  Separate regressions cancel and supersede during recommendation
+  materialization; both fail the whole Prepare and do not publish partial
+  variants.
+
+These session tests use only a mock sender. They prove variant selection,
+admission, executor consumption, and successful Arm publication; they do not
+call real `SendInput` or qualify playback in Sky. Candidate-binary
+baseline-equivalent timings above are structural, single-run descriptions of
+the raw compile/validate/executor path and the prepared plan move. They are not
+an exact-base A/B, gameplay-speed result, or end-to-end native Arm measurement.
+Capacity numbers remain calculated vector capacities and struct sizes, not
+Windows process-memory measurements.
+
+## Review-correction verification
+
+Final-source checks ran on Windows 11 x64 MSVC with `rustc 1.99.1`
+(`x86_64-pc-windows-msvc`) and Cargo 1.99.1. Exit codes below are from the
+listed commands; PASS means exit 0.
+
+| Command | Exit | Result |
+| --- | ---: | --- |
+| `git diff --check` | 0 | PASS |
+| `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` | 0 | PASS |
+| `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check` | 0 | PASS |
+| `cargo clippy --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core -p sky_dispatch_win32 -p sky_player --all-targets --all-features -- -D warnings` | 0 | PASS |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core --features test-support` | 0 | PASS: 78 unit and 4 integration tests |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support` | 0 | PASS: 255 unit and 4 real-time no-allocation tests |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc` | 0 | PASS: 4 tests |
+| `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-test --lib preparation_cancellation_tests::` | 0 | PASS: 15 tests |
+| `cargo xtask check desktop-native` | 0 | PASS |
+| `cargo xtask check all` (single serial run) | 0 | PASS: static, Rust, Bun checks, Playwright E2E, and desktop checks; architecture check reported 61 accepted warnings |
+| `cargo xtask check all` (earlier overlapping run) | 1 | FAIL: two simultaneous invocations collided on E2E port 4173; rerun after both exited passed |
+
+The overlapping failure was an invocation collision: one Playwright run
+reported `Port 4173 is already in use`, followed by connection-refused errors.
+The single-run verification above completed all gates successfully. No test was
+skipped by the final `check all` run. Real `SendInput` and in-game playback
+qualification were not performed; all successful session Arm coverage uses a
+mock sender as described above. The final `check all` architecture warnings
+are existing allowlisted/advisory findings; that gate reported PASS.
