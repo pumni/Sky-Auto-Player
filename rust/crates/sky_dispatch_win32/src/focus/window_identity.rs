@@ -2,7 +2,7 @@
 use super::WINDOW_IDENTITY_AUTHORITY_DROP_COUNT;
 use super::filetime_ticks;
 #[cfg(feature = "test-support")]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Identity of a live window and the process that owns it.
 ///
@@ -21,13 +21,16 @@ pub struct WindowIdentity {
 
 /// Retained authority for one window owner process. The process handle is
 /// opened with `PROCESS_QUERY_LIMITED_INFORMATION` only and remains owned by
-/// the session until terminal teardown. Full identity checks are control
-/// plane work; the precision path uses only the frozen PID and atomic live
-/// state published by the session.
+/// the session target until its worker and supervisor have exited. The
+/// control plane verifies the full image identity periodically; final musical
+/// admission also checks the retained process creation time without
+/// allocating, beside its fresh foreground HWND/PID query.
 pub struct WindowIdentityAuthority {
     pub(super) identity: WindowIdentity,
     pub(super) image_identity: String,
     pub(super) process_handle: Option<isize>,
+    #[cfg(feature = "test-support")]
+    pub(super) process_identity_test_override: AtomicU8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +47,11 @@ pub enum WindowIdentityContinuity {
 // read-only queries from the supervisor thread and closed by the owning
 // session thread after that supervisor has joined.
 unsafe impl Send for WindowIdentityAuthority {}
+// SAFETY: identity strings and the handle value are immutable after
+// construction. Concurrent methods issue read-only queries on the same
+// process handle. Drop requires unique access and runs only after the final
+// Arc held by the session target, worker, or supervisor is released.
+unsafe impl Sync for WindowIdentityAuthority {}
 
 impl WindowIdentityAuthority {
     pub fn identity(&self) -> &WindowIdentity {
@@ -66,6 +74,109 @@ impl WindowIdentityAuthority {
             },
             image_identity: "C:\\Sky\\sky-test.exe".to_string(),
             process_handle: None,
+            process_identity_test_override: AtomicU8::new(0),
+        }
+    }
+
+    /// Override the final process-identity proof in deterministic worker
+    /// tests. `Continuous` is the default for a synthetic authority.
+    #[cfg(feature = "test-support")]
+    pub fn set_process_identity_status_for_test(&self, status: WindowIdentityContinuity) {
+        self.process_identity_test_override.store(
+            match status {
+                WindowIdentityContinuity::Continuous => 0,
+                WindowIdentityContinuity::ProcessTerminated => 1,
+                WindowIdentityContinuity::OwnerMismatch => 2,
+                WindowIdentityContinuity::WindowUnavailable => 3,
+                WindowIdentityContinuity::ProcessIdentityMismatch => 4,
+                WindowIdentityContinuity::QueryUnavailable => 5,
+            },
+            Ordering::Release,
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn process_identity_test_status(&self) -> Option<WindowIdentityContinuity> {
+        match self.process_identity_test_override.load(Ordering::Acquire) {
+            0 => Some(WindowIdentityContinuity::Continuous),
+            1 => Some(WindowIdentityContinuity::ProcessTerminated),
+            2 => Some(WindowIdentityContinuity::OwnerMismatch),
+            3 => Some(WindowIdentityContinuity::WindowUnavailable),
+            4 => Some(WindowIdentityContinuity::ProcessIdentityMismatch),
+            5 => Some(WindowIdentityContinuity::QueryUnavailable),
+            _ => None,
+        }
+    }
+
+    /// Recheck the retained process object's creation-time proof for one
+    /// final musical syscall. The current foreground HWND/PID is sampled
+    /// separately by `foreground_window_owner_matches`; this check binds that
+    /// fresh PID back to the process object retained during startup.
+    pub fn verify_final_process_identity(
+        &self,
+        expected_hwnd: isize,
+        expected_owner_pid: u32,
+    ) -> WindowIdentityContinuity {
+        if self.identity.hwnd != expected_hwnd || self.identity.owner_pid != expected_owner_pid {
+            return WindowIdentityContinuity::OwnerMismatch;
+        }
+        self.process_identity_continuity()
+    }
+
+    fn process_identity_continuity(&self) -> WindowIdentityContinuity {
+        #[cfg(feature = "test-support")]
+        if let Some(status) = self.process_identity_test_status() {
+            return status;
+        }
+
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::FILETIME;
+            use windows_sys::Win32::System::Threading::GetProcessTimes;
+
+            let Some(handle) = self.process_handle else {
+                #[cfg(feature = "test-support")]
+                {
+                    return WindowIdentityContinuity::Continuous;
+                }
+                #[cfg(not(feature = "test-support"))]
+                {
+                    return WindowIdentityContinuity::QueryUnavailable;
+                }
+            };
+            let handle = handle as windows_sys::Win32::Foundation::HANDLE;
+            let mut creation = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut exit = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut kernel = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut user = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) }
+                == 0
+            {
+                return WindowIdentityContinuity::QueryUnavailable;
+            }
+            if filetime_ticks(exit) != 0 {
+                return WindowIdentityContinuity::ProcessTerminated;
+            }
+            if filetime_ticks(creation) != self.identity.process_start_time_filetime {
+                return WindowIdentityContinuity::ProcessIdentityMismatch;
+            }
+            WindowIdentityContinuity::Continuous
+        }
+        #[cfg(not(windows))]
+        {
+            WindowIdentityContinuity::QueryUnavailable
         }
     }
 
@@ -142,7 +253,9 @@ impl WindowIdentityAuthority {
     /// frozen startup identity. Called only by the desktop supervisor.
     pub fn continuity(&self) -> WindowIdentityContinuity {
         #[cfg(feature = "test-support")]
-        if self.process_handle.is_none() {
+        if let Some(status) = self.process_identity_test_status() {
+            return status;
+        } else if self.process_handle.is_none() {
             return WindowIdentityContinuity::Continuous;
         }
         let process_status = self.process_continuity();
@@ -417,6 +530,8 @@ pub fn retain_window_identity(hwnd: isize) -> Result<WindowIdentityAuthority, St
             identity,
             image_identity,
             process_handle: Some(process as isize),
+            #[cfg(feature = "test-support")]
+            process_identity_test_override: AtomicU8::new(u8::MAX),
         }),
         Err(error) => {
             unsafe { CloseHandle(process) };

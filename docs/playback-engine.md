@@ -169,8 +169,9 @@ Worker Loop -> Wait Deadline Reached
 ```
 
 The worker stages a bounded packet before its deadline wait, then rechecks
-controls, modifiers for Down, fresh foreground HWND/PID ownership, target
-generation, lease, power, and focus immediately before the prepared sender. A
+controls, modifiers for Down, fresh foreground HWND/PID ownership, the retained
+process creation-time proof, target generation, lease, power, and focus
+immediately before the prepared sender. A
 pre-call focus, target, or modifier rejection makes the worker replan without
 attempting or advancing that authored Down. Terminal Stop, Skip, Quit, Panic,
 lease expiry, ownership failure, and system suspend remain fail-closed. When a
@@ -240,6 +241,39 @@ dispatch boundary and does not issue `SendInput`.
   cleanup completion plus $G$.
 - Stop, Skip, Panic, and Suspend retain their terminal safety cleanup path,
   including an Up attempt when the target is not foreground.
+
+### Session Target Binding and Lifetime
+
+`SessionTarget` owns the target HWND/generation publication, its bound owner
+PID and generation, and the retained `WindowIdentityAuthority` for that
+generation. The authority retains a query-only process handle plus the startup
+creation-time and image identity. Desktop startup binds it before Arm; a
+generation publication invalidates and releases the old binding before a new
+identity can bind. A worker that already cloned the old authority may finish
+that bounded query, but its final target-generation check rejects the old
+publication. A target publication cannot inherit the prior process proof, even
+when the numeric HWND is reused.
+
+For each focus-required musical packet, the worker samples the current
+foreground HWND and owner PID, then queries the retained process handle for its
+live state and creation time after lease/control checks. It performs a final
+atomic HWND/generation/owner check before entering the sender. The process
+query is constant-time and uses no heap allocation; a concurrent control-plane
+binding makes that packet replan before any syscall. The supervisor continues
+to check `IsWindow`, owner PID, process creation time, and image path on its
+control cadence. This final proof supplements the fresh OS window query; it
+does not replace it with a cached PID or identity value.
+
+Tracked safety cleanup uses a separate retained-owner proof. It rechecks the
+exact HWND/process continuity without requiring that window to be foreground,
+then follows the existing release and quarantine policy. The target binding is
+stored under the same shared session state used by worker and watchdog, so an
+owner object unwind does not close the process handle while either thread can
+still perform terminal cleanup. The watchdog lease and desktop supervisor
+remain active; presentation events and progress snapshots are not worker
+authority. Presentation delivery failure still requests terminal cleanup,
+while a blocked presentation consumer cannot hold the supervisor's command,
+lease, or worker-join path.
 
 ### Resume Barrier (cleanup completion + $G$)
 After verified pause or focus-restoration cleanup completes at QPC $Q$:

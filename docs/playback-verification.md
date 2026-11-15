@@ -127,6 +127,17 @@ The existing fail-stop sequence stops on the first failed native case. Do not
 retry failures to complete a matrix. Smoke, Compare, the six AB/BA pairs, metric
 filters, thresholds, and drain timeout keep their defined behavior.
 
+## Issue #666 M3 session ownership checks
+
+The Windows `test-support` suite covers target-generation authority lifetime,
+fresh retained process-creation proof at the musical gate, owner disappearance
+through watchdog wake and tracked cleanup, callback-epoch rundown, presentation
+stall isolation, and bounded join/retirement. Run it with the M3 command set in
+[`issue-666-m3.md`](evidence/issue-666-m3.md). These deterministic mock tests
+do not call real `SendInput`, suspend Windows, or qualify gameplay reception.
+The M3 evidence report maps each lifecycle invariant to its test and states
+which paths still need OS/native qualification.
+
 ## Offline lifecycle and manifest checks
 
 The current offline scheduler lifecycle report is produced and validated with:

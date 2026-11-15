@@ -1,6 +1,13 @@
 use parking_lot::Mutex;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 
+/// Session-owned target publication and its retained process authority.
+///
+/// The worker and watchdog share this object. Publishing a new target epoch
+/// invalidates the old owner atomics and drops the stored authority; any
+/// worker query already holding an `Arc` can finish, but its final epoch check
+/// cannot authorize that stale binding.
 pub struct SessionTarget {
     target_hwnd: AtomicIsize,
     target_generation: AtomicU64,
@@ -10,6 +17,11 @@ pub struct SessionTarget {
     owner_generation: AtomicU64,
     owner_live: AtomicBool,
     owner_failure: AtomicU32,
+    owner_process_identity_required: AtomicBool,
+    /// Keeps the query-only process handle alive for the whole session
+    /// control-plane lifetime. The precision path uses `try_lock`, clones the
+    /// immutable authority, and performs OS queries without holding this lock.
+    owner_authority: Mutex<Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)>>,
     writer: Mutex<()>,
 }
 
@@ -35,6 +47,12 @@ pub(super) enum OwnerIdentityFailure {
     WindowUnavailable = 3,
     ProcessIdentityMismatch = 4,
     QueryUnavailable = 5,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OwnerAuthorityReadError {
+    Busy,
+    Status(OwnerIdentityStatus),
 }
 
 #[cfg(test)]
@@ -66,15 +84,42 @@ impl SessionTarget {
             owner_generation: AtomicU64::new(0),
             owner_live: AtomicBool::new(false),
             owner_failure: AtomicU32::new(OwnerIdentityFailure::None as u32),
+            owner_process_identity_required: AtomicBool::new(false),
+            owner_authority: Mutex::new(None),
             writer: Mutex::new(()),
         }
     }
 
     pub(super) fn require_owner_identity(&self) {
         self.owner_identity_required.store(true, Ordering::Release);
+        self.owner_process_identity_required
+            .store(true, Ordering::Release);
     }
 
     pub(super) fn bind_owner_identity(&self, hwnd: isize, generation: u64, owner_pid: u32) -> bool {
+        self.bind_owner_identity_inner(hwnd, generation, owner_pid, None)
+    }
+
+    pub(super) fn bind_owner_identity_authority(
+        &self,
+        hwnd: isize,
+        generation: u64,
+        owner_pid: u32,
+        authority: Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+    ) -> bool {
+        if authority.identity().hwnd != hwnd {
+            return false;
+        }
+        self.bind_owner_identity_inner(hwnd, generation, owner_pid, Some(authority))
+    }
+
+    fn bind_owner_identity_inner(
+        &self,
+        hwnd: isize,
+        generation: u64,
+        owner_pid: u32,
+        authority: Option<Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>>,
+    ) -> bool {
         if hwnd == 0 || owner_pid == 0 {
             return false;
         }
@@ -88,17 +133,82 @@ impl SessionTarget {
         if self.owner_pid.load(Ordering::SeqCst) != 0
             && self.owner_generation.load(Ordering::SeqCst) == generation
         {
-            return false;
+            let authority_upgrade = authority.is_some()
+                && !self.owner_process_identity_required.load(Ordering::SeqCst)
+                && self.owner_authority.lock().is_none();
+            if !authority_upgrade {
+                return false;
+            }
         }
 
         self.owner_identity_required.store(true, Ordering::SeqCst);
         self.owner_failure
             .store(OwnerIdentityFailure::None as u32, Ordering::SeqCst);
         self.owner_live.store(false, Ordering::SeqCst);
+        let has_authority = authority.is_some();
+        *self.owner_authority.lock() = authority.map(|authority| (authority, generation));
+        if has_authority {
+            self.owner_process_identity_required
+                .store(true, Ordering::SeqCst);
+        }
         self.owner_pid.store(owner_pid, Ordering::SeqCst);
         self.owner_generation.store(generation, Ordering::SeqCst);
         self.owner_live.store(true, Ordering::SeqCst);
         true
+    }
+
+    pub(super) fn owner_process_identity_required(&self) -> bool {
+        self.owner_process_identity_required.load(Ordering::Acquire)
+    }
+
+    /// Obtain an authority snapshot for a final worker gate without waiting
+    /// behind control-plane binding or polling. Contention rejects this one
+    /// packet before the syscall and lets the worker replan.
+    pub(super) fn try_owner_authority_for_generation(
+        &self,
+        expected_generation: u64,
+    ) -> Result<Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, OwnerAuthorityReadError>
+    {
+        let Some(authority) = self.owner_authority.try_lock() else {
+            return Err(OwnerAuthorityReadError::Busy);
+        };
+        let owner_pid = match self.owner_identity_status(expected_generation) {
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => owner_pid,
+            status => return Err(OwnerAuthorityReadError::Status(status)),
+        };
+        let Some((hwnd, generation)) = self.load_stable() else {
+            return Err(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale));
+        };
+        if generation != expected_generation {
+            return Err(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale));
+        }
+        let Some((authority, bound_generation)) = authority.as_ref() else {
+            return Err(OwnerAuthorityReadError::Status(
+                OwnerIdentityStatus::Missing,
+            ));
+        };
+        if *bound_generation != expected_generation || authority.identity().hwnd != hwnd {
+            return Err(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale));
+        }
+        if authority.identity().owner_pid != owner_pid {
+            return Err(OwnerAuthorityReadError::Status(
+                OwnerIdentityStatus::OwnerMismatch,
+            ));
+        }
+        Ok(Arc::clone(authority))
+    }
+
+    pub(super) fn owner_authority_snapshot(
+        &self,
+    ) -> Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)> {
+        self.owner_authority
+            .lock()
+            .as_ref()
+            .map(|(authority, generation)| (Arc::clone(authority), *generation))
+    }
+
+    pub(super) fn clear_owner_authority(&self) {
+        self.owner_authority.lock().take();
     }
 
     #[inline(always)]
@@ -270,6 +380,7 @@ impl SessionTarget {
         self.owner_failure
             .store(OwnerIdentityFailure::None as u32, Ordering::SeqCst);
         self.owner_live.store(false, Ordering::SeqCst);
+        self.owner_authority.lock().take();
         #[cfg(test)]
         if let Some(hook) = hook.as_mut() {
             (**hook)(TargetPublicationWritePoint::InProgress);
@@ -463,6 +574,43 @@ mod tests {
         assert_eq!(
             target.owner_identity_status(generation),
             OwnerIdentityStatus::Bound(88)
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn retained_owner_authority_tracks_generation_and_worker_clone_lifetime() {
+        let target = SessionTarget::new(123, 1);
+        target.require_owner_identity();
+        let authority = Arc::new(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+        );
+        let weak_authority = Arc::downgrade(&authority);
+        assert!(target.bind_owner_identity_authority(123, 1, 77, Arc::clone(&authority)));
+
+        let worker_binding = target
+            .try_owner_authority_for_generation(1)
+            .expect("worker acquires current binding without waiting");
+        assert!(Arc::ptr_eq(&authority, &worker_binding));
+        drop(authority);
+
+        assert!(target.publish(456));
+        assert_eq!(target.load_stable(), Some((456, 2)));
+        assert_eq!(
+            target.owner_identity_status(2),
+            OwnerIdentityStatus::Stale,
+            "a target generation change invalidates the prior owner proof"
+        );
+        assert!(matches!(
+            target.try_owner_authority_for_generation(2),
+            Err(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale))
+        ));
+        assert!(weak_authority.upgrade().is_some());
+
+        drop(worker_binding);
+        assert!(
+            weak_authority.upgrade().is_none(),
+            "the old process authority is released only after the worker's in-flight clone"
         );
     }
 }

@@ -5,7 +5,7 @@ use crate::engine::shared::{
     SessionTarget, SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseAgeProof,
     SupervisorLeaseState,
 };
-use crate::engine::target::OwnerIdentityStatus;
+use crate::engine::target::{OwnerAuthorityReadError, OwnerIdentityStatus};
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::time::DurationTicks;
@@ -129,6 +129,7 @@ pub(crate) fn focus_matches(require_focus: bool, focus_active: &AtomicBool) -> b
 pub(crate) enum OwnerAdmissionFailure {
     Mismatch,
     QueryUnavailable,
+    ProofBusy,
     IdentityAbsent,
     IdentityStale,
     ProcessTerminated,
@@ -466,10 +467,81 @@ pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static
     match failure {
         OwnerAdmissionFailure::Mismatch => "prepared_down_owner_mismatch",
         OwnerAdmissionFailure::QueryUnavailable => "prepared_down_owner_query_unavailable",
+        OwnerAdmissionFailure::ProofBusy => "prepared_down_owner_proof_busy",
         OwnerAdmissionFailure::IdentityAbsent => "prepared_down_owner_identity_absent",
         OwnerAdmissionFailure::IdentityStale => "prepared_down_owner_identity_stale",
         OwnerAdmissionFailure::ProcessTerminated => "prepared_down_owner_process_terminated",
         OwnerAdmissionFailure::IdentityDrift => "prepared_down_owner_identity_drift",
+    }
+}
+
+fn fresh_process_identity_verdict(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+) -> FinalDownVerdict {
+    if !require_focus || !target.owner_process_identity_required() {
+        return FinalDownVerdict::Allowed;
+    }
+    let authority = match target.try_owner_authority_for_generation(expected.generation) {
+        Ok(authority) => authority,
+        Err(OwnerAuthorityReadError::Busy) => {
+            return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy);
+        }
+        Err(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale))
+            if !target.is_current(expected.hwnd, expected.generation) =>
+        {
+            return FinalDownVerdict::TargetChanged;
+        }
+        Err(OwnerAuthorityReadError::Status(status)) => {
+            return FinalDownVerdict::OwnerRejected(match status {
+                OwnerIdentityStatus::Bound(_) | OwnerIdentityStatus::NotRequired => {
+                    OwnerAdmissionFailure::IdentityAbsent
+                }
+                OwnerIdentityStatus::Missing => OwnerAdmissionFailure::IdentityAbsent,
+                OwnerIdentityStatus::Stale => OwnerAdmissionFailure::IdentityStale,
+                OwnerIdentityStatus::ProcessTerminated => OwnerAdmissionFailure::ProcessTerminated,
+                OwnerIdentityStatus::OwnerMismatch => OwnerAdmissionFailure::Mismatch,
+                OwnerIdentityStatus::WindowUnavailable
+                | OwnerIdentityStatus::ProcessIdentityMismatch => {
+                    OwnerAdmissionFailure::IdentityDrift
+                }
+                OwnerIdentityStatus::QueryUnavailable => OwnerAdmissionFailure::QueryUnavailable,
+            });
+        }
+    };
+    match sky_dispatch_win32::focus::foreground_window_owner_matches(
+        expected.hwnd,
+        authority.identity().owner_pid,
+    ) {
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
+            return FinalDownVerdict::FocusLost;
+        }
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+            return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch);
+        }
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
+            return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::QueryUnavailable);
+        }
+    }
+    match authority.verify_final_process_identity(expected.hwnd, authority.identity().owner_pid) {
+        sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {
+            FinalDownVerdict::Allowed
+        }
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
+            FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProcessTerminated)
+        }
+        sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch => {
+            FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch)
+        }
+        sky_dispatch_win32::focus::WindowIdentityContinuity::WindowUnavailable
+        | sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessIdentityMismatch => {
+            FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityDrift)
+        }
+        sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable => {
+            FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::QueryUnavailable)
+        }
     }
 }
 
@@ -538,9 +610,9 @@ pub(crate) fn verify_safety_cleanup_target(
     if !target_stamp_still_current(target, expected) {
         return Err("target HWND/generation changed before tracked safety cleanup".into());
     }
-    if require_owner_identity {
-        match target.owner_identity_status(expected.generation) {
-            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {}
+    if require_owner_identity || target.owner_process_identity_required() {
+        let owner_pid = match target.owner_identity_status(expected.generation) {
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => owner_pid,
             OwnerIdentityStatus::Bound(_) | OwnerIdentityStatus::NotRequired => {
                 return Err("tracked safety cleanup has no bound target owner PID".into());
             }
@@ -565,7 +637,30 @@ pub(crate) fn verify_safety_cleanup_target(
             OwnerIdentityStatus::QueryUnavailable => {
                 return Err("tracked safety cleanup target owner query is unavailable".into());
             }
+        };
+        if target.owner_process_identity_required() {
+            let authority = match target.try_owner_authority_for_generation(expected.generation) {
+                Ok(authority) => authority,
+                Err(OwnerAuthorityReadError::Busy) => {
+                    return Err("tracked safety cleanup owner proof is busy".into());
+                }
+                Err(OwnerAuthorityReadError::Status(_)) => {
+                    return Err("tracked safety cleanup retained owner proof is unavailable".into());
+                }
+            };
+            if authority.continuity()
+                != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+                || authority.identity().owner_pid != owner_pid
+                || authority.identity().hwnd != expected.hwnd
+            {
+                return Err(
+                    "tracked safety cleanup retained owner proof is no longer current".into(),
+                );
+            }
         }
+    }
+    if !target_stamp_still_current(target, expected) {
+        return Err("target HWND/generation changed during tracked safety proof".into());
     }
     Ok(())
 }
@@ -797,6 +892,57 @@ fn verify_final_musical_packet_admission(
             _ => {}
         }
         return FinalDownAdmissionResult::Replan;
+    }
+
+    let final_control_verdict = final_down_control_verdict(control_signals);
+    if final_control_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_control_verdict, runtime, metrics);
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    // Keep the retained process object alive in the session target and query
+    // its creation-time proof after lease/control checks, immediately before
+    // the final atomic target check and sender boundary. Lock contention is a
+    // pre-call rejection for this packet; it does not consume an onset.
+    let process_identity_verdict = fresh_process_identity_verdict(target, expected, require_focus);
+    if process_identity_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(process_identity_verdict, runtime, metrics);
+        return match process_identity_verdict {
+            FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
+                FinalDownAdmissionResult::Replan
+            }
+            FinalDownVerdict::OwnerRejected(failure) => {
+                FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
+            }
+            _ => FinalDownAdmissionResult::Replan,
+        };
+    }
+
+    let final_identity_target_verdict =
+        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
+    if final_identity_target_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_identity_target_verdict, runtime, metrics);
+        return match final_identity_target_verdict {
+            FinalDownVerdict::OwnerRejected(failure) => {
+                FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
+            }
+            FinalDownVerdict::FocusLost => {
+                if let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+                {
+                    match step {
+                        DispatchStep::Terminate(error) => {
+                            return FinalDownAdmissionResult::Terminal(error);
+                        }
+                        DispatchStep::TerminateStatic(error) => {
+                            return FinalDownAdmissionResult::Terminal(error.to_string());
+                        }
+                    }
+                }
+                FinalDownAdmissionResult::Replan
+            }
+            _ => FinalDownAdmissionResult::Replan,
+        };
     }
 
     let final_control_verdict = final_down_control_verdict(control_signals);

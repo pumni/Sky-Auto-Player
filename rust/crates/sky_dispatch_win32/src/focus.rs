@@ -849,6 +849,7 @@ mod tests {
             },
             image_identity,
             process_handle: Some(process as isize),
+            process_identity_test_override: std::sync::atomic::AtomicU8::new(u8::MAX),
         };
         assert_eq!(
             authority.process_continuity(),

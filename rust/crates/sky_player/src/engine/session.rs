@@ -218,8 +218,6 @@ pub struct NativeDispatchSession {
     supervisor_lease_timeout_ticks: AtomicU64,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
-    window_identity_authority:
-        Mutex<Option<(sky_dispatch_win32::focus::WindowIdentityAuthority, u64)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,7 +369,6 @@ impl NativeDispatchSession {
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
             thread_handle: Mutex::new(None),
             watchdog_handle: Mutex::new(None),
-            window_identity_authority: Mutex::new(None),
         })
     }
 
@@ -1012,6 +1009,28 @@ impl NativeDispatchSession {
         self.bind_window_identity_authority_with_pid(authority, expected_owner_pid)
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn set_window_process_identity_status_for_test(
+        &self,
+        status: sky_dispatch_win32::focus::WindowIdentityContinuity,
+    ) -> bool {
+        let Some((authority, _)) = self.shared.target.owner_authority_snapshot() else {
+            return false;
+        };
+        authority.set_process_identity_status_for_test(status);
+        true
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn window_identity_authority_weak_for_test(
+        &self,
+    ) -> Option<std::sync::Weak<sky_dispatch_win32::focus::WindowIdentityAuthority>> {
+        self.shared
+            .target
+            .owner_authority_snapshot()
+            .map(|(authority, _)| Arc::downgrade(&authority))
+    }
+
     fn bind_window_identity_authority_with_pid(
         &self,
         authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
@@ -1024,19 +1043,18 @@ impl NativeDispatchSession {
         if hwnd != identity.hwnd || expected_owner_pid == 0 {
             return Err("window identity HWND does not match the published target".to_string());
         }
-        let mut retained = self.window_identity_authority.lock();
         if authority.continuity() != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
         {
             return Err("window process identity changed during startup binding".to_string());
         }
-        if !self
-            .shared
-            .target
-            .bind_owner_identity(hwnd, generation, expected_owner_pid)
-        {
+        if !self.shared.target.bind_owner_identity_authority(
+            hwnd,
+            generation,
+            expected_owner_pid,
+            Arc::new(authority),
+        ) {
             return Err("window identity could not bind to the current target generation".into());
         }
-        *retained = Some((authority, generation));
         let _ = self.shared.commands.interrupt.signal();
         Ok(())
     }
@@ -1056,8 +1074,8 @@ impl NativeDispatchSession {
     /// Poll the retained process object and exact target HWND on the desktop
     /// supervisor thread. This function never runs in the precision suffix.
     pub fn poll_window_identity_authority(&self) -> bool {
-        let retained = self.window_identity_authority.lock();
-        let Some((authority, bound_generation)) = retained.as_ref() else {
+        let Some((authority, bound_generation)) = self.shared.target.owner_authority_snapshot()
+        else {
             return self.shared.target.owner_identity_status(0)
                 == super::target::OwnerIdentityStatus::NotRequired;
         };
@@ -1072,7 +1090,7 @@ impl NativeDispatchSession {
             let _ = self.shared.commands.interrupt.signal();
             return false;
         };
-        if target != (authority.identity().hwnd, *bound_generation) {
+        if target != (authority.identity().hwnd, bound_generation) {
             if self.startup_active() {
                 self.shared
                     .commands
@@ -1120,7 +1138,7 @@ impl NativeDispatchSession {
                 .system_power
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
-        self.window_identity_authority.lock().take();
+        self.shared.target.clear_owner_authority();
         self.shared.target.invalidate_owner_identity();
     }
 

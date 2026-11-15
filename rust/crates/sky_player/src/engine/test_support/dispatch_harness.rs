@@ -624,6 +624,18 @@ impl ProductionDispatchTestHarness {
         self.target.require_owner_identity();
         let (current_hwnd, generation) = self.target.load_stable().expect("test target snapshot");
         assert_eq!(current_hwnd, hwnd, "focus fixture HWND must be published");
+        #[cfg(feature = "test-support")]
+        assert!(self.target.bind_owner_identity_authority(
+            hwnd,
+            generation,
+            owner_pid,
+            Arc::new(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                    hwnd, owner_pid,
+                )
+            ),
+        ));
+        #[cfg(not(feature = "test-support"))]
         assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
@@ -636,6 +648,18 @@ impl ProductionDispatchTestHarness {
             .load_stable()
             .expect("republished test target snapshot");
         assert_eq!(published_hwnd, hwnd);
+        #[cfg(feature = "test-support")]
+        assert!(self.target.bind_owner_identity_authority(
+            hwnd,
+            generation,
+            owner_pid,
+            Arc::new(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                    hwnd, owner_pid,
+                )
+            ),
+        ));
+        #[cfg(not(feature = "test-support"))]
         assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
