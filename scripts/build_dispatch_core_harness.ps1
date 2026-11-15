@@ -146,8 +146,8 @@ try {
     $cargoVersion = (& cargo --version).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not identify active cargo version' }
     if ($isDispatchCleanupM3 -and
-        ($rustcVersion -notmatch '(?m)^release: 1\.99\.1$' -or
-            $rustcVersion -notmatch '(?m)^host: x86_64-pc-windows-msvc$' -or
+        ($rustcVersion -notmatch '(?m)^release: 1\.99\.1\r?$' -or
+            $rustcVersion -notmatch '(?m)^host: x86_64-pc-windows-msvc\r?$' -or
             $cargoVersion -notmatch '^cargo 1\.99\.1(?:\s|$)')) {
         throw 'DispatchCleanupM3 requires Rust/Cargo 1.99.1 for the Windows MSVC host'
     }

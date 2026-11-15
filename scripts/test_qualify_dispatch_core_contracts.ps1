@@ -546,6 +546,9 @@ $validM3Candidate = [pscustomobject]@{
     output_root = $m3OutputRoot; cargo_target_dir = (Join-Path $m3OutputRoot 'cargo-target')
 }
 Assert-DispatchCleanupM3ManifestIdentity -Manifest $validM3Candidate -ExpectedRole Candidate -RepositoryRoot $repositoryRoot | Out-Null
+$crlfM3Candidate = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$crlfM3Candidate.rustc_version = $crlfM3Candidate.rustc_version.Replace("`n", "`r`n")
+Assert-DispatchCleanupM3ManifestIdentity -Manifest $crlfM3Candidate -ExpectedRole Candidate -RepositoryRoot $repositoryRoot | Out-Null
 Assert-DispatchCleanupM3RunnerProvenance -Manifest $validM3Candidate -RunnerIdentity $m3RunnerIdentityFixture -RunnerRoot $repositoryRoot | Out-Null
 $validM3Baseline = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
 $validM3Baseline.source_role = 'Baseline'

@@ -116,8 +116,8 @@ function Assert-DispatchCleanupM3ManifestIdentity {
         (Get-ManifestProperty $Manifest 'safety_timing_margin_us') -ne $profile.SafetyTimingMarginUs -or
         (Get-ManifestProperty $Manifest 'target') -ne $profile.Target -or
         (Get-ManifestProperty $Manifest 'target_identity') -ne $profile.Target -or
-        [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch '(?m)^release: 1\.99\.1$' -or
-        [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch ('(?m)^host: ' + [regex]::Escape($profile.Target) + '$') -or
+        [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch '(?m)^release: 1\.99\.1\r?$' -or
+        [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch ('(?m)^host: ' + [regex]::Escape($profile.Target) + '\r?$') -or
         [string](Get-ManifestProperty $Manifest 'cargo_version') -notmatch '^cargo 1\.99\.1(?:\s|$)' -or
         (Get-ManifestProperty $Manifest 'cargo_clean_exit_code') -ne 0 -or
         (Get-ManifestProperty $Manifest 'cargo_build_exit_code') -ne 0 -or
