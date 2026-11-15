@@ -1,4 +1,6 @@
-use super::config::{AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeSessionOptions};
+use super::config::{
+    AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeScheduleInput, NativeSessionOptions,
+};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -255,12 +257,36 @@ impl NativeDispatchSession {
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let min_release_gap_us = options.timing.min_release_gap_us;
-        validate_native_schedule_timing_with_release_gap(
-            &options.schedule,
-            options.timing.min_hold_us,
-            min_release_gap_us,
-            qpc_clock,
-        )?;
+        let (total_us, generation_count) = match &options.schedule {
+            NativeScheduleInput::Raw(schedule) => {
+                validate_native_schedule_timing_with_release_gap(
+                    schedule,
+                    options.timing.min_hold_us,
+                    min_release_gap_us,
+                    qpc_clock,
+                )?;
+                (
+                    schedule
+                        .batches
+                        .last()
+                        .map_or(0, |batch| batch.scheduled_us),
+                    schedule.generation_count,
+                )
+            }
+            NativeScheduleInput::Prepared(schedule) => {
+                if !schedule.is_compatible(
+                    qpc_clock.frequency_hz(),
+                    options.timing.min_hold_us,
+                    min_release_gap_us,
+                ) {
+                    return Err(
+                        "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
+                            .to_string(),
+                    );
+                }
+                (schedule.total_us(), schedule.generation_count())
+            }
+        };
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
@@ -277,12 +303,6 @@ impl NativeDispatchSession {
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let supervisor_lease_timeout_us = options.wait.supervisor_lease_timeout_us;
         let interrupt = power_endpoint.interrupt();
-        let total_us = options
-            .schedule
-            .batches
-            .last()
-            .map_or(0, |batch| batch.scheduled_us);
-        let generation_count = options.schedule.generation_count;
         let observer_enabled = EffectiveRuntimePolicy::for_native(&options).observer_enabled;
         let require_owner_identity =
             options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);

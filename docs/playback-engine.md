@@ -33,6 +33,42 @@ the game samples.
   derived from host calibration, combining high-resolution waitable timers
   with a microsecond-accurate QPC spin loop.
 
+## Prepared Native Runtime
+
+Desktop `Prepare` compiles the authored schedule once and shares that
+`RuntimeSchedule` with the offline timing advisory. For a physical variant, it
+then creates an immutable `PreparedDispatchSchedule` in the current QPC
+frequency domain and validates its timestamps against the selected H/G policy.
+The plan retains compact Down chords and intents, the key registry, schedule
+metadata, and the unmatched-Up diagnostics needed by the worker. Source notes
+and the full `RuntimeSchedule` are released before the plan is published.
+
+`Start` rechecks the prepared ID and settings identity, selects the requested
+variant, and moves its plan into native session creation. It does not compile,
+walk, or validate the authored schedule. Worker boot checks the plan's QPC and
+H/G compatibility, moves its arrays into a new `DispatchExecutor`, and creates
+fresh cursor, slot, epoch, barrier, and transport state for that playback. A
+replay therefore begins with empty session state while reusing only immutable
+schedule data. Dry-run variants do not require a physical QPC plan; their
+advisory remains offline and cannot block a valid dry-run.
+
+`NativeScheduleInput::Raw` remains the safe admission path for Rust callers
+that still provide a `RuntimeSchedule`: session admission validates its timing
+policy, and worker boot validates and materializes it again with cancellation
+checkpoints before creating the executor. Desktop production entry points
+provide `NativeScheduleInput::Prepared`. A prepared
+plan whose QPC frequency or H/G policy no longer matches the worker is rejected
+before dispatch.
+
+Schedule compilation, timing validation, QPC conversion, and arena creation
+run during cancellable Prepare. The remaining prepared worker construction
+moves the already allocated arrays and initializes fixed-size state. Startup
+still emits existing per-batch telemetry rows for unmatched Up metadata to
+preserve schema 25; that diagnostics-only loop is proportional to the number
+of unmatched-Up batches, which is zero for ordinary valid songs. See the
+[M1 evidence record](evidence/issue-666-m1.md) for modeled-capacity and timing
+scope.
+
 ## 15-Slot Dispatch Executor
 
 The executor manages up to 15 instrument key slots corresponding to the
@@ -141,9 +177,10 @@ complete and sender QPC evidence is ordered with no timing error. Unqualified
 syscalls still contribute their raw attempt, missing-QPC, and transport-error
 counters without entering those timing distributions.
 
-Unmatched-Up diagnostic metadata is committed by the normal authored-frame
-Prepare path. Test-only metadata wake instrumentation is not a production path.
-Metadata has no physical dispatch boundary and does not issue `SendInput`.
+Unmatched-Up diagnostic metadata is captured during Prepare and its existing
+telemetry rows are published during worker boot before Arm. Test-only metadata
+wake instrumentation is not a production path. Metadata has no physical
+dispatch boundary and does not issue `SendInput`.
 
 ### Focus and Process Identity
 - The target window must be the exact foreground window (`GetForegroundWindow() == target_hwnd`).
@@ -238,12 +275,13 @@ scheduler implementation in the crate: `DispatchExecutor`, including when
 `test-support` is enabled.
 
 `MAX_RETAINED_DISPATCH_BYTES` is the 512 MiB calculated-capacity limit used by
-the compiler's phase checks and the desktop million-action construction test.
-That test, `valid_one_million_single_key_actions_fit_compact_executor_budget`,
-builds and compiles one million single-key actions, constructs the production
-executor, and sums the measured source, compiled-schedule, and executor
-capacities across the overlapping construction phases. It does not run a
-million-action playback or measure process RSS, Windows memory peak, or
+the compiler's phase checks, prepared-plan materialization, and the desktop
+million-action construction test. That test,
+`valid_one_million_single_key_actions_fit_prepared_runtime_budget`, builds and
+compiles one million single-key actions, creates the QPC-domain prepared plan,
+and moves it into a fresh production executor. Its report includes the source,
+compiled-schedule, prepared-plan, and overlapping peak capacities. It does not
+run a million-action playback or measure process RSS, Windows memory peak, or
 real-time dispatch. The historical
 [FINAL-RT-R5 record](https://github.com/pumni/Sky-Auto-Player/blob/fcf8fcf87bd3215c110039185ece535516191aaf/evidence/dispatch-core-646/final-rt-r5.md)
 describes a coordinator fixture at its pinned revision only; it is not evidence

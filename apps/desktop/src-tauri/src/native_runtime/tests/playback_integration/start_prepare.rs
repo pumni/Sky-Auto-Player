@@ -932,6 +932,11 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
         );
         assert_eq!(native_variant.config.fps, variant_dto.config.fps);
         assert_eq!(native_variant.config.dry_run, variant_dto.config.dry_run);
+        assert_eq!(
+            native_variant.prepared_schedule.is_some(),
+            !variant_dto.config.dry_run,
+            "only physical variants retain an immutable dispatch plan"
+        );
         assert!(!advisory.receiver_acknowledged);
     }
     let recommended = confirmation

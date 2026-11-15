@@ -127,7 +127,7 @@ fn projection_session_with_down(
     let player = Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -694,7 +694,7 @@ fn native_handoff_test_player(
     Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,

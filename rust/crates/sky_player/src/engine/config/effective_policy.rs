@@ -154,7 +154,8 @@ mod tests {
     ) -> NativeSessionOptions {
         NativeSessionOptions {
             schedule: sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
-                .expect("empty schedule with one allowed key"),
+                .expect("empty schedule with one allowed key")
+                .into(),
             backend: if backend_is_production {
                 BackendConfig::Production
             } else {

@@ -73,7 +73,6 @@ pub(crate) use wait::{
 
 use super::shared::SessionShared;
 use super::*;
-use sky_dispatch_core::model::RuntimeSchedule;
 #[cfg(any(test, feature = "test-support"))]
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -371,7 +370,7 @@ pub(super) fn update_deferred_worker_metrics(
 }
 
 pub(super) struct Worker<'a> {
-    schedule: Option<RuntimeSchedule>,
+    schedule: Option<NativeScheduleInput>,
     config: WorkerConfig,
     shared: &'a SessionShared,
     epoch_qpc: QpcTicks,
@@ -457,14 +456,14 @@ impl<'a> Worker<'a> {
         }
     }
 
-    fn take_schedule(&mut self) -> Result<RuntimeSchedule, &'static str> {
+    fn take_schedule(&mut self) -> Result<NativeScheduleInput, &'static str> {
         self.schedule
             .take()
-            .ok_or("worker runtime schedule was already consumed")
+            .ok_or("worker runtime plan was already consumed")
     }
 
     #[cfg(test)]
-    pub(super) fn take_schedule_for_test(&mut self) -> Result<RuntimeSchedule, &'static str> {
+    pub(super) fn take_schedule_for_test(&mut self) -> Result<NativeScheduleInput, &'static str> {
         self.take_schedule()
     }
 

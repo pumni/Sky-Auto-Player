@@ -3,6 +3,7 @@ use crate::commands::{
     PlaybackConfigDto, TimingAdvisoryAssumptionsDto, TimingAdvisoryStatus,
     WholeStreamTimingAdvisoryDto,
 };
+#[cfg(test)]
 use sky_app_core::song::ScheduleMetadata;
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_player::timing_model::{
@@ -73,6 +74,7 @@ impl TimingModelAssumptions {
     }
 }
 
+#[cfg(test)]
 pub(super) fn analyze_variant(
     schedule: &ScheduleMetadata,
     config: &PlaybackConfigDto,
@@ -91,25 +93,27 @@ pub(super) fn analyze_variant(
 }
 
 #[cfg(test)]
-pub(super) fn analyze_variant_with_model_hook(
-    schedule: &ScheduleMetadata,
+pub(super) fn analyze_compiled_variant_with_model_hook(
+    source_action_count: usize,
+    compiled: &sky_player::adapter_support::RuntimeSchedule,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
     before_model: impl FnOnce(),
 ) -> WholeStreamTimingAdvisoryDto {
-    analyze_variant_with_assumptions_and_hook(
-        schedule,
+    analyze_compiled_variant_with_hook(
+        source_action_count,
+        compiled,
         config,
         policy,
         plan_fingerprint,
         cancelled,
-        TimingModelAssumptions::default(),
         before_model,
     )
 }
 
+#[cfg(test)]
 fn analyze_variant_with_assumptions(
     schedule: &ScheduleMetadata,
     config: &PlaybackConfigDto,
@@ -129,6 +133,7 @@ fn analyze_variant_with_assumptions(
     )
 }
 
+#[cfg(test)]
 fn analyze_variant_with_assumptions_and_hook(
     schedule: &ScheduleMetadata,
     config: &PlaybackConfigDto,
@@ -138,55 +143,17 @@ fn analyze_variant_with_assumptions_and_hook(
     assumptions: TimingModelAssumptions,
     before_model: impl FnOnce(),
 ) -> WholeStreamTimingAdvisoryDto {
-    let mut result = empty_advisory(plan_fingerprint, assumptions, config.dry_run, None);
-    if cancelled.load(Ordering::Acquire) {
-        return unavailable(result, "analysis was cancelled before packet preparation");
-    }
-    if let Err(reason) = validate_assumptions(config, policy, assumptions) {
-        result.status = TimingAdvisoryStatus::InvalidAssumptions;
-        result.explanation = reason;
-        return result;
-    }
-    result.effective_hold_floor_h_us = Some(policy.min_hold_us);
-    result.authored_release_gap_floor_g_us = Some(policy.min_release_gap_us);
-    result.physical_release_gap_floor_g_us = Some(policy.min_release_gap_us);
-    result.structural_same_key_cycle_minimum_us =
-        policy.min_hold_us.checked_add(policy.min_release_gap_us);
-    if schedule.actions.len() > MAX_TIMING_ADVISORY_ACTIONS {
-        return unavailable(
-            result,
-            &format!(
-                "The schedule has {} authored actions; the offline advisory limit is {}.",
-                schedule.actions.len(),
-                MAX_TIMING_ADVISORY_ACTIONS
-            ),
-        );
-    }
-    let estimated_work = match u64::try_from(schedule.actions.len())
-        .ok()
-        .and_then(|count| count.checked_mul(MAX_KEY_VISITS_PER_PACKET))
-    {
-        Some(work) if work <= MAX_TIMING_ADVISORY_WORK_UNITS => work,
-        _ => {
-            return unavailable(
-                result,
-                "The schedule exceeds the offline advisory work budget.",
-            );
-        }
+    let (result, estimated_work) = match prepare_advisory(
+        schedule.actions.len(),
+        config,
+        policy,
+        plan_fingerprint,
+        cancelled,
+        assumptions,
+    ) {
+        Ok(prepared) => prepared,
+        Err(result) => return *result,
     };
-    let _estimated_memory = match estimated_peak_bytes(schedule.actions.len()) {
-        Some(bytes) if bytes <= MAX_TIMING_ADVISORY_MEMORY_BYTES => bytes,
-        _ => {
-            return unavailable(
-                result,
-                "The schedule exceeds the offline advisory memory budget.",
-            );
-        }
-    };
-    if cancelled.load(Ordering::Acquire) {
-        return unavailable(result, "analysis was cancelled before packet compilation");
-    }
-
     let compiled = match super::session::compile_dispatch_schedule(schedule, cancelled) {
         Ok(compiled) => compiled,
         Err(error) => {
@@ -196,6 +163,160 @@ fn analyze_variant_with_assumptions_and_hook(
             );
         }
     };
+    analyze_compiled_stream(
+        &compiled,
+        result,
+        estimated_work,
+        policy,
+        cancelled,
+        assumptions,
+        before_model,
+    )
+}
+
+#[cfg(not(test))]
+pub(super) fn analyze_compiled_variant(
+    source_action_count: usize,
+    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    config: &PlaybackConfigDto,
+    policy: &MaterializedTimingPolicy,
+    plan_fingerprint: &str,
+    cancelled: &AtomicBool,
+) -> WholeStreamTimingAdvisoryDto {
+    analyze_compiled_variant_with_hook(
+        source_action_count,
+        compiled,
+        config,
+        policy,
+        plan_fingerprint,
+        cancelled,
+        || {},
+    )
+}
+
+pub(super) fn unavailable_compiled_variant(
+    source_action_count: usize,
+    config: &PlaybackConfigDto,
+    policy: &MaterializedTimingPolicy,
+    plan_fingerprint: &str,
+    cancelled: &AtomicBool,
+    explanation: &str,
+) -> WholeStreamTimingAdvisoryDto {
+    match prepare_advisory(
+        source_action_count,
+        config,
+        policy,
+        plan_fingerprint,
+        cancelled,
+        TimingModelAssumptions::default(),
+    ) {
+        Ok((result, _)) => unavailable(result, explanation),
+        Err(result) => *result,
+    }
+}
+
+fn analyze_compiled_variant_with_hook(
+    source_action_count: usize,
+    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    config: &PlaybackConfigDto,
+    policy: &MaterializedTimingPolicy,
+    plan_fingerprint: &str,
+    cancelled: &AtomicBool,
+    before_model: impl FnOnce(),
+) -> WholeStreamTimingAdvisoryDto {
+    let (result, estimated_work) = match prepare_advisory(
+        source_action_count,
+        config,
+        policy,
+        plan_fingerprint,
+        cancelled,
+        TimingModelAssumptions::default(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(result) => return *result,
+    };
+    analyze_compiled_stream(
+        compiled,
+        result,
+        estimated_work,
+        policy,
+        cancelled,
+        TimingModelAssumptions::default(),
+        before_model,
+    )
+}
+
+fn prepare_advisory(
+    action_count: usize,
+    config: &PlaybackConfigDto,
+    policy: &MaterializedTimingPolicy,
+    plan_fingerprint: &str,
+    cancelled: &AtomicBool,
+    assumptions: TimingModelAssumptions,
+) -> Result<(WholeStreamTimingAdvisoryDto, u64), Box<WholeStreamTimingAdvisoryDto>> {
+    let mut result = empty_advisory(plan_fingerprint, assumptions, config.dry_run, None);
+    if cancelled.load(Ordering::Acquire) {
+        return Err(Box::new(unavailable(
+            result,
+            "analysis was cancelled before packet preparation",
+        )));
+    }
+    if let Err(reason) = validate_assumptions(config, policy, assumptions) {
+        result.status = TimingAdvisoryStatus::InvalidAssumptions;
+        result.explanation = reason;
+        return Err(Box::new(result));
+    }
+    result.effective_hold_floor_h_us = Some(policy.min_hold_us);
+    result.authored_release_gap_floor_g_us = Some(policy.min_release_gap_us);
+    result.physical_release_gap_floor_g_us = Some(policy.min_release_gap_us);
+    result.structural_same_key_cycle_minimum_us =
+        policy.min_hold_us.checked_add(policy.min_release_gap_us);
+    if action_count > MAX_TIMING_ADVISORY_ACTIONS {
+        return Err(Box::new(unavailable(
+            result,
+            &format!(
+                "The schedule has {action_count} authored actions; the offline advisory limit is {MAX_TIMING_ADVISORY_ACTIONS}."
+            ),
+        )));
+    }
+    let estimated_work = match u64::try_from(action_count)
+        .ok()
+        .and_then(|count| count.checked_mul(MAX_KEY_VISITS_PER_PACKET))
+    {
+        Some(work) if work <= MAX_TIMING_ADVISORY_WORK_UNITS => work,
+        _ => {
+            return Err(Box::new(unavailable(
+                result,
+                "The schedule exceeds the offline advisory work budget.",
+            )));
+        }
+    };
+    if estimated_peak_bytes(action_count)
+        .is_none_or(|bytes| bytes > MAX_TIMING_ADVISORY_MEMORY_BYTES)
+    {
+        return Err(Box::new(unavailable(
+            result,
+            "The schedule exceeds the offline advisory memory budget.",
+        )));
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Err(Box::new(unavailable(
+            result,
+            "analysis was cancelled before packet compilation",
+        )));
+    }
+    Ok((result, estimated_work))
+}
+
+fn analyze_compiled_stream(
+    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    mut result: WholeStreamTimingAdvisoryDto,
+    estimated_work: u64,
+    policy: &MaterializedTimingPolicy,
+    cancelled: &AtomicBool,
+    assumptions: TimingModelAssumptions,
+    before_model: impl FnOnce(),
+) -> WholeStreamTimingAdvisoryDto {
     if cancelled.load(Ordering::Acquire) {
         return unavailable(result, "analysis was cancelled after packet compilation");
     }
@@ -244,7 +365,7 @@ fn analyze_variant_with_assumptions_and_hook(
     // exercise cancellation while an advisory analysis is in flight.
     before_model();
     let report = match analyze_dispatch_schedule_cancellable(
-        &compiled,
+        compiled,
         assumptions.model_config(policy),
         cancelled,
     ) {

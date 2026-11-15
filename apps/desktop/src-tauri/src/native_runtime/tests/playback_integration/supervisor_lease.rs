@@ -38,7 +38,7 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
     let player = Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,

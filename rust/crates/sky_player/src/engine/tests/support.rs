@@ -8,7 +8,7 @@ pub(super) fn test_session_options(
     backend: BackendConfig,
 ) -> NativeSessionOptions {
     NativeSessionOptions {
-        schedule,
+        schedule: schedule.into(),
         backend,
         profile: DispatchProfile::StrictTimingDiagnostic,
         timing: TimingOptions {

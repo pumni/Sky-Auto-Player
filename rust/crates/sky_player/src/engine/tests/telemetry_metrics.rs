@@ -454,7 +454,7 @@ fn worker_takes_runtime_schedule_only_once() {
     assert!(worker.take_schedule_for_test().is_ok());
     assert!(matches!(
         worker.take_schedule_for_test(),
-        Err("worker runtime schedule was already consumed")
+        Err("worker runtime plan was already consumed")
     ));
 }
 

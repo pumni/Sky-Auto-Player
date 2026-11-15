@@ -1,4 +1,5 @@
 use super::telemetry::TelemetryMode;
+use sky_dispatch_core::executor::PreparedDispatchSchedule;
 use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
@@ -210,8 +211,22 @@ pub enum BackendConfig {
     },
 }
 
+/// Schedule admission input for a native session. Existing callers may keep
+/// supplying a validated raw runtime schedule; production desktop playback
+/// supplies the tick-domain plan materialized during Prepare.
+pub enum NativeScheduleInput {
+    Raw(RuntimeSchedule),
+    Prepared(PreparedDispatchSchedule),
+}
+
+impl From<RuntimeSchedule> for NativeScheduleInput {
+    fn from(schedule: RuntimeSchedule) -> Self {
+        Self::Raw(schedule)
+    }
+}
+
 pub struct NativeSessionOptions {
-    pub schedule: RuntimeSchedule,
+    pub schedule: NativeScheduleInput,
     pub backend: BackendConfig,
     pub profile: DispatchProfile,
     pub timing: TimingOptions,

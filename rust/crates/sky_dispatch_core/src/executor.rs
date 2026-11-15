@@ -5,6 +5,7 @@
 //! and physical H/G timing floors.
 
 use smallvec::SmallVec;
+use std::num::NonZeroU64;
 
 use crate::accounting::{GenerationAccounting, GenerationCounters};
 use crate::model::{GenerationId, KeyRegistry, KeySlot, MAX_KEYS, RuntimeSchedule};
@@ -218,6 +219,362 @@ pub struct ExecutorMemoryMetrics {
     pub total_bytes: usize,
 }
 
+/// Authored metadata for an Up intent that has no paired Down generation.
+/// This is prepared before Arm so startup does not walk every action merely
+/// to produce the existing stale-metadata diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedUnmatchedUpMetadata {
+    pub source_action_index: u32,
+    pub scheduled_ticks: TimelineTicks,
+    pub suppressed_intent_count: usize,
+}
+
+/// Capacity evidence for an immutable dispatch plan and its overlapping
+/// construction phase. Values describe allocated capacities, not process RSS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedDispatchMemoryMetrics {
+    pub chord_count: usize,
+    pub chord_capacity: usize,
+    pub intent_count: usize,
+    pub intent_capacity: usize,
+    pub unmatched_up_count: usize,
+    pub unmatched_up_capacity: usize,
+    pub plan_capacity_bytes: usize,
+    pub overlapping_peak_capacity_bytes: usize,
+}
+
+/// Immutable, QPC-domain dispatch materialization produced during Prepare.
+/// It contains only the fixed dispatch representation and the metadata needed
+/// to initialize a fresh session; cursor, slots, epoch, and transport state
+/// are created separately by `DispatchExecutor::from_prepared_schedule`.
+#[derive(Debug)]
+pub struct PreparedDispatchSchedule {
+    down_chords: Vec<DownChordHeaderTicks>,
+    down_intents: Vec<DownIntentTicks>,
+    schedule_end_offset_ticks: TimelineTicks,
+    schedule_end_offset_us: u64,
+    key_registry: KeyRegistry,
+    total_generations: u64,
+    qpc_frequency_hz: NonZeroU64,
+    min_hold_us: u64,
+    min_release_gap_us: u64,
+    min_hold_ticks: DurationTicks,
+    min_release_gap_ticks: DurationTicks,
+    total_us: u64,
+    packet_count: usize,
+    has_down: bool,
+    unmatched_up_metadata: Vec<PreparedUnmatchedUpMetadata>,
+    memory_metrics: PreparedDispatchMemoryMetrics,
+}
+
+impl PreparedDispatchSchedule {
+    /// Compile a `RuntimeSchedule` into the immutable QPC-relative physical
+    /// representation used by a later session. The conversion rounds up in
+    /// the same way as `QpcClock::timeline_from_us`.
+    pub fn prepare(
+        schedule: &RuntimeSchedule,
+        qpc_frequency_hz: NonZeroU64,
+        min_hold_us: u64,
+        min_release_gap_us: u64,
+        caller_retained_capacity_bytes: usize,
+    ) -> Result<Self, String> {
+        Self::prepare_with_cancellation(
+            schedule,
+            qpc_frequency_hz,
+            min_hold_us,
+            min_release_gap_us,
+            caller_retained_capacity_bytes,
+            || Ok(()),
+        )
+    }
+
+    /// Cancellable form used by the desktop Prepare path and by raw-schedule
+    /// admission. Checkpoints are bounded by the number of authored packets.
+    pub fn prepare_with_cancellation(
+        schedule: &RuntimeSchedule,
+        qpc_frequency_hz: NonZeroU64,
+        min_hold_us: u64,
+        min_release_gap_us: u64,
+        caller_retained_capacity_bytes: usize,
+        mut checkpoint: impl FnMut() -> Result<(), String>,
+    ) -> Result<Self, String> {
+        checkpoint()?;
+        let qpc_to_ticks = |microseconds| {
+            let numerator = (microseconds as u128)
+                .checked_mul(qpc_frequency_hz.get() as u128)
+                .and_then(|value| value.checked_add(999_999))?;
+            u64::try_from(numerator / 1_000_000)
+                .ok()
+                .map(TimelineTicks::from_raw)
+        };
+        let min_hold_ticks = qpc_to_ticks(min_hold_us)
+            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+            .ok_or_else(|| "prepared hold-floor conversion overflow".to_string())?;
+        let min_release_gap_ticks = qpc_to_ticks(min_release_gap_us)
+            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+            .ok_or_else(|| "prepared release-gap conversion overflow".to_string())?;
+        crate::validation::validate_min_hold_and_release_gap_feasibility_ticks_with_checkpoint(
+            schedule,
+            min_hold_us,
+            min_hold_ticks,
+            min_release_gap_us,
+            min_release_gap_ticks,
+            qpc_to_ticks,
+            || checkpoint().map_err(|_| crate::validation::ScheduleTimingError::Cancelled),
+        )
+        .map_err(|error| format!("prepared native schedule admission failed: {error}"))?;
+        checkpoint()?;
+
+        let chord_count = schedule.down_chords.len();
+        let mut intent_count = 0usize;
+        for (index, chord) in schedule.down_chords.iter().enumerate() {
+            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            intent_count = intent_count
+                .checked_add(chord.intents.len())
+                .ok_or_else(|| "executor Down intent count overflow".to_string())?;
+        }
+        checked_executor_storage_bytes(chord_count, intent_count)?;
+
+        let mut down_chords = Vec::new();
+        reserve_executor_chords(&mut down_chords, chord_count)?;
+        let mut down_intents = Vec::new();
+        reserve_executor_intents(&mut down_intents, intent_count)?;
+        for (index, chord) in schedule.down_chords.iter().enumerate() {
+            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            let scheduled_ticks = qpc_to_ticks(chord.scheduled_us).ok_or_else(|| {
+                format!(
+                    "scheduled timestamp conversion failed for chord at {}us",
+                    chord.scheduled_us
+                )
+            })?;
+            let intent_start = down_intents.len();
+            for intent in &chord.intents {
+                let paired_up_offset_ticks =
+                    qpc_to_ticks(intent.paired_up_offset_us).ok_or_else(|| {
+                        format!(
+                            "paired Up offset timestamp conversion failed at {}us",
+                            intent.paired_up_offset_us
+                        )
+                    })?;
+                down_intents.push(DownIntentTicks {
+                    generation_id: intent.generation_id,
+                    key_slot: intent.key_slot,
+                    scan_code: intent.scan_code,
+                    source_action_index: intent.source_action_index,
+                    reason_id: intent.reason_id,
+                    paired_up_offset_ticks,
+                    paired_up_offset_us: intent.paired_up_offset_us,
+                    paired_up_source_action_index: intent.paired_up_source_action_index,
+                });
+            }
+            let intent_len = down_intents
+                .len()
+                .checked_sub(intent_start)
+                .ok_or_else(|| "executor Down intent range underflow".to_string())?;
+            down_chords.push(DownChordHeaderTicks {
+                chord_index: chord.chord_index,
+                scheduled_ticks,
+                scheduled_us: chord.scheduled_us,
+                down_mask: chord.down_mask,
+                source_action_index: chord.source_action_index,
+                reason_id: chord.reason_id,
+                intent_start,
+                intent_count: intent_len,
+            });
+        }
+        if down_intents.len() != intent_count {
+            return Err("executor Down intent count changed during preparation".to_string());
+        }
+
+        let mut unmatched_up_count = 0usize;
+        for (index, batch) in schedule.batches.iter().enumerate() {
+            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            if batch.kind != crate::model::ActionKind::Up {
+                continue;
+            }
+            let start = usize::try_from(batch.intent_start)
+                .map_err(|_| "prepared unmatched-Up intent range overflow")?;
+            let end = start
+                .checked_add(usize::from(batch.intent_len))
+                .ok_or("prepared unmatched-Up intent range overflow")?;
+            let intents = schedule
+                .intents
+                .get(start..end)
+                .ok_or("prepared unmatched-Up intent range is invalid")?;
+            if intents
+                .iter()
+                .any(|intent| intent.generation_id() == crate::model::NO_GENERATION_ID)
+            {
+                unmatched_up_count = unmatched_up_count
+                    .checked_add(1)
+                    .ok_or_else(|| "prepared unmatched-Up count overflow".to_string())?;
+            }
+        }
+        let mut unmatched_up_metadata = Vec::new();
+        unmatched_up_metadata
+            .try_reserve_exact(unmatched_up_count)
+            .map_err(|error| format!("prepared unmatched-Up allocation failed: {error}"))?;
+        for (index, batch) in schedule.batches.iter().enumerate() {
+            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            if batch.kind != crate::model::ActionKind::Up {
+                continue;
+            }
+            let start = usize::try_from(batch.intent_start)
+                .map_err(|_| "prepared unmatched-Up intent range overflow")?;
+            let end = start
+                .checked_add(usize::from(batch.intent_len))
+                .ok_or("prepared unmatched-Up intent range overflow")?;
+            let intents = schedule
+                .intents
+                .get(start..end)
+                .ok_or("prepared unmatched-Up intent range is invalid")?;
+            let suppressed_intent_count = intents
+                .iter()
+                .filter(|intent| intent.generation_id() == crate::model::NO_GENERATION_ID)
+                .count();
+            if suppressed_intent_count != 0 {
+                unmatched_up_metadata.push(PreparedUnmatchedUpMetadata {
+                    source_action_index: batch.source_action_index,
+                    scheduled_ticks: qpc_to_ticks(batch.scheduled_us).ok_or_else(|| {
+                        format!(
+                            "unmatched Up timestamp conversion failed at {}us",
+                            batch.scheduled_us
+                        )
+                    })?,
+                    suppressed_intent_count,
+                });
+            }
+        }
+        checkpoint()?;
+
+        let schedule_memory = schedule.memory_metrics_with_checkpoint(checkpoint)?;
+        let schedule_bytes = schedule_memory
+            .heap_payload_bytes
+            .checked_add(schedule_memory.struct_bytes)
+            .ok_or_else(|| "runtime schedule capacity overflow".to_string())?;
+        let chord_bytes = down_chords
+            .capacity()
+            .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
+            .ok_or_else(|| "prepared chord capacity overflow".to_string())?;
+        let intent_bytes = down_intents
+            .capacity()
+            .checked_mul(std::mem::size_of::<DownIntentTicks>())
+            .ok_or_else(|| "prepared intent capacity overflow".to_string())?;
+        let unmatched_up_bytes = unmatched_up_metadata
+            .capacity()
+            .checked_mul(std::mem::size_of::<PreparedUnmatchedUpMetadata>())
+            .ok_or_else(|| "prepared unmatched-Up capacity overflow".to_string())?;
+        let plan_capacity_bytes = chord_bytes
+            .checked_add(intent_bytes)
+            .and_then(|bytes| bytes.checked_add(unmatched_up_bytes))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .ok_or_else(|| "prepared plan capacity overflow".to_string())?;
+        let overlapping_peak_capacity_bytes = caller_retained_capacity_bytes
+            .checked_add(schedule_bytes)
+            .and_then(|bytes| bytes.checked_add(plan_capacity_bytes))
+            .ok_or_else(|| "prepared startup capacity overflow".to_string())?
+            .max(schedule.compile_memory.phase_peak_capacity_bytes);
+        if overlapping_peak_capacity_bytes > crate::model::MAX_RETAINED_DISPATCH_BYTES {
+            return Err(format!(
+                "prepared playback capacity ({overlapping_peak_capacity_bytes} bytes) exceeds the {} byte retained-dispatch budget",
+                crate::model::MAX_RETAINED_DISPATCH_BYTES
+            ));
+        }
+        let total_us = schedule
+            .batches
+            .last()
+            .map_or(0, |batch| batch.scheduled_us);
+        let memory_metrics = PreparedDispatchMemoryMetrics {
+            chord_count,
+            chord_capacity: down_chords.capacity(),
+            intent_count,
+            intent_capacity: down_intents.capacity(),
+            unmatched_up_count,
+            unmatched_up_capacity: unmatched_up_metadata.capacity(),
+            plan_capacity_bytes,
+            overlapping_peak_capacity_bytes,
+        };
+        Ok(Self {
+            down_chords,
+            down_intents,
+            schedule_end_offset_ticks: qpc_to_ticks(schedule.schedule_end_offset_us)
+                .ok_or_else(|| "schedule end offset timestamp conversion overflow".to_string())?,
+            schedule_end_offset_us: schedule.schedule_end_offset_us,
+            key_registry: schedule.key_registry.clone(),
+            total_generations: schedule.generation_count,
+            qpc_frequency_hz,
+            min_hold_us,
+            min_release_gap_us,
+            min_hold_ticks,
+            min_release_gap_ticks,
+            total_us,
+            packet_count: schedule.packets.len(),
+            has_down: !schedule.down_chords.is_empty(),
+            unmatched_up_metadata,
+            memory_metrics,
+        })
+    }
+
+    pub fn is_compatible(
+        &self,
+        qpc_frequency_hz: NonZeroU64,
+        min_hold_us: u64,
+        min_release_gap_us: u64,
+    ) -> bool {
+        self.qpc_frequency_hz == qpc_frequency_hz
+            && self.min_hold_us == min_hold_us
+            && self.min_release_gap_us == min_release_gap_us
+    }
+
+    pub fn qpc_frequency_hz(&self) -> NonZeroU64 {
+        self.qpc_frequency_hz
+    }
+
+    pub fn min_hold_us(&self) -> u64 {
+        self.min_hold_us
+    }
+
+    pub fn min_release_gap_us(&self) -> u64 {
+        self.min_release_gap_us
+    }
+
+    pub fn total_us(&self) -> u64 {
+        self.total_us
+    }
+
+    pub fn generation_count(&self) -> u64 {
+        self.total_generations
+    }
+
+    pub fn packet_count(&self) -> usize {
+        self.packet_count
+    }
+
+    pub fn has_down(&self) -> bool {
+        self.has_down
+    }
+
+    pub fn unmatched_up_metadata(&self) -> &[PreparedUnmatchedUpMetadata] {
+        &self.unmatched_up_metadata
+    }
+
+    pub fn memory_metrics(&self) -> PreparedDispatchMemoryMetrics {
+        self.memory_metrics
+    }
+
+    pub fn schedule_end_offset_us(&self) -> u64 {
+        self.schedule_end_offset_us
+    }
+}
+
 /// Timing and authored metadata for an active key slot being released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UpSlotTiming {
@@ -250,6 +607,37 @@ pub struct UpSlotTimingSummary {
 }
 
 impl DispatchExecutor {
+    /// Create fresh mutable session state from a plan prepared before Arm.
+    /// The authored arrays are moved without rebuilding or reallocating.
+    pub fn from_prepared_schedule(plan: PreparedDispatchSchedule) -> Self {
+        let PreparedDispatchSchedule {
+            down_chords,
+            down_intents,
+            schedule_end_offset_ticks,
+            schedule_end_offset_us,
+            key_registry,
+            total_generations,
+            min_hold_ticks,
+            min_release_gap_ticks,
+            ..
+        } = plan;
+        Self {
+            down_chords,
+            down_intents,
+            schedule_end_offset_ticks,
+            schedule_end_offset_us,
+            key_registry,
+            chord_cursor: 0,
+            slots: [MusicalSlot::default(); MAX_KEYS],
+            resume_barrier_qpc: None,
+            min_hold_ticks,
+            min_release_gap_ticks,
+            counters: GenerationCounters::default(),
+            total_generations,
+            activated_generations: 0,
+        }
+    }
+
     /// Construct a new 15-slot executor from a validated `RuntimeSchedule`.
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,

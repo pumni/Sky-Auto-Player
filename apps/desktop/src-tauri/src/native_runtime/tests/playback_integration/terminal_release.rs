@@ -523,6 +523,14 @@ fn physical_startup_target_failure_retires_without_reentrant_active_lock() {
     let activity = ActivityCoordinator::default();
     let mut service = NativePlaybackService::new(activity.clone());
     service.startup_failure = Some("no admissible visible Sky window was found".into());
+    let compile_checkpoints = Arc::new(AtomicU64::new(0));
+    let compile_checkpoints_hook = Arc::clone(&compile_checkpoints);
+    *service
+        .prepare_compile_test_hook
+        .lock()
+        .expect("Prepare compiler hook") = Some(Arc::new(move |_| {
+        compile_checkpoints_hook.fetch_add(1, Ordering::AcqRel);
+    }));
     let service = Arc::new(service);
     let settings = ApplicationSettings::default();
     let events = Arc::new(Mutex::new(NativeEventHub::default()));
@@ -580,7 +588,28 @@ fn physical_startup_target_failure_retires_without_reentrant_active_lock() {
     };
 
     let first_prepared_id = prepare_physical_failure_plan(&service, &settings, &"c".repeat(32));
+    let first_prepare_compilations = compile_checkpoints.load(Ordering::Acquire);
+    assert!(first_prepare_compilations > 0);
+    {
+        let prepared = service.prepared.lock().expect("prepared cache");
+        let plan = prepared
+            .iter()
+            .find(|(id, _)| id == &first_prepared_id)
+            .and_then(|(_, record)| {
+                record
+                    .variants
+                    .get(&crate::commands::PlaybackDecision::Proceed)
+            })
+            .and_then(|variant| variant.prepared_schedule.as_ref())
+            .expect("Start must consume a prepared physical runtime");
+        assert!(plan.has_down());
+    }
     let first_error = start_attempt(first_prepared_id.clone());
+    assert_eq!(
+        compile_checkpoints.load(Ordering::Acquire),
+        first_prepare_compilations,
+        "Start must not compile or materialize the authored schedule"
+    );
     assert!(
         first_error.starts_with("target_not_found:"),
         "{first_error}"
@@ -638,7 +667,14 @@ fn physical_startup_target_failure_retires_without_reentrant_active_lock() {
     assert_eq!(stop.state, PlaybackSessionState::Failed);
 
     let second_prepared_id = prepare_physical_failure_plan(&service, &settings, &"d".repeat(32));
+    let second_prepare_compilations = compile_checkpoints.load(Ordering::Acquire);
+    assert!(second_prepare_compilations > first_prepare_compilations);
     let second_error = start_attempt(second_prepared_id.clone());
+    assert_eq!(
+        compile_checkpoints.load(Ordering::Acquire),
+        second_prepare_compilations,
+        "a second Start must not compile or materialize the authored schedule"
+    );
     assert!(
         second_error.starts_with("target_not_found:"),
         "{second_error}"

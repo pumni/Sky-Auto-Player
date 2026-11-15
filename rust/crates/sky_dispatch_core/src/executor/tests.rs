@@ -13,6 +13,202 @@ fn test_ticks(us: u64) -> Result<TimelineTicks, std::convert::Infallible> {
 }
 
 #[test]
+fn prepared_plan_starts_fresh_and_matches_raw_executor_decisions() {
+    let allowed = vec![0x15];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "first down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 5_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "first up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 7_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "second down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 12_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "second up".into(),
+        },
+    ];
+    let schedule = compile_actions(&actions, &allowed);
+    let frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
+    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 1_000, 1_000, 0)
+        .expect("physical schedule is admissible");
+    assert!(prepared.is_compatible(frequency, 1_000, 1_000));
+    assert!(!prepared.is_compatible(
+        std::num::NonZeroU64::new(2_000_000).expect("alternate QPC frequency"),
+        1_000,
+        1_000
+    ));
+    assert!(!prepared.is_compatible(frequency, 1_001, 1_000));
+
+    let mut prepared_executor = DispatchExecutor::from_prepared_schedule(prepared);
+    let mut raw_executor = DispatchExecutor::new(
+        &schedule,
+        DurationTicks::from_raw(1_000),
+        DurationTicks::from_raw(1_000),
+        test_ticks,
+    )
+    .expect("raw schedule executor");
+    assert_eq!(prepared_executor.active_mask(), 0);
+    assert_eq!(
+        prepared_executor.total_chords(),
+        raw_executor.total_chords()
+    );
+    for timestamp in [0, 5_000, 7_000, 12_000] {
+        let now = crate::time::QpcTicks::from_raw(timestamp);
+        let prepared_decision = prepared_executor
+            .evaluate_at(now, crate::time::QpcTicks::ZERO)
+            .expect("prepared decision");
+        let raw_decision = raw_executor
+            .evaluate_at(now, crate::time::QpcTicks::ZERO)
+            .expect("raw decision");
+        assert_eq!(prepared_decision, raw_decision);
+        if let DispatchDecision::Send {
+            up_mask,
+            down_chord,
+            ..
+        } = prepared_decision
+        {
+            let down_mask = down_chord.map_or(0, |chord| chord.down_mask);
+            prepared_executor
+                .on_send_completed_at(up_mask, down_mask, now)
+                .expect("prepared send completion");
+            raw_executor
+                .on_send_completed_at(up_mask, down_mask, now)
+                .expect("raw send completion");
+        }
+    }
+    assert_eq!(
+        prepared_executor.evaluate_at(
+            crate::time::QpcTicks::from_raw(12_000),
+            crate::time::QpcTicks::ZERO,
+        ),
+        Ok(DispatchDecision::Finished)
+    );
+    assert_eq!(prepared_executor.active_mask(), 0);
+}
+
+#[test]
+fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
+    let allowed = vec![0x15];
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up".into(),
+        },
+    ];
+    let schedule = compile_actions(&actions, &allowed);
+    let frequency = std::num::NonZeroU64::new(3_000_000).expect("QPC frequency");
+    let plan = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
+        .expect("QPC timestamp conversion rounds up");
+    let executor = DispatchExecutor::from_prepared_schedule(plan);
+    match executor
+        .evaluate_at(crate::time::QpcTicks::ZERO, crate::time::QpcTicks::ZERO)
+        .expect("first decision")
+    {
+        DispatchDecision::Send {
+            down_chord: Some(chord),
+            ..
+        } => assert_eq!(chord.intents[0].paired_up_offset_ticks.as_u64(), 3),
+        decision => panic!("expected initial Down, got {decision:?}"),
+    }
+
+    let many_actions = (0..5_000_u32)
+        .flat_map(|index| {
+            let at_us = u64::from(index) * 2;
+            [
+                KeyActionInput {
+                    source_action_index: index * 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: at_us,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: index * 2 + 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: at_us + 1,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "up".into(),
+                },
+            ]
+        })
+        .collect::<Vec<_>>();
+    let large_schedule = compile_actions(&many_actions, &allowed);
+    let mut checkpoints = 0;
+    let error = PreparedDispatchSchedule::prepare_with_cancellation(
+        &large_schedule,
+        std::num::NonZeroU64::new(1_000_000).expect("QPC frequency"),
+        0,
+        0,
+        0,
+        || {
+            checkpoints += 1;
+            if checkpoints == 3 {
+                Err("test cancellation".into())
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .expect_err("validation checks cancellation while walking large schedules");
+    assert!(error.contains("cancelled"));
+    assert_eq!(checkpoints, 3);
+}
+
+#[test]
+fn prepared_plan_retains_unmatched_up_metadata_without_a_down_stream() {
+    let schedule = compile_actions(
+        &[KeyActionInput {
+            source_action_index: 7,
+            kind: ActionKind::Up,
+            scheduled_us: 10,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "unmatched up".into(),
+        }],
+        &[0x15],
+    );
+    let frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
+    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
+        .expect("unmatched Up is admitted as diagnostics metadata");
+    assert!(!prepared.has_down());
+    assert_eq!(prepared.packet_count(), 1);
+    assert_eq!(prepared.generation_count(), 0);
+    assert_eq!(prepared.unmatched_up_metadata().len(), 1);
+    assert_eq!(prepared.unmatched_up_metadata()[0].source_action_index, 7);
+    assert_eq!(
+        prepared.unmatched_up_metadata()[0].scheduled_ticks,
+        TimelineTicks::from_raw(10)
+    );
+}
+
+#[test]
 fn fixture_1_independent_release_a_floor_does_not_block_b_down() {
     // A-Up authored 20 ms, floor 25 ms; B-Down independent at 21 ms
     // H = 25 ms, G = 16 ms
