@@ -1,8 +1,9 @@
 //! Offline whole-stream timing and headroom estimates.
 //!
-//! This module is deliberately disconnected from worker admission and packet
-//! execution. Its estimates cannot delay, authorize, reorder, retry, or drop a
-//! production packet.
+//! The offline dispatch advisory reuses the production `DispatchExecutor` with
+//! deterministic sender-cost assumptions. It is disconnected from worker
+//! admission and Win32 effects: its estimates cannot delay, authorize, reorder,
+//! retry, or drop a production packet.
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -437,7 +438,9 @@ mod tests {
         analyze_whole_stream, analyze_whole_stream_cancellable,
     };
     use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::executor::{DispatchDecision, DispatchExecutor};
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, QpcTicks};
     use std::sync::atomic::AtomicBool;
 
     fn config() -> WholeStreamModelConfig {
@@ -562,6 +565,186 @@ mod tests {
         assert_eq!(report.packets[2].h_floor_displacement_ticks, 7);
         assert_eq!(report.packets[2].modeled_ready_ticks, 17);
         assert_eq!(report.negative_slack_count, 1);
+    }
+
+    #[test]
+    fn executor_cursor_wait_is_distinct_from_sender_occupancy() {
+        // A is first Downed with independent C. A's repeat chord stays at the
+        // Down cursor until its Up completion + G, so B cannot pass it. C's
+        // independent Up remains eligible and is sent at its authored time.
+        let actions = [
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15, 0x17],
+                reason: "initial A and C chord".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "release A".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 34_334,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "repeat A at authored H+G".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 35_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "independent B behind A".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 36_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "independent C release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 5,
+                kind: ActionKind::Up,
+                scheduled_us: 50_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "release repeated A".into(),
+            },
+            KeyActionInput {
+                source_action_index: 6,
+                kind: ActionKind::Up,
+                scheduled_us: 65_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "release B".into(),
+            },
+        ];
+        let schedule = compile_runtime_intents(&actions, &[0x15, 0x16, 0x17])
+            .expect("deterministic executor fixture schedule");
+        let config = WholeStreamModelConfig {
+            qpc_frequency_hz: 1_000_000,
+            effective_min_hold_us: 17_167,
+            physical_release_gap_us: 17_167,
+            estimated_sender_setup_us: 10,
+            estimated_per_input_us: 3,
+            estimated_post_send_us: 5,
+            estimated_metadata_cost_us: 1,
+            resume_down_barrier_ticks: None,
+        };
+        let advisory =
+            analyze_dispatch_schedule_cancellable(&schedule, config, &AtomicBool::new(false))
+                .expect("production-executor offline advisory");
+
+        let mut executor = DispatchExecutor::new(
+            &schedule,
+            DurationTicks::from_raw(config.effective_min_hold_us),
+            DurationTicks::from_raw(config.physical_release_gap_us),
+            |us| Ok::<_, String>(sky_dispatch_core::time::TimelineTicks::from_raw(us)),
+        )
+        .expect("production executor for deterministic trace");
+        let mut now = QpcTicks::ZERO;
+        let epoch = QpcTicks::ZERO;
+        let mut sends = Vec::new();
+
+        for _ in 0..32 {
+            match executor
+                .evaluate_at(now, epoch)
+                .expect("fixture QPC arithmetic")
+            {
+                DispatchDecision::Finished => break,
+                DispatchDecision::Wait { deadline_qpc } => {
+                    assert!(deadline_qpc > now, "fixture wait must advance its clock");
+                    if deadline_qpc.as_u64() == 37_180 {
+                        assert_eq!(executor.chord_cursor(), 1);
+                        assert_eq!(executor.current_chord().unwrap().down_mask, 0x01);
+                    }
+                    now = deadline_qpc;
+                }
+                DispatchDecision::Send {
+                    up_mask,
+                    down_chord,
+                    timing_window,
+                } => {
+                    let down_mask = down_chord.map_or(0, |chord| chord.down_mask);
+                    let target = timing_window.authored_target_qpc.as_u64();
+                    let pre_call = now.as_u64();
+                    let event_count = u64::from(up_mask.count_ones() + down_mask.count_ones());
+                    let sender_completion = pre_call + 10 + 3 * event_count;
+                    let worker_free = sender_completion + 5;
+                    executor
+                        .on_send_completed_at(
+                            up_mask,
+                            down_mask,
+                            QpcTicks::from_raw(sender_completion),
+                        )
+                        .expect("complete deterministic sender evidence");
+                    sends.push((
+                        up_mask,
+                        down_mask,
+                        target,
+                        pre_call,
+                        sender_completion,
+                        worker_free,
+                    ));
+                    now = QpcTicks::from_raw(worker_free);
+                }
+            }
+        }
+
+        assert_eq!(executor.chord_cursor(), 3);
+        assert_eq!(executor.active_mask(), 0);
+        assert_eq!(
+            sends,
+            [
+                (0x00, 0x05, 0, 0, 16, 21),
+                (0x01, 0x00, 20_000, 20_000, 20_013, 20_018),
+                (0x04, 0x00, 36_000, 36_000, 36_013, 36_018),
+                (0x00, 0x01, 34_334, 37_180, 37_193, 37_198),
+                (0x00, 0x02, 35_000, 37_198, 37_211, 37_216),
+                (0x01, 0x00, 50_000, 54_360, 54_373, 54_378),
+                (0x02, 0x00, 65_000, 65_000, 65_013, 65_018),
+            ],
+            "A remains ahead of B; independent Up C is sent at its deadline"
+        );
+        assert_eq!(
+            advisory
+                .packets
+                .iter()
+                .map(|packet| packet.authored_target_ticks)
+                .collect::<Vec<_>>(),
+            [0, 20_000, 36_000, 34_334, 35_000, 50_000, 65_000]
+        );
+        assert_eq!(
+            advisory
+                .packets
+                .iter()
+                .map(|packet| packet.modeled_ready_ticks)
+                .collect::<Vec<_>>(),
+            [0, 20_000, 36_000, 37_180, 37_198, 54_360, 65_000]
+        );
+        assert_eq!(advisory.packets[1].h_floor_displacement_ticks, 0);
+        assert_eq!(advisory.packets[3].g_floor_displacement_ticks, 2_846);
+        assert_eq!(advisory.packets[5].h_floor_displacement_ticks, 4_360);
+
+        let a_head_g_eligible = sends[3].3;
+        let b_authored = sends[4].2;
+        let pure_down_cursor_hol = a_head_g_eligible - b_authored;
+        let a_sender_occupancy = sends[3].4 - sends[3].3;
+        let a_post_send = sends[3].5 - sends[3].4;
+        let total_sequential_delay = sends[4].3 - b_authored;
+        assert_eq!(pure_down_cursor_hol, 2_180);
+        assert_eq!(a_sender_occupancy, 13);
+        assert_eq!(a_post_send, 5);
+        assert_eq!(total_sequential_delay, 2_198);
+        assert_eq!(
+            advisory.packets[4].hol_delay_lower_bound_ticks,
+            pure_down_cursor_hol + a_sender_occupancy + a_post_send,
+            "the advisory's aggregate lower-bound row includes cursor wait and worker occupancy"
+        );
     }
 
     #[test]

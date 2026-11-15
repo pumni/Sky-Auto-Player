@@ -134,14 +134,6 @@ impl TrackedKeyState {
         self.custom_terminal_up_emitter = Some(Box::new(emitter));
     }
 
-    /// Force successful test sends to provide only completion QPC evidence.
-    /// This exercises callers that must preserve an unavailable pre-call
-    /// sample without weakening the production sender's timestamp authority.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn disable_pre_call_qpc_sample_for_test(&mut self) {
-        self.qpc_clock = None;
-    }
-
     /// Install deterministic success test emitters for both single scan code and packet paths.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_test_emitters(&mut self) {

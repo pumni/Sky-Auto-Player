@@ -20,6 +20,8 @@ fn signed_qpc_delta(value: u64, baseline: u64) -> Option<i64> {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PrecisionPacketTimingObservation {
+    pub(crate) sendinput_attempts: u8,
+    pub(crate) healthy_completion: bool,
     pub(crate) authored_target_qpc: u64,
     pub(crate) packet_not_before_qpc: u64,
     pub(crate) pre_call_qpc: Option<u64>,
@@ -240,14 +242,6 @@ pub struct WorkerMetricsLocal {
     pub core_post_send_window_sample_count: u64,
     pub observer_window_sample_count: u64,
     pub wait_window_sample_count: u64,
-    pub timeline_rebase_count: u64,
-    pub timeline_rebase_total_us: u64,
-    pub timeline_rebase_max_us: u64,
-    pub timeline_rebase_total_ticks: DurationTicks,
-    pub timeline_rebase_max_ticks: DurationTicks,
-    /// Deprecated compatibility field. Authored dispatch never rebases its
-    /// timeline, so production always leaves this at zero.
-    pub timeline_rebase_last_reason: u8,
     pub dispatch_occupancy_max_us: u64,
     pub send_down_degraded_samples: u64,
     pub send_up_degraded_samples: u64,
@@ -302,14 +296,16 @@ pub struct WorkerMetricsLocal {
 }
 
 impl WorkerMetricsLocal {
-    /// Record fixed-width evidence for one physical sender attempt. Missing or
-    /// unrepresentable intervals are left unavailable by omitting their sample
-    /// count; no timestamp is guessed or replaced with a schedule value.
-    pub(crate) fn observe_precision_packet_timing(
+    /// Record raw sender-result accounting once, then admit timing samples only
+    /// for a complete transport with valid sender QPC evidence. Missing or
+    /// unrepresentable intervals are never replaced with a schedule/clock value.
+    pub(crate) fn observe_precision_packet_result(
         &mut self,
         observation: PrecisionPacketTimingObservation,
     ) {
         let PrecisionPacketTimingObservation {
+            sendinput_attempts,
+            healthy_completion,
             authored_target_qpc,
             packet_not_before_qpc,
             pre_call_qpc,
@@ -318,16 +314,23 @@ impl WorkerMetricsLocal {
             previous_sender_completion_known,
             transport_anomaly,
         } = observation;
-        self.precision_packet_attempts = self.precision_packet_attempts.saturating_add(1);
+        let sendinput_attempts = u64::from(sendinput_attempts);
+        self.precision_packet_attempts = self
+            .precision_packet_attempts
+            .saturating_add(sendinput_attempts);
         self.pre_call_qpc_unavailable_attempts = self
             .pre_call_qpc_unavailable_attempts
-            .saturating_add(u64::from(pre_call_qpc.is_none()));
+            .saturating_add(sendinput_attempts * u64::from(pre_call_qpc.is_none()));
         self.sendinput_completion_qpc_unavailable_attempts = self
             .sendinput_completion_qpc_unavailable_attempts
-            .saturating_add(u64::from(sendinput_completion_qpc.is_none()));
+            .saturating_add(sendinput_attempts * u64::from(sendinput_completion_qpc.is_none()));
         self.transport_anomalies = self
             .transport_anomalies
             .saturating_add(u64::from(transport_anomaly));
+
+        if sendinput_attempts == 0 || !healthy_completion {
+            return;
+        }
 
         match packet_not_before_qpc.checked_sub(authored_target_qpc) {
             Some(displacement) => {
@@ -543,24 +546,6 @@ impl WorkerMetricsLocal {
         self.observer_duration_max_us = self
             .observer_duration_max_us
             .max(observer.observer_duration_max_us);
-        self.timeline_rebase_count = self
-            .timeline_rebase_count
-            .max(observer.timeline_rebase_count);
-        self.timeline_rebase_total_us = self
-            .timeline_rebase_total_us
-            .max(observer.timeline_rebase_total_us);
-        self.timeline_rebase_max_us = self
-            .timeline_rebase_max_us
-            .max(observer.timeline_rebase_max_us);
-        self.timeline_rebase_total_ticks = self
-            .timeline_rebase_total_ticks
-            .max(observer.timeline_rebase_total_ticks);
-        self.timeline_rebase_max_ticks = self
-            .timeline_rebase_max_ticks
-            .max(observer.timeline_rebase_max_ticks);
-        if observer.timeline_rebase_last_reason != 0 {
-            self.timeline_rebase_last_reason = observer.timeline_rebase_last_reason;
-        }
         self.observer_dropped_samples = self
             .observer_dropped_samples
             .saturating_add(observer.observer_dropped_samples);
@@ -660,12 +645,26 @@ pub(crate) struct SharedMetrics {
     pub(crate) publish_count: AtomicU64,
 }
 
+#[cfg(test)]
 pub(crate) fn try_publish_metrics(
-    local: &WorkerMetricsLocal,
+    local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
     force: bool,
+) -> bool {
+    try_publish_metrics_with_update(local, shared, qpc_clock, now_us, force, |_| {})
+}
+
+/// Apply dispatch-owned projection fields only when a snapshot is due and its
+/// nonblocking writer slot is available.
+pub(crate) fn try_publish_metrics_with_update(
+    local: &mut WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+    force: bool,
+    before_project: impl FnOnce(&mut WorkerMetricsLocal),
 ) -> bool {
     try_publish_metrics_from(
         local,
@@ -674,11 +673,12 @@ pub(crate) fn try_publish_metrics(
         now_us,
         force,
         SnapshotOwner::Dispatch,
+        before_project,
     )
 }
 
 pub(crate) fn try_publish_observer_metrics(
-    local: &WorkerMetricsLocal,
+    local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
@@ -691,6 +691,7 @@ pub(crate) fn try_publish_observer_metrics(
         now_us,
         force,
         SnapshotOwner::Observer,
+        |_| {},
     )
 }
 
@@ -701,12 +702,13 @@ enum SnapshotOwner {
 }
 
 fn try_publish_metrics_from(
-    local: &WorkerMetricsLocal,
+    local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
     force: bool,
     owner: SnapshotOwner,
+    before_project: impl FnOnce(&mut WorkerMetricsLocal),
 ) -> bool {
     let last_publish_us = match owner {
         SnapshotOwner::Dispatch => &shared.last_publish_us,
@@ -721,6 +723,7 @@ fn try_publish_metrics_from(
             let Some(mut slot) = shared.snapshot.dispatch.try_write() else {
                 return false;
             };
+            before_project(local);
             *slot = project_metrics_for_snapshot(local, qpc_clock);
             true
         }
@@ -728,6 +731,7 @@ fn try_publish_metrics_from(
             let Some(mut slot) = shared.snapshot.observer.try_write() else {
                 return false;
             };
+            before_project(local);
             *slot = project_metrics_for_snapshot(local, qpc_clock);
             true
         }

@@ -190,9 +190,8 @@ fn cleanup_overflow_preflights_without_mutation() {
 }
 
 #[test]
-fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
-    // Parameters from Leader L9:
-    // GameFps = 60, TimingMarginUs = 500, T = 16_667 us, H = 2*T + 500 = 33_834 us, G = 17_167 us.
+fn independent_down_dispatches_while_another_slot_waits_for_hold_floor() {
+    // At 60 FPS with a 500 us margin, T = 16_667 us, H = 2*T + 500 = 33_834 us, and G = 17_167 us.
     // Repeating cycle every 100_000 us, starting at 50_000 us:
     // Key A Down @ 50_000 us (slot 0)
     // Key A Up   @ 84_000 us (slot 0, hold = 34_000 us >= H)
@@ -201,8 +200,7 @@ fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
     //
     // A 5,000 us worker stall delays Key A Down completion to 55_000 us.
     // Key A release due is pushed to: max(84_000, 55_000 + 33_834) = 88_834 us.
-    // In Phase A (ordered pipeline), Key B Down (85_000 us) is HOL-blocked behind Key A Up until 88_834 us (lateness: 3,834 us).
-    // In Phase B (independent 15-slot executor), Key B Down is dispatched on time at 85_000 us (lateness: 0 us)!
+    // Key A's hold floor moves its Up to 88_834 us, while independent Key B remains due at 85_000 us.
     let allowed = vec![0x15, 0x16];
     let actions = vec![
         KeyActionInput {
@@ -267,7 +265,7 @@ fn leader_l9_prescribed_interleaved_hol_model_verifies_b_down_not_blocked() {
     );
 
     // 3. At 85_000 us: Key B Down is evaluated.
-    // In Phase B, slot 1 is free and Key B Down is dispatched IMMEDIATELY at 85_000 us!
+    // Slot 1 is free, so Key B Down remains eligible at 85_000 us.
     let step_b_down = exec.evaluate(TimelineTicks::from_raw(85_000));
     assert!(
         matches!(

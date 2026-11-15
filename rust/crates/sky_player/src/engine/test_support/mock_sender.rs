@@ -140,6 +140,20 @@ pub(crate) fn create_mock_backend(
                 result.timing_error = Some(QpcError::CounterUnavailable);
                 result
             }
+            Some(InjectedSendOutcome::InvalidQpcOrderAfterSend) => {
+                let mut result = mock_platform_send_result_from_started_ticks(
+                    qpc_clock,
+                    Ok(sender_started_ticks),
+                    codes.len() as u8,
+                    codes.len() as u8,
+                    0,
+                    0,
+                );
+                result.completed_ticks = Some(QpcTicks::from_raw(
+                    sender_started_ticks.as_u64().saturating_sub(1),
+                ));
+                result
+            }
         }
     });
     if let Some(counter) = script.full_instrument_release_calls.clone() {
@@ -283,6 +297,27 @@ fn physical_packet_outcome(
                     started_ticks: Some(started_ticks),
                     completed_ticks: None,
                     timing_error: Some(QpcError::CounterUnavailable),
+                },
+            };
+        }
+        Some(InjectedSendOutcome::InvalidQpcOrderAfterSend) => {
+            return SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: requested,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started_ticks),
+                    completed_ticks: Some(QpcTicks::from_raw(
+                        started_ticks.as_u64().saturating_sub(1),
+                    )),
+                    timing_error: None,
                 },
             };
         }

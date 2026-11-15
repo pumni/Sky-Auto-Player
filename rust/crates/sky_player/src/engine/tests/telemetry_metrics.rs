@@ -774,14 +774,14 @@ fn cpu_metrics_sampling_is_due_only_at_the_interval_boundary() {
 #[test]
 fn healthy_metric_publication_is_throttled_but_force_is_immediate() {
     let shared = SharedMetrics::default();
-    let local = WorkerMetricsLocal::default();
+    let mut local = WorkerMetricsLocal::default();
     let qpc_clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
-    try_publish_metrics(&local, &shared, qpc_clock, 0, false);
-    try_publish_metrics(&local, &shared, qpc_clock, 49_999, false);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 0, false);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 49_999, false);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 0);
-    try_publish_metrics(&local, &shared, qpc_clock, 50_000, false);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 50_000, false);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 1);
-    try_publish_metrics(&local, &shared, qpc_clock, 50_001, true);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 50_001, true);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 2);
 }
 
@@ -1028,25 +1028,6 @@ fn input_path_health_uses_full_window_and_recovers_without_latching() {
 }
 
 #[test]
-fn spin_threshold_rises_immediately_and_decays_with_hysteresis() {
-    assert_eq!(adjust_spin_threshold(700, 1_000), 1_000);
-    assert_eq!(adjust_spin_threshold(1_000, 700), 950);
-    assert_eq!(adjust_spin_threshold(1_000, 100), 950);
-}
-
-#[test]
-fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
-    let stats = WakeErrorStats {
-        p50_us: 300,
-        p95_us: 1_500,
-        p99_us: 1_500,
-        max_us: 1_500,
-        robust_us: 300,
-    };
-    assert_eq!(derive_spin_threshold_us(stats.robust_us, 700), 700);
-}
-
-#[test]
 fn only_live_dispatch_executor_sources_remain() {
     let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine");
     for legacy in [
@@ -1190,6 +1171,11 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
 
     let snapshot = session.snapshot();
     assert_eq!(snapshot.status, "error", "zero progress must be terminal");
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 1);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.transport_anomalies, 1);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
     assert!(
         snapshot
             .terminal_error
@@ -1206,6 +1192,98 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
             .iter()
             .any(|record| { record["event_index"] == 2 && record["runtime_outcome"] == "sent" })
     );
+}
+
+#[test]
+fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::qpc_failure_after_send();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    ))
+    .expect("test session admission");
+
+    session.arm(0).expect("worker arm");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "error");
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(snapshot.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 1);
+    assert_eq!(snapshot.sendinput_envelope_samples, 0);
+    assert_eq!(snapshot.authored_lateness_samples, 0);
+    assert_eq!(snapshot.residual_lateness_samples, 0);
+    assert_eq!(snapshot.hol_delay_lower_bound_samples, 0);
+    assert_eq!(snapshot.unattributed_lateness_samples, 0);
+    assert_eq!(snapshot.physical_floor_displacement_samples, 0);
+    assert_eq!(snapshot.transport_anomalies, 1);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
+    assert!(
+        snapshot
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("ClockFailureAfterSend"))
+    );
+    assert_eq!(
+        send_calls.load(Ordering::SeqCst),
+        2,
+        "one musical packet and one terminal cleanup Up were sent"
+    );
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+}
+
+#[test]
+fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::invalid_qpc_order_after_send();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    ))
+    .expect("test session admission");
+
+    session.arm(0).expect("worker arm");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "error");
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(snapshot.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(snapshot.transport_anomalies, 1);
+    assert_eq!(snapshot.authored_lateness_samples, 0);
+    assert_eq!(snapshot.residual_lateness_samples, 0);
+    assert_eq!(snapshot.hol_delay_lower_bound_samples, 0);
+    assert_eq!(snapshot.unattributed_lateness_samples, 0);
+    assert_eq!(snapshot.physical_floor_displacement_samples, 0);
+    assert_eq!(snapshot.sendinput_envelope_samples, 0);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
+    assert!(
+        snapshot
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("invalid QPC ordering"))
+    );
+    assert_eq!(send_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
 }
 
 #[test]
@@ -1246,13 +1324,16 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid disjoint mixed schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
     let mut options = test_session_options(
         schedule,
         1,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
-            fault_script: FaultInjectionScript::none(),
+            fault_script,
         },
     );
     // This test asserts mixed-packet telemetry cardinality, not the production
@@ -1271,6 +1352,9 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
         "terminal error: {:?}",
         snapshot.terminal_error
     );
+    assert_eq!(snapshot.precision_packet_attempts, 3);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 3);
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))

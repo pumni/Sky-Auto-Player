@@ -19,30 +19,6 @@ use super::TrackedKeyState;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
 
-#[cfg(any(test, feature = "test-support"))]
-pub(super) fn clock_failure_before_send_outcome(
-    packet: PhysicalPacket,
-    error: crate::clock::QpcError,
-) -> SendTransactionOutcome {
-    SendTransactionOutcome {
-        status: SendTransactionStatus::ClockFailureBeforeSend,
-        evidence: SendEvidence {
-            requested_mask: packet.up_mask | packet.down_mask,
-            confirmed_mask: 0,
-            skipped_mask: 0,
-            first_inserted: 0,
-            attempts: 0,
-            zero_progress_retries: 0,
-            retry_reason: PacketRetryReason::None,
-            first_win32_error: None,
-            last_win32_error: None,
-            started_ticks: None,
-            completed_ticks: None,
-            timing_error: Some(error),
-        },
-    }
-}
-
 fn packet_outcome_proves_zero_transport(
     packet: PhysicalPacket,
     outcome: SendTransactionOutcome,
@@ -114,37 +90,17 @@ impl TrackedKeyState {
         let packet = prepared.packet();
         #[cfg(any(test, feature = "test-support"))]
         if let Some(emitter) = self.custom_packet_emitter.as_ref() {
-            let started_ticks = if let Some(clock) = self.qpc_clock {
-                match clock.now() {
-                    Ok(ticks) => Some(ticks),
-                    Err(error) => {
-                        self.timing_error = Some(error);
-                        return self.apply_packet_outcome(
-                            packet,
-                            clock_failure_before_send_outcome(packet, error),
-                        );
-                    }
-                }
-            } else {
-                None
-            };
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
             let previous_in_flight_mask = self.in_flight_mask;
             self.in_flight_mask |= packet.up_mask | packet.down_mask;
-            let mut outcome = emitter(packet);
+            // A custom sender is a test-support boundary replacement. Its
+            // timestamps are injected evidence and must pass through unchanged
+            // so missing or contradictory QPC values remain observable.
+            let outcome = emitter(packet);
+            self.timing_error = outcome.evidence.timing_error;
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
-            if let Some(started_ticks) = started_ticks {
-                outcome.evidence.started_ticks = Some(started_ticks);
-                if outcome
-                    .evidence
-                    .completed_ticks
-                    .is_some_and(|completed| completed < started_ticks)
-                {
-                    outcome.evidence.completed_ticks = Some(started_ticks);
-                }
-            }
             #[cfg(any(test, feature = "test-support"))]
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
             let outcome =
@@ -767,12 +723,23 @@ impl TrackedKeyState {
             SendTransactionStatus::ClockFailureBeforeSend
             | SendTransactionStatus::ClockFailureAfterSend => {
                 self.timing_error = outcome.evidence.timing_error;
-                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend)
-                    && !packet_outcome_proves_zero_transport(packet, outcome)
-                {
-                    let uncertain_mask = packet.up_mask | packet.down_mask;
-                    self.active_mask &= !uncertain_mask;
-                    self.possibly_active_mask |= uncertain_mask;
+                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend) {
+                    if outcome.evidence.attempts != 0 && outcome.evidence.first_inserted == 0 {
+                        self.sendinput_zero_progress_failures =
+                            self.sendinput_zero_progress_failures.saturating_add(1);
+                    } else if outcome.evidence.attempts != 0
+                        && u16::from(outcome.evidence.first_inserted)
+                            < u16::from(packet.event_count())
+                    {
+                        self.sendinput_partial_events =
+                            self.sendinput_partial_events.saturating_add(1);
+                        self.chord_split_events = self.chord_split_events.saturating_add(1);
+                    }
+                    if !packet_outcome_proves_zero_transport(packet, outcome) {
+                        let uncertain_mask = packet.up_mask | packet.down_mask;
+                        self.active_mask &= !uncertain_mask;
+                        self.possibly_active_mask |= uncertain_mask;
+                    }
                 }
                 self.chords_rejected = self.chords_rejected.saturating_add(1);
                 self.authored_keys_rejected = self

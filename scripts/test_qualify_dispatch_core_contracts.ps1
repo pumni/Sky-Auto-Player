@@ -12,7 +12,7 @@ if ($parseErrors.Count -ne 0) {
     throw ('qualify_dispatch_core.ps1 parser errors: ' + (($parseErrors | ForEach-Object Message) -join '; '))
 }
 
-foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1')) {
+foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1')) {
     $path = Join-Path $PSScriptRoot $scriptName
     $scriptTokens = $null
     $scriptErrors = $null
@@ -102,6 +102,12 @@ $sinkIdentityFunctionAst = $caseRunnerAst.Find({
 }, $true)
 if ($null -eq $sinkIdentityFunctionAst) { throw 'missing case-runner contract function: Assert-SinkIdentity' }
 Invoke-Expression $sinkIdentityFunctionAst.Extent.Text
+$m3SessionFunctionAst = $caseRunnerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-DispatchCleanupM3SessionIdentity'
+}, $true)
+if ($null -eq $m3SessionFunctionAst) { throw 'missing case-runner contract function: Assert-DispatchCleanupM3SessionIdentity' }
+Invoke-Expression $m3SessionFunctionAst.Extent.Text
 $runId = 'observer-contract-run'
 $observerMode = 'SchedulerQueuedV3Compat3'
 $observerVersion = 'scheduler-receiveonly-queue-v3-compat3'
@@ -423,13 +429,14 @@ try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -Expe
 if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
-if ($frameBuilderSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)" -or
-    $acceptanceSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)") {
+$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3'\)"
+if ($frameBuilderSource -notmatch $m3ProfileSet -or
+    $acceptanceSource -notmatch $m3ProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
 }
 $qualifierSource = Get-Content -LiteralPath $runnerPath -Raw
-if ($qualifierSource -notmatch "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot'\)") {
-    throw 'FrameSnapshot profile is missing from qualification runner'
+if ($qualifierSource -notmatch $m3ProfileSet) {
+    throw 'FrameSnapshot or DispatchCleanupM3 profile is missing from qualification runner'
 }
 Assert-QualificationTimingMargin -RequestedStage Canary -Profile FrameSnapshot -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
 Assert-QualificationTimingMargin -RequestedStage Smoke -Profile FrameSnapshot -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
@@ -442,9 +449,220 @@ if (-not $wrongFrameMarginRejected) { throw 'FrameSnapshot Compare accepted a no
 $wrongFrameCanaryRejected = $false
 try { Assert-QualificationTimingMargin -RequestedStage Canary -Profile FrameSnapshot -MarginUs 0 -PairCount 1 -SampleDurationSeconds 0 } catch { $wrongFrameCanaryRejected = $true }
 if (-not $wrongFrameCanaryRejected) { throw 'FrameSnapshot safety canary accepted a non-safety margin' }
+Assert-QualificationTimingMargin -RequestedStage Canary -Profile DispatchCleanupM3 -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Smoke -Profile DispatchCleanupM3 -MarginUs 500 -PairCount 1 -SampleDurationSeconds 0 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Compare -Profile DispatchCleanupM3 -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+Assert-QualificationTimingMargin -RequestedStage Final -Profile DispatchCleanupM3 -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+$wrongM3PerformanceMarginRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Compare -Profile DispatchCleanupM3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 } catch { $wrongM3PerformanceMarginRejected = $true }
+if (-not $wrongM3PerformanceMarginRejected) { throw 'DispatchCleanupM3 Compare accepted a nonzero performance margin' }
+$wrongM3SafetyMarginRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Canary -Profile DispatchCleanupM3 -MarginUs 0 -PairCount 1 -SampleDurationSeconds 0 } catch { $wrongM3SafetyMarginRejected = $true }
+if (-not $wrongM3SafetyMarginRejected) { throw 'DispatchCleanupM3 Canary accepted a non-safety margin' }
 if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Final'\)" -or
-    -not $qualifierSource.Contains("if (`$Stage -eq 'Canary' -and `$QualificationProfile -ne 'FrameSnapshot')")) {
-    throw 'FrameSnapshot canary stage is missing its opt-in stage and profile boundary'
+    -not $qualifierSource.Contains("if (`$Stage -eq 'Canary' -and `$QualificationProfile -notin @('FrameSnapshot', 'DispatchCleanupM3'))")) {
+    throw 'FrameSnapshot or DispatchCleanupM3 canary stage is missing its profile boundary'
+}
+
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
+    throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
+}
+$manifestImportPattern = 'Import-Module (Join-Path $PSScriptRoot ''dispatch_harness_manifest.psm1'') -Force'
+$profileImportPattern = 'Import-Module (Join-Path $PSScriptRoot ''dispatch_qualification_profiles.psm1'') -Force'
+foreach ($scriptPath in @(
+        (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'),
+        (Join-Path $PSScriptRoot 'qualify_dispatch_core.ps1'),
+        (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1')
+    )) {
+    $manifestImportLine = (Select-String -LiteralPath $scriptPath -SimpleMatch -Pattern $manifestImportPattern | Select-Object -First 1).LineNumber
+    $profileImportLine = (Select-String -LiteralPath $scriptPath -SimpleMatch -Pattern $profileImportPattern | Select-Object -First 1).LineNumber
+    if (-not $manifestImportLine -or -not $profileImportLine -or $profileImportLine -le $manifestImportLine) {
+        throw ('DispatchCleanupM3 caller imports its public profile helper before initializing the manifest module: ' + $scriptPath)
+    }
+}
+$m3Profile = Get-DispatchCleanupM3Profile
+$m3RunnerGit = Get-DispatchM3GitCheckoutIdentity $repositoryRoot
+$m3RemoteRows = @(& git -C $repositoryRoot ls-remote origin ('refs/heads/' + $m3Profile.CandidateLineageBranch))
+if ($LASTEXITCODE -ne 0 -or $m3RemoteRows.Count -ne 1) { throw 'could not resolve the current M3 runner branch tip for identity contracts' }
+$m3LineageTip = ([string]$m3RemoteRows[0] -split '\s+')[0]
+& git -C $repositoryRoot merge-base --is-ancestor $m3Profile.CandidateRevision $m3LineageTip
+if ($LASTEXITCODE -ne 0) { throw 'accepted M2 candidate is not an ancestor of the observed runner branch tip' }
+$m3RunnerCheckout = [pscustomobject]@{
+    root = $repositoryRoot; top_level = $m3RunnerGit.checkout.top_level; git_dir = $m3RunnerGit.checkout.git_dir
+    git_common_dir = $m3RunnerGit.checkout.git_common_dir; revision = $m3RunnerGit.revision
+    tree = $m3RunnerGit.tree; branch = $m3RunnerGit.branch; clean = $true
+}
+$m3RunnerIdentityFixture = [pscustomobject]@{
+    root = $repositoryRoot; revision = $m3RunnerGit.revision; tree = $m3RunnerGit.tree; branch = $m3RunnerGit.branch
+    clean = $true; candidate_lineage_branch = $m3Profile.CandidateLineageBranch
+    candidate_lineage_tip_revision = $m3LineageTip; candidate_lineage_verified = $true; checkout = $m3RunnerCheckout
+}
+$m3ContractRoot = Join-Path $env:TEMP ('dispatch-cleanup-m3-contract-' + [guid]::NewGuid().ToString('N'))
+$m3CandidateSourceRoot = Join-Path $m3ContractRoot 'candidate-worktree'
+$m3BaselineSourceRoot = Join-Path $m3ContractRoot 'baseline-worktree'
+$m3OutputRoot = Join-Path $m3ContractRoot 'candidate-output'
+$m3RunnerPaths = @($m3Profile.RunnerProvenancePaths)
+$m3RunnerScriptProvenance = @(
+    foreach ($relativePath in $m3RunnerPaths) {
+        $actualPath = Join-Path $repositoryRoot ($relativePath.Replace('/', '\'))
+        [pscustomobject]@{
+            source_path = $relativePath
+            evidence_path = 'runner-provenance/' + $relativePath.Replace('/', '\')
+            sha256 = (Get-FileHash -LiteralPath $actualPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
+)
+$m3CandidateSourceCheckout = [pscustomobject]@{
+    root = $m3CandidateSourceRoot; top_level = $m3CandidateSourceRoot
+    git_dir = (Join-Path $m3ContractRoot 'git-worktrees\candidate'); git_common_dir = $m3RunnerGit.checkout.git_common_dir
+    revision = $m3Profile.CandidateRevision; tree = $m3Profile.CandidateTree; branch = ''; clean = $true
+}
+$validM3Candidate = [pscustomobject]@{
+    schema_version = 1; qualification_profile = $m3Profile.Name; workload_version = $m3Profile.WorkloadVersion
+    source_role = 'Candidate'; source_revision = $m3Profile.CandidateRevision; source_tree_sha = $m3Profile.CandidateTree
+    source_branch = ''; source_tree_clean = $true; clean_build = $true
+    base_source_revision = $m3Profile.BaselineRevision; base_source_tree_sha = $m3Profile.BaselineTree
+    baseline_source_revision = $m3Profile.BaselineRevision; baseline_source_tree_sha = $m3Profile.BaselineTree
+    candidate_source_revision = $m3Profile.CandidateRevision; candidate_source_tree_sha = $m3Profile.CandidateTree
+    source_root = $m3CandidateSourceRoot; source_checkout_identity = $m3CandidateSourceCheckout
+    cargo_profile = 'dist'; cargo_features = @('real-input-acceptance'); qpc_read_counting = $false
+    observer_mode = 'qualification-on'; receiveonly_observer_mode = $m3Profile.ObserverMode
+    receiveonly_observer_version = $m3Profile.ObserverVersion
+    receiveonly_observer_schema_version = 3; receiveonly_observer_event_schema_version = 3
+    guard_mode = 'frozen'; performance_timing_margin_us = 0; safety_timing_margin_us = 500
+    target = $m3Profile.Target; target_identity = $m3Profile.Target
+    rustc_version = "rustc 1.99.1 (contract)`nrelease: 1.99.1`nhost: x86_64-pc-windows-msvc"
+    cargo_version = 'cargo 1.99.1 (contract)'; cargo_clean_exit_code = 0; cargo_build_exit_code = 0
+    binary_name = 'rt-native-acceptance.exe'; binary_sha256 = ('c' * 64)
+    builder_script_sha256 = [string](@($m3RunnerScriptProvenance | Where-Object source_path -eq 'scripts/build_dispatch_core_harness.ps1')[0].sha256)
+    runner_source_revision = $m3RunnerGit.revision; runner_source_tree_sha = $m3RunnerGit.tree
+    runner_source_branch = $m3RunnerGit.branch; runner_source_root = $repositoryRoot; runner_source_clean = $true
+    runner_source_checkout_identity = $m3RunnerCheckout
+    candidate_lineage_branch = $m3Profile.CandidateLineageBranch
+    candidate_lineage_tip_revision = $m3LineageTip; candidate_lineage_verified = $true
+    runner_script_provenance = $m3RunnerScriptProvenance
+    output_root = $m3OutputRoot; cargo_target_dir = (Join-Path $m3OutputRoot 'cargo-target')
+}
+Assert-DispatchCleanupM3ManifestIdentity -Manifest $validM3Candidate -ExpectedRole Candidate -RepositoryRoot $repositoryRoot | Out-Null
+$crlfM3Candidate = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$crlfM3Candidate.rustc_version = $crlfM3Candidate.rustc_version.Replace("`n", "`r`n")
+Assert-DispatchCleanupM3ManifestIdentity -Manifest $crlfM3Candidate -ExpectedRole Candidate -RepositoryRoot $repositoryRoot | Out-Null
+Assert-DispatchCleanupM3RunnerProvenance -Manifest $validM3Candidate -RunnerIdentity $m3RunnerIdentityFixture -RunnerRoot $repositoryRoot | Out-Null
+$validM3Baseline = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$validM3Baseline.source_role = 'Baseline'
+$validM3Baseline.source_revision = $m3Profile.BaselineRevision
+$validM3Baseline.source_tree_sha = $m3Profile.BaselineTree
+$validM3Baseline.source_root = $m3BaselineSourceRoot
+$validM3Baseline.source_checkout_identity.root = $m3BaselineSourceRoot
+$validM3Baseline.source_checkout_identity.top_level = $m3BaselineSourceRoot
+$validM3Baseline.source_checkout_identity.git_dir = Join-Path $m3ContractRoot 'git-worktrees\baseline'
+$validM3Baseline.source_checkout_identity.revision = $m3Profile.BaselineRevision
+$validM3Baseline.source_checkout_identity.tree = $m3Profile.BaselineTree
+Assert-DispatchCleanupM3ManifestIdentity -Manifest $validM3Baseline -ExpectedRole Baseline -RepositoryRoot $repositoryRoot | Out-Null
+
+$m3InvalidCases = @(
+    @{ name = 'candidate SHA'; mutate = { param($m) $m.source_revision = ('0' * 40) } },
+    @{ name = 'candidate tree'; mutate = { param($m) $m.source_tree_sha = ('0' * 40) } },
+    @{ name = 'runner HEAD substituted for accepted M2 candidate'; mutate = { param($m) $m.source_revision = $m.runner_source_revision; $m.source_tree_sha = $m.runner_source_tree_sha } },
+    @{ name = 'unverified candidate lineage'; mutate = { param($m) $m.candidate_lineage_verified = $false } },
+    @{ name = 'wrong lineage branch'; mutate = { param($m) $m.candidate_lineage_branch = 'refactor/frame-snapshot-dispatch' } },
+    @{ name = 'wrong lineage tip'; mutate = { param($m) $m.candidate_lineage_tip_revision = ('0' * 40) } },
+    @{ name = 'dirty source'; mutate = { param($m) $m.source_tree_clean = $false; $m.source_checkout_identity.clean = $false } },
+    @{ name = 'wrong role'; mutate = { param($m) $m.source_role = 'Baseline' } },
+    @{ name = 'role swap'; expected_role = 'Baseline'; mutate = { param($m) } },
+    @{ name = 'wrong profile'; mutate = { param($m) $m.qualification_profile = 'FrameSnapshot' } },
+    @{ name = 'wrong workload version'; mutate = { param($m) $m.workload_version = 'frame-snapshot-v1' } },
+    @{ name = 'wrong Rust target'; mutate = { param($m) $m.target = 'x86_64-unknown-linux-gnu' } },
+    @{ name = 'wrong target identity'; mutate = { param($m) $m.target_identity = 'x86_64-unknown-linux-gnu' } },
+    @{ name = 'wrong build profile'; mutate = { param($m) $m.cargo_profile = 'release' } },
+    @{ name = 'wrong feature'; mutate = { param($m) $m.cargo_features = @('real-input-acceptance', 'qpc-read-counting') } },
+    @{ name = 'wrong Rust version'; mutate = { param($m) $m.rustc_version = $m.rustc_version.Replace('release: 1.99.1', 'release: 1.99.0') } },
+    @{ name = 'wrong Cargo version'; mutate = { param($m) $m.cargo_version = 'cargo 1.98.0' } },
+    @{ name = 'wrong observer mode'; mutate = { param($m) $m.receiveonly_observer_mode = 'SchedulerQueuedV2' } },
+    @{ name = 'wrong observer version'; mutate = { param($m) $m.receiveonly_observer_version = 'scheduler-receiveonly-queue-v2' } },
+    @{ name = 'wrong observer schema'; mutate = { param($m) $m.receiveonly_observer_schema_version = 2 } },
+    @{ name = 'wrong observer event schema'; mutate = { param($m) $m.receiveonly_observer_event_schema_version = 4 } },
+    @{ name = 'wrong performance margin'; mutate = { param($m) $m.performance_timing_margin_us = 500 } },
+    @{ name = 'wrong safety margin'; mutate = { param($m) $m.safety_timing_margin_us = 0 } },
+    @{ name = 'wrong runner identity'; mutate = { param($m) $m.runner_source_tree_sha = ('0' * 40) } },
+    @{ name = 'evidence root inside repository'; mutate = { param($m) $m.output_root = Join-Path $repositoryRoot '.benchmarks\m3-contract' } }
+)
+$m3NegativeContractCount = 0
+foreach ($case in $m3InvalidCases) {
+    $invalidM3 = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    & $case.mutate $invalidM3
+    $expectedRole = if ($case.expected_role) { $case.expected_role } else { 'Candidate' }
+    $rejected = $false
+    try { Assert-DispatchCleanupM3ManifestIdentity -Manifest $invalidM3 -ExpectedRole $expectedRole -RepositoryRoot $repositoryRoot | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw ('DispatchCleanupM3 accepted invalid ' + $case.name) }
+    $m3NegativeContractCount++
+}
+Assert-DispatchCleanupM3SessionIdentity -Scenario 'canonical-max-chord' -Workload 'canonical-max-chord' -TimingMarginUs 0 -GameFps 60 -SampleSeconds 15 | Out-Null
+Assert-DispatchCleanupM3SessionIdentity -Scenario 'canonical-max-chord' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 | Out-Null
+Assert-DispatchCleanupM3SessionIdentity -Scenario 'canonical-single' -Workload 'canonical-single' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 | Out-Null
+Assert-DispatchCleanupM3SessionIdentity -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -TimingMarginUs 0 -GameFps 60 -SampleSeconds 0 | Out-Null
+Assert-DispatchCleanupM3SessionIdentity -Scenario 'timing-margin-sweep' -Workload 'boundary-120fps-margin-500' -TimingMarginUs 500 -GameFps 120 -SampleSeconds 0 | Out-Null
+$m3BadSessionCases = @(
+    @{ name = 'performance margin'; scenario = 'canonical-max-chord'; workload = 'canonical-max-chord'; margin = 500; fps = 60; sample = 15 },
+    @{ name = 'safety margin'; scenario = 'canonical-single'; workload = 'canonical-single'; margin = 0; fps = 60; sample = 0 },
+    @{ name = 'performance FPS'; scenario = 'dense-alternating'; workload = 'dense-alternating'; margin = 0; fps = 120; sample = 15 },
+    @{ name = 'safety timed sample'; scenario = 'focus-loss'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 15 },
+    @{ name = 'workload scenario mismatch'; scenario = 'dense-alternating'; workload = 'mixed-up-down'; margin = 0; fps = 60; sample = 15 },
+    @{ name = 'wrong boundary margin'; scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; margin = 500; fps = 60; sample = 0 },
+    @{ name = 'unsupported workload'; scenario = 'hol-interleaved'; workload = 'unqualified'; margin = 500; fps = 60; sample = 0 }
+)
+foreach ($case in $m3BadSessionCases) {
+    $rejected = $false
+    try { Assert-DispatchCleanupM3SessionIdentity -Scenario $case.scenario -Workload $case.workload -TimingMarginUs $case.margin -GameFps $case.fps -SampleSeconds $case.sample | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw ('DispatchCleanupM3 accepted invalid session ' + $case.name) }
+    $m3NegativeContractCount++
+}
+$wrongM3BaselineSha = $validM3Baseline | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$wrongM3BaselineSha.source_revision = ('0' * 40)
+$rejectedWrongM3BaselineSha = $false
+try { Assert-DispatchCleanupM3ManifestIdentity -Manifest $wrongM3BaselineSha -ExpectedRole Baseline -RepositoryRoot $repositoryRoot | Out-Null } catch { $rejectedWrongM3BaselineSha = $true }
+if (-not $rejectedWrongM3BaselineSha) { throw 'DispatchCleanupM3 accepted a wrong baseline SHA' }
+$m3NegativeContractCount++
+$wrongM3BaselineTree = $validM3Baseline | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$wrongM3BaselineTree.source_tree_sha = ('0' * 40)
+$rejectedWrongM3BaselineTree = $false
+try { Assert-DispatchCleanupM3ManifestIdentity -Manifest $wrongM3BaselineTree -ExpectedRole Baseline -RepositoryRoot $repositoryRoot | Out-Null } catch { $rejectedWrongM3BaselineTree = $true }
+if (-not $rejectedWrongM3BaselineTree) { throw 'DispatchCleanupM3 accepted a wrong baseline tree' }
+$m3NegativeContractCount++
+$dirtyM3Baseline = $validM3Baseline | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$dirtyM3Baseline.source_tree_clean = $false
+$dirtyM3Baseline.source_checkout_identity.clean = $false
+$dirtyM3BaselineRejected = $false
+try { Assert-DispatchCleanupM3ManifestIdentity -Manifest $dirtyM3Baseline -ExpectedRole Baseline -RepositoryRoot $repositoryRoot | Out-Null } catch { $dirtyM3BaselineRejected = $true }
+if (-not $dirtyM3BaselineRejected) { throw 'DispatchCleanupM3 accepted a dirty baseline checkout' }
+$m3NegativeContractCount++
+$wrongM3RunnerIdentity = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$wrongM3RunnerIdentity.runner_source_revision = ('d' * 40)
+$wrongM3RunnerIdentity.runner_source_checkout_identity.revision = ('d' * 40)
+$wrongM3RunnerIdentity.candidate_lineage_tip_revision = ('d' * 40)
+$wrongM3RunnerRejected = $false
+try { Assert-DispatchCleanupM3RunnerProvenance -Manifest $wrongM3RunnerIdentity -RunnerIdentity $m3RunnerIdentityFixture -RunnerRoot $repositoryRoot | Out-Null } catch { $wrongM3RunnerRejected = $true }
+if (-not $wrongM3RunnerRejected) { throw 'DispatchCleanupM3 accepted a manifest tied to another runner commit' }
+$m3NegativeContractCount++
+$wrongM3RunnerScriptHash = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$wrongM3RunnerScriptHash.runner_script_provenance[0].sha256 = ('0' * 64)
+$wrongM3RunnerScriptRejected = $false
+try { Assert-DispatchCleanupM3RunnerProvenance -Manifest $wrongM3RunnerScriptHash -RunnerIdentity $m3RunnerIdentityFixture -RunnerRoot $repositoryRoot | Out-Null } catch { $wrongM3RunnerScriptRejected = $true }
+if (-not $wrongM3RunnerScriptRejected) { throw 'DispatchCleanupM3 accepted a tampered runner script hash' }
+$m3NegativeContractCount++
+$m3BaselineRejectedByOldProfile = $false
+try { Assert-FrameSnapshotManifestIdentity -Manifest $validM3Baseline -ExpectedRole Baseline } catch { $m3BaselineRejectedByOldProfile = $true }
+if (-not $m3BaselineRejectedByOldProfile) { throw 'old FrameSnapshot validator accepted the M3 baseline identity' }
+$m3NegativeContractCount++
+$m3CandidateRejectedByOldProfile = $false
+try { Assert-FrameSnapshotManifestIdentity -Manifest $validM3Candidate -ExpectedRole Candidate } catch { $m3CandidateRejectedByOldProfile = $true }
+if (-not $m3CandidateRejectedByOldProfile) { throw 'old FrameSnapshot validator accepted the M3 candidate identity' }
+$m3NegativeContractCount++
+if ((Get-QualificationReportRowLabel -Profile DispatchCleanupM3 -Role candidate -Manifest $validM3Candidate) -ne 'DispatchCleanupM3-Candidate' -or
+    (Get-QualificationReportRowLabel -Profile DispatchCleanupM3 -Role control -Manifest $validM3Baseline) -ne 'DispatchCleanupM3-Baseline') {
+    throw 'DispatchCleanupM3 report projection confused candidate and baseline roles'
 }
 
 $integrityRoot = Join-Path $env:TEMP ('dispatch-manifest-integrity-' + [guid]::NewGuid().ToString('N'))
@@ -480,6 +698,96 @@ try {
     if (-not $integrityRejected) { throw 'immutable harness manifest integrity accepted a changed binary' }
 } finally {
     Remove-Item -LiteralPath $integrityRoot -Recurse -Force
+}
+
+$m3IntegrityRoot = Join-Path $env:TEMP ('dispatch-cleanup-m3-manifest-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $m3IntegrityRoot | Out-Null
+try {
+    $m3IntegrityBinary = Join-Path $m3IntegrityRoot 'rt-native-acceptance.exe'
+    $m3IntegrityManifestPath = Join-Path $m3IntegrityRoot 'manifest.json'
+    [System.IO.File]::WriteAllBytes($m3IntegrityBinary, [byte[]](1, 2, 3, 4))
+    $m3IntegrityManifest = $validM3Candidate | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $m3IntegrityManifest.output_root = $m3IntegrityRoot
+    $m3IntegrityManifest.cargo_target_dir = Join-Path $m3IntegrityRoot 'cargo-target'
+    $m3IntegrityManifest | Add-Member -NotePropertyName binary_path -NotePropertyValue $m3IntegrityBinary -Force
+    $m3IntegrityManifest.binary_sha256 = (Get-FileHash -LiteralPath $m3IntegrityBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    $m3IntegrityManifest | Add-Member -NotePropertyName builder_script_sha256 -NotePropertyValue ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()) -Force
+    $m3IntegrityManifest | Add-Member -NotePropertyName manifest_path -NotePropertyValue $m3IntegrityManifestPath -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Destination (Join-Path $m3IntegrityRoot 'build_dispatch_core_harness.ps1')
+    [System.IO.File]::WriteAllText((Join-Path $m3IntegrityRoot 'build.log'), 'm3 build fixture')
+    [System.IO.File]::WriteAllText((Join-Path $m3IntegrityRoot 'clean.log'), 'm3 clean fixture')
+    foreach ($entry in $m3IntegrityManifest.runner_script_provenance) {
+        $sourceFile = Join-Path $repositoryRoot ($entry.source_path.Replace('/', '\'))
+        $copyPath = Join-Path $m3IntegrityRoot ($entry.evidence_path.Replace('/', '\'))
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $copyPath) | Out-Null
+        Copy-Item -LiteralPath $sourceFile -Destination $copyPath
+    }
+    $m3IntegrityManifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $m3IntegrityManifestPath -Encoding UTF8
+    $m3ChecksumLines = [System.Collections.Generic.List[string]]::new()
+    $m3ChecksumLines.Add(((Get-FileHash -LiteralPath $m3IntegrityManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() + '  manifest.json'))
+    $m3ChecksumLines.Add(($m3IntegrityManifest.binary_sha256 + '  rt-native-acceptance.exe'))
+    $m3ChecksumLines.Add(($m3IntegrityManifest.builder_script_sha256 + '  build_dispatch_core_harness.ps1'))
+    $m3ChecksumLines.Add(((Get-FileHash -LiteralPath (Join-Path $m3IntegrityRoot 'build.log') -Algorithm SHA256).Hash.ToLowerInvariant() + '  build.log'))
+    $m3ChecksumLines.Add(((Get-FileHash -LiteralPath (Join-Path $m3IntegrityRoot 'clean.log') -Algorithm SHA256).Hash.ToLowerInvariant() + '  clean.log'))
+    foreach ($entry in $m3IntegrityManifest.runner_script_provenance) {
+        $copyPath = Join-Path $m3IntegrityRoot ($entry.evidence_path.Replace('/', '\'))
+        $m3ChecksumLines.Add(([string]$entry.sha256 + '  ' + [string]$entry.evidence_path.Replace('\', '/')))
+    }
+    $m3ChecksumPath = Join-Path $m3IntegrityRoot 'SHA256SUMS.txt'
+    Set-Content -LiteralPath $m3ChecksumPath -Value $m3ChecksumLines.ToArray() -Encoding UTF8
+    Assert-ImmutableHarnessManifestIntegrity -Manifest $m3IntegrityManifest -ManifestPath $m3IntegrityManifestPath | Out-Null
+
+    $originalBinaryHash = $m3IntegrityManifest.binary_sha256
+    $m3IntegrityManifest.binary_sha256 = ('d' * 64)
+    $m3BinaryHashTamperRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $m3IntegrityManifest -ManifestPath $m3IntegrityManifestPath | Out-Null } catch { $m3BinaryHashTamperRejected = $true }
+    if (-not $m3BinaryHashTamperRejected) { throw 'DispatchCleanupM3 immutable manifest integrity accepted a tampered binary hash' }
+    $m3NegativeContractCount++
+    $m3IntegrityManifest.binary_sha256 = $originalBinaryHash
+
+    $originalBinary = [System.IO.File]::ReadAllBytes($m3IntegrityBinary)
+    [System.IO.File]::WriteAllBytes($m3IntegrityBinary, [byte[]](4, 3, 2, 1))
+    $m3BinaryTamperRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $m3IntegrityManifest -ManifestPath $m3IntegrityManifestPath | Out-Null } catch { $m3BinaryTamperRejected = $true }
+    if (-not $m3BinaryTamperRejected) { throw 'DispatchCleanupM3 immutable manifest integrity accepted a tampered binary' }
+    $m3NegativeContractCount++
+    [System.IO.File]::WriteAllBytes($m3IntegrityBinary, $originalBinary)
+
+    $originalManifestBytes = [System.IO.File]::ReadAllBytes($m3IntegrityManifestPath)
+    $manifestText = [System.Text.Encoding]::UTF8.GetString($originalManifestBytes)
+    [System.IO.File]::WriteAllText($m3IntegrityManifestPath, $manifestText + ' ')
+    $m3ManifestTamperRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $m3IntegrityManifest -ManifestPath $m3IntegrityManifestPath | Out-Null } catch { $m3ManifestTamperRejected = $true }
+    if (-not $m3ManifestTamperRejected) { throw 'DispatchCleanupM3 immutable manifest integrity accepted a tampered manifest hash' }
+    $m3NegativeContractCount++
+    [System.IO.File]::WriteAllBytes($m3IntegrityManifestPath, $originalManifestBytes)
+
+    $originalChecksumBytes = [System.IO.File]::ReadAllBytes($m3ChecksumPath)
+    $tamperedChecksumLines = @($m3ChecksumLines.ToArray())
+    $tamperedChecksumLines[0] = (('0' * 64) + '  manifest.json')
+    Set-Content -LiteralPath $m3ChecksumPath -Value $tamperedChecksumLines -Encoding UTF8
+    $m3ChecksumTamperRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $m3IntegrityManifest -ManifestPath $m3IntegrityManifestPath | Out-Null } catch { $m3ChecksumTamperRejected = $true }
+    if (-not $m3ChecksumTamperRejected) { throw 'DispatchCleanupM3 immutable manifest integrity accepted a tampered checksum file' }
+    $m3NegativeContractCount++
+    [System.IO.File]::WriteAllBytes($m3ChecksumPath, $originalChecksumBytes)
+
+    $firstProvenance = $m3IntegrityManifest.runner_script_provenance[0]
+    $firstProvenancePath = Join-Path $m3IntegrityRoot ($firstProvenance.evidence_path.Replace('/', '\'))
+    $originalProvenanceBytes = [System.IO.File]::ReadAllBytes($firstProvenancePath)
+    [System.IO.File]::WriteAllText($firstProvenancePath, 'tampered runner script')
+    $m3RunnerScriptTamperRejected = $false
+    try { Assert-ImmutableHarnessManifestIntegrity -Manifest $m3IntegrityManifest -ManifestPath $m3IntegrityManifestPath | Out-Null } catch { $m3RunnerScriptTamperRejected = $true }
+    if (-not $m3RunnerScriptTamperRejected) { throw 'DispatchCleanupM3 immutable manifest integrity accepted a tampered runner source copy' }
+    $m3NegativeContractCount++
+    [System.IO.File]::WriteAllBytes($firstProvenancePath, $originalProvenanceBytes)
+} finally {
+    $safeTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    $safeM3IntegrityRoot = [System.IO.Path]::GetFullPath($m3IntegrityRoot)
+    if (-not $safeM3IntegrityRoot.StartsWith($safeTempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'refusing to clean M3 manifest fixtures outside the temporary directory'
+    }
+    Remove-Item -LiteralPath $m3IntegrityRoot -Recurse -Force
 }
 
 $smokeRuns = [System.Collections.Generic.List[string]]::new()
@@ -836,4 +1144,181 @@ try {
     Remove-Item -LiteralPath $reportRoot -Recurse -Force
 }
 
+# M3 timing floors mirror acceptance/scenarios.rs: the ordinary acceptance
+# hold uses one configured frame; HolInterleaved alone holds for two frames.
+$acceptanceLimitsSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'rust\crates\sky_player\src\bin\acceptance\acceptance_limits.rs') -Raw
+$acceptanceScenariosSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'rust\crates\sky_player\src\bin\acceptance\scenarios.rs') -Raw
+if ($acceptanceLimitsSource -notmatch 'ACCEPTANCE_HOLD_FRAMES:\s*u64\s*=\s*1\s*;' -or
+    $acceptanceScenariosSource -notmatch 'Scenario::HolInterleaved\s*\{\s*2\s*\}\s*else\s*\{\s*ACCEPTANCE_HOLD_FRAMES') {
+    throw 'native acceptance hold-frame source contract changed; M3 timing expectations need review'
+}
+$m3Floors60Margin0 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 60 -TimingMarginUs 0
+$m3Floors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 60 -TimingMarginUs 500
+$m3Floors120Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 120 -TimingMarginUs 500
+$m3HolFloors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'hol-interleaved' -GameFps 60 -TimingMarginUs 500
+if ($m3Floors60Margin0.configured_H_us -ne 16667 -or $m3Floors60Margin0.configured_G_us -ne 16667 -or
+    $m3Floors60Margin500.configured_H_us -ne 17167 -or $m3Floors60Margin500.configured_G_us -ne 17167 -or
+    $m3Floors120Margin500.configured_H_us -ne 8834 -or $m3Floors120Margin500.configured_G_us -ne 8834 -or
+    $m3HolFloors60Margin500.configured_H_us -ne 33834 -or $m3HolFloors60Margin500.configured_G_us -ne 17167 -or
+    $m3HolFloors60Margin500.hold_frames -ne 2) {
+    throw 'DispatchCleanupM3 frame, hold, or release-gap arithmetic does not match native scenario configuration'
+}
+
+$m3ReportCandidate = [pscustomobject]@{
+    qualification_profile = 'DispatchCleanupM3'; source_role = 'Candidate'
+    workload_version = 'dispatch-runtime-cleanup-m3-v1'; observer_mode = 'SchedulerQueuedV3Compat3'
+    guard_mode = 'frozen'; performance_timing_margin_us = 0; safety_timing_margin_us = 500
+}
+$m3ReportBaseline = [pscustomobject]@{
+    qualification_profile = 'DispatchCleanupM3'; source_role = 'Baseline'
+    workload_version = 'dispatch-runtime-cleanup-m3-v1'; observer_mode = 'SchedulerQueuedV3Compat3'
+    guard_mode = 'frozen'; performance_timing_margin_us = 0; safety_timing_margin_us = 500
+}
+$m3SafetyScenarioNames = @(
+    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+    'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
+    'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor',
+    'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
+    'lease-age-watchdog-delayed', 'noncanonical-profile'
+)
+$m3CompareWorkloads = @('dense-alternating', 'mixed-up-down', 'canonical-max-chord')
+$m3FinalWorkloads = @('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
+$m3CanaryProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Stage Canary -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -SafetyScenarios $m3SafetyScenarioNames
+$m3SmokeProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Stage Smoke -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -SafetyScenarios $m3SafetyScenarioNames
+$m3CompareProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Control $m3ReportBaseline -Stage Compare -Pairs 6 -SampleSeconds 15 -TimingMarginUs 0 `
+    -SafetyScenarios $m3SafetyScenarioNames -PerformanceWorkloads $m3CompareWorkloads
+$m3FinalProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Control $m3ReportBaseline -Stage Final -Pairs 6 -SampleSeconds 15 -TimingMarginUs 0 `
+    -SafetyScenarios $m3SafetyScenarioNames -PerformanceWorkloads $m3FinalWorkloads
+
+if ($m3CanaryProjection.StageSummary.planned_session_count -ne 1 -or
+    $m3CanaryProjection.StageSummary.stage_kind -ne 'candidate-only safety Canary' -or
+    $m3CanaryProjection.StageSummary.candidate_session_count -ne 1 -or
+    $m3CanaryProjection.StageSummary.control_session_count -ne 0 -or
+    $m3CanaryProjection.StageSummary.configured_H_us -ne 17167 -or
+    $m3CanaryProjection.StageSummary.configured_G_us -ne 17167 -or
+    $m3CanaryProjection.SummaryParameters.pairs -ne $null -or
+    $m3CanaryProjection.SummaryParameters.sample_seconds -ne $null -or
+    $m3CanaryProjection.ManifestParameters.pairs -ne $null -or
+    $m3CanaryProjection.ManifestParameters.sample_seconds -ne $null -or
+    $m3CanaryProjection.ManifestParameters.pair_order -ne $null -or
+    $m3CanaryProjection.SummaryParameters.performance_timing_margin_us -ne 0 -or
+    $m3CanaryProjection.SummaryParameters.safety_timing_margin_us -ne 500 -or
+    -not $m3CanaryProjection.MarkdownStageLines[0].Contains('Canary') -or
+    -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('candidate-only safety stage')) -or
+    -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('no timed performance samples')) -or
+    (($m3CanaryProjection.MarkdownStageLines -join "`n") -match 'AB/BA|six pairs|15 seconds per performance session')) {
+    throw 'DispatchCleanupM3 Canary projection implies a comparison/sample or reports incorrect H/G/session identity'
+}
+if ($m3SmokeProjection.StageSummary.planned_session_count -ne 22 -or
+    $m3SmokeProjection.StageSummary.stage_kind -ne 'safety-only; candidate-only' -or
+    $m3SmokeProjection.StageSummary.candidate_session_count -ne 22 -or
+    $m3SmokeProjection.StageSummary.control_session_count -ne 0 -or
+    $m3SmokeProjection.StageSummary.workload_summary -ne '22 candidate-only safety scenarios' -or
+    -not $m3SmokeProjection.MarkdownStageLines[0].Contains('safety-only') -or
+    $m3SmokeProjection.StageSummary.timed_performance_samples -or
+    $m3SmokeProjection.StageSummary.configured_H_us -ne 17167 -or
+    $m3SmokeProjection.StageSummary.configured_G_us -ne 17167) {
+    throw 'DispatchCleanupM3 Smoke projection does not describe its candidate-only safety cases'
+}
+if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
+    $m3CompareProjection.StageSummary.stage_kind -ne 'paired performance' -or
+    $m3CompareProjection.StageSummary.candidate_session_count -ne 36 -or
+    $m3CompareProjection.StageSummary.control_session_count -ne 36 -or
+    $m3CompareProjection.StageSummary.game_fps -ne 60 -or
+    $m3CompareProjection.StageSummary.timing_margin_us -ne 0 -or
+    $m3CompareProjection.StageSummary.configured_H_us -ne 16667 -or
+    $m3CompareProjection.StageSummary.configured_G_us -ne 16667 -or
+    $m3CompareProjection.StageSummary.pairs -ne 6 -or
+    -not $m3CompareProjection.StageSummary.pair_order.Contains('AB/BA') -or
+    -not $m3CompareProjection.ManifestParameters.pair_order.Contains('AB/BA') -or
+    $m3CompareProjection.SummaryParameters.performance_timing_margin_us -ne 0 -or
+    $m3CompareProjection.SummaryParameters.safety_timing_margin_us -ne 500) {
+    throw 'DispatchCleanupM3 Compare projection lost its paired performance protocol or per-session timing settings'
+}
+if ($m3FinalProjection.StageSummary.planned_session_count -ne 166 -or
+    $m3FinalProjection.StageSummary.stage_kind -ne 'paired performance plus candidate-only safety and boundaries' -or
+    $m3FinalProjection.StageSummary.candidate_session_count -ne 106 -or
+    $m3FinalProjection.StageSummary.control_session_count -ne 60 -or
+    $null -ne $m3FinalProjection.StageSummary.game_fps -or
+    $null -ne $m3FinalProjection.StageSummary.timing_margin_us -or
+    $null -ne $m3FinalProjection.StageSummary.configured_H_us -or
+    $null -ne $m3FinalProjection.StageSummary.configured_G_us -or
+    $m3FinalProjection.StageSummary.configured_H_G_mode -ne 'varies_by_session' -or
+    -not $m3FinalProjection.StageSummary.configured_H_G_summary.Contains('varies by session') -or
+    -not $m3FinalProjection.ManifestParameters.configured_H_G_summary.Contains('varies by session') -or
+    -not $m3FinalProjection.StageSummary.timing_margin_summary.Contains('0 us performance; 500 us safety') -or
+    $m3FinalProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
+    throw 'DispatchCleanupM3 Final projection fabricated aggregate timing values for a mixed stage'
+}
+
+$m3RunConfig = [pscustomobject]@{
+    qualification_profile = 'DispatchCleanupM3'; scenario = 'canonical-single'; workload = 'canonical-single'
+    game_fps = 60; timing_margin_us = 500; expected_hold_us = 17167; expected_release_gap_us = 17167
+    configured_H_us = 17167; configured_G_us = 17167
+}
+$verifiedCanaryFloors = Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario 'canonical-single' `
+    -RunConfig $m3RunConfig -ExpectedWorkload 'canonical-single' -ExpectedGameFps 60 -ExpectedTimingMarginUs 500
+$m3CanaryRow = [pscustomobject]@{
+    stage = $m3CanaryProjection.StageSummary.stage
+    qualification_profile = $m3CanaryProjection.StageSummary.qualification_profile
+    planned_session_count = $m3CanaryProjection.StageSummary.planned_session_count
+    attempted_session_count = 1; role = 'candidate'; scenario = $m3RunConfig.scenario
+    game_fps = $m3RunConfig.game_fps; timing_margin_us = $m3RunConfig.timing_margin_us
+    configured_H_us = $m3RunConfig.configured_H_us; configured_G_us = $m3RunConfig.configured_G_us
+}
+$m3ReportRoot = Join-Path $env:TEMP ('m3-report-contract-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $m3ReportRoot | Out-Null
+try {
+    $m3CanaryRow | Export-Csv -LiteralPath (Join-Path $m3ReportRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    [ordered]@{
+        stage = $m3CanaryProjection.StageSummary.stage
+        qualification_profile = $m3CanaryProjection.StageSummary.qualification_profile
+        session_plan = $m3CanaryProjection.StageSummary
+        parameters = $m3CanaryProjection.SummaryParameters
+    } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $m3ReportRoot 'summary.json') -Encoding UTF8
+    $csvCanary = Import-Csv -LiteralPath (Join-Path $m3ReportRoot 'sessions.csv') | Select-Object -First 1
+    $jsonCanary = Get-Content -LiteralPath (Join-Path $m3ReportRoot 'summary.json') -Raw | ConvertFrom-Json
+    if ([long]$m3RunConfig.expected_hold_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
+        [long]$m3RunConfig.expected_release_gap_us -ne [long]$jsonCanary.session_plan.configured_G_us -or
+        [long]$csvCanary.configured_H_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
+        [long]$csvCanary.configured_G_us -ne [long]$jsonCanary.session_plan.configured_G_us -or
+        $csvCanary.stage -ne $jsonCanary.stage -or
+        $csvCanary.qualification_profile -ne $jsonCanary.qualification_profile -or
+        $csvCanary.planned_session_count -ne $jsonCanary.session_plan.planned_session_count -or
+        $csvCanary.role -ne 'candidate' -or $csvCanary.game_fps -ne $jsonCanary.session_plan.game_fps -or
+        $csvCanary.timing_margin_us -ne $jsonCanary.session_plan.timing_margin_us -or
+        $verifiedCanaryFloors.configured_H_us -ne 17167 -or $verifiedCanaryFloors.configured_G_us -ne 17167) {
+        throw 'DispatchCleanupM3 Canary run-config, CSV, and JSON timing/stage identity disagree'
+    }
+} finally {
+    Remove-Item -LiteralPath $m3ReportRoot -Recurse -Force
+}
+$badM3HRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$badM3HRunConfig.configured_H_us = 33834
+$badM3HRunConfig.expected_hold_us = 33834
+$badM3HRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3HRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3HRejected = $true }
+if (-not $badM3HRejected) { throw 'DispatchCleanupM3 accepted the old two-frame H on canonical-single' }
+$m3NegativeContractCount++
+$wrongScenarioRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$wrongScenarioRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario hol-interleaved -RunConfig $wrongScenarioRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $wrongScenarioRejected = $true }
+if (-not $wrongScenarioRejected) { throw 'DispatchCleanupM3 accepted incorrect scenario attribution for H/G reporting' }
+$m3NegativeContractCount++
+$badM3GRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$badM3GRunConfig.configured_G_us = $badM3GRunConfig.configured_G_us + 1
+$badM3GRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3GRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3GRejected = $true }
+if (-not $badM3GRejected) { throw 'DispatchCleanupM3 accepted a release gap different from frame interval plus margin' }
+$m3NegativeContractCount++
+
+Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

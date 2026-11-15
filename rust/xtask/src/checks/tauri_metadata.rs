@@ -411,7 +411,7 @@ fn v4_legacy_updater_source_contract(source: &str, surface: &str) -> Result<()> 
     ] {
         if source.contains(forbidden) {
             return Err(format!(
-                "retired v3 updater marker `{forbidden}` remains in current v4 surface {surface} (retired in #324)"
+                "retired v3 updater marker `{forbidden}` remains in current v4 surface {surface}"
             )
             .into());
         }
@@ -442,7 +442,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     for forbidden in ["name = \"sky_updater\"", "name = \"pep440_rs\""] {
         if lockfile_source.contains(forbidden) {
             return Err(format!(
-                "retired v3 dependency `{forbidden}` remains in {} (retired in #324)",
+                "retired v3 dependency `{forbidden}` remains in {}",
                 lockfile.display()
             )
             .into());
@@ -452,7 +452,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     let startup_guard = root.join("apps/desktop/src-tauri/src/startup_guard.rs");
     if startup_guard.exists() {
         return Err(format!(
-            "retired custom updater startup admission path remains: {} (retired in #324)",
+            "retired custom updater startup admission path remains: {}",
             startup_guard.display()
         )
         .into());
@@ -506,7 +506,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     ] {
         if native_adapters_source.contains(forbidden) {
             return Err(format!(
-                "retired v3 updater marker `{forbidden}` remains in sky_native_adapters (retired in #324)"
+                "retired v3 updater marker `{forbidden}` remains in sky_native_adapters"
             )
             .into());
         }
@@ -519,7 +519,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     ] {
         if !native_adapters_source.contains(required_drop) {
             return Err(format!(
-                "sky_native_adapters must explicitly drop retired update key `{required_drop}` on save/migrate (retired in #324)"
+                "sky_native_adapters must explicitly drop retired update key `{required_drop}` on save/migrate"
             )
             .into());
         }

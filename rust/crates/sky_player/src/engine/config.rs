@@ -142,7 +142,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
-pub type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &super::shared::SessionTarget) + Send + Sync>;
+pub type RestoreRaceHook = Arc<
+    dyn Fn(&AtomicBool, &super::shared::SessionTarget, Option<sky_dispatch_win32::clock::QpcTicks>)
+        + Send
+        + Sync,
+>;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;

@@ -152,8 +152,9 @@ impl SendTransactionOutcome {
         matches!(self.status, SendTransactionStatus::Complete)
     }
 
-    /// A physical packet is complete only when the sender's masks and single
-    /// raw-call evidence account for every requested event.
+    /// Transport is complete only when the sender's masks and single raw-call
+    /// evidence account for every requested event. Callers that commit musical
+    /// timing must also check `has_valid_sender_timing_evidence`.
     pub fn has_complete_evidence_for(&self, packet: PhysicalPacket) -> bool {
         let requested_mask = packet.up_mask | packet.down_mask;
         let requested = packet.event_count();
@@ -164,6 +165,18 @@ impl SendTransactionOutcome {
             && self.evidence.skipped_mask == 0
             && self.evidence.first_inserted == requested
             && self.evidence.attempts == 1
+            && self.evidence.zero_progress_retries == 0
+            && self.evidence.retry_reason == PacketRetryReason::None
+            && self.evidence.first_win32_error.is_none()
+            && self.evidence.last_win32_error.is_none()
+    }
+
+    /// Sender timing is usable only when both native QPC boundaries exist in
+    /// order and the sender reported no timing error. This is independent of
+    /// transport completeness so an inserted packet can remain tracked for
+    /// cleanup while its timing proof is rejected.
+    pub fn has_valid_sender_timing_evidence(&self) -> bool {
+        self.evidence.timing_error.is_none() && self.evidence.duration_ticks().is_ok()
     }
 
     pub fn sent_scan_codes(&self) -> SmallVec<[u16; 15]> {

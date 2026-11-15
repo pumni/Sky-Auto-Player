@@ -2,9 +2,11 @@ pub(crate) mod metrics;
 mod output;
 
 pub use metrics::WorkerMetricsLocal;
+#[cfg(test)]
+pub(crate) use metrics::try_publish_metrics;
 pub(crate) use metrics::{
     SharedMetrics, cpu_metrics_sample_due, publish_lifecycle_metrics, publish_terminal_metrics,
-    try_publish_metrics, try_publish_observer_metrics,
+    try_publish_metrics_with_update, try_publish_observer_metrics,
 };
 pub use output::NativeTelemetryOutput;
 pub(crate) use output::UpSlotLossReason;

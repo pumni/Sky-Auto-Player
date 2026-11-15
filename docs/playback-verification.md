@@ -31,6 +31,80 @@ margins. Canary/Smoke and candidate safety use a 500 µs margin; Compare/Final
 performance uses margin 0 for both roles. Existing Scheduler and DispatchCore
 profile semantics are unchanged.
 
+## DispatchCleanupM3 runner-contract profile
+
+`DispatchCleanupM3` is a separate profile for issue #661. Its workload identity
+is `dispatch-runtime-cleanup-m3-v1`; its native observer remains Scheduler V3
+Compat3 with schema 3. The profile does not change the `FrameSnapshot`,
+`Scheduler`, or `DispatchCore` pins or validation rules.
+
+Build the baseline and candidate from clean detached worktrees at these exact
+source identities:
+
+| Role | Commit | Tree |
+|---|---|---|
+| Baseline | `2277ac34a21a57a8d5ec313bba55ad78fc60794f` | `9a8637129dbb7a05be4f9386da188413b45f9774` |
+| Candidate, accepted M2 | `74c2b2618af50881f15eacd27ab722d316954743` | `902c772442706b326e020db6d36daedd60632b02` |
+
+The candidate commit must be an ancestor of the pushed
+`refactor/dispatch-runtime-cleanup` branch. The clean runner checkout must match
+that branch tip. The runner commit/tree and captured runner script hashes are
+recorded separately from the candidate source identity. A later runner HEAD is
+never substituted for the accepted M2 candidate source. The detached worktrees,
+runner checkout, and external evidence output must retain their actual Git
+identity; do not put a branch name into the detached source identity.
+
+M3 manifests require Rust and Cargo 1.99.1, the Windows MSVC host and
+`x86_64-pc-windows-msvc` target, optimized `dist`, exactly the
+`real-input-acceptance` feature, and no `qpc-read-counting`. Performance margin
+is 0 µs and safety margin is 500 µs. Cargo target output, binaries, manifests,
+runner provenance copies, checksums, and logs all live outside the checkouts.
+The checksum inventory covers the manifest, binary, build scripts/logs, and
+captured M3 runner source files. Per-session reports capture FPS, margin, the
+configured H/G floors, and workload version. These workload definitions accept
+no PRNG seed; reports record a null seed and that deterministic seed mode.
+
+M3 per-session H/G reporting follows the native acceptance scenario: the
+ordinary hold uses `ACCEPTANCE_HOLD_FRAMES = 1`; `hol-interleaved` explicitly
+uses two hold frames; G always uses one frame. A frame is
+`ceil(1,000,000 / FPS)` µs and the selected margin is added to both floors.
+At 60 FPS / 500 µs, `canonical-single` therefore reports H/G 17,167/17,167 µs.
+The report validator checks run-config H/G against its scenario, FPS, and
+margin before including a session row. Canary is one candidate-only Quiet
+`canonical-single` safety session with no timed performance sample. Smoke is a
+candidate-only Quiet safety sequence. Compare reports its AB/BA performance
+pairs. Final includes paired performance sessions, candidate-only safety
+sessions, and 60/120 FPS boundary sessions; its aggregate H/G, FPS, and margin
+are explicitly `varies by session`, with actual values retained per row in
+`sessions.csv`.
+
+From the clean, pushed runner checkout, add two detached worktrees outside the
+runner directory and use new empty output directories outside both worktrees:
+
+```powershell
+git worktree add --detach <baseline-worktree> 2277ac34a21a57a8d5ec313bba55ad78fc60794f
+git worktree add --detach <candidate-worktree> 74c2b2618af50881f15eacd27ab722d316954743
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile DispatchCleanupM3 -SourceRole Baseline `
+  -SourceRoot <baseline-worktree> -OutputRoot <baseline-output>
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile DispatchCleanupM3 -SourceRole Candidate `
+  -SourceRoot <candidate-worktree> -OutputRoot <candidate-output>
+```
+
+Each build verifies the remote runner tip, accepted M2 lineage, detached source
+SHA/tree, toolchain and output locations before emitting its immutable manifest.
+Verify both with `Assert-DispatchCleanupM3ManifestIdentity` and
+`Assert-ImmutableHarnessManifestIntegrity` before requesting any native session.
+
+Offline manifest builds and integrity checks do not start the acceptance
+runner. The candidate-only Quiet `canonical-single` Canary at 60 FPS and 500 µs
+safety margin was separately authorized and run once. Its reporting correction
+is documented append-only in
+[`docs/evidence/issue-661-m3/canary-reporting-erratum.md`](evidence/issue-661-m3/canary-reporting-erratum.md).
+The reporting-correction checkpoint authorizes zero further native sessions;
+Smoke, Compare, and Final require separate Leader decisions.
+
 ## Final workload
 
 The Final stage runs these five performance workloads:

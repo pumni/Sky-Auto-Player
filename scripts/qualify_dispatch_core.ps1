@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')]
     [string]$Stage,
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
     [string]$CandidateManifest,
@@ -22,14 +22,17 @@ $PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot')
-$baseRevision = if ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
-$baseTree = if ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
-$expectedBranch = if ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
-$expectedWorkloadVersion = if ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+$isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
+$dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')
+$baseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
+$baseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
+$expectedBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+$expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
 $caseRunner = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $manifestBuilder = Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'
 $manifestValidator = Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1'
@@ -47,6 +50,7 @@ $candidate = $null
 $control = $null
 $head = $null
 $tree = $null
+$runnerIdentity = $null
 $exitCode = 0
 $stoppedAtFirstNativeFailure = $false
 
@@ -84,6 +88,21 @@ function Get-OptionalProperty {
 }
 
 function Get-CurrentSourceIdentity {
+    if ($isDispatchCleanupM3) {
+        $script:runnerIdentity = Get-DispatchCleanupM3RunnerIdentity -RunnerRoot $root
+        $script:head = $script:runnerIdentity.revision
+        $script:tree = $script:runnerIdentity.tree
+        return [ordered]@{
+            branch = $script:runnerIdentity.branch
+            revision = $script:runnerIdentity.revision
+            tree = $script:runnerIdentity.tree
+            clean = $script:runnerIdentity.clean
+            runner_checkout_identity = $script:runnerIdentity.checkout
+            candidate_lineage_branch = $script:runnerIdentity.candidate_lineage_branch
+            candidate_lineage_tip_revision = $script:runnerIdentity.candidate_lineage_tip_revision
+            candidate_lineage_verified = $script:runnerIdentity.candidate_lineage_verified
+        }
+    }
     $branch = ((& git -C $root branch --show-current) -join '').Trim()
     if ($LASTEXITCODE -ne 0 -or $branch -ne $expectedBranch) { throw ('expected branch ' + $expectedBranch + ', got ' + $branch) }
     $script:head = (& git -C $root rev-parse HEAD).Trim()
@@ -173,6 +192,24 @@ function Assert-FrameSnapshotSourceRoot {
     }
 }
 
+function Assert-DispatchCleanupM3SourceRoot {
+    param($Manifest, [string]$Role)
+    $expectedRole = if ($Role -eq 'candidate') { 'Candidate' } else { 'Baseline' }
+    Assert-DispatchCleanupM3ManifestIdentity -Manifest $Manifest -ExpectedRole $expectedRole -RepositoryRoot $root | Out-Null
+    $sourceRoot = [System.IO.Path]::GetFullPath([string]$Manifest.source_root)
+    $identity = Get-DispatchM3GitCheckoutIdentity $sourceRoot
+    if (-not $identity.clean -or $identity.revision -ne $Manifest.source_revision -or
+        $identity.tree -ne $Manifest.source_tree_sha -or $identity.branch -ne '' -or
+        $identity.root -ne [string]$Manifest.source_checkout_identity.root -or
+        $identity.checkout.top_level -ne [string]$Manifest.source_checkout_identity.top_level -or
+        $identity.checkout.git_dir -ne [string]$Manifest.source_checkout_identity.git_dir -or
+        $identity.checkout.git_common_dir -ne [string]$Manifest.source_checkout_identity.git_common_dir -or
+        $identity.checkout.git_common_dir -ne [string]$script:runnerIdentity.checkout.git_common_dir) {
+        throw ('DispatchCleanupM3 ' + $expectedRole + ' manifest source SHA/tree/checkout differs from its clean detached worktree')
+    }
+    Assert-DispatchCleanupM3RunnerProvenance -Manifest $Manifest -RunnerIdentity $script:runnerIdentity -RunnerRoot $root | Out-Null
+}
+
 function Read-And-VerifyManifest {
     param([string]$Path, [string]$Role)
     Assert-AbsolutePath $Path ($Role + ' manifest')
@@ -188,6 +225,9 @@ function Read-And-VerifyManifest {
     if ($QualificationProfile -eq 'FrameSnapshot') {
         Assert-FrameSnapshotSourceRoot -Manifest $manifest -Role $Role
     }
+    if ($isDispatchCleanupM3) {
+        Assert-DispatchCleanupM3SourceRoot -Manifest $manifest -Role $Role
+    }
     if ($qualifiedProfile) {
         Assert-ImmutableHarnessManifestIntegrity -Manifest $manifest -ManifestPath $Path | Out-Null
     }
@@ -197,7 +237,7 @@ function Read-And-VerifyManifest {
     if ($manifest.schema_version -ne 1 -or
         $manifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
         $manifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
-        $manifest.source_branch -ne $(if ($qualifiedProfile -and $Role -eq 'control') { '' } else { $expectedBranch }) -or
+        $manifest.source_branch -ne $(if (($qualifiedProfile -and $Role -eq 'control') -or $isDispatchCleanupM3) { '' } else { $expectedBranch }) -or
         ([bool]$manifest.source_tree_clean -ne (-not $c1TimedVerified)) -or
         -not [bool]$manifest.clean_build -or
         $manifest.cargo_profile -ne 'dist' -or
@@ -580,6 +620,10 @@ function Invoke-NativeCase {
         '-OutputRoot', $sessionRoot,
         '-GameFps', [string]$Fps
     )
+    if ($isDispatchCleanupM3) {
+        if ([string]::IsNullOrWhiteSpace($Workload)) { throw 'DispatchCleanupM3 native cases require an explicit workload identity' }
+        $args += @('-Workload', $Workload)
+    }
     if ($Sample -gt 0) { $args += @('-SampleSeconds', [string]$Sample) }
     if ($Load -eq 'Contention') { $args += '-CpuContention' }
     if ($Historical) { $args += '-HistoricalSourceAllowed' }
@@ -607,6 +651,21 @@ function Invoke-NativeCase {
     $details = if ($null -ne $report) { Get-OptionalProperty $report 'details' } else { $null }
     $invocationPath = if ($caseDirectory) { Join-Path $caseDirectory 'invocation.json' } else { $null }
     $invocation = if ($invocationPath -and (Test-Path -LiteralPath $invocationPath -PathType Leaf)) { Get-Content -LiteralPath $invocationPath -Raw | ConvertFrom-Json } else { $null }
+    if ($isDispatchCleanupM3 -and $caseDirectory) {
+        $runConfigPath = Join-Path $caseDirectory 'run-config.json'
+        if (-not (Test-Path -LiteralPath $runConfigPath -PathType Leaf)) {
+            throw 'DispatchCleanupM3 case is missing run-config.json timing provenance'
+        }
+        $runConfig = Get-Content -LiteralPath $runConfigPath -Raw | ConvertFrom-Json
+        $verifiedFloors = Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario $Scenario `
+            -RunConfig $runConfig -ExpectedWorkload $Workload -ExpectedGameFps $Fps `
+            -ExpectedTimingMarginUs $Margin
+        if ($null -eq $invocation -or
+            [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us -or
+            [long]$invocation.configured_G_us -ne $verifiedFloors.configured_G_us) {
+            throw 'DispatchCleanupM3 invocation H/G differs from its verified run-config'
+        }
+    }
     $row = [pscustomobject]@{
         run_id = if ($null -ne $report) { [string]$report.run_id } else { $null }
         stage = $Stage
@@ -616,6 +675,10 @@ function Invoke-NativeCase {
         role = $Role
         source_revision = $HarnessManifest.source_revision
         source_tree_sha = $HarnessManifest.source_tree_sha
+        runner_source_revision = Get-OptionalProperty $HarnessManifest 'runner_source_revision'
+        runner_source_tree_sha = Get-OptionalProperty $HarnessManifest 'runner_source_tree_sha'
+        runner_source_branch = Get-OptionalProperty $HarnessManifest 'runner_source_branch'
+        candidate_lineage_tip_revision = Get-OptionalProperty $HarnessManifest 'candidate_lineage_tip_revision'
         control_kind = Get-OptionalProperty $HarnessManifest 'control_kind'
         control_label = Get-QualificationReportRowLabel -Profile $QualificationProfile -Role $Role -Manifest $HarnessManifest
         base_source_revision = Get-OptionalProperty $HarnessManifest 'base_source_revision'
@@ -634,6 +697,11 @@ function Invoke-NativeCase {
         receiveonly_observer_version = Get-OptionalProperty $invocation 'receiveonly_observer_version'
         guard_mode = $HarnessManifest.guard_mode
         workload = $Workload
+        workload_version = Get-OptionalProperty $HarnessManifest 'workload_version'
+        session_seed = Get-OptionalProperty $invocation 'session_seed'
+        seed_mode = Get-OptionalProperty $invocation 'seed_mode'
+        configured_H_us = Get-OptionalProperty $invocation 'configured_H_us'
+        configured_G_us = Get-OptionalProperty $invocation 'configured_G_us'
         scenario = $Scenario
         load = $Load
         game_fps = $Fps
@@ -705,6 +773,11 @@ function Invoke-NativeCase {
         report = $report
         runner_output = if ($caseDirectory) { $text.Replace($caseDirectory, '<evidence-directory>').Replace($evidenceRoot, '<evidence-root>') } else { $text }
     }
+    if ($isDispatchCleanupM3) {
+        $row | Add-Member -NotePropertyName qualification_profile -NotePropertyValue $QualificationProfile
+        $row | Add-Member -NotePropertyName planned_session_count -NotePropertyValue $plannedSessionCount
+        $row | Add-Member -NotePropertyName attempted_session_count -NotePropertyValue $null
+    }
     $script:runRows.Add($row)
     if ($caseExit -ne 0 -or $status -ne 'PASS') {
         $script:failureRows.Add([pscustomobject]@{ scenario = $Scenario; workload = $Workload; role = $Role; cell_id = $CellId; pair_id = $PairId; exit_code = $caseExit; status = $status; reason = $reason; evidence_directory = $caseDirectory })
@@ -773,6 +846,7 @@ function Get-MetricPath {
 
 function Get-ComparisonDescription {
 param([string]$Profile, $Control, $Candidate)
+if ($Profile -eq 'DispatchCleanupM3') { return 'DispatchCleanupM3 accepted M2 candidate vs pinned native A/B baseline; runner identity is recorded separately from binary source identity' }
 if ($Profile -eq 'FrameSnapshot') { return 'FrameSnapshot baseline vs FrameSnapshot candidate; same frame-snapshot-v1 workload and zero-margin performance policy' }
 if ($Profile -eq 'Scheduler') { return 'C0 Scheduler baseline vs Scheduler-Candidate' }
 if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -eq 'adaptive') { return 'Frozen vs Adaptive' }
@@ -782,18 +856,18 @@ if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -e
 function Assert-QualificationTimingMargin {
     param(
         [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')] [string]$RequestedStage,
-        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot')] [string]$Profile,
+        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')] [string]$Profile,
         [ValidateSet(0, 500)] [int]$MarginUs,
         [int]$PairCount,
         [int]$SampleDurationSeconds
     )
     if ($RequestedStage -in @('Canary', 'Smoke')) {
-        if ($Profile -eq 'FrameSnapshot' -and $MarginUs -ne 500) {
-            throw ('FrameSnapshot ' + $RequestedStage + ' is a candidate safety phase and requires 500 us')
+        if ($Profile -in @('FrameSnapshot', 'DispatchCleanupM3') -and $MarginUs -ne 500) {
+            throw ($Profile + ' ' + $RequestedStage + ' is a candidate safety phase and requires 500 us')
         }
         return $true
     }
-    $expectedMarginUs = if ($Profile -eq 'FrameSnapshot') { 0 } else { 500 }
+    $expectedMarginUs = if ($Profile -in @('FrameSnapshot', 'DispatchCleanupM3')) { 0 } else { 500 }
     if ($PairCount -ne 6 -or $SampleDurationSeconds -ne 15 -or $MarginUs -ne $expectedMarginUs) {
         throw ($RequestedStage + ' requires exactly six paired runs, 15-second samples, and a ' + $expectedMarginUs + ' us timing margin for ' + $Profile)
     }
@@ -802,7 +876,7 @@ function Assert-QualificationTimingMargin {
 
 function Assert-SchedulerObserverPairMode {
     param($Control, $Candidate)
-    if ($QualificationProfile -notin @('Scheduler', 'FrameSnapshot')) { return }
+    if ($QualificationProfile -notin @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')) { return }
     $expectedVersion = 'scheduler-receiveonly-queue-v3-compat3'
     foreach ($row in @($Control, $Candidate)) {
         if ($row.receiveonly_observer_mode -ne 'SchedulerQueuedV3Compat3' -or
@@ -928,7 +1002,7 @@ function Get-PairedMetrics {
 
 try {
     if ($Stage -in @('Canary', 'Smoke') -and $ControlManifest) { throw ($Stage + ' accepts only -CandidateManifest; control manifests are reserved for Compare and Final') }
-    if ($Stage -eq 'Canary' -and $QualificationProfile -ne 'FrameSnapshot') { throw 'Canary is available only for FrameSnapshot' }
+    if ($Stage -eq 'Canary' -and $QualificationProfile -notin @('FrameSnapshot', 'DispatchCleanupM3')) { throw 'Canary is available only for FrameSnapshot or DispatchCleanupM3' }
     if ($Stage -in @('Compare', 'Final') -and -not $ControlManifest) { throw ($Stage + ' requires -ControlManifest') }
     Assert-QualificationTimingMargin -RequestedStage $Stage -Profile $QualificationProfile -MarginUs $TimingMarginUs -PairCount $Pairs -SampleDurationSeconds $SampleSeconds | Out-Null
     Assert-AbsolutePath $CandidateManifest 'candidate manifest'
@@ -944,7 +1018,14 @@ try {
     $rustcVersion = (& rustc -Vv) -join [Environment]::NewLine
     if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
     $candidate = Read-And-VerifyManifest $candidateManifestPath 'candidate'
-    if ($candidate.source_revision -ne $head -or $candidate.source_tree_sha -ne $tree) { throw 'candidate manifest must name the current clean source revision and tree' }
+    if ($isDispatchCleanupM3) {
+        if ($candidate.source_revision -ne $dispatchCleanupM3.CandidateRevision -or $candidate.source_tree_sha -ne $dispatchCleanupM3.CandidateTree -or
+            $candidate.source_revision -eq $head) {
+            throw 'DispatchCleanupM3 candidate must remain the accepted M2 source; runner HEAD cannot substitute as candidate binary source'
+        }
+    } elseif ($candidate.source_revision -ne $head -or $candidate.source_tree_sha -ne $tree) {
+        throw 'candidate manifest must name the current clean source revision and tree'
+    }
     if ($candidate.rustc_version -ne $rustcVersion.Trim()) { throw 'candidate manifest rustc identity differs from the active toolchain' }
     if ($Stage -in @('Compare', 'Final')) {
         Assert-AbsolutePath $ControlManifest 'control manifest'
@@ -961,13 +1042,15 @@ try {
             ($qualifiedProfile -and ($control.qualification_profile -ne $candidate.qualification_profile -or
                 $control.receiveonly_observer_mode -ne $candidate.receiveonly_observer_mode -or
                 $control.receiveonly_observer_version -ne $candidate.receiveonly_observer_version)) -or
-            ($QualificationProfile -eq 'FrameSnapshot' -and
+            ($QualificationProfile -in @('FrameSnapshot', 'DispatchCleanupM3') -and
                 ($control.performance_timing_margin_us -ne 0 -or $candidate.performance_timing_margin_us -ne 0 -or
                     $control.safety_timing_margin_us -ne 500 -or $candidate.safety_timing_margin_us -ne 500))) {
             throw 'control and candidate manifests do not have matching compiler, target, profile, feature, and workload identities'
         }
-        & git -C $root merge-base --is-ancestor $control.source_revision HEAD
-        if ($LASTEXITCODE -ne 0) { throw 'control source revision is not an ancestor of the candidate checkout' }
+        if (-not $isDispatchCleanupM3) {
+            & git -C $root merge-base --is-ancestor $control.source_revision HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'control source revision is not an ancestor of the candidate checkout' }
+        }
     }
 
     $scenarios = @(
@@ -983,9 +1066,24 @@ try {
     } else {
         @('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
     }
+    $plannedSessionCount = switch ($Stage) {
+        'Canary' { 1 }
+        'Smoke' { $scenarios.Count }
+        'Compare' { $performanceWorkloads.Count * 2 * 6 * 2 }
+        'Final' { ($performanceWorkloads.Count * 2 * 6 * 2) + ($scenarios.Count * 2) + 2 }
+    }
+    $plannedControlSessionCount = if ($Stage -in @('Compare', 'Final')) { $performanceWorkloads.Count * 2 * 6 } else { 0 }
+    $plannedCandidateSessionCount = $plannedSessionCount - $plannedControlSessionCount
+    $plannedWorkload = if ($Stage -eq 'Canary') { 'canonical-single' } elseif ($Stage -eq 'Smoke') { 'safety-smoke' } else { $performanceWorkloads -join ',' }
+    Write-Output ('PLAN profile=' + $QualificationProfile + ' workload=' + $plannedWorkload + ' candidate-role=Candidate case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $candidate.performance_timing_margin_us + ' safety-margin-us=' + $candidate.safety_timing_margin_us + ' sessions=' + $plannedCandidateSessionCount)
+    if ($Stage -in @('Compare', 'Final')) {
+        Write-Output ('PLAN control-role=Baseline case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $control.performance_timing_margin_us + ' safety-margin-us=' + $control.safety_timing_margin_us + ' sessions=' + $plannedControlSessionCount)
+    }
 
     if ($Stage -eq 'Canary') {
-        [void](Invoke-NativeCase -Scenario 'canonical-single' -Workload 'frame-snapshot-canary-v1' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'frame-snapshot-canary' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
+        $canaryWorkload = if ($isDispatchCleanupM3) { 'canonical-single' } else { 'frame-snapshot-canary-v1' }
+        $canaryCell = if ($isDispatchCleanupM3) { 'dispatch-cleanup-m3-canary-quiet' } else { 'frame-snapshot-canary' }
+        [void](Invoke-NativeCase -Scenario 'canonical-single' -Workload $canaryWorkload -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId $canaryCell -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
     } elseif ($Stage -eq 'Smoke') {
         $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $scenarios -InvokeCase {
             param($scenario)
@@ -1000,7 +1098,7 @@ try {
             $finalSafetyCases = @(
                 foreach ($load in @('Quiet', 'Contention')) {
                     foreach ($scenario in $scenarios) {
-                        [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-' + $load.ToLowerInvariant(); load = $load; margin = if ($QualificationProfile -eq 'FrameSnapshot') { $candidate.safety_timing_margin_us } else { $TimingMarginUs }; fps = 60 }
+                        [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-' + $load.ToLowerInvariant(); load = $load; margin = if ($QualificationProfile -in @('FrameSnapshot', 'DispatchCleanupM3')) { $candidate.safety_timing_margin_us } else { $TimingMarginUs }; fps = 60 }
                     }
                 }
                 [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 0; fps = 60 }
@@ -1014,6 +1112,9 @@ try {
         }
     }
 
+    if ($isDispatchCleanupM3) {
+        foreach ($row in $runRows) { $row.attempted_session_count = $runRows.Count }
+    }
     $source = Get-CurrentSourceIdentity
     $os = Get-CimInstance Win32_OperatingSystem
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -1025,14 +1126,22 @@ try {
         -Stage $Stage `
         -Pairs $Pairs `
         -SampleSeconds $SampleSeconds `
-        -TimingMarginUs $TimingMarginUs
+        -TimingMarginUs $TimingMarginUs `
+        -SafetyScenarios $scenarios `
+        -PerformanceWorkloads $performanceWorkloads
+    if ($isDispatchCleanupM3 -and $reportProjection.StageSummary.planned_session_count -ne $plannedSessionCount) {
+        throw 'DispatchCleanupM3 report projection session count differs from the executable stage plan'
+    }
     $comparisonDescription = if ($Stage -eq 'Compare') {
         Get-ComparisonDescription -Profile $QualificationProfile -Control $control -Candidate $candidate
     } else { $null }
     $controlLabel = $reportProjection.ControlLabel
     $candidateLabel = $reportProjection.CandidateLabel
     $passed = @($runRows | Where-Object status -eq 'PASS').Count
-    $safetyRows = @($runRows | Where-Object { $_.workload -like '*safety*' -or $_.cell_id -eq 'boundary-safety' })
+    $safetyRows = @($runRows | Where-Object {
+        $_.workload -like '*safety*' -or $_.cell_id -eq 'boundary-safety' -or
+        ($isDispatchCleanupM3 -and $Stage -eq 'Canary' -and $_.workload -eq 'canonical-single')
+    })
     $hardSafety = [ordered]@{
         invalid_or_duplicate_down = '0 expected by PASS verdict; event-window reconciliation and production forensics are recorded per run'
         unexplained_missing_chord = '0 expected by PASS verdict; chord_split_events, missed boundaries, SendInput counters, and event-window counts are recorded per run'
@@ -1042,6 +1151,42 @@ try {
         residual_release_obligations = @($safetyRows | Where-Object { $null -ne $_.final_release_obligation_mask -and [long]$_.final_release_obligation_mask -ne 0 }).Count
         rt_allocation = 'covered by focused rt_dispatch_no_alloc test; not instrumented by the native ReceiveOnly runner'
     }
+    $sessionPlan = [ordered]@{
+        stage = $Stage
+        workload_version = $candidate.workload_version
+        planned_session_count = $plannedSessionCount
+        attempted_session_count = $runRows.Count
+        candidate_session_count = $plannedCandidateSessionCount
+        control_session_count = $plannedControlSessionCount
+        performance_margin_us = $candidate.performance_timing_margin_us
+        safety_margin_us = $candidate.safety_timing_margin_us
+        candidate_role = 'Candidate'
+        control_role = if ($control) { 'Baseline' } else { $null }
+        session_seed = $null
+        seed_mode = 'none; deterministic workload definitions do not accept a PRNG seed'
+        configured_H_us = if ($isDispatchCleanupM3) { $reportProjection.StageSummary.configured_H_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) * 2 + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) * 2 } else { $null }
+        configured_G_us = if ($isDispatchCleanupM3) { $reportProjection.StageSummary.configured_G_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) } else { $null }
+    }
+    if ($isDispatchCleanupM3) {
+        $sessionPlan['qualification_profile'] = $QualificationProfile
+        $sessionPlan['stage_kind'] = $reportProjection.StageSummary.stage_kind
+        $sessionPlan['configured_H_G_mode'] = $reportProjection.StageSummary.configured_H_G_mode
+        $sessionPlan['configured_H_G_summary'] = $reportProjection.StageSummary.configured_H_G_summary
+        $sessionPlan['game_fps'] = $reportProjection.StageSummary.game_fps
+        $sessionPlan['game_fps_summary'] = $reportProjection.StageSummary.game_fps_summary
+        $sessionPlan['timing_margin_us'] = $reportProjection.StageSummary.timing_margin_us
+        $sessionPlan['timing_margin_summary'] = $reportProjection.StageSummary.timing_margin_summary
+        $sessionPlan['role_scope'] = $reportProjection.StageSummary.role_scope
+        $sessionPlan['workload_summary'] = $reportProjection.StageSummary.workload_summary
+        $sessionPlan['workloads'] = $reportProjection.StageSummary.workloads
+        $sessionPlan['scenarios'] = $reportProjection.StageSummary.scenarios
+        $sessionPlan['load_cells'] = $reportProjection.StageSummary.load_cells
+        $sessionPlan['pairs'] = $reportProjection.StageSummary.pairs
+        $sessionPlan['pair_order'] = $reportProjection.StageSummary.pair_order
+        $sessionPlan['timed_performance_sample_seconds'] = $reportProjection.StageSummary.timed_performance_sample_seconds
+        $sessionPlan['timed_performance_samples'] = $reportProjection.StageSummary.timed_performance_samples
+        $sessionPlan['sample_scope'] = $reportProjection.StageSummary.sample_scope
+    }
     $summary = [ordered]@{
         schema_version = 1
         run_id = $runId
@@ -1050,6 +1195,18 @@ try {
         qualification_profile = $QualificationProfile
         receiveonly_observer = [ordered]@{ mode = if ($qualifiedProfile) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }; version = if ($qualifiedProfile) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null } }
         source = $source
+        runner_identity = if ($isDispatchCleanupM3) { [ordered]@{
+            source_revision = $runnerIdentity.revision
+            source_tree_sha = $runnerIdentity.tree
+            source_branch = $runnerIdentity.branch
+            source_root = $runnerIdentity.root
+            source_tree_clean = $runnerIdentity.clean
+            candidate_lineage_branch = $runnerIdentity.candidate_lineage_branch
+            candidate_lineage_tip_revision = $runnerIdentity.candidate_lineage_tip_revision
+            candidate_lineage_verified = $runnerIdentity.candidate_lineage_verified
+            runner_script_provenance = @($candidate.runner_script_provenance)
+        } } else { $null }
+        session_plan = $sessionPlan
         candidate = [ordered]@{ label = $candidateLabel; manifest_path = $candidate.manifest_path; manifest_sha256 = $candidate.manifest_sha256; qualification_profile = $reportProjection.CandidateQualificationProfile; source_role = Get-OptionalProperty $candidate 'source_role'; source_root = Get-OptionalProperty $candidate 'source_root'; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; base_source_revision = Get-OptionalProperty $candidate 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $candidate 'base_source_tree_sha'; binary_path = $candidate.resolved_binary_path; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); target = $candidate.target; binary_sha256 = $candidate.binary_sha256; performance_timing_margin_us = $reportProjection.CandidateMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.CandidateMargins.safety_timing_margin_us }
         control = if ($control) { [ordered]@{ control_label = $controlLabel; manifest_path = $control.manifest_path; control_kind = Get-OptionalProperty $control 'control_kind'; manifest_sha256 = $control.manifest_sha256; qualification_profile = $reportProjection.ControlQualificationProfile; source_role = Get-OptionalProperty $control 'source_role'; source_root = Get-OptionalProperty $control 'source_root'; source_revision = $control.source_revision; source_tree_sha = $control.source_tree_sha; base_source_revision = Get-OptionalProperty $control 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $control 'base_source_tree_sha'; binary_path = $control.resolved_binary_path; profile = $control.cargo_profile; features = @($control.cargo_features); target = $control.target; binary_sha256 = $control.binary_sha256; performance_timing_margin_us = $reportProjection.ControlMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.ControlMargins.safety_timing_margin_us } } else { $null }
         parameters = $reportProjection.SummaryParameters
@@ -1072,7 +1229,7 @@ try {
             per_key_authored_up = 'Up sidecar records are retained and counted, but this summary does not consume their per-slot authored offsets or floors; per-key authored Up p95/p99 are unsupported'
             packet_aggregates = 'p95/p99 for authored lateness, floor displacement, residual, waiter handoff, and sender envelope are packet trace record or per-syscall aggregates'
             hot_cold = 'authored Down-chord schedule gap; hot < 20000 us, cold >= 20000 us'
-            paired_screen = 'candidate worse than max(5 us, 10% control) at p95 or max(20 us, 10% control) at p99 in at least 4 of 6 pairs prompts leader review'
+            paired_screen = if ($isDispatchCleanupM3 -and $Stage -in @('Canary', 'Smoke')) { 'not applicable; candidate-only safety stage has no paired timed performance samples' } else { 'candidate worse than max(5 us, 10% control) at p95 or max(20 us, 10% control) at p99 in at least 4 of 6 pairs prompts leader review' }
         }
         remote_evidence = [ordered]@{ summary_and_manifest = 'PR report'; raw_bundle = 'PENDING user attachment; no existing workflow uploader used' }
         failures = $failureRows.ToArray()
@@ -1080,7 +1237,113 @@ try {
         disposition = if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -eq 0) { 'collected; leader review required for performance gates' } else { 'one or more cases failed; leader review required' }
     }
     $summary | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
-    $runRows | Select-Object run_id,stage,cell_id,pair_id,pair_order,role,source_revision,source_tree_sha,control_kind,control_label,base_source_revision,base_source_tree_sha,base_source_archive_sha256,base_source_file_sha256,overlay_sha256,derived_source_file_sha256,source_changes_sha256,derived_source_inventory_sha256,harness_sha256,profile,features,observer_mode,receiveonly_observer_mode,receiveonly_observer_version,guard_mode,workload,scenario,load,game_fps,timing_margin_us,sample_seconds,started_utc,ended_utc,case_exit_code,status,reason,evidence_directory,expected_sink_event_count,observed_sink_event_count,sink_window_match,active_count,possibly_active_count,final_release_obligation_mask,production_hold_floor_violation_count,production_release_floor_violation_count,production_forensics_anomaly_count,production_structural_anomaly_count,production_same_key_overlap_forensics_count,production_anchor_overwrite_count,production_unmatched_up_count,missed_down_boundaries,missed_down_keys,missed_physical_window_boundaries,keys_dropped,chord_split_events,sendinput_partial_events,sendinput_zero_progress_failures,generation_total,generation_activated,generation_released,generation_cancelled,generation_scheduled,expected_down_key_count,expected_up_key_count,precision_packet_attempts,authored_lateness_samples,residual_lateness_samples,sendinput_envelope_samples,qpc_read_count_available,qpc_read_count,native_timing_telemetry_available,native_timing_telemetry_unavailable_reason,telemetry_trace_records,observed_down_chords,attempted_down_send_calls,completed_down_chords,failed_down_chords,actual_sendinput_calls,telemetry_generation_mismatch,telemetry_negative_order,telemetry_dropped,observer_queue_dropped,worker_cpu_time_us,process_cpu_time_us,spin_time_us,spin_time_available,spin_time_complete,spin_duty_cycle_ppm,spin_expected_samples,spin_dropped_samples,spin_missing_samples,timing_metrics_json | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    $sessionCsvProperties = @(
+        'run_id',
+        'stage',
+        'cell_id',
+        'pair_id',
+        'pair_order',
+        'role',
+        'source_revision',
+        'source_tree_sha',
+        'runner_source_revision',
+        'runner_source_tree_sha',
+        'runner_source_branch',
+        'candidate_lineage_tip_revision',
+        'control_kind',
+        'control_label',
+        'base_source_revision',
+        'base_source_tree_sha',
+        'base_source_archive_sha256',
+        'base_source_file_sha256',
+        'overlay_sha256',
+        'derived_source_file_sha256',
+        'source_changes_sha256',
+        'derived_source_inventory_sha256',
+        'harness_sha256',
+        'profile',
+        'features',
+        'observer_mode',
+        'receiveonly_observer_mode',
+        'receiveonly_observer_version',
+        'guard_mode',
+        'workload',
+        'workload_version',
+        'session_seed',
+        'seed_mode',
+        'configured_H_us',
+        'configured_G_us',
+        'scenario',
+        'load',
+        'game_fps',
+        'timing_margin_us',
+        'sample_seconds',
+        'started_utc',
+        'ended_utc',
+        'case_exit_code',
+        'status',
+        'reason',
+        'evidence_directory',
+        'expected_sink_event_count',
+        'observed_sink_event_count',
+        'sink_window_match',
+        'active_count',
+        'possibly_active_count',
+        'final_release_obligation_mask',
+        'production_hold_floor_violation_count',
+        'production_release_floor_violation_count',
+        'production_forensics_anomaly_count',
+        'production_structural_anomaly_count',
+        'production_same_key_overlap_forensics_count',
+        'production_anchor_overwrite_count',
+        'production_unmatched_up_count',
+        'missed_down_boundaries',
+        'missed_down_keys',
+        'missed_physical_window_boundaries',
+        'keys_dropped',
+        'chord_split_events',
+        'sendinput_partial_events',
+        'sendinput_zero_progress_failures',
+        'generation_total',
+        'generation_activated',
+        'generation_released',
+        'generation_cancelled',
+        'generation_scheduled',
+        'expected_down_key_count',
+        'expected_up_key_count',
+        'precision_packet_attempts',
+        'authored_lateness_samples',
+        'residual_lateness_samples',
+        'sendinput_envelope_samples',
+        'qpc_read_count_available',
+        'qpc_read_count',
+        'native_timing_telemetry_available',
+        'native_timing_telemetry_unavailable_reason',
+        'telemetry_trace_records',
+        'observed_down_chords',
+        'attempted_down_send_calls',
+        'completed_down_chords',
+        'failed_down_chords',
+        'actual_sendinput_calls',
+        'telemetry_generation_mismatch',
+        'telemetry_negative_order',
+        'telemetry_dropped',
+        'observer_queue_dropped',
+        'worker_cpu_time_us',
+        'process_cpu_time_us',
+        'spin_time_us',
+        'spin_time_available',
+        'spin_time_complete',
+        'spin_duty_cycle_ppm',
+        'spin_expected_samples',
+        'spin_dropped_samples',
+        'spin_missing_samples',
+        'timing_metrics_json'
+    )
+    if ($isDispatchCleanupM3) {
+        $sessionCsvProperties = @('run_id', 'stage', 'qualification_profile', 'planned_session_count', 'attempted_session_count') + @($sessionCsvProperties | Select-Object -Skip 2)
+    }
+    $runRows | Select-Object -Property $sessionCsvProperties | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
     $pairedMetrics.paired_sessions | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'paired-sessions.csv') -NoTypeInformation -Encoding UTF8
     $pairedMetrics.cell_summary | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'paired-cells.csv') -NoTypeInformation -Encoding UTF8
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
@@ -1088,6 +1351,42 @@ try {
     $performanceMarkdown = @($pairedMetrics.cell_summary | ForEach-Object {
         '| ' + $_.cell_id + ' | ' + $_.metric + ' | ' + $_.available_pairs + '/' + $_.attempted_pairs + ' | ' + $_.favorable_p95_pairs + '/' + $_.unfavorable_p95_pairs + ' | ' + $_.favorable_p99_pairs + '/' + $_.unfavorable_p99_pairs + ' | ' + $_.p95_regression_pairs + '/' + $_.p99_regression_pairs + ' | ' + $_.leader_review_prompt + ' |'
     })
+    if ($isDispatchCleanupM3) {
+        $markdown = @(
+            '# DispatchCleanupM3 qualification ' + $Stage,
+            ''
+        ) + @($reportProjection.MarkdownStageLines) + @(
+            '',
+            '- Run: `' + $runId + '`',
+            '- Source: `' + $head + '` tree `' + $tree + '` (clean)',
+            ('- Candidate: ' + $reportProjection.MarkdownCandidatePrefix + '`' + $candidate.source_revision + '` / `' + $candidate.cargo_profile + '` / SHA-256 `' + $candidate.binary_sha256 + '`'),
+            ('- Control: ' + $(if ($control) { $reportProjection.MarkdownControlLabel + '; `' + $control.source_revision + '` / `' + $control.cargo_profile + '` / SHA-256 `' + $control.binary_sha256 + '`' } else { $reportProjection.MarkdownControlLabel })),
+            '- Sessions attempted: ' + $runRows.Count + '; PASS: ' + $passed + '; failed/inconclusive: ' + $failureRows.Count,
+            '- Disposition: ' + $(if ($stoppedAtFirstNativeFailure) { 'STOPPED_AT_FIRST_NATIVE_FAILURE' } elseif ($exitCode -ne 0) { 'FAILED' } else { 'COMPLETED' }),
+            '- Sink: identity-verified project-owned ReceiveOnly; no gameplay window is targeted.'
+        )
+        if ($Stage -in @('Compare', 'Final')) {
+            $markdown += @(
+                '- Percentiles use nearest-rank ceiling; unavailable evidence remains unavailable. No p99.9 is inferred.',
+                '- Reported timing metrics require qualified sender QPC evidence; paired performance observations are separate from safety cases.',
+                '- Tail screen: candidate p95 worse than max(5 us, 10% control) or p99 worse than max(20 us, 10% control) in >=4/6 pairs in a cell prompts Leader review; outliers are retained.',
+                '- Native RT allocation is not instrumented in the sink runner; see focused no-allocation test result in the command record.'
+            )
+        }
+        if ($safetyRows.Count -gt 0) {
+            $markdown += @('', '## Safety cases', '', '| Scenario | Verdict | Exit | Reason |', '|---|---:|---:|---|') + $safetyMarkdown
+        }
+        if ($Stage -in @('Compare', 'Final')) {
+            $markdown += @(
+                '',
+                '## Paired performance observations',
+                '',
+                '| Cell | Metric | Available pairs | p95 favorable/unfavorable | p99 favorable/unfavorable | p95/p99 threshold pairs | Leader review prompt |',
+                '|---|---|---:|---:|---:|---:|---:|'
+            ) + $performanceMarkdown
+        }
+        $markdown += @('', 'These evidence summaries do not make an automatic shipping or performance-gate decision.', '')
+    } else {
     $markdown = @(
         '# Dispatch Core qualification ' + $Stage,
         '',
@@ -1123,6 +1422,7 @@ try {
         'These are evidence summaries, not an automatic performance-gate verdict. No design, gate, or rollout selection is made by this runner.',
         ''
     )
+    }
     $markdown | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.md') -Encoding UTF8
     $scriptHash = Get-Sha256 $PSCommandPath
     $caseRunnerHash = Get-Sha256 $caseRunner

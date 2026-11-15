@@ -10,6 +10,7 @@ describe intended invariants. This index is a route map, not a reading checklist
 - **Native playback:** [engine and timing](playback-engine.md) for scheduling,
   admission, focus, and cleanup; [verification](playback-verification.md) for
   native sink and timing qualification. Browser mocks are not native timing evidence.
+  Current dispatch refactor evidence: [issue #661 M2](evidence/issue-661-m2/README.md).
 - **Desktop UI:** [workbench](desktop-workbench.md) for user interactions,
   [React Aria types](desktop-type-boundary.md), and
   [JavaScript tooling](desktop-tooling.md). Consult the

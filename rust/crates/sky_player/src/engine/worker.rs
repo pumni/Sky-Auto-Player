@@ -59,13 +59,9 @@ use startup::{StartupResources, initialize_startup};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use timing::calibrated_spin_threshold_us;
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use timing::derive_spin_threshold_us;
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use timing::signed_ticks_to_us;
 #[cfg(test)]
-pub(crate) use timing::{
-    adjust_spin_threshold, anchored_dispatch_target_ticks, deadline_target_ticks,
-};
+pub(crate) use timing::{anchored_dispatch_target_ticks, deadline_target_ticks};
 pub(crate) use timing::{
     signed_delta, signed_timeline_delta_ticks, supervisor_lease_expired, wait_failure_message,
     wake_lateness_ticks,
@@ -333,7 +329,6 @@ pub(crate) struct WorkerResources {
 pub(super) struct WorkerCore {
     pub(super) resources: Option<WorkerResources>,
     pub(super) metrics: WorkerMetricsLocal,
-    pub(super) health: Option<WorkerHealthState>,
     pub(super) timing: Option<WorkerTimingState>,
     pub(super) runtime: WorkerRuntime,
     pub(super) errors: WorkerErrorState,

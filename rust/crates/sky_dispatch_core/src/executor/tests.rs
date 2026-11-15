@@ -482,8 +482,7 @@ fn fixture_hol_stalled_down_does_not_block_independent_slot() {
 
     // Key A's release obligation is now due at max(20 ms, 15 ms + 10 ms) = 25 ms.
     // At 16 ms: Key B's authored Down is due.
-    // In Phase A, Key A's release floor at 25 ms would Head-of-Line block Key B.
-    // In Phase B, Key B is independent and emitted IMMEDIATELY at 16 ms!
+    // Key A's release floor is 25 ms, but Key B uses an independent slot and is due at 16 ms.
     let step16 = executor.evaluate(TimelineTicks::from_raw(16_000));
     assert!(
         matches!(

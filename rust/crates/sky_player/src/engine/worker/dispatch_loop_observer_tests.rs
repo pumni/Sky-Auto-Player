@@ -1,9 +1,11 @@
 #[test]
-fn completion_qpc_missing_and_clock_error_fails_closed() {
+fn complete_transport_with_sender_timing_error_fails_closed() {
+    use sky_dispatch_win32::clock::QpcError;
+
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
-    harness.resources.backend.set_packet_emitter(|packet| {
-        sky_dispatch_win32::clock::set_qpc_now_fault_for_test(true);
+    let started = harness.resources.clock.now().expect("mock sender start QPC");
+    harness.resources.backend.set_packet_emitter(move |packet| {
         SendTransactionOutcome {
             status: SendTransactionStatus::Complete,
             evidence: SendEvidence {
@@ -16,9 +18,9 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
                 retry_reason: PacketRetryReason::None,
                 first_win32_error: None,
                 last_win32_error: None,
-                started_ticks: None,
-                completed_ticks: None,
-                timing_error: None,
+                started_ticks: Some(started),
+                completed_ticks: Some(started),
+                timing_error: Some(QpcError::CounterUnavailable),
             },
         }
     });
@@ -31,17 +33,19 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
         .expect("some candidate");
 
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
 
     assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
-    assert!(
-        harness
-            .runtime
-            .terminal_error
-            .as_ref()
-            .unwrap()
-            .contains("SendInput completion QPC unavailable")
-    );
+    assert!(harness.runtime.terminal_error.as_ref().unwrap().contains(
+        "SendInput Complete status with sender timing error"
+    ));
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(harness.local_metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
+    assert_eq!(harness.local_metrics.authored_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.residual_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
+    assert_eq!(harness.local_metrics.physical_floor_displacement_samples, 0);
     assert_eq!(
         harness
             .resources
@@ -57,12 +61,15 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
 #[test]
-fn completion_qpc_missing_and_clock_success_dispatches() {
+fn complete_status_without_completion_qpc_fails_closed_even_when_qpc_is_available() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let clock = harness.resources.clock;
     harness
         .resources
         .backend
-        .set_packet_emitter(|packet| SendTransactionOutcome {
+        .set_packet_emitter(move |packet| {
+            let started = clock.now().expect("mock sender start QPC");
+            SendTransactionOutcome {
             status: SendTransactionStatus::Complete,
             evidence: SendEvidence {
                 requested_mask: packet.up_mask | packet.down_mask,
@@ -74,10 +81,11 @@ fn completion_qpc_missing_and_clock_success_dispatches() {
                 retry_reason: PacketRetryReason::None,
                 first_win32_error: None,
                 last_win32_error: None,
-                started_ticks: None,
+                started_ticks: Some(started),
                 completed_ticks: None,
                 timing_error: None,
             },
+        }
         });
     harness.attach_executor_for_test().expect("attach executor");
 
@@ -87,42 +95,48 @@ fn completion_qpc_missing_and_clock_success_dispatches() {
         .expect("stage candidate")
         .expect("some candidate");
 
-    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
-    assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
-    assert!(harness.runtime.terminal_error.is_none());
+    assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
+    assert!(harness
+        .runtime
+        .terminal_error
+        .as_deref()
+        .is_some_and(|error| error.contains("completion_qpc=unavailable")));
     assert_eq!(
         harness
             .resources
             .scheduler
             .chord_cursor(),
-        1
+        0
     );
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(harness.local_metrics.sendinput_completion_qpc_unavailable_attempts, 1);
+    assert_eq!(harness.local_metrics.transport_anomalies, 1);
+    assert_eq!(harness.local_metrics.authored_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.residual_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
+    assert_eq!(harness.local_metrics.physical_floor_displacement_samples, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let evidence = harness.finalize_for_test();
+    assert_eq!(evidence.release_obligation_mask, 0);
+    assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
 
 #[test]
-fn successful_send_keeps_missing_pre_call_unavailable_with_real_completion_qpc() {
+fn complete_status_without_pre_call_qpc_fails_closed() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
-    harness.attach_executor_for_test().expect("attach executor");
-    let chord = harness.current_executor_chord_for_test();
-    let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-        .expect("stage candidate")
-        .expect("Down candidate");
-    let qpc_clock = harness.resources.clock;
-    let completion_qpc = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let completion_capture = std::sync::Arc::clone(&completion_qpc);
-    harness
-        .resources
-        .backend
-        .disable_pre_call_qpc_sample_for_test();
+    let clock = harness.resources.clock;
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     harness
         .resources
         .backend
         .set_packet_emitter(move |packet| {
-            let completion_qpc = qpc_clock.now().expect("real sender completion QPC");
-            completion_capture.store(completion_qpc.as_u64(), Ordering::Release);
+            let completion = clock.now().expect("mock sender completion QPC");
             SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
                 evidence: SendEvidence {
@@ -136,61 +150,105 @@ fn successful_send_keeps_missing_pre_call_unavailable_with_real_completion_qpc()
                     first_win32_error: None,
                     last_win32_error: None,
                     started_ticks: None,
-                    completed_ticks: Some(completion_qpc),
+                    completed_ticks: Some(completion),
                     timing_error: None,
                 },
             }
         });
+    harness.attach_executor_for_test().expect("attach executor");
 
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, true),
-        super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        super::StagedDispatchOutcome::Exit
     ));
-    let completion_qpc = sky_dispatch_win32::clock::QpcTicks::from_raw(
-        completion_qpc.load(Ordering::Acquire),
-    );
-    let observation = match harness.observer.pop_front().expect("Down observation") {
-        crate::engine::worker::dispatch::observation::DispatchObservation::Down(observation) => {
-            observation
-        }
-        other => panic!("unexpected observation: {other:?}"),
-    };
-    assert_eq!(
-        observation.trace.result_status,
-        SendTransactionStatus::Complete
-    );
-    assert_eq!(observation.pre_call_qpc, None);
-    assert_eq!(observation.sendinput_completion_qpc, completion_qpc);
+    assert!(harness
+        .runtime
+        .terminal_error
+        .as_deref()
+        .is_some_and(|error| error.contains("pre_call_qpc=unavailable")));
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 1);
+    assert_eq!(harness.local_metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(harness.local_metrics.transport_anomalies, 1);
+    assert_eq!(harness.local_metrics.authored_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.residual_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    let evidence = harness.finalize_for_test();
+    assert_eq!(evidence.release_obligation_mask, 0);
+    assert!(!cleanup.lock().expect("cleanup capture").is_empty());
+}
 
-    let mut telemetry = crate::engine::TelemetryCollector::new(
-        crate::engine::TelemetryMode::Ring,
-        1,
-    );
-    crate::engine::worker::dispatch::observation::record_down_send_telemetry(
-        &observation,
-        &mut telemetry,
-        0,
-        0,
-        false,
-        0,
-        0,
-        None,
-        Some(TimelineTicks::from_raw(completion_qpc.as_u64())),
-        None,
-        completion_qpc,
-        false,
-        false,
-    )
-    .expect("serialize successful sender evidence");
-    let record = telemetry.output.records.back().expect("trace record");
-    assert!(!record.pre_call_qpc_available);
-    assert_eq!(record.pre_call_qpc_ticks, 0);
-    assert_eq!(record.pre_call_qpc_provenance, crate::engine::TimestampProvenance::Unavailable);
-    assert!(record.sendinput_completion_qpc_available);
-    assert_eq!(record.sendinput_completion_qpc_ticks, completion_qpc.as_u64());
-    assert_eq!(record.sendinput_completion_qpc_provenance, crate::engine::TimestampProvenance::Measured);
-    assert!(!record.authored_lateness_available);
-    assert!(!record.sendinput_envelope_available);
+#[test]
+fn complete_status_with_invalid_qpc_order_fails_closed() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let clock = harness.resources.clock;
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness
+        .resources
+        .backend
+        .set_packet_emitter(move |packet| {
+            let started = clock.now().expect("mock sender start QPC");
+            let completed = sky_dispatch_win32::clock::QpcTicks::from_raw(
+                started.as_u64().checked_sub(1).expect("nonzero QPC"),
+            );
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask: packet.up_mask | packet.down_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(started),
+                    completed_ticks: Some(completed),
+                    timing_error: None,
+                },
+            }
+        });
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        super::StagedDispatchOutcome::Exit
+    ));
+    assert!(harness
+        .runtime
+        .terminal_error
+        .as_deref()
+        .is_some_and(|error| error.contains("invalid QPC ordering")));
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(harness.local_metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(harness.local_metrics.transport_anomalies, 1);
+    assert_eq!(harness.local_metrics.authored_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.residual_lateness_samples, 0);
+    assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
+    assert_eq!(harness.local_metrics.physical_floor_displacement_samples, 0);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    let evidence = harness.finalize_for_test();
+    assert_eq!(evidence.release_obligation_mask, 0);
+    assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
 
 #[test]
@@ -283,7 +341,12 @@ fn wait_observation_is_published_promptly_on_dispatch() {
         &mut harness.local_metrics,
     );
     let candidate = harness
-        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_with_observer_for_test(
+            1,
+            None,
+            TimelineTicks::from_raw(20_000),
+            true,
+        )
         .expect("stage Up")
         .expect("Up candidate");
     assert!(matches!(
@@ -358,7 +421,12 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
     );
     let chord = harness.current_executor_chord_for_test();
     let mixed = harness
-        .stage_candidate_for_test(1, chord, TimelineTicks::from_raw(1_000))
+        .stage_candidate_with_observer_for_test(
+            1,
+            chord,
+            TimelineTicks::from_raw(1_000),
+            true,
+        )
         .expect("stage mixed")
         .expect("mixed");
     assert_ne!(mixed.packet_masks.up_mask, 0);
@@ -492,6 +560,7 @@ fn final_control_rejects_staged_down_and_up_before_send() {
         super::StagedDispatchOutcome::Replan
     ));
     assert!(down_packets.lock().expect("Down packets").is_empty());
+    assert_eq!(down.local_metrics.precision_packet_attempts, 0);
 
     let mut up = ProductionDispatchTestHarness::new_down_only();
     let up_packets = up.configure_mock_packet_sender_for_test(&[0, 0]);
@@ -506,7 +575,12 @@ fn final_control_rejects_staged_down_and_up_before_send() {
         super::StagedDispatchOutcome::Dispatched
     ));
     let candidate = up
-        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_with_observer_for_test(
+            1,
+            None,
+            TimelineTicks::from_raw(20_000),
+            true,
+        )
         .expect("stage Up")
         .expect("Up candidate");
     up.quit_requested.store(true, Ordering::Release);
@@ -515,6 +589,7 @@ fn final_control_rejects_staged_down_and_up_before_send() {
         super::StagedDispatchOutcome::Exit
     ));
     assert_eq!(up_packets.lock().expect("Up packets").len(), 1);
+    assert_eq!(up.local_metrics.precision_packet_attempts, 1);
 }
 
 #[test]
@@ -564,7 +639,7 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
             .as_u64(),
     );
     let up = harness
-        .stage_candidate_for_test(3, None, both_ups_due)
+        .stage_candidate_with_observer_for_test(3, None, both_ups_due, true)
         .expect("stage Up")
         .expect("Up");
     assert!(matches!(
@@ -693,7 +768,7 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     }
 
     let up = harness
-        .stage_candidate_for_test(3, None, both_ups_due)
+        .stage_candidate_with_observer_for_test(3, None, both_ups_due, true)
         .expect("stage coalesced Up")
         .expect("Up");
     assert!(matches!(

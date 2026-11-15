@@ -1,7 +1,7 @@
-//! Production wait-guard mode configuration (Phase D, #646).
+//! Production wait-guard mode configuration.
 //!
-//! Frozen is the single shipping production wait strategy. Adaptive mode was
-//! concluded as inconclusive in Phase C and retired in Phase D.
+//! Frozen is the only supported production wait strategy. Adaptive mode is
+//! retired.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WaitGuardMode {
@@ -13,10 +13,7 @@ impl WaitGuardMode {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "frozen" => Ok(Self::Frozen),
-            "adaptive" => Err(
-                "adaptive guard mode was retired in Phase D (#646); only 'frozen' is supported"
-                    .to_string(),
-            ),
+            "adaptive" => Err("adaptive guard mode is retired; only 'frozen' is supported".into()),
             _ => Err(format!(
                 "unknown wait guard mode '{value}', expected 'frozen'"
             )),
@@ -51,7 +48,7 @@ mod tests {
     #[test]
     fn parse_adaptive_fails_cleanly() {
         let err = WaitGuardMode::parse("adaptive").unwrap_err();
-        assert!(err.contains("retired in Phase D"));
+        assert!(err.contains("adaptive guard mode is retired"));
     }
 
     #[test]

@@ -126,12 +126,20 @@ Worker Loop -> Wait Deadline Reached
 
 The physical path stages a bounded packet, waits to its deadline, checks the
 final focus/identity/modifier/lease/control gates, then calls the prepared
-`SendInput` sender. Healthy dispatch uses fixed buffers and does not allocate.
-Packets contain no more than 15 inputs, with Up before Down. Full Down ownership
-commits only after complete insertion and valid completion QPC. Zero, partial,
-or invalid-QPC outcomes preserve possibly-active release obligations for cleanup.
-Cleanup succeeds only after physical state is verified resolved; pause/focus
-resume then observes the absolute cleanup-completion plus $G$ barrier.
+`SendInput` sender once. Healthy dispatch uses fixed buffers and does not
+allocate. Packets contain no more than 15 inputs, with Up before Down. Musical
+commit requires complete transport evidence and valid sender-side pre-call and
+completion QPC values in order. The worker never replaces missing sender
+completion with a later clock read. A syscall with unavailable or invalid QPC is
+counted from its raw evidence, is not committed to the scheduler, and retains
+the transport journal for cleanup. Zero and short insertion status remains
+visible in the corresponding error counter. Terminal safety Up is tracked
+separately from musical packet metrics.
+
+Latency, envelope, and hold timing samples are qualified only when transport is
+complete and sender QPC evidence is ordered with no timing error. Unqualified
+syscalls still contribute their raw attempt, missing-QPC, and transport-error
+counters without entering those timing distributions.
 
 Unmatched-Up diagnostic metadata is committed by the normal authored-frame
 Prepare path. Test-only metadata wake instrumentation is not a production path.
@@ -141,11 +149,16 @@ Metadata has no physical dispatch boundary and does not issue `SendInput`.
 - The target window must be the exact foreground window (`GetForegroundWindow() == target_hwnd`).
 - The process owning the foreground window must match the retained target PID and
   image verified at startup.
-- If focus is lost, Down transmission halts immediately, and any active keys are
-  safely released.
+- Focus loss pauses musical dispatch without proactively sending musical Up or
+  starting cleanup while the target is in the background. On return, the exact
+  target must remain stable through the configured grace period. The worker then
+  reconciles and verifies cleanup, and requires a Down barrier at verified
+  cleanup completion plus $G$.
+- Stop, Skip, Panic, and Suspend retain their terminal safety cleanup path,
+  including an Up attempt when the target is not foreground.
 
 ### Resume Barrier (cleanup completion + $G$)
-After verified pause or focus cleanup completes at QPC $Q$:
+After verified pause or focus-restoration cleanup completes at QPC $Q$:
 - All active key obligations are cleared or verified released.
 - A mandatory delay barrier of $Q + G$ is imposed before any subsequent Down chord
   may be transmitted. This sender-side barrier does not control game sampling.
@@ -186,6 +199,19 @@ of the authored target, slot release floor and packet not-before floor to the
 sampled pre-call QPC; it is unavailable when that sample is missing. Packet-level
 summaries do not provide per-key p95/p99.
 
+Worker staging always keeps a scalar Up summary with the active-slot count,
+first source action, authored target, release deadline, and hold-floor mask. It
+materializes the fixed-capacity per-slot records only when the observer queue
+is enabled. Observer-off mixed-packet replans use the same summary to retain the
+Up-only timing window; observer-on traces retain each slot's source and timing
+fields. Expected Up-slot accounting still partitions into captured, dropped,
+and not captured by mode.
+
+Live dispatch snapshots remain on the existing 50 ms cadence. Backend counters
+are projected only when that cadence is due and the snapshot writer slot is
+available. Focus/manual-pause lifecycle snapshots and terminal/finalization
+snapshots still refresh backend counters at their existing publication points.
+
 The healthy real-time dispatch path is checked for zero heap allocations by
 [`rt_dispatch_no_alloc.rs`](../rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs).
 The Prepare UI also shows an offline, read-only estimate from the authored song,
@@ -199,8 +225,8 @@ acknowledge the estimate. The desktop consumer is
 the simulator is in `apps/desktop/src-tauri/src/native_runtime/playback/timing_advisory.rs`.
 
 The bounded observation producer does not sample queue occupancy; the observer
-consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
-accounting remain off the real-time producer suffix.
+consumer owns queue high-watermark sampling and per-slot sidecar accounting.
+The producer keeps only bounded scalar expected/loss totals.
 
 The live `DispatchExecutor` stores compact chord headers and their intents in a
 contiguous arena. `MAX_EXECUTOR_BYTES` bounds the calculated capacities of

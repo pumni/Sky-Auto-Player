@@ -1,7 +1,7 @@
 use super::{
     PrecisionPacketTimingObservation, SharedMetrics, SnapshotBuffer, WorkerMetricsLocal,
     publish_lifecycle_metrics, publish_terminal_metrics, try_publish_metrics,
-    try_publish_observer_metrics,
+    try_publish_metrics_with_update, try_publish_observer_metrics,
 };
 use sky_dispatch_win32::clock::QpcClock;
 use std::num::NonZeroU64;
@@ -108,23 +108,29 @@ fn dispatch_publication_is_nonblocking_when_a_reader_holds_its_slot() {
 fn required_lifecycle_publication_survives_forced_snapshot_contention() {
     let shared = Arc::new(SharedMetrics::default());
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
-    let active = WorkerMetricsLocal {
+    let mut active = WorkerMetricsLocal {
         active_count: 1,
         possibly_active_count: 1,
         failed_release_count: 0,
         ..WorkerMetricsLocal::default()
     };
-    assert!(try_publish_metrics(&active, &shared, qpc_clock, 1, true));
+    assert!(try_publish_metrics(
+        &mut active,
+        &shared,
+        qpc_clock,
+        1,
+        true
+    ));
 
     let reader = shared.snapshot.dispatch.read();
-    let cleaned = WorkerMetricsLocal {
+    let mut cleaned = WorkerMetricsLocal {
         active_count: 0,
         possibly_active_count: 0,
         failed_release_count: 0,
         ..active.clone()
     };
     assert!(
-        !try_publish_metrics(&cleaned, &shared, qpc_clock, 2, true),
+        !try_publish_metrics(&mut cleaned, &shared, qpc_clock, 2, true),
         "a forced packet-style publication remains best effort under reader contention"
     );
 
@@ -150,6 +156,70 @@ fn required_lifecycle_publication_survives_forced_snapshot_contention() {
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.failed_release_count, 0);
+}
+
+#[test]
+fn dispatch_projection_update_runs_only_for_a_publishable_snapshot() {
+    let shared = SharedMetrics::default();
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+    let mut local = WorkerMetricsLocal::default();
+    let mut update_count = 0;
+
+    assert!(try_publish_metrics_with_update(
+        &mut local,
+        &shared,
+        qpc_clock,
+        49_999,
+        false,
+        |metrics| {
+            update_count += 1;
+            metrics.active_count = 1;
+        },
+    ));
+    assert_eq!(update_count, 0, "cadence-skipped packet does no projection");
+
+    assert!(try_publish_metrics_with_update(
+        &mut local,
+        &shared,
+        qpc_clock,
+        50_000,
+        false,
+        |metrics| {
+            update_count += 1;
+            metrics.active_count = 2;
+        },
+    ));
+    assert_eq!(update_count, 1);
+    assert_eq!(shared.snapshot.load().active_count, 2);
+
+    let reader = shared.snapshot.dispatch.read();
+    assert!(!try_publish_metrics_with_update(
+        &mut local,
+        &shared,
+        qpc_clock,
+        100_000,
+        false,
+        |_| update_count += 1,
+    ));
+    assert_eq!(
+        update_count, 1,
+        "writer contention skips counter projection"
+    );
+    drop(reader);
+
+    assert!(try_publish_metrics_with_update(
+        &mut local,
+        &shared,
+        qpc_clock,
+        100_000,
+        false,
+        |metrics| {
+            update_count += 1;
+            metrics.active_count = 3;
+        },
+    ));
+    assert_eq!(update_count, 2);
+    assert_eq!(shared.snapshot.load().active_count, 3);
 }
 
 #[test]
@@ -248,19 +318,29 @@ fn terminal_cleanup_snapshot_is_visible_after_forced_publication_contention() {
 fn observer_and_dispatch_publications_do_not_overwrite_each_other() {
     let shared = SharedMetrics::default();
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
-    let dispatch = WorkerMetricsLocal {
+    let mut dispatch = WorkerMetricsLocal {
         elapsed_us: 4,
         total_us: 9,
         ..WorkerMetricsLocal::default()
     };
-    let observer = WorkerMetricsLocal {
+    let mut observer = WorkerMetricsLocal {
         observer_degraded_samples: 2,
         wait_window_sample_count: 6,
         ..WorkerMetricsLocal::default()
     };
-    assert!(try_publish_metrics(&dispatch, &shared, qpc_clock, 0, true));
+    assert!(try_publish_metrics(
+        &mut dispatch,
+        &shared,
+        qpc_clock,
+        0,
+        true
+    ));
     assert!(try_publish_observer_metrics(
-        &observer, &shared, qpc_clock, 0, true
+        &mut observer,
+        &shared,
+        qpc_clock,
+        0,
+        true
     ));
 
     let published = shared.snapshot.load();
@@ -273,7 +353,7 @@ fn observer_and_dispatch_publications_do_not_overwrite_each_other() {
 #[test]
 fn publication_derives_public_lateness_microseconds_from_ticks() {
     let shared = SharedMetrics::default();
-    let local = WorkerMetricsLocal {
+    let mut local = WorkerMetricsLocal {
         max_sendinput_pre_call_lateness_ticks: 1_234,
         max_sendinput_pre_call_lateness_us: 999_999,
         wait_planned_gap_max_ticks: 2_345,
@@ -282,7 +362,7 @@ fn publication_derives_public_lateness_microseconds_from_ticks() {
     };
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
 
-    try_publish_metrics(&local, &shared, qpc_clock, 0, true);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 0, true);
 
     let published = shared.snapshot.load();
     assert_eq!(published.max_sendinput_pre_call_lateness_ticks, 1_234);
@@ -294,14 +374,14 @@ fn publication_derives_public_lateness_microseconds_from_ticks() {
 #[test]
 fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
     let shared = SharedMetrics::default();
-    let local = WorkerMetricsLocal {
+    let mut local = WorkerMetricsLocal {
         max_hold_floor_delay_ticks: 1_234,
         max_release_floor_delay_ticks: 2_345,
         ..WorkerMetricsLocal::default()
     };
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
 
-    try_publish_metrics(&local, &shared, qpc_clock, 0, true);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 0, true);
 
     let published = shared.snapshot.load();
     assert_eq!(published.max_hold_floor_delay_ticks, 1_234);
@@ -313,14 +393,16 @@ fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
 #[test]
 fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
     let mut metrics = WorkerMetricsLocal::default();
-    metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+    metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
+        sendinput_attempts: 1,
+        healthy_completion: true,
         authored_target_qpc: 100,
         packet_not_before_qpc: 110,
         pre_call_qpc: Some(125),
         sendinput_completion_qpc: Some(132),
         previous_sendinput_completion_qpc: Some(115),
         previous_sender_completion_known: true,
-        transport_anomaly: true,
+        transport_anomaly: false,
     });
     assert_eq!(metrics.precision_packet_attempts, 1);
     assert_eq!(metrics.authored_lateness_samples, 1);
@@ -337,25 +419,50 @@ fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
     assert_eq!(metrics.sendinput_envelope_samples, 1);
     assert_eq!(metrics.max_sendinput_envelope_ticks, 7);
     assert_eq!(metrics.overdue_packet_observations, 1);
-    assert_eq!(metrics.transport_anomalies, 1);
+    assert_eq!(metrics.transport_anomalies, 0);
     assert_eq!(metrics.timing_arithmetic_anomalies, 0);
 }
 
 #[test]
-fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_ordering() {
+fn unqualified_sender_result_keeps_raw_counters_without_timing_samples() {
     let mut metrics = WorkerMetricsLocal::default();
-    metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
-        authored_target_qpc: 200,
-        packet_not_before_qpc: 190,
-        ..PrecisionPacketTimingObservation::default()
+    metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
+        sendinput_attempts: 1,
+        healthy_completion: false,
+        authored_target_qpc: 100,
+        packet_not_before_qpc: 110,
+        pre_call_qpc: Some(125),
+        sendinput_completion_qpc: Some(124),
+        previous_sendinput_completion_qpc: Some(115),
+        previous_sender_completion_known: true,
+        transport_anomaly: true,
     });
     assert_eq!(metrics.precision_packet_attempts, 1);
-    assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 1);
-    assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 1);
+    assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.transport_anomalies, 1);
     assert_eq!(metrics.authored_lateness_samples, 0);
     assert_eq!(metrics.residual_lateness_samples, 0);
+    assert_eq!(metrics.hol_delay_lower_bound_samples, 0);
+    assert_eq!(metrics.unattributed_lateness_samples, 0);
     assert_eq!(metrics.sendinput_envelope_samples, 0);
     assert_eq!(metrics.physical_floor_displacement_samples, 0);
-    assert_eq!(metrics.timing_arithmetic_anomalies, 1);
     assert_eq!(metrics.overdue_packet_observations, 0);
+}
+
+#[test]
+fn precision_packet_result_without_a_syscall_does_not_count_an_attempt() {
+    let mut metrics = WorkerMetricsLocal::default();
+    metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
+        sendinput_attempts: 0,
+        transport_anomaly: true,
+        ..PrecisionPacketTimingObservation::default()
+    });
+
+    assert_eq!(metrics.precision_packet_attempts, 0);
+    assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.authored_lateness_samples, 0);
+    assert_eq!(metrics.sendinput_envelope_samples, 0);
+    assert_eq!(metrics.transport_anomalies, 1);
 }
