@@ -655,8 +655,8 @@ pub(crate) fn dispatch_staged_candidate(
     if !healthy_completion_evidence {
         let anomaly_record = sender_failure_record(&candidate, &send_result);
         runtime
-            .recovered_dispatch_anomalies
-            .push(format!("post-call attempted anomaly: {anomaly_record}"));
+            .attempted_dispatch_anomalies
+            .record(format!("post-call attempted anomaly: {anomaly_record}"));
         // A prior successful sender timestamp is not evidence about this
         // anomalous syscall and must not be attributed to the next packet.
         runtime.last_physical_send_completion_qpc = None;

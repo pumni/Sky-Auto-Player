@@ -44,9 +44,6 @@ impl Worker<'_> {
     fn finalize(&mut self, worker_result: Result<(), Box<dyn Any + Send>>) -> u8 {
         let shared = self.shared;
         let core = &mut self.core;
-        core.errors
-            .secondary
-            .append(&mut core.runtime.recovered_dispatch_anomalies);
         let resources = core
             .resources
             .take()
@@ -77,6 +74,9 @@ impl Worker<'_> {
                 abort_counts: std::mem::take(&mut core.errors.abort_counts),
                 terminal_error: std::mem::take(&mut core.runtime.terminal_error),
                 secondary_errors: std::mem::take(&mut core.errors.secondary),
+                attempted_dispatch_anomalies: std::mem::take(
+                    &mut core.runtime.attempted_dispatch_anomalies,
+                ),
                 last_published_error: std::mem::take(&mut core.errors.last_published),
                 terminal_trigger: core.runtime.terminal_trigger.take(),
             },

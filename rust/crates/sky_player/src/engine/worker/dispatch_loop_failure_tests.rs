@@ -58,7 +58,8 @@ fn sender_failure_record_for_test(
     ));
     let record = harness
         .runtime
-        .recovered_dispatch_anomalies
+        .attempted_dispatch_anomalies
+        .details()
         .first()
         .expect("recovered sender anomaly record")
         .clone();
@@ -258,7 +259,8 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
         assert_eq!(harness.resources.backend.release_obligation_mask() & packet_mask, 0);
         assert!(harness
             .runtime
-            .recovered_dispatch_anomalies
+            .attempted_dispatch_anomalies
+            .details()
             .first()
             .is_some_and(|record| {
                 record.contains("status=IntegrityLost") && record.contains(expected_evidence)
@@ -396,7 +398,8 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
         assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
         let anomaly = harness
             .runtime
-            .recovered_dispatch_anomalies
+            .attempted_dispatch_anomalies
+            .details()
             .first()
             .expect("post-call QPC failure record");
         assert!(anomaly.contains("status=ClockFailureAfterSend"), "{anomaly}");

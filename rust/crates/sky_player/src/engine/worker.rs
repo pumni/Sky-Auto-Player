@@ -1,4 +1,5 @@
 mod admission;
+mod anomaly_history;
 mod boot;
 mod cleanup;
 mod control;
@@ -19,6 +20,7 @@ pub(crate) use admission::{
     target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
     verify_safety_cleanup_target,
 };
+pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
 #[cfg(test)]
@@ -118,6 +120,7 @@ pub(crate) fn finalize_worker_for_test(
     worker_panicked: bool,
     terminal_trigger: Option<TerminalTrigger>,
     terminal_error: Option<String>,
+    attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     cleanup_observation: &mut cleanup::FinalizeTestObservation,
 ) -> u8 {
     let telemetry_output = parking_lot::Mutex::new(None);
@@ -143,6 +146,7 @@ pub(crate) fn finalize_worker_for_test(
                 abort_counts: HashMap::new(),
                 terminal_error,
                 secondary_errors: Vec::new(),
+                attempted_dispatch_anomalies,
                 last_published_error: None,
                 terminal_trigger,
             },
@@ -217,9 +221,9 @@ pub(crate) struct WorkerRuntime {
     /// syscall attempt crosses the pre-roll boundary even when its transport
     /// evidence is anomalous; that onset is reconciled and never replayed.
     pub(crate) musical_physical_attempt_started: bool,
-    /// Recovered anomalies are retained for terminal evidence without making
-    /// an otherwise recoverable session fail.
-    pub(crate) recovered_dispatch_anomalies: Vec<String>,
+    /// Attempted transport anomalies remain a terminal error latch while
+    /// allowing verified cleanup and later, never-attempted notes to proceed.
+    pub(crate) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
 }
 

@@ -191,9 +191,22 @@ later Down onsets that have never been attempted may continue, in authored
 order, after all final gates pass again. If ownership, release, or timing cannot
 be proved, playback stays blocked or exits fail-closed with the obligation
 retained. Recovering the physical key state does not convert the anomalous
-transport into a successful packet: the session retains its transport error and
-the normal clean-completion contract can still finish it as an error after
-later unattempted onsets have been dispatched.
+transport into a successful packet. The worker keeps an attempted-anomaly latch
+while it recovers, then promotes that latch to a terminal error during
+finalization. Later unattempted onsets may still run after verified cleanup and
+G, but a completed session with any attempted post-call anomaly ends in error.
+An already stronger terminal error remains primary; a concurrent terminal
+control cause remains recorded alongside the anomaly evidence.
+
+Attempted-anomaly diagnostics have bounded storage: the worker counts every
+attempt, counts omitted detail records, and retains at most 16 records (the
+first eight and rolling last eight). Each retained record is capped at 512
+bytes and preserves the available source action, raw insertion count, Win32
+error, attempt count, and QPC fields. The bounded sample is stored inline and
+does not add heap allocation to the healthy dispatch path. The terminal error
+latch depends on the total counter, not on which detail records remain. This is
+internal diagnostic evidence; telemetry schema 25 and public DTOs do not
+change.
 
 Musical Up-only packets use the same fresh focus/identity/control gate and may
 be replanned when that gate fails. Terminal and pause safety Up use the existing

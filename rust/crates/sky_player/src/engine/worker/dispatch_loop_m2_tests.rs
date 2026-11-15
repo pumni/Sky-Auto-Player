@@ -7,7 +7,7 @@ use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, SendEvidence,
     SendTransactionOutcome, SendTransactionStatus,
 };
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn staged_send_at(
@@ -28,6 +28,8 @@ fn staged_send_at(
     }
 }
 
+include!("dispatch_loop_m2_review_tests.rs");
+
 fn qpc_offset(harness: &ProductionDispatchTestHarness, us: u64) -> TimelineTicks {
     TimelineTicks::from_raw(
         harness
@@ -35,6 +37,12 @@ fn qpc_offset(harness: &ProductionDispatchTestHarness, us: u64) -> TimelineTicks
             .expect("convert authored offset")
             .as_u64(),
     )
+}
+
+fn wait_until_qpc(harness: &ProductionDispatchTestHarness, target: QpcTicks) {
+    while harness.qpc_now_for_test().expect("wait QPC") < target {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 fn test_action(index: u32, kind: ActionKind, scheduled_us: u64, scan: u16) -> KeyActionInput {
@@ -146,7 +154,8 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     let anomaly = harness
         .runtime
-        .recovered_dispatch_anomalies
+        .attempted_dispatch_anomalies
+        .details()
         .first()
         .expect("preserved raw anomaly evidence");
     assert!(anomaly.contains("source_action=12"), "{anomaly}");
@@ -278,7 +287,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
         .terminal_error
         .as_deref()
         .is_some_and(|error| error.contains("tracked safety cleanup failed")));
-    assert_eq!(harness.runtime.recovered_dispatch_anomalies.len(), 1);
+    assert_eq!(harness.runtime.attempted_dispatch_anomalies.retained_count(), 1);
 }
 
 #[test]
@@ -510,7 +519,12 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
     assert_eq!(harness.generation_accounting_for_test().active, 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    let anomaly = harness.runtime.recovered_dispatch_anomalies.first().expect("Up anomaly");
+    let anomaly = harness
+        .runtime
+        .attempted_dispatch_anomalies
+        .details()
+        .first()
+        .expect("Up anomaly");
     assert!(anomaly.contains("source_action=41"), "{anomaly}");
     assert!(anomaly.contains("up_mask=0x0001 down_mask=0x0000"), "{anomaly}");
     assert!(anomaly.contains("attempts=1 status=IntegrityLost"), "{anomaly}");

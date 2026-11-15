@@ -37,7 +37,8 @@ fn complete_transport_with_sender_timing_error_reconciles_before_continuation() 
     assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
     assert!(harness
         .runtime
-        .recovered_dispatch_anomalies
+        .attempted_dispatch_anomalies
+        .details()
         .first()
         .is_some_and(|record| record.contains("timing_error=Some(CounterUnavailable)")));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
@@ -104,7 +105,8 @@ fn complete_status_without_completion_qpc_is_reconciled_without_fabricating_time
     assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
     assert!(harness
         .runtime
-        .recovered_dispatch_anomalies
+        .attempted_dispatch_anomalies
+        .details()
         .first()
         .is_some_and(|error| error.contains("completion_qpc=unavailable")));
     assert_eq!(
@@ -171,7 +173,8 @@ fn complete_status_without_pre_call_qpc_is_reconciled_without_fabricating_time()
     ));
     assert!(harness
         .runtime
-        .recovered_dispatch_anomalies
+        .attempted_dispatch_anomalies
+        .details()
         .first()
         .is_some_and(|error| error.contains("pre_call_qpc=unavailable")));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
@@ -234,7 +237,8 @@ fn complete_status_with_invalid_qpc_order_is_reconciled_without_clock_substituti
     ));
     assert!(harness
         .runtime
-        .recovered_dispatch_anomalies
+        .attempted_dispatch_anomalies
+        .details()
         .first()
         .is_some_and(|error| error.contains("completion_qpc=")));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);

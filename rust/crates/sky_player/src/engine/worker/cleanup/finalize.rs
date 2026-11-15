@@ -40,6 +40,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         mut abort_counts,
         mut terminal_error,
         mut secondary_errors,
+        mut attempted_dispatch_anomalies,
         mut last_published_error,
         mut terminal_trigger,
     } = state;
@@ -324,6 +325,15 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     ) {
         *abort_counts.entry("panic").or_insert(0) += 1;
     }
+    // Apply the anomaly latch only after stronger worker, cleanup, scheduler,
+    // observer, and terminal-QPC errors have been collected. This preserves a
+    // more specific primary error while making every attempted anomaly
+    // terminal even when all retained details have been omitted or drained.
+    if let Some(summary) = attempted_dispatch_anomalies.terminal_error_summary() {
+        record_termination_error(&mut terminal_error, &mut secondary_errors, summary);
+    }
+    attempted_dispatch_anomalies.append_details_to(&mut secondary_errors);
+
     let terminal_abort_reason = if worker_panicked
         || cleanup_result.is_err()
         || terminal_error.is_some()
