@@ -14,8 +14,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 $targetTriple = 'x86_64-pc-windows-msvc'
 $profile = 'dist'
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'

@@ -466,6 +466,22 @@ if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Fina
 
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
+    throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
+}
+$manifestImportPattern = 'Import-Module (Join-Path $PSScriptRoot ''dispatch_harness_manifest.psm1'') -Force'
+$profileImportPattern = 'Import-Module (Join-Path $PSScriptRoot ''dispatch_qualification_profiles.psm1'') -Force'
+foreach ($scriptPath in @(
+        (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'),
+        (Join-Path $PSScriptRoot 'qualify_dispatch_core.ps1'),
+        (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1')
+    )) {
+    $manifestImportLine = (Select-String -LiteralPath $scriptPath -SimpleMatch -Pattern $manifestImportPattern | Select-Object -First 1).LineNumber
+    $profileImportLine = (Select-String -LiteralPath $scriptPath -SimpleMatch -Pattern $profileImportPattern | Select-Object -First 1).LineNumber
+    if (-not $manifestImportLine -or -not $profileImportLine -or $profileImportLine -le $manifestImportLine) {
+        throw ('DispatchCleanupM3 caller imports its public profile helper before initializing the manifest module: ' + $scriptPath)
+    }
+}
 $m3Profile = Get-DispatchCleanupM3Profile
 $m3RunnerGit = Get-DispatchM3GitCheckoutIdentity $repositoryRoot
 $m3RemoteRows = @(& git -C $repositoryRoot ls-remote origin ('refs/heads/' + $m3Profile.CandidateLineageBranch))
