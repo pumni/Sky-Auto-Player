@@ -333,7 +333,6 @@ pub(crate) struct WorkerResources {
 pub(super) struct WorkerCore {
     pub(super) resources: Option<WorkerResources>,
     pub(super) metrics: WorkerMetricsLocal,
-    pub(super) health: Option<WorkerHealthState>,
     pub(super) timing: Option<WorkerTimingState>,
     pub(super) runtime: WorkerRuntime,
     pub(super) errors: WorkerErrorState,

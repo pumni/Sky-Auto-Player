@@ -422,8 +422,39 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
 #[test]
 fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     use sky_dispatch_core::executor::DispatchDecision;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
-    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+            reason: "initial-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Down,
+            scheduled_us: 19_000,
+            scan_codes: vec![0x16].into(),
+            reason: "earlier-mixed-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: vec![0x15].into(),
+            reason: "mixed-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 39_000,
+            scan_codes: vec![0x16].into(),
+            reason: "later-up".into(),
+        },
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
     harness.attach_executor_for_test().expect("attach live scheduler");
     let epoch = harness.resources.playback.epoch;
@@ -470,10 +501,27 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     };
     assert_eq!(up_mask, 0b01);
     let mixed = harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .stage_candidate_with_scheduler_window_and_observer_for_test(
+            up_mask,
+            down_chord,
+            timing_window,
+            true,
+        )
         .expect("stage mixed candidate")
         .expect("mixed candidate");
     assert_eq!(mixed.packet_masks.down_mask, 0b10);
+    let expected_up_summary = mixed
+        .up_slot_timing_summary
+        .expect("mixed packet retains its Up timing summary");
+    assert!(
+        timing_window.authored_target_qpc < expected_up_summary.authored_target_qpc,
+        "the Down target precedes the Up target in this mixed packet"
+    );
+    let expected_up_window = (
+        expected_up_summary.authored_target_qpc,
+        expected_up_summary.musical_up_not_before_qpc,
+        expected_up_summary.hold_floor_mask,
+    );
     let accounting_before_replan = harness.generation_accounting_for_test();
 
     assert!(harness.target.publish(2), "publish a new target generation");
@@ -481,9 +529,21 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
         harness.qpc_now_for_test().expect("fallback Up sender QPC"),
     );
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(mixed, false),
+        harness.dispatch_staged_candidate_for_test(mixed, true),
         super::StagedDispatchOutcome::Dispatched
     ));
+
+    let fallback = match harness.observer.pop_front().expect("Up-only observation") {
+        crate::engine::worker::dispatch::observation::DispatchObservation::Down(packet) => packet,
+        other => panic!("expected Up-only packet observation, got {other:?}"),
+    };
+    assert_eq!(fallback.requested_packet, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
+    assert_eq!(fallback.physical_target_qpc, expected_up_window.0);
+    assert_eq!(
+        fallback.physical_timing_window.packet_not_before_qpc,
+        expected_up_window.1
+    );
+    assert_eq!(fallback.physical_timing_window.hold_floor_mask, expected_up_window.2);
 
     let captured = packets.lock().expect("mock packet capture");
     assert_eq!(captured.len(), 2, "stale target sends only the independent Up");

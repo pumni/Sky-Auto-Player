@@ -52,12 +52,6 @@ fn publish_focus_hint(focus_active: &AtomicBool, interrupt: &OwnedEvent, active:
     }
 }
 
-fn timeline_rebase_reason(_code: u8) -> Option<String> {
-    // Compatibility field only: authored dispatch no longer rebases its
-    // timeline and therefore never emits a reason.
-    None
-}
-
 fn signal_supervisor_expiry(shared: &SessionShared) {
     shared
         .commands
@@ -1367,9 +1361,9 @@ impl NativeDispatchSession {
             core_post_send_window_sample_count: local.core_post_send_window_sample_count,
             observer_window_sample_count: local.observer_window_sample_count,
             wait_window_sample_count: local.wait_window_sample_count,
-            timeline_rebase_count: local.timeline_rebase_count,
-            timeline_rebase_total_us: local.timeline_rebase_total_us,
-            timeline_rebase_max_us: local.timeline_rebase_max_us,
+            timeline_rebase_count: 0,
+            timeline_rebase_total_us: 0,
+            timeline_rebase_max_us: 0,
             core_post_send_max_us: local.core_post_send_max_us,
             wake_to_send_max_us: local.wake_to_send_max_us,
             observer_duration_max_us: local.observer_duration_max_us,

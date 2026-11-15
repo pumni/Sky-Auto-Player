@@ -1,6 +1,7 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
 use super::super::{
-    DurationTicks, QpcError, TimelineTicks, publish_lifecycle_metrics, try_publish_metrics,
+    DurationTicks, QpcError, TimelineTicks, publish_lifecycle_metrics,
+    try_publish_metrics_with_update,
 };
 use super::admission::{FinalControlAdmission, final_control_precheck};
 use super::{
@@ -165,7 +166,8 @@ fn wait_for_blocked_resume_replan(
 }
 
 pub(crate) fn publish_live_metrics_after_dispatch(
-    local: &super::WorkerMetricsLocal,
+    local: &mut super::WorkerMetricsLocal,
+    backend: &sky_dispatch_win32::input::TrackedKeyState,
     shared: &super::SharedMetrics,
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
@@ -173,7 +175,9 @@ pub(crate) fn publish_live_metrics_after_dispatch(
     let Ok(now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(now_qpc.as_u64())) else {
         return;
     };
-    let _ = try_publish_metrics(local, shared, qpc_clock, now_us, false);
+    let _ = try_publish_metrics_with_update(local, shared, qpc_clock, now_us, false, |local| {
+        publish_backend_counters(backend, local)
+    });
 }
 
 #[inline]
@@ -236,7 +240,8 @@ pub struct StagedCandidate {
     pub(crate) preflight_target: Option<TargetStamp>,
     pub(crate) source_action_index: u32,
     pub(crate) trace_kind: u8,
-    pub(crate) up_slot_timings: SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>,
+    pub(crate) up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
+    pub(crate) up_slot_timings: Option<SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
 }
 
 fn down_authored_target(
@@ -294,6 +299,7 @@ pub(crate) fn stage_candidate(
     up_mask: u16,
     down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    capture_up_slot_timings: bool,
     target: &SessionTarget,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
@@ -326,11 +332,23 @@ pub(crate) fn stage_candidate(
         None
     };
 
-    let up_slot_timings = if up_mask != 0 {
-        resources.scheduler.up_slot_timings(up_mask)
-    } else {
-        SmallVec::new()
-    };
+    let up_slot_timing_summary = resources
+        .scheduler
+        .up_slot_timing_summary(up_mask, resources.playback.epoch)
+        .map_err(|error| format!("Up slot timing summary arithmetic failure: {error}"))?;
+    let up_slot_timings = capture_up_slot_timings.then(|| {
+        if up_mask != 0 {
+            resources.scheduler.up_slot_timings(up_mask)
+        } else {
+            SmallVec::new()
+        }
+    });
+    if let Some(timings) = &up_slot_timings
+        && timings.len()
+            != usize::from(up_slot_timing_summary.map_or(0, |summary| summary.slot_count))
+    {
+        return Err("Up slot timing summary disagrees with observer attribution".to_string());
+    }
 
     let authored_target_qpc = timing_window.authored_target_qpc;
     let authored_target_ticks = authored_target_qpc
@@ -355,8 +373,8 @@ pub(crate) fn stage_candidate(
     };
     let source_action_index = if has_down {
         down_chord.map_or(0, |c| c.source_action_index)
-    } else if let Some(first_up) = up_slot_timings.first() {
-        first_up.source_action_index
+    } else if let Some(summary) = up_slot_timing_summary {
+        summary.first_source_action_index
     } else {
         0
     };
@@ -374,6 +392,7 @@ pub(crate) fn stage_candidate(
         preflight_target,
         source_action_index,
         trace_kind,
+        up_slot_timing_summary,
         up_slot_timings,
     }))
 }
@@ -446,16 +465,19 @@ pub(crate) fn dispatch_staged_candidate(
             FinalDownAdmissionResult::Replan => {
                 match stage_up_only_for_stale_mixed_candidate(
                     &candidate,
-                    target,
-                    config.focus.require_focus,
-                    focus_active,
-                    FinalControlSignals {
-                        quit_requested,
-                        skip_requested,
-                        panic_requested,
-                        desired_pause,
-                        supervisor_expired,
-                        system_power: Some(system_power),
+                    SchedulerStageAdmission {
+                        target,
+                        require_focus: config.focus.require_focus,
+                        focus_active,
+                        capture_up_slot_timings: observer.is_some(),
+                        control_signals: FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        },
                     },
                     resources,
                     runtime,
@@ -521,9 +543,14 @@ pub(crate) fn dispatch_staged_candidate(
         }
     }
 
-    if candidate.up_mask != 0 && candidate.up_slot_timings.is_empty() {
+    if candidate.up_mask != 0 && candidate.up_slot_timing_summary.is_none() {
         runtime.terminal_error =
-            Some("missing Up slot timing attribution in staged candidate".to_string());
+            Some("missing Up slot timing summary in staged candidate".to_string());
+        return StagedDispatchOutcome::Exit;
+    }
+    if observer.is_some() && candidate.up_mask != 0 && candidate.up_slot_timings.is_none() {
+        runtime.terminal_error =
+            Some("observer Up-slot attribution missing from staged candidate".to_string());
         return StagedDispatchOutcome::Exit;
     }
 
@@ -714,12 +741,18 @@ pub(crate) fn dispatch_staged_candidate(
     );
 
     if let Some(observer) = observer {
-        let mut up_slots = if candidate.up_slot_timings.is_empty() {
+        let up_slot_count = usize::from(
+            candidate
+                .up_slot_timing_summary
+                .map_or(0, |summary| summary.slot_count),
+        );
+        let up_slot_timings = candidate.up_slot_timings.as_deref().unwrap_or_default();
+        let mut up_slots = if up_slot_count == 0 {
             None
         } else {
             observer.acquire_up_slots()
         };
-        if !candidate.up_slot_timings.is_empty() && up_slots.is_none() {
+        if up_slot_count != 0 && up_slots.is_none() {
             local_metrics.observer_dropped_samples =
                 local_metrics.observer_dropped_samples.saturating_add(1);
         }
@@ -729,7 +762,7 @@ pub(crate) fn dispatch_staged_candidate(
                 .as_mut()
                 .expect("owned slot storage")
                 .iter_mut()
-                .zip(&candidate.up_slot_timings)
+                .zip(up_slot_timings)
             {
                 *slot = *timing;
             }
@@ -744,7 +777,7 @@ pub(crate) fn dispatch_staged_candidate(
                 .pending_wait_observation
                 .map_or(0, |wait| wait.spin_ticks.as_u64()),
             up_slots,
-            up_slot_count: candidate.up_slot_timings.len() as u8,
+            up_slot_count: up_slot_count as u8,
             up_pre_call_available: send_result.evidence.started_ticks.is_some(),
             epoch_qpc: resources.playback.epoch,
             allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
@@ -777,17 +810,22 @@ pub(crate) fn dispatch_staged_candidate(
         publish_down_observation(
             observer,
             crate::engine::worker::dispatch::observation::DispatchObservation::Down(observation),
-            candidate.up_slot_timings.len(),
+            up_slot_count,
             local_metrics,
         );
-    } else if !candidate.up_slot_timings.is_empty() {
-        account_unobserved_up_slots(local_metrics, candidate.up_slot_timings.len());
+    } else if let Some(summary) = candidate.up_slot_timing_summary {
+        account_unobserved_up_slots(local_metrics, usize::from(summary.slot_count));
     }
     super::dispatch::publish_pending_wait_observation(runtime, observer, local_metrics);
 
     if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
-        publish_backend_counters(&resources.backend, local_metrics);
-        publish_live_metrics_after_dispatch(local_metrics, metrics, qpc_clock, completion_qpc);
+        publish_live_metrics_after_dispatch(
+            local_metrics,
+            &resources.backend,
+            metrics,
+            qpc_clock,
+            completion_qpc,
+        );
     }
 
     StagedDispatchOutcome::Dispatched
@@ -1440,16 +1478,19 @@ pub(super) fn dispatch(
                 Some(send_action @ SchedulerAction::Send { .. }) => {
                     match stage_scheduler_action_preserving_due_up(
                         send_action,
-                        target,
-                        config.focus.require_focus,
-                        focus_active,
-                        FinalControlSignals {
-                            quit_requested,
-                            skip_requested,
-                            panic_requested,
-                            desired_pause,
-                            supervisor_expired,
-                            system_power: Some(system_power),
+                        SchedulerStageAdmission {
+                            target,
+                            require_focus: config.focus.require_focus,
+                            focus_active,
+                            capture_up_slot_timings: core.observer.pending.is_some(),
+                            control_signals: FinalControlSignals {
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                                supervisor_expired,
+                                system_power: Some(system_power),
+                            },
                         },
                         resources,
                         &mut core.runtime,
@@ -1509,16 +1550,19 @@ pub(super) fn dispatch(
                         StagedDispatchOutcome::Replan => {
                             let fallback = match stage_up_only_for_stale_mixed_candidate(
                                 staged_candidate,
-                                target,
-                                config.focus.require_focus,
-                                focus_active,
-                                FinalControlSignals {
-                                    quit_requested,
-                                    skip_requested,
-                                    panic_requested,
-                                    desired_pause,
-                                    supervisor_expired,
-                                    system_power: Some(system_power),
+                                SchedulerStageAdmission {
+                                    target,
+                                    require_focus: config.focus.require_focus,
+                                    focus_active,
+                                    capture_up_slot_timings: core.observer.pending.is_some(),
+                                    control_signals: FinalControlSignals {
+                                        quit_requested,
+                                        skip_requested,
+                                        panic_requested,
+                                        desired_pause,
+                                        supervisor_expired,
+                                        system_power: Some(system_power),
+                                    },
                                 },
                                 resources,
                                 &mut core.runtime,

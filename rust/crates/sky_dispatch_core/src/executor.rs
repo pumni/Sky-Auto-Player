@@ -238,6 +238,17 @@ impl UpSlotTiming {
     };
 }
 
+/// Compact timing data needed to stage an Up packet when per-slot observer
+/// attribution is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpSlotTimingSummary {
+    pub slot_count: u8,
+    pub first_source_action_index: u32,
+    pub authored_target_qpc: QpcTicks,
+    pub musical_up_not_before_qpc: QpcTicks,
+    pub hold_floor_mask: u16,
+}
+
 impl DispatchExecutor {
     /// Construct a new 15-slot executor from a validated `RuntimeSchedule`.
     pub fn new<F, E>(
@@ -429,6 +440,65 @@ impl DispatchExecutor {
             }
         }
         timings
+    }
+
+    /// Summarize Up timing without constructing or copying per-slot observer
+    /// records. The result preserves the Up-only packet window and source
+    /// attribution needed by the worker when a mixed packet is replanned.
+    pub fn up_slot_timing_summary(
+        &self,
+        up_mask: u16,
+        epoch_qpc: QpcTicks,
+    ) -> Result<Option<UpSlotTimingSummary>, TimeArithmeticError> {
+        let mut remaining = up_mask;
+        let mut slot_count = 0u8;
+        let mut first_source_action_index = None;
+        let mut authored_target_qpc = None;
+        let mut musical_up_not_before_qpc = None;
+        let mut hold_floor_mask = 0u16;
+
+        while remaining != 0 {
+            let slot_index = remaining.trailing_zeros() as usize;
+            let slot_mask = 1u16 << slot_index;
+            remaining &= !slot_mask;
+
+            let Some(slot) = self.slots.get(slot_index) else {
+                continue;
+            };
+            if slot.active_generation.is_none() {
+                continue;
+            }
+
+            let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
+                slot.authored_up_offset_ticks.as_u64(),
+            ))?;
+            let release_not_before_qpc = authored_up_qpc.max(slot.release_not_before_qpc);
+            slot_count += 1;
+            first_source_action_index.get_or_insert(slot.paired_up_source_action_index);
+            authored_target_qpc = Some(
+                authored_target_qpc.map_or(authored_up_qpc, |current: QpcTicks| {
+                    current.min(authored_up_qpc)
+                }),
+            );
+            musical_up_not_before_qpc = Some(
+                musical_up_not_before_qpc.map_or(release_not_before_qpc, |current: QpcTicks| {
+                    current.max(release_not_before_qpc)
+                }),
+            );
+            if slot.release_not_before_qpc > authored_up_qpc {
+                hold_floor_mask |= slot_mask;
+            }
+        }
+
+        Ok(authored_target_qpc.zip(musical_up_not_before_qpc).map(
+            |(authored_target_qpc, musical_up_not_before_qpc)| UpSlotTimingSummary {
+                slot_count,
+                first_source_action_index: first_source_action_index.unwrap_or_default(),
+                authored_target_qpc,
+                musical_up_not_before_qpc,
+                hold_floor_mask,
+            },
+        ))
     }
 
     #[inline]

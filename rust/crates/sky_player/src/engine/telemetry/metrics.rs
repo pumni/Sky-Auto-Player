@@ -242,14 +242,6 @@ pub struct WorkerMetricsLocal {
     pub core_post_send_window_sample_count: u64,
     pub observer_window_sample_count: u64,
     pub wait_window_sample_count: u64,
-    pub timeline_rebase_count: u64,
-    pub timeline_rebase_total_us: u64,
-    pub timeline_rebase_max_us: u64,
-    pub timeline_rebase_total_ticks: DurationTicks,
-    pub timeline_rebase_max_ticks: DurationTicks,
-    /// Deprecated compatibility field. Authored dispatch never rebases its
-    /// timeline, so production always leaves this at zero.
-    pub timeline_rebase_last_reason: u8,
     pub dispatch_occupancy_max_us: u64,
     pub send_down_degraded_samples: u64,
     pub send_up_degraded_samples: u64,
@@ -554,24 +546,6 @@ impl WorkerMetricsLocal {
         self.observer_duration_max_us = self
             .observer_duration_max_us
             .max(observer.observer_duration_max_us);
-        self.timeline_rebase_count = self
-            .timeline_rebase_count
-            .max(observer.timeline_rebase_count);
-        self.timeline_rebase_total_us = self
-            .timeline_rebase_total_us
-            .max(observer.timeline_rebase_total_us);
-        self.timeline_rebase_max_us = self
-            .timeline_rebase_max_us
-            .max(observer.timeline_rebase_max_us);
-        self.timeline_rebase_total_ticks = self
-            .timeline_rebase_total_ticks
-            .max(observer.timeline_rebase_total_ticks);
-        self.timeline_rebase_max_ticks = self
-            .timeline_rebase_max_ticks
-            .max(observer.timeline_rebase_max_ticks);
-        if observer.timeline_rebase_last_reason != 0 {
-            self.timeline_rebase_last_reason = observer.timeline_rebase_last_reason;
-        }
         self.observer_dropped_samples = self
             .observer_dropped_samples
             .saturating_add(observer.observer_dropped_samples);
@@ -671,12 +645,26 @@ pub(crate) struct SharedMetrics {
     pub(crate) publish_count: AtomicU64,
 }
 
+#[cfg(test)]
 pub(crate) fn try_publish_metrics(
-    local: &WorkerMetricsLocal,
+    local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
     force: bool,
+) -> bool {
+    try_publish_metrics_with_update(local, shared, qpc_clock, now_us, force, |_| {})
+}
+
+/// Apply dispatch-owned projection fields only when a snapshot is due and its
+/// nonblocking writer slot is available.
+pub(crate) fn try_publish_metrics_with_update(
+    local: &mut WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+    force: bool,
+    before_project: impl FnOnce(&mut WorkerMetricsLocal),
 ) -> bool {
     try_publish_metrics_from(
         local,
@@ -685,11 +673,12 @@ pub(crate) fn try_publish_metrics(
         now_us,
         force,
         SnapshotOwner::Dispatch,
+        before_project,
     )
 }
 
 pub(crate) fn try_publish_observer_metrics(
-    local: &WorkerMetricsLocal,
+    local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
@@ -702,6 +691,7 @@ pub(crate) fn try_publish_observer_metrics(
         now_us,
         force,
         SnapshotOwner::Observer,
+        |_| {},
     )
 }
 
@@ -712,12 +702,13 @@ enum SnapshotOwner {
 }
 
 fn try_publish_metrics_from(
-    local: &WorkerMetricsLocal,
+    local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
     force: bool,
     owner: SnapshotOwner,
+    before_project: impl FnOnce(&mut WorkerMetricsLocal),
 ) -> bool {
     let last_publish_us = match owner {
         SnapshotOwner::Dispatch => &shared.last_publish_us,
@@ -732,6 +723,7 @@ fn try_publish_metrics_from(
             let Some(mut slot) = shared.snapshot.dispatch.try_write() else {
                 return false;
             };
+            before_project(local);
             *slot = project_metrics_for_snapshot(local, qpc_clock);
             true
         }
@@ -739,6 +731,7 @@ fn try_publish_metrics_from(
             let Some(mut slot) = shared.snapshot.observer.try_write() else {
                 return false;
             };
+            before_project(local);
             *slot = project_metrics_for_snapshot(local, qpc_clock);
             true
         }

@@ -301,6 +301,16 @@ impl ProductionDispatchTestHarness {
         down_chord: Option<DownChordMetadata>,
         fallback_ticks: TimelineTicks,
     ) -> Result<Option<StagedCandidate>, String> {
+        self.stage_candidate_with_observer_for_test(up_mask, down_chord, fallback_ticks, false)
+    }
+
+    pub fn stage_candidate_with_observer_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<DownChordMetadata>,
+        fallback_ticks: TimelineTicks,
+        capture_up_slot_timings: bool,
+    ) -> Result<Option<StagedCandidate>, String> {
         let epoch = self.resources.playback.epoch;
         let requested_qpc = epoch
             .checked_add_duration(DurationTicks::from_raw(fallback_ticks.as_u64()))
@@ -343,10 +353,11 @@ impl ProductionDispatchTestHarness {
                 actual_chord.map(|chord| chord.down_mask),
             ));
         }
-        self.stage_candidate_with_scheduler_window_for_test(
+        self.stage_candidate_with_scheduler_window_and_observer_for_test(
             actual_up_mask,
             actual_chord,
             timing_window,
+            capture_up_slot_timings,
         )
     }
 
@@ -356,10 +367,26 @@ impl ProductionDispatchTestHarness {
         down_chord: Option<DownChordMetadata>,
         timing_window: DispatchTimingWindow,
     ) -> Result<Option<StagedCandidate>, String> {
+        self.stage_candidate_with_scheduler_window_and_observer_for_test(
+            up_mask,
+            down_chord,
+            timing_window,
+            false,
+        )
+    }
+
+    pub fn stage_candidate_with_scheduler_window_and_observer_for_test(
+        &mut self,
+        up_mask: u16,
+        down_chord: Option<DownChordMetadata>,
+        timing_window: DispatchTimingWindow,
+        capture_up_slot_timings: bool,
+    ) -> Result<Option<StagedCandidate>, String> {
         stage_candidate(
             up_mask,
             down_chord,
             timing_window,
+            capture_up_slot_timings,
             &self.target,
             &mut self.resources,
             &mut self.runtime,

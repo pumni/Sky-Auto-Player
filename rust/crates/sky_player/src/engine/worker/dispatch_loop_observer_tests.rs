@@ -341,7 +341,12 @@ fn wait_observation_is_published_promptly_on_dispatch() {
         &mut harness.local_metrics,
     );
     let candidate = harness
-        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_with_observer_for_test(
+            1,
+            None,
+            TimelineTicks::from_raw(20_000),
+            true,
+        )
         .expect("stage Up")
         .expect("Up candidate");
     assert!(matches!(
@@ -416,7 +421,12 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
     );
     let chord = harness.current_executor_chord_for_test();
     let mixed = harness
-        .stage_candidate_for_test(1, chord, TimelineTicks::from_raw(1_000))
+        .stage_candidate_with_observer_for_test(
+            1,
+            chord,
+            TimelineTicks::from_raw(1_000),
+            true,
+        )
         .expect("stage mixed")
         .expect("mixed");
     assert_ne!(mixed.packet_masks.up_mask, 0);
@@ -565,7 +575,12 @@ fn final_control_rejects_staged_down_and_up_before_send() {
         super::StagedDispatchOutcome::Dispatched
     ));
     let candidate = up
-        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_with_observer_for_test(
+            1,
+            None,
+            TimelineTicks::from_raw(20_000),
+            true,
+        )
         .expect("stage Up")
         .expect("Up candidate");
     up.quit_requested.store(true, Ordering::Release);
@@ -624,7 +639,7 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
             .as_u64(),
     );
     let up = harness
-        .stage_candidate_for_test(3, None, both_ups_due)
+        .stage_candidate_with_observer_for_test(3, None, both_ups_due, true)
         .expect("stage Up")
         .expect("Up");
     assert!(matches!(
@@ -753,7 +768,7 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     }
 
     let up = harness
-        .stage_candidate_for_test(3, None, both_ups_due)
+        .stage_candidate_with_observer_for_test(3, None, both_ups_due, true)
         .expect("stage coalesced Up")
         .expect("Up");
     assert!(matches!(

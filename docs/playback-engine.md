@@ -199,6 +199,19 @@ of the authored target, slot release floor and packet not-before floor to the
 sampled pre-call QPC; it is unavailable when that sample is missing. Packet-level
 summaries do not provide per-key p95/p99.
 
+Worker staging always keeps a scalar Up summary with the active-slot count,
+first source action, authored target, release deadline, and hold-floor mask. It
+materializes the fixed-capacity per-slot records only when the observer queue
+is enabled. Observer-off mixed-packet replans use the same summary to retain the
+Up-only timing window; observer-on traces retain each slot's source and timing
+fields. Expected Up-slot accounting still partitions into captured, dropped,
+and not captured by mode.
+
+Live dispatch snapshots remain on the existing 50 ms cadence. Backend counters
+are projected only when that cadence is due and the snapshot writer slot is
+available. Focus/manual-pause lifecycle snapshots and terminal/finalization
+snapshots still refresh backend counters at their existing publication points.
+
 The healthy real-time dispatch path is checked for zero heap allocations by
 [`rt_dispatch_no_alloc.rs`](../rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs).
 The Prepare UI also shows an offline, read-only estimate from the authored song,
@@ -212,8 +225,8 @@ acknowledge the estimate. The desktop consumer is
 the simulator is in `apps/desktop/src-tauri/src/native_runtime/playback/timing_advisory.rs`.
 
 The bounded observation producer does not sample queue occupancy; the observer
-consumer owns queue high-watermark sampling. Queue diagnostics and Up-slot
-accounting remain off the real-time producer suffix.
+consumer owns queue high-watermark sampling and per-slot sidecar accounting.
+The producer keeps only bounded scalar expected/loss totals.
 
 The live `DispatchExecutor` stores compact chord headers and their intents in a
 contiguous arena. `MAX_EXECUTOR_BYTES` bounds the calculated capacities of

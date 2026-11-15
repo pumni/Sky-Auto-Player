@@ -362,6 +362,28 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
         .as_u64()
         .saturating_sub(timing1.authored_up_offset_ticks.as_u64());
     assert_eq!(floor_disp1, 0);
+
+    let epoch = QpcTicks::from_raw(1_000);
+    let summary = exec
+        .up_slot_timing_summary(0b11, epoch)
+        .expect("summary arithmetic")
+        .expect("active Up slots");
+    assert_eq!(summary.slot_count, 2);
+    assert_eq!(summary.first_source_action_index, 11);
+    assert_eq!(summary.authored_target_qpc, QpcTicks::from_raw(26_000));
+    assert_eq!(
+        summary.musical_up_not_before_qpc,
+        QpcTicks::from_raw(41_000)
+    );
+    assert_eq!(summary.hold_floor_mask, 0b01);
+    assert_eq!(
+        exec.up_slot_timing_summary(0x8001, epoch)
+            .expect("summary ignores bits outside the 15-slot scheduler")
+            .expect("slot zero remains active"),
+        exec.up_slot_timing_summary(0b1, epoch)
+            .expect("in-range summary arithmetic")
+            .expect("slot zero remains active")
+    );
 }
 #[test]
 fn executor_storage_admission_rejects_overflow_and_budget_excess() {

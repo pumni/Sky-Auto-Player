@@ -31,6 +31,8 @@ pub use shared::SystemPowerState;
 pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use telemetry::TRACE_FLAG_DEFERRED;
+#[cfg(test)]
+pub(crate) use telemetry::try_publish_metrics;
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NATIVE_UP_SLOT_TRACE_CAPACITY, NativeTelemetryOutput,
     NativeTelemetrySummary, RtTraceRecord, TelemetryMode, TimestampProvenance, TimingSemantics,
@@ -40,8 +42,8 @@ pub(crate) use telemetry::{
     SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_RECOVERY, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
     TRACE_KIND_MIXED, TRACE_KIND_UP, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector,
     TraceContext, TraceDelivery, TraceTiming, UpSlotLossReason, cpu_metrics_sample_due,
-    publish_lifecycle_metrics, trace_outcome_code, trace_send_status_code, try_publish_metrics,
-    try_publish_observer_metrics,
+    publish_lifecycle_metrics, trace_outcome_code, trace_send_status_code,
+    try_publish_metrics_with_update, try_publish_observer_metrics,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use test_support::CommandTimingResult;

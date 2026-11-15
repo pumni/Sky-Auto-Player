@@ -774,14 +774,14 @@ fn cpu_metrics_sampling_is_due_only_at_the_interval_boundary() {
 #[test]
 fn healthy_metric_publication_is_throttled_but_force_is_immediate() {
     let shared = SharedMetrics::default();
-    let local = WorkerMetricsLocal::default();
+    let mut local = WorkerMetricsLocal::default();
     let qpc_clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
-    try_publish_metrics(&local, &shared, qpc_clock, 0, false);
-    try_publish_metrics(&local, &shared, qpc_clock, 49_999, false);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 0, false);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 49_999, false);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 0);
-    try_publish_metrics(&local, &shared, qpc_clock, 50_000, false);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 50_000, false);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 1);
-    try_publish_metrics(&local, &shared, qpc_clock, 50_001, true);
+    try_publish_metrics(&mut local, &shared, qpc_clock, 50_001, true);
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 2);
 }
 

@@ -19,9 +19,8 @@ use super::super::{
 };
 use super::admission::focus_matches_hwnd;
 use super::{
-    DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
-    WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target, initialize_startup,
-    load_target_stamp,
+    DispatchHealthOptions, StartupResources, Worker, WorkerResources, WorkerSchedulingGuards,
+    ensure_preflight_for_target, initialize_startup, load_target_stamp,
 };
 use crate::engine::config::{CALIBRATION_SAMPLES, StartupCalibrationPlacement};
 use epoch::compute_playback_epoch;
@@ -428,13 +427,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         wait_warn_us: config.timing.input_path_warn_us,
         ..DispatchHealthOptions::default()
     };
-    core.health = Some(WorkerHealthState {
-        options: health_options,
-        sendinput_window: HealthWindow::default(),
-        core_post_send_window: HealthWindow::default(),
-        observer_window: HealthWindow::default(),
-        wait_window: HealthWindow::default(),
-    });
     core.metrics.sendinput_warn_threshold_us = health_options.sendinput_warn_floor_us;
     core.metrics.core_post_send_warn_threshold_us = health_options.core_post_send_warn_us;
     core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
