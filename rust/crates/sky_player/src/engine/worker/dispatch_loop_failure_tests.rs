@@ -54,17 +54,16 @@ fn sender_failure_record_for_test(
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Exit
+        super::StagedDispatchOutcome::Dispatched
     ));
     let record = harness
         .runtime
-        .terminal_error
-        .as_ref()
-        .expect("terminal sender error record")
+        .recovered_dispatch_anomalies
+        .first()
+        .expect("recovered sender anomaly record")
         .clone();
     let cleanup = harness.finalize_for_test();
-    assert_eq!(cleanup.active_mask, 0);
-    assert_eq!(cleanup.possibly_active_mask, 0);
+    assert_eq!(cleanup.release_obligation_mask, 0);
     record
 }
 
@@ -246,31 +245,30 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
 
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::StagedDispatchOutcome::Exit
+            super::StagedDispatchOutcome::Dispatched
         ));
-        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_ne!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_eq!(harness.resources.scheduler.accounting().activated, 0);
+        assert_eq!(harness.resources.scheduler.accounting().cancelled, 2);
         assert_eq!(
             harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-            Some(0)
+            None
         );
-        assert_eq!(harness.resources.backend.in_flight_mask, packet_mask);
-        assert_eq!(
-            harness.resources.backend.release_obligation_mask() & packet_mask,
-            packet_mask
-        );
-        let error = harness
+        assert_eq!(harness.resources.backend.in_flight_mask, 0);
+        assert_eq!(harness.resources.backend.release_obligation_mask() & packet_mask, 0);
+        assert!(harness
             .runtime
-            .terminal_error
-            .as_deref()
-            .expect("terminal sender error");
-        assert!(error.contains("status=IntegrityLost"), "{error}");
-        assert!(error.contains(expected_evidence), "{error}");
+            .recovered_dispatch_anomalies
+            .first()
+            .is_some_and(|record| {
+                record.contains("status=IntegrityLost") && record.contains(expected_evidence)
+            }));
         let _ = harness.finalize_for_test();
     }
 }
 
 #[test]
-fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_commit() {
+fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_replay() {
     use sky_dispatch_core::executor::DispatchDecision;
     use sky_dispatch_win32::clock::QpcError;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -371,7 +369,7 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
         harness.set_mock_sender_start_qpc_for_test(mixed_target);
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::StagedDispatchOutcome::Exit
+            super::StagedDispatchOutcome::Dispatched
         ));
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
         assert_eq!(harness.local_metrics.precision_packet_attempts, 2);
@@ -382,39 +380,37 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
             1
         );
         assert_eq!(harness.local_metrics.transport_anomalies, 1);
-        assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+        let accounting_after = harness.generation_accounting_for_test();
+        assert_eq!(accounting_after.total, accounting_before.total);
+        assert_eq!(accounting_after.activated, 1);
+        assert_eq!(accounting_after.cancelled, 2);
+        assert_eq!(accounting_after.active, 0);
         assert_eq!(
             harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-            Some(1),
-            "QPC failure cannot advance the production Down cursor"
+            None,
+            "verified cleanup consumes the syscall-attempted B onset exactly once"
         );
-        let obligation = harness.release_obligation_mask_for_test();
-        match inserted_count {
-            0 => {
-                assert_eq!(obligation, 0b01, "zero insertion retains only prior held A");
-                assert_eq!(harness.resources.backend.in_flight_mask, 0);
-                assert_eq!(harness.resources.backend.sendinput_zero_progress_failures, 1);
-                assert_eq!(harness.resources.backend.sendinput_partial_events, 0);
-            }
-            1 | 2 => {
-                assert_eq!(obligation, 0b11, "partial/full insert without completion is uncertain");
-                assert_eq!(harness.resources.backend.in_flight_mask, 0b11);
-                assert_eq!(
-                    harness.resources.backend.sendinput_partial_events,
-                    u64::from(inserted_count == 1)
-                );
-            }
-            _ => unreachable!(),
-        }
-        let error = harness
+        assert_eq!(harness.release_obligation_mask_for_test(), 0);
+        assert_eq!(harness.resources.backend.in_flight_mask, 0);
+        assert_eq!(harness.resources.backend.sendinput_partial_events, u64::from(inserted_count == 1));
+        assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
+        let anomaly = harness
             .runtime
-            .terminal_error
-            .as_deref()
+            .recovered_dispatch_anomalies
+            .first()
             .expect("post-call QPC failure record");
-        assert!(error.contains("status=ClockFailureAfterSend"), "{error}");
-        assert!(error.contains("first_inserted="), "{error}");
-        assert!(error.contains("completion_qpc=unavailable"), "{error}");
-        assert_eq!(packets.lock().expect("initial packet capture").len(), 1);
+        assert!(anomaly.contains("status=ClockFailureAfterSend"), "{anomaly}");
+        assert!(anomaly.contains("first_inserted="), "{anomaly}");
+        assert!(anomaly.contains("completion_qpc=unavailable"), "{anomaly}");
+        assert_eq!(
+            packets.lock().expect("initial packet capture").len(),
+            1,
+            "the original A onset had exactly one healthy packet"
+        );
+        assert!(
+            anomaly.contains("source_action=2 source_chord=1 up_mask=0x0001 down_mask=0x0002"),
+            "the attempted mixed B onset is identified exactly: {anomaly}"
+        );
         let _ = harness.finalize_for_test();
     }
 }

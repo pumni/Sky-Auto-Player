@@ -41,17 +41,13 @@ fn packet_outcome_proves_zero_transport(
                 && evidence.retry_reason == PacketRetryReason::None
         }
         SendTransactionStatus::ZeroProgress => {
-            evidence.attempts <= 1
+            evidence.attempts == 0
                 && matches!(
                     evidence.retry_reason,
                     PacketRetryReason::None | PacketRetryReason::ZeroProgress
                 )
         }
-        SendTransactionStatus::ClockFailureAfterSend => {
-            evidence.attempts == 1
-                && evidence.timing_error.is_some()
-                && evidence.retry_reason == PacketRetryReason::None
-        }
+        SendTransactionStatus::PreparationRejected => evidence.attempts == 0,
         _ => false,
     }
 }
@@ -105,7 +101,10 @@ impl TrackedKeyState {
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
             let outcome =
                 self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
-            if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+            if defer_journal_commit
+                && packet_outcome_proves_zero_transport(packet, outcome)
+                && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
+            {
                 self.in_flight_mask = previous_in_flight_mask;
             }
             #[cfg(any(test, feature = "test-support"))]
@@ -148,7 +147,10 @@ impl TrackedKeyState {
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
         let outcome =
             self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
-        if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+        if defer_journal_commit
+            && packet_outcome_proves_zero_transport(packet, outcome)
+            && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
+        {
             self.in_flight_mask = previous_in_flight_mask;
         }
         #[cfg(any(test, feature = "test-support"))]
@@ -693,6 +695,13 @@ impl TrackedKeyState {
                     "physical packet made zero progress: {} events requested",
                     packet.event_count()
                 ));
+                if outcome.evidence.attempts != 0 && packet.down_mask != 0 {
+                    // A zero raw insertion count does not prove a Down was not
+                    // observed by the target. Keep a conservative release
+                    // obligation until the independent safety probe reconciles it.
+                    self.active_mask &= !packet.down_mask;
+                    self.possibly_active_mask |= packet.down_mask;
+                }
             }
             SendTransactionStatus::PreparationRejected => {
                 self.chords_rejected = self.chords_rejected.saturating_add(1);

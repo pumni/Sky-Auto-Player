@@ -166,6 +166,9 @@ pub(crate) type FinalGateRaceHook = Arc<
         + Sync,
 >;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) type FinalGateBeforeSyscallHook = Arc<dyn Fn() + Send + Sync>;
+
 /// Deliberate session profiles. The profile owns backend/policy selection so
 /// callers do not compose a contradictory matrix of booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

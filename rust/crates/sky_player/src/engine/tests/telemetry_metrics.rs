@@ -1103,7 +1103,7 @@ fn termination_error_aggregation_preserves_primary_and_secondary_errors() {
 }
 
 #[test]
-fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
+fn persistent_zero_progress_down_is_not_replayed_and_next_unattempted_chord_is_sent() {
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -1136,6 +1136,7 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid fault-injection schedule");
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let script = FaultInjectionScript {
         entries: vec![
             (
@@ -1153,6 +1154,7 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
                 },
             ),
         ],
+        send_input_capture: Some(Arc::clone(&send_input_capture)),
         ..FaultInjectionScript::default()
     };
     let session = NativeDispatchSession::new(test_session_options(
@@ -1170,8 +1172,11 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "error", "zero progress must be terminal");
-    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(
+        snapshot.status, "error",
+        "zero progress snapshot: {snapshot:?}"
+    );
+    assert_eq!(snapshot.precision_packet_attempts, 3);
     assert_eq!(snapshot.sendinput_zero_progress_failures, 1);
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.transport_anomalies, 1);
@@ -1180,9 +1185,69 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
         snapshot
             .terminal_error
             .as_deref()
-            .is_some_and(|error| !error.starts_with("clean completion contract failed:")),
-        "transport fault identity must survive finalization: {snapshot:?}"
+            .is_some_and(|error| error.starts_with("clean completion contract failed:"))
     );
+    assert_eq!(snapshot.generation_accounting.cancelled, 1);
+    assert_eq!(snapshot.generation_accounting.released, 1);
+    let send_calls = send_input_capture.lock().expect("mock SendInput capture");
+    assert_eq!(
+        send_calls.len(),
+        5,
+        "one attempted Down, two tracked cleanup Ups, and the later Down/Up"
+    );
+    assert!(matches!(
+        send_calls.first(),
+        Some(MockSendInputCapture::Packet {
+            packet: PhysicalPacket {
+                up_mask: 0,
+                down_mask: 1
+            },
+            status: sky_dispatch_win32::input::SendTransactionStatus::ZeroProgress,
+            attempts: 1,
+            ..
+        })
+    ));
+    assert_eq!(
+        &send_calls[1..3],
+        &[
+            MockSendInputCapture::SingleEmitter {
+                scan_codes: vec![0x15],
+                key_up: true,
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes: vec![0x15],
+                key_up: true,
+            },
+        ]
+    );
+    assert!(
+        matches!(
+            send_calls.get(3),
+            Some(MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 2
+                },
+                status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+                attempts: 1,
+                ..
+            })
+        ),
+        "the authored second Down is sent after the first onset was attempted and cleanup verified"
+    );
+    assert!(matches!(
+        send_calls.get(4),
+        Some(MockSendInputCapture::Packet {
+            packet: PhysicalPacket {
+                up_mask: 2,
+                down_mask: 0
+            },
+            status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+            attempts: 1,
+            ..
+        })
+    ));
+    drop(send_calls);
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
             .expect("valid telemetry JSON");
@@ -1190,12 +1255,19 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
     assert!(
         !records
             .iter()
-            .any(|record| { record["event_index"] == 2 && record["runtime_outcome"] == "sent" })
+            .any(|record| { record["source_action_index"] == 0 && record["sent_count"] != 0 }),
+        "attempted zero-progress onset must not publish a successful packet"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| { record["source_action_index"] == 2 && record["sent_count"] == 1 }),
+        "later authored Down send must remain visible"
     );
 }
 
 #[test]
-fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
+fn post_send_qpc_failure_is_reconciled_without_reconstructed_completion() {
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::qpc_failure_after_send();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -1214,7 +1286,10 @@ fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "error");
+    assert_eq!(
+        snapshot.status, "error",
+        "post-send QPC snapshot: {snapshot:?}"
+    );
     assert_eq!(snapshot.precision_packet_attempts, 1);
     assert_eq!(snapshot.pre_call_qpc_unavailable_attempts, 0);
     assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 1);
@@ -1228,11 +1303,16 @@ fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
     assert!(
-        snapshot
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.contains("ClockFailureAfterSend"))
+        snapshot.terminal_error.as_deref().is_some_and(
+            |error| error.contains("earlier SendInput QPC timing evidence unavailable")
+        ),
+        "the anomaly remains fail-closed for final session outcome: {snapshot:?}"
     );
+    assert!(snapshot.secondary_errors.iter().any(|error| {
+        error.contains("post-call attempted anomaly")
+            && error.contains("ClockFailureAfterSend")
+            && error.contains("completion_qpc=unavailable")
+    }));
     assert_eq!(
         send_calls.load(Ordering::SeqCst),
         2,
@@ -1243,7 +1323,7 @@ fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
 }
 
 #[test]
-fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
+fn invalid_sender_qpc_order_is_reconciled_without_qualified_timing_samples() {
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::invalid_qpc_order_after_send();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -1262,7 +1342,10 @@ fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "error");
+    assert_eq!(
+        snapshot.status, "error",
+        "invalid-QPC-order snapshot: {snapshot:?}"
+    );
     assert_eq!(snapshot.precision_packet_attempts, 1);
     assert_eq!(snapshot.pre_call_qpc_unavailable_attempts, 0);
     assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
@@ -1279,7 +1362,16 @@ fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
         snapshot
             .terminal_error
             .as_deref()
-            .is_some_and(|error| error.contains("invalid QPC ordering"))
+            .is_some_and(|error| error.starts_with("clean completion contract failed:")),
+        "an anomaly cannot publish a clean completion: {snapshot:?}"
+    );
+    assert!(
+        snapshot.secondary_errors.iter().any(|error| {
+            error.contains("post-call attempted anomaly")
+                && error.contains("pre_call_qpc=")
+                && error.contains("completion_qpc=")
+        }),
+        "invalid sender QPC evidence should remain visible: {snapshot:?}"
     );
     assert_eq!(send_calls.load(Ordering::SeqCst), 2);
     assert_eq!(snapshot.active_count, 0);

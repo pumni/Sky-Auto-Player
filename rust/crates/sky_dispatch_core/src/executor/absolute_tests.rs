@@ -336,6 +336,144 @@ fn absolute_scheduler_checked_overflow_does_not_mutate_slot_or_cursor() {
 }
 
 #[test]
+fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_for_g() {
+    let allowed = [0x15, 0x16];
+    let actions = [
+        KeyActionInput {
+            source_action_index: 41,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "ambiguous attempted onset".into(),
+        },
+        KeyActionInput {
+            source_action_index: 42,
+            kind: ActionKind::Up,
+            scheduled_us: 10,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "attempt cleanup target".into(),
+        },
+        KeyActionInput {
+            source_action_index: 43,
+            kind: ActionKind::Down,
+            scheduled_us: 11,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "never-attempted next onset".into(),
+        },
+        KeyActionInput {
+            source_action_index: 44,
+            kind: ActionKind::Up,
+            scheduled_us: 30,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "next release".into(),
+        },
+    ];
+    let schedule = compile_actions(&actions, &allowed);
+    let mut executor = DispatchExecutor::new(
+        &schedule,
+        DurationTicks::from_raw(7),
+        DurationTicks::from_raw(5),
+        test_ticks,
+    )
+    .expect("absolute scheduler");
+    let epoch = QpcTicks::from_raw(1_000);
+    let (attempted_source, attempted_mask) = {
+        let attempted = executor.current_chord().expect("first authored onset");
+        (attempted.source_action_index, attempted.down_mask)
+    };
+
+    assert_eq!(attempted_source, 41);
+    assert_eq!(executor.chord_cursor(), 0);
+    assert_eq!(executor.accounting().scheduled, 2);
+    assert!(
+        executor
+            .consume_attempted_down_after_verified_cleanup(41, attempted_mask)
+            .is_err(),
+        "the attempt cannot be consumed before verified cleanup"
+    );
+
+    // There is no successful musical completion to commit. Cleanup's actual
+    // completion QPC, and only that QPC, establishes the next-Down barrier.
+    let cleanup_completion = QpcTicks::from_raw(2_000);
+    executor
+        .on_verified_cleanup_at(cleanup_completion)
+        .expect("verified release cleanup");
+    executor
+        .consume_attempted_down_after_verified_cleanup(41, attempted_mask)
+        .expect("consume attempted onset after release proof");
+
+    assert_eq!(executor.chord_cursor(), 1);
+    assert_eq!(executor.accounting().activated, 0);
+    assert_eq!(executor.accounting().cancelled, 1);
+    assert_eq!(executor.accounting().scheduled, 1);
+    assert_eq!(executor.active_mask(), 0);
+    let barrier = cleanup_completion
+        .checked_add_duration(DurationTicks::from_raw(5))
+        .expect("cleanup completion + G");
+    assert_eq!(executor.resume_barrier_qpc(), Some(barrier));
+    assert_eq!(
+        executor.evaluate_at(QpcTicks::from_raw(barrier.as_u64() - 1), epoch,),
+        Ok(DispatchDecision::Wait {
+            deadline_qpc: barrier
+        }),
+        "the unattempted onset remains scheduled but is held behind verified cleanup + G"
+    );
+    let DispatchDecision::Send { down_chord, .. } = executor
+        .evaluate_at(barrier, epoch)
+        .expect("exact cleanup barrier")
+    else {
+        panic!("the never-attempted onset must be eligible at cleanup + G");
+    };
+    assert_eq!(down_chord.expect("next onset").source_action_index, 43);
+}
+
+#[test]
+fn attempted_down_consumption_rejects_a_different_authored_onset() {
+    let allowed = [0x15];
+    let schedule = compile_actions(
+        &[
+            KeyActionInput {
+                source_action_index: 7,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "current onset".into(),
+            },
+            KeyActionInput {
+                source_action_index: 8,
+                kind: ActionKind::Up,
+                scheduled_us: 20,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "release".into(),
+            },
+        ],
+        &allowed,
+    );
+    let mut executor = DispatchExecutor::new(
+        &schedule,
+        DurationTicks::ZERO,
+        DurationTicks::from_raw(1),
+        test_ticks,
+    )
+    .expect("absolute scheduler");
+    executor
+        .on_verified_cleanup_at(QpcTicks::from_raw(20))
+        .expect("verified cleanup");
+    assert!(
+        executor
+            .consume_attempted_down_after_verified_cleanup(99, 1)
+            .is_err()
+    );
+    assert!(
+        executor
+            .consume_attempted_down_after_verified_cleanup(7, 2)
+            .is_err()
+    );
+    assert_eq!(executor.chord_cursor(), 0);
+    assert_eq!(executor.accounting().cancelled, 0);
+}
+
+#[test]
 fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
     const HOLD_US: u64 = 17_167;
     const GAP_US: u64 = 16_667;

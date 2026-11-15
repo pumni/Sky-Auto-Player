@@ -81,7 +81,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) timing: WorkerTimingState,
     pub(crate) runtime: WorkerRuntime,
     pub(crate) local_metrics: WorkerMetricsLocal,
-    pub(crate) focus_active: AtomicBool,
+    pub(crate) focus_active: Arc<AtomicBool>,
     pub(crate) target: Arc<SessionTarget>,
     pub(crate) quit_requested: AtomicBool,
     pub(crate) skip_requested: AtomicBool,
@@ -257,7 +257,7 @@ impl ProductionDispatchTestHarness {
             timing,
             runtime,
             local_metrics: WorkerMetricsLocal::default(),
-            focus_active: AtomicBool::new(true),
+            focus_active: Arc::new(AtomicBool::new(true)),
             target,
             quit_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
@@ -608,6 +608,37 @@ impl ProductionDispatchTestHarness {
             + 'static,
     {
         self.runtime.final_gate_post_focus_race_hook = Some(Arc::new(hook));
+    }
+
+    pub fn set_final_gate_before_syscall_hook<F>(&mut self, hook: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.runtime.final_gate_before_syscall_hook = Some(Arc::new(hook));
+    }
+
+    /// Enable deterministic foreground and retained owner identity for tests
+    /// that exercise the production focus-required final gate.
+    pub fn configure_focus_owner_for_test(&mut self, hwnd: isize, owner_pid: u32) {
+        self.config.focus.require_focus = true;
+        self.target.require_owner_identity();
+        let (current_hwnd, generation) = self.target.load_stable().expect("test target snapshot");
+        assert_eq!(current_hwnd, hwnd, "focus fixture HWND must be published");
+        assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+    }
+
+    pub fn republish_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
+        assert!(self.target.publish_for_test(hwnd));
+        let (published_hwnd, generation) = self
+            .target
+            .load_stable()
+            .expect("republished test target snapshot");
+        assert_eq!(published_hwnd, hwnd);
+        assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
     }
 
     pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {

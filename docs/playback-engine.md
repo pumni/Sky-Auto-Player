@@ -150,34 +150,61 @@ $G = T + \text{margin}$.
   cannot attribute a missing game note. Without an operator-controlled real
   sheet and mapped note position, gameplay evidence remains inconclusive.
 
-## Final Down Admission and Safety Boundary
+## Final Musical Packet Admission and Safety Boundary
 
-Every physical Down chord must pass strict final admission checks immediately
-before calling `SendInput`:
+Every musical packet, including Up-only packets, must pass a fresh final
+admission against its staged HWND/generation and retained owner identity before
+calling `SendInput`. Down-bearing packets also check modifiers:
 
 ```text
 Worker Loop -> Wait Deadline Reached
     -> Sample Foreground HWND
     -> Query Process Identity (PID, creation time)
     -> Verify Target HWND & Generation Match
-    -> Check Modifier Keys (Ctrl, Alt, Shift, Win = unpressed)
+    -> For Down: Check Modifier Keys (Ctrl, Alt, Shift, Win = unpressed)
     -> Verify Supervisor Lease Active
     -> Check System Power & Session Controls (Pause, Skip, Stop)
     -> Pass: Dispatch SendInput
     -> Reject: Defer, Replan, or Terminate
 ```
 
-The physical path stages a bounded packet, waits to its deadline, checks the
-final focus/identity/modifier/lease/control gates, then calls the prepared
-`SendInput` sender once. Healthy dispatch uses fixed buffers and does not
-allocate. Packets contain no more than 15 inputs, with Up before Down. Musical
-commit requires complete transport evidence and valid sender-side pre-call and
-completion QPC values in order. The worker never replaces missing sender
-completion with a later clock read. A syscall with unavailable or invalid QPC is
-counted from its raw evidence, is not committed to the scheduler, and retains
-the transport journal for cleanup. Zero and short insertion status remains
-visible in the corresponding error counter. Terminal safety Up is tracked
-separately from musical packet metrics.
+The worker stages a bounded packet before its deadline wait, then rechecks
+controls, modifiers for Down, fresh foreground HWND/PID ownership, target
+generation, lease, power, and focus immediately before the prepared sender. A
+pre-call focus, target, or modifier rejection makes the worker replan without
+attempting or advancing that authored Down. Terminal Stop, Skip, Quit, Panic,
+lease expiry, ownership failure, and system suspend remain fail-closed. When a
+mixed packet's Down gate is temporarily rejected while its independent Up is
+still eligible, the worker stages and admits that Up-only packet through the
+same fresh musical final gate; the rejected Down remains pending.
+
+Each authored Down onset can cross the syscall boundary at most once. A
+pre-call rejection has no attempt; once the sender reports a syscall attempt,
+the onset is consumed even when insertion is zero, short, complete with missing
+QPC evidence, or otherwise ambiguous. The worker preserves the raw count,
+Win32 error, attempt, and timing evidence, does not commit the packet as a
+successful musical completion, and never invents a sender completion QPC.
+Attempted Down keys remain tracked as a conservative release obligation until
+the separate ownership-verified safety path proves cleanup. If cleanup succeeds,
+the actual cleanup completion QPC starts the resume barrier at $Q + G$; only
+later Down onsets that have never been attempted may continue, in authored
+order, after all final gates pass again. If ownership, release, or timing cannot
+be proved, playback stays blocked or exits fail-closed with the obligation
+retained. Recovering the physical key state does not convert the anomalous
+transport into a successful packet: the session retains its transport error and
+the normal clean-completion contract can still finish it as an error after
+later unattempted onsets have been dispatched.
+
+Musical Up-only packets use the same fresh focus/identity/control gate and may
+be replanned when that gate fails. Terminal and pause safety Up use the existing
+tracked cleanup policy, including its ownership proof, without requiring current
+foreground focus. This keeps a stale musical Up from reaching a new target
+while preserving cleanup when focus is absent. Healthy dispatch uses fixed
+buffers and does not allocate. Packets contain at most 15 inputs, with Up
+before Down. H/G decisions use real sender completion QPC on healthy packets or
+verified cleanup completion QPC after recovery; missing evidence is never
+replaced by a later clock read. Terminal safety Up remains separate from
+musical packet metrics.
 
 Latency, envelope, and hold timing samples are qualified only when transport is
 complete and sender QPC evidence is ordered with no timing error. Unqualified

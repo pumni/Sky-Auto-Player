@@ -16,7 +16,8 @@ mod wait;
 pub(crate) use admission::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
-    target_stamp_still_current, verify_final_down_admission,
+    target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
+    verify_safety_cleanup_target,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
@@ -193,6 +194,8 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_before_syscall_hook: Option<super::config::FinalGateBeforeSyscallHook>,
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_count_for_test: u64,
     #[cfg(test)]
@@ -211,9 +214,12 @@ pub(crate) struct WorkerRuntime {
     pub(crate) terminal_trigger: Option<TerminalTrigger>,
     pub(crate) manual_pause_suspension_pending: bool,
     /// True only after the first successful authored musical commit. A
-    /// final foreground mismatch before that point is startup failure, not a
-    /// pause/rebase event.
-    pub(crate) musical_physical_commit_started: bool,
+    /// syscall attempt crosses the pre-roll boundary even when its transport
+    /// evidence is anomalous; that onset is reconciled and never replayed.
+    pub(crate) musical_physical_attempt_started: bool,
+    /// Recovered anomalies are retained for terminal evidence without making
+    /// an otherwise recoverable session fail.
+    pub(crate) recovered_dispatch_anomalies: Vec<String>,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
 }
 

@@ -1,5 +1,5 @@
 #[test]
-fn complete_transport_with_sender_timing_error_fails_closed() {
+fn complete_transport_with_sender_timing_error_reconciles_before_continuation() {
     use sky_dispatch_win32::clock::QpcError;
 
     let mut harness = ProductionDispatchTestHarness::new_down_only();
@@ -34,10 +34,12 @@ fn complete_transport_with_sender_timing_error_fails_closed() {
 
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
-    assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
-    assert!(harness.runtime.terminal_error.as_ref().unwrap().contains(
-        "SendInput Complete status with sender timing error"
-    ));
+    assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
+    assert!(harness
+        .runtime
+        .recovered_dispatch_anomalies
+        .first()
+        .is_some_and(|record| record.contains("timing_error=Some(CounterUnavailable)")));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
     assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
     assert_eq!(harness.local_metrics.sendinput_completion_qpc_unavailable_attempts, 0);
@@ -51,18 +53,20 @@ fn complete_transport_with_sender_timing_error_fails_closed() {
             .resources
             .scheduler
             .chord_cursor(),
-        0
+        1
     );
     assert!(harness.runtime.last_physical_send_completion_qpc.is_none());
     let evidence = harness.finalize_for_test();
     assert_eq!(evidence.active_mask, 0);
     assert_eq!(evidence.possibly_active_mask, 0);
     assert_eq!(evidence.failed_release_mask, 0);
-    assert!(!cleanup.lock().expect("cleanup capture").is_empty());
+    assert_eq!(evidence.release_obligation_mask, 0);
+    assert!(!cleanup.lock().expect("resumable cleanup capture").is_empty());
 }
 #[test]
-fn complete_status_without_completion_qpc_fails_closed_even_when_qpc_is_available() {
+fn complete_status_without_completion_qpc_is_reconciled_without_fabricating_time() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     let clock = harness.resources.clock;
     harness
         .resources
@@ -97,18 +101,18 @@ fn complete_status_without_completion_qpc_fails_closed_even_when_qpc_is_availabl
 
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
-    assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
+    assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
     assert!(harness
         .runtime
-        .terminal_error
-        .as_deref()
+        .recovered_dispatch_anomalies
+        .first()
         .is_some_and(|error| error.contains("completion_qpc=unavailable")));
     assert_eq!(
         harness
             .resources
             .scheduler
             .chord_cursor(),
-        0
+        1
     );
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
     assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
@@ -119,16 +123,15 @@ fn complete_status_without_completion_qpc_fails_closed_even_when_qpc_is_availabl
     assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
     assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
     assert_eq!(harness.local_metrics.physical_floor_displacement_samples, 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, 1);
-    assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
     let evidence = harness.finalize_for_test();
     assert_eq!(evidence.release_obligation_mask, 0);
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
 
 #[test]
-fn complete_status_without_pre_call_qpc_fails_closed() {
+fn complete_status_without_pre_call_qpc_is_reconciled_without_fabricating_time() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let clock = harness.resources.clock;
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
@@ -164,12 +167,12 @@ fn complete_status_without_pre_call_qpc_fails_closed() {
         .expect("Down candidate");
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Exit
+        super::StagedDispatchOutcome::Dispatched
     ));
     assert!(harness
         .runtime
-        .terminal_error
-        .as_deref()
+        .recovered_dispatch_anomalies
+        .first()
         .is_some_and(|error| error.contains("pre_call_qpc=unavailable")));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
     assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 1);
@@ -179,16 +182,16 @@ fn complete_status_without_pre_call_qpc_fails_closed() {
     assert_eq!(harness.local_metrics.residual_lateness_samples, 0);
     assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
     assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, 1);
-    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
     let evidence = harness.finalize_for_test();
     assert_eq!(evidence.release_obligation_mask, 0);
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
 
 #[test]
-fn complete_status_with_invalid_qpc_order_fails_closed() {
+fn complete_status_with_invalid_qpc_order_is_reconciled_without_clock_substitution() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let clock = harness.resources.clock;
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
@@ -227,13 +230,13 @@ fn complete_status_with_invalid_qpc_order_fails_closed() {
         .expect("Down candidate");
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Exit
+        super::StagedDispatchOutcome::Dispatched
     ));
     assert!(harness
         .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("invalid QPC ordering")));
+        .recovered_dispatch_anomalies
+        .first()
+        .is_some_and(|error| error.contains("completion_qpc=")));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
     assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
     assert_eq!(harness.local_metrics.sendinput_completion_qpc_unavailable_attempts, 0);
@@ -243,9 +246,9 @@ fn complete_status_with_invalid_qpc_order_fails_closed() {
     assert_eq!(harness.local_metrics.hol_delay_lower_bound_samples, 0);
     assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
     assert_eq!(harness.local_metrics.physical_floor_displacement_samples, 0);
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, 1);
-    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
     let evidence = harness.finalize_for_test();
     assert_eq!(evidence.release_obligation_mask, 0);
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());

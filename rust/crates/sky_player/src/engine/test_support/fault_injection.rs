@@ -62,7 +62,6 @@ pub struct FaultInjectionScript {
     pub base_latency_ticks: u64,
     /// Extra latency per key, in QPC ticks, applied to every call.
     pub per_key_latency_ticks: u64,
-    pub focus_loss_after_due_before_send: bool,
     pub wait_failure: bool,
     /// When set, the mock physical probe returns Inconclusive while the flag
     /// is true. This models target-dependent proof being unavailable during a
@@ -230,13 +229,6 @@ impl FaultInjectionScript {
     pub fn panic_after_send_before_commit() -> Self {
         Self {
             entries: vec![(0, InjectedSendOutcome::PanicAfterSend)],
-            ..Default::default()
-        }
-    }
-
-    pub fn focus_loss_after_due_before_send() -> Self {
-        Self {
-            focus_loss_after_due_before_send: true,
             ..Default::default()
         }
     }

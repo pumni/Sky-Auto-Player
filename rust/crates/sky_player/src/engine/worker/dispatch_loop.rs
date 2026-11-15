@@ -10,7 +10,8 @@ use super::{
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
     publish_backend_counters, publish_backend_metrics, target_stamp_still_current,
-    verify_final_down_admission, wait_for_next_boundary,
+    verify_final_down_admission, verify_final_musical_up_admission, verify_safety_cleanup_target,
+    wait_for_next_boundary,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::test_support::PacketSenderAttemptEvidence;
@@ -181,19 +182,11 @@ pub(crate) fn publish_live_metrics_after_dispatch(
 }
 
 #[inline]
-pub(crate) const fn startup_focus_loss_is_terminal(
-    focus_ok: bool,
-    musical_physical_commit_started: bool,
-) -> bool {
-    !focus_ok && !musical_physical_commit_started
-}
-
-#[inline]
 pub(crate) const fn preroll_manual_pause_cancels(
     manual_pause: bool,
-    musical_physical_commit_started: bool,
+    musical_physical_attempt_started: bool,
 ) -> bool {
-    manual_pause && !musical_physical_commit_started
+    manual_pause && !musical_physical_attempt_started
 }
 
 fn suspend_live_input_for_dispatch(
@@ -237,7 +230,9 @@ pub struct StagedCandidate {
     pub(crate) down_authored_target_ticks: Option<TimelineTicks>,
     pub(crate) down_authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     pub(crate) timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    pub(crate) preflight_target: Option<TargetStamp>,
+    /// Stable HWND/generation snapshot captured during staging. Down-bearing
+    /// packets also pass physical-key preflight against this exact stamp.
+    pub(crate) target_stamp: Option<TargetStamp>,
     pub(crate) source_action_index: u32,
     pub(crate) trace_kind: u8,
     pub(crate) up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
@@ -308,7 +303,7 @@ pub(crate) fn stage_candidate(
     let has_down = down_mask != 0;
     let packet_masks = sky_dispatch_win32::input::PhysicalPacket::new(up_mask, down_mask);
 
-    let preflight_target = if has_down {
+    let target_stamp = if has_down {
         let Some(target_stamp) = load_target_stamp(target) else {
             runtime.verified_target = None;
             return Ok(None);
@@ -327,6 +322,12 @@ pub(crate) fn stage_candidate(
             runtime.verified_target = None;
             return Ok(None);
         }
+        Some(target_stamp)
+    } else if up_mask != 0 {
+        let Some(target_stamp) = load_target_stamp(target) else {
+            runtime.verified_target = None;
+            return Ok(None);
+        };
         Some(target_stamp)
     } else {
         None
@@ -389,7 +390,7 @@ pub(crate) fn stage_candidate(
         down_authored_target_ticks: down_target.map(|target| target.0),
         down_authored_target_qpc: down_target.map(|target| target.1),
         timing_window,
-        preflight_target,
+        target_stamp,
         source_action_index,
         trace_kind,
         up_slot_timing_summary,
@@ -435,21 +436,32 @@ pub(crate) fn dispatch_staged_candidate(
         hook.maybe_inject_hol_stall(candidate.packet_masks.down_mask, source_idx, qpc_clock);
     }
 
+    if candidate.up_mask != 0 && candidate.up_slot_timing_summary.is_none() {
+        runtime.terminal_error =
+            Some("missing Up slot timing summary in staged candidate".to_string());
+        return StagedDispatchOutcome::Exit;
+    }
+    if observer.is_some() && candidate.up_mask != 0 && candidate.up_slot_timings.is_none() {
+        runtime.terminal_error =
+            Some("observer Up-slot attribution missing from staged candidate".to_string());
+        return StagedDispatchOutcome::Exit;
+    }
+
+    let control_signals = FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_expired,
+        system_power: Some(system_power),
+    };
+    let expected_target = candidate
+        .target_stamp
+        .expect("musical packet target stamp is captured during staging");
     if has_down {
-        let expected = candidate
-            .preflight_target
-            .expect("target stamp checked in staging");
-        let control_signals = FinalControlSignals {
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            supervisor_expired,
-            system_power: Some(system_power),
-        };
         match verify_final_down_admission(
             target,
-            expected,
+            expected_target,
             config.focus.require_focus,
             focus_active,
             control_signals,
@@ -463,21 +475,14 @@ pub(crate) fn dispatch_staged_candidate(
         ) {
             FinalDownAdmissionResult::Allowed => {}
             FinalDownAdmissionResult::Replan => {
-                match stage_up_only_for_stale_mixed_candidate(
+                match stage_up_only_for_mixed_replan(
                     &candidate,
                     SchedulerStageAdmission {
                         target,
                         require_focus: config.focus.require_focus,
                         focus_active,
                         capture_up_slot_timings: observer.is_some(),
-                        control_signals: FinalControlSignals {
-                            quit_requested,
-                            skip_requested,
-                            panic_requested,
-                            desired_pause,
-                            supervisor_expired,
-                            system_power: Some(system_power),
-                        },
+                        control_signals,
                     },
                     resources,
                     runtime,
@@ -541,17 +546,27 @@ pub(crate) fn dispatch_staged_candidate(
             | FinalControlAdmission::QuitRequested
             | FinalControlAdmission::SkipRequested => return StagedDispatchOutcome::Exit,
         }
-    }
-
-    if candidate.up_mask != 0 && candidate.up_slot_timing_summary.is_none() {
-        runtime.terminal_error =
-            Some("missing Up slot timing summary in staged candidate".to_string());
-        return StagedDispatchOutcome::Exit;
-    }
-    if observer.is_some() && candidate.up_mask != 0 && candidate.up_slot_timings.is_none() {
-        runtime.terminal_error =
-            Some("observer Up-slot attribution missing from staged candidate".to_string());
-        return StagedDispatchOutcome::Exit;
+        match verify_final_musical_up_admission(
+            target,
+            expected_target,
+            config.focus.require_focus,
+            focus_active,
+            control_signals,
+            timing.lease_timeout_ticks,
+            qpc_clock,
+            progress_clock,
+            &resources.backend,
+            &mut resources.playback,
+            runtime,
+            local_metrics,
+        ) {
+            FinalDownAdmissionResult::Allowed => {}
+            FinalDownAdmissionResult::Replan => return StagedDispatchOutcome::Replan,
+            FinalDownAdmissionResult::Terminal(error) => {
+                runtime.terminal_error = Some(gate_rejection_record(&candidate, &error));
+                return StagedDispatchOutcome::Exit;
+            }
+        }
     }
 
     let previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
@@ -559,15 +574,15 @@ pub(crate) fn dispatch_staged_candidate(
     runtime.previous_sendinput_completion_qpc = previous_sendinput_completion_qpc;
     runtime.previous_sender_completion_known = previous_sender_completion_known;
 
+    let physical_packet = sky_dispatch_win32::input::PhysicalPacket::new(
+        candidate.packet_masks.up_mask,
+        candidate.packet_masks.down_mask,
+    );
     let send_result = resources
         .backend
         .send_prepared_physical_packet_at_final_boundary_deferred_commit(
             &candidate.prepared_packet,
         );
-    let physical_packet = sky_dispatch_win32::input::PhysicalPacket::new(
-        candidate.packet_masks.up_mask,
-        candidate.packet_masks.down_mask,
-    );
     let complete_transport_evidence = send_result.has_complete_evidence_for(physical_packet);
     let valid_sender_timing_evidence = send_result.has_valid_sender_timing_evidence();
     let healthy_completion_evidence = complete_transport_evidence && valid_sender_timing_evidence;
@@ -619,62 +634,104 @@ pub(crate) fn dispatch_staged_candidate(
         },
     );
 
+    if has_down && send_result.evidence.attempts != 0 {
+        // Crossing the syscall boundary consumes this authored onset even if
+        // the sender cannot prove count or timing completion.
+        runtime.musical_physical_attempt_started = true;
+    }
+
     if system_power.system_suspend_terminal() {
         runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
         return StagedDispatchOutcome::Exit;
     }
-
-    if matches!(
-        send_result.status,
-        sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
-    ) {
-        runtime.verified_target = None;
+    if send_result.evidence.attempts == 0 {
         runtime.terminal_error = Some(format!(
-            "SendInput split authored chord: {}",
-            sender_failure_record(&candidate, &send_result)
-        ));
-        return StagedDispatchOutcome::Exit;
-    }
-    if !send_result.is_success() {
-        runtime.terminal_error = Some(format!(
-            "SendInput transport failure: {}",
+            "SendInput rejected before syscall; authored onset remains unattempted: {}",
             sender_failure_record(&candidate, &send_result),
         ));
         return StagedDispatchOutcome::Exit;
     }
 
-    if !complete_transport_evidence {
-        runtime.terminal_error = Some(format!(
-            "SendInput Complete status without complete transport evidence: {}",
-            sender_failure_record(&candidate, &send_result),
-        ));
-        return StagedDispatchOutcome::Exit;
-    }
-    if let Some(timing_error) = send_result.evidence.timing_error {
-        runtime.terminal_error = Some(format!(
-            "SendInput Complete status with sender timing error ({timing_error:?}): {}",
-            sender_failure_record(&candidate, &send_result),
-        ));
-        return StagedDispatchOutcome::Exit;
+    if !healthy_completion_evidence {
+        let anomaly_record = sender_failure_record(&candidate, &send_result);
+        runtime
+            .recovered_dispatch_anomalies
+            .push(format!("post-call attempted anomaly: {anomaly_record}"));
+        // A prior successful sender timestamp is not evidence about this
+        // anomalous syscall and must not be attributed to the next packet.
+        runtime.last_physical_send_completion_qpc = None;
+
+        let Some(expected_target) = candidate.target_stamp else {
+            runtime.verified_target = None;
+            runtime.terminal_error = Some(format!(
+                "post-call anomaly has no retained target stamp; release remains pending: {anomaly_record}"
+            ));
+            return StagedDispatchOutcome::Exit;
+        };
+        if let Err(error) =
+            verify_safety_cleanup_target(target, expected_target, config.focus.require_focus)
+        {
+            runtime.verified_target = None;
+            runtime.terminal_error = Some(format!(
+                "post-call anomaly cleanup withheld pending ownership proof ({error}); release remains pending: {anomaly_record}"
+            ));
+            return StagedDispatchOutcome::Exit;
+        }
+        if let Err(error) = suspend_live_input_for_dispatch(
+            &mut resources.backend,
+            &mut resources.scheduler,
+            expected_target.hwnd,
+            runtime,
+            || qpc_clock.now().map_err(|error| format!("{error:?}")),
+        ) {
+            runtime.verified_target = None;
+            runtime.terminal_error = Some(format!(
+                "post-call anomaly tracked safety cleanup failed ({error}): {anomaly_record}"
+            ));
+            return StagedDispatchOutcome::Exit;
+        }
+        runtime
+            .production_forensics
+            .observe_lifecycle(super::dispatch::observation::ObserverLifecycle::ResetAll);
+
+        if has_down {
+            let chord = candidate
+                .down_chord
+                .expect("Down-bearing packet retains its authored chord identity");
+            if let Err(error) = resources
+                .scheduler
+                .consume_attempted_down_after_verified_cleanup(
+                    chord.source_action_index,
+                    chord.down_mask,
+                )
+            {
+                runtime.terminal_error = Some(format!(
+                    "verified cleanup could not consume attempted Down ({error}): {anomaly_record}"
+                ));
+                return StagedDispatchOutcome::Exit;
+            }
+        }
+
+        // Terminal controls remain terminal. The release is verified above,
+        // but later authored notes are never dispatched after these signals.
+        if quit_requested.load(Ordering::Acquire)
+            || skip_requested.load(Ordering::Acquire)
+            || panic_requested.load(Ordering::Acquire)
+            || supervisor_expired.is_expired()
+            || system_power.system_suspend_terminal()
+        {
+            return StagedDispatchOutcome::Exit;
+        }
+        return StagedDispatchOutcome::Dispatched;
     }
 
-    let (Some(_pre_call_qpc), Some(completion_qpc)) = (
-        send_result.evidence.started_ticks,
-        send_result.evidence.completed_ticks,
-    ) else {
+    let Some(completion_qpc) = send_result.evidence.completed_ticks else {
         runtime.terminal_error = Some(format!(
-            "SendInput successful status without complete QPC evidence: {}",
+            "healthy SendInput evidence lost its completion QPC: {}",
             sender_failure_record(&candidate, &send_result),
         ));
         return StagedDispatchOutcome::Exit;
     };
-    if !valid_sender_timing_evidence {
-        runtime.terminal_error = Some(format!(
-            "SendInput returned invalid QPC ordering: {}",
-            sender_failure_record(&candidate, &send_result),
-        ));
-        return StagedDispatchOutcome::Exit;
-    }
 
     #[cfg(any(test, feature = "test-support"))]
     if candidate.up_mask != 0
@@ -723,10 +780,6 @@ pub(crate) fn dispatch_staged_candidate(
     {
         runtime.terminal_error = Some(format!("transport journal commit failed: {error}"));
         return StagedDispatchOutcome::Exit;
-    }
-
-    if has_down {
-        runtime.musical_physical_commit_started = true;
     }
 
     let pre_call_qpc = send_result.evidence.started_ticks;
@@ -831,10 +884,7 @@ pub(crate) fn dispatch_staged_candidate(
     StagedDispatchOutcome::Dispatched
 }
 
-pub(super) fn dispatch(
-    worker: &mut Worker<'_>,
-    _focus_loss_fault: bool,
-) -> Result<(), Box<dyn Any + Send>> {
+pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send>> {
     let shared = worker.shared;
     let core = &mut worker.core;
     let config = &worker.config;
@@ -925,13 +975,6 @@ pub(super) fn dispatch(
 
             let now_ticks = qpc_ticks_or_terminal!();
             let focus_ok = focus_matches(config.focus.require_focus, focus_active);
-            if startup_focus_loss_is_terminal(
-                focus_ok,
-                core.runtime.musical_physical_commit_started,
-            ) {
-                core.runtime.terminal_error = Some("focus_lost_during_preroll".to_string());
-                break;
-            }
             let manual_pause = desired_pause.load(Ordering::Acquire);
             let resume_wait_signals = FinalControlSignals {
                 quit_requested,
@@ -956,7 +999,7 @@ pub(super) fn dispatch(
 
             if preroll_manual_pause_cancels(
                 manual_pause,
-                core.runtime.musical_physical_commit_started,
+                core.runtime.musical_physical_attempt_started,
             ) {
                 core.runtime.terminal_error = Some("manual_pause_during_preroll".to_string());
                 break;
@@ -1061,13 +1104,16 @@ pub(super) fn dispatch(
                         continue;
                     }
                     if !manual_pause_active {
-                        if let Err(error) = suspend_live_input_for_dispatch(
-                            &mut resources.backend,
-                            &mut resources.scheduler,
-                            preflight_target.hwnd,
-                            &core.runtime,
-                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
-                        ) {
+                        if (core.runtime.musical_physical_attempt_started
+                            || resources.backend.release_obligation_mask() != 0)
+                            && let Err(error) = suspend_live_input_for_dispatch(
+                                &mut resources.backend,
+                                &mut resources.scheduler,
+                                preflight_target.hwnd,
+                                &core.runtime,
+                                || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                            )
+                        {
                             core.runtime.verified_target = None;
                             core.runtime.terminal_error =
                                 Some(format!("focus restoration failed: {error}"));
@@ -1548,7 +1594,7 @@ pub(super) fn dispatch(
                     ) {
                         StagedDispatchOutcome::Dispatched => {}
                         StagedDispatchOutcome::Replan => {
-                            let fallback = match stage_up_only_for_stale_mixed_candidate(
+                            let fallback = match stage_up_only_for_mixed_replan(
                                 staged_candidate,
                                 SchedulerStageAdmission {
                                     target,
@@ -1580,7 +1626,7 @@ pub(super) fn dispatch(
                             } else {
                                 let target_stale = candidate
                                     .as_ref()
-                                    .and_then(|candidate| candidate.preflight_target)
+                                    .and_then(|candidate| candidate.target_stamp)
                                     .is_some_and(|expected| {
                                         !target_stamp_still_current(target, expected)
                                     });
@@ -1743,7 +1789,7 @@ pub(super) fn dispatch(
                 progress_clock: &shared.publication.progress_clock,
                 metrics,
             };
-            let candidate_preflight_target = candidate.preflight_target;
+            let candidate_target_stamp = candidate.target_stamp;
             let candidate_retry_deadline = candidate.timing_window.packet_not_before_qpc;
             match dispatch_staged_candidate(
                 candidate,
@@ -1762,7 +1808,7 @@ pub(super) fn dispatch(
                         core.observer.pending.as_ref(),
                         &mut core.metrics,
                     );
-                    let target_stale = candidate_preflight_target
+                    let target_stale = candidate_target_stamp
                         .is_some_and(|expected| !target_stamp_still_current(target, expected));
                     let controls_allow_wait = matches!(
                         final_control_precheck(FinalControlSignals {
@@ -1775,7 +1821,7 @@ pub(super) fn dispatch(
                         }),
                         FinalControlAdmission::Allowed
                     );
-                    if target_stale && controls_allow_wait {
+                    if controls_allow_wait {
                         let replan_now = match qpc_clock.now() {
                             Ok(now) => now,
                             Err(error) => {
@@ -1786,7 +1832,11 @@ pub(super) fn dispatch(
                         };
                         match wait_after_unstable_target(
                             replan_now,
-                            candidate_retry_deadline,
+                            if target_stale {
+                                candidate_retry_deadline
+                            } else {
+                                replan_now
+                            },
                             qpc_clock,
                             &resources.waiter,
                             interrupt,
@@ -1834,4 +1884,7 @@ mod tests {
 
     include!("dispatch_loop_observer_tests.rs");
     include!("dispatch_loop_failure_tests.rs");
+    mod m2_tests {
+        include!("dispatch_loop_m2_tests.rs");
+    }
 }

@@ -117,20 +117,18 @@ struct SchedulerStageAdmission<'a> {
     control_signals: FinalControlSignals<'a>,
 }
 
-struct UpOnlyTargetReplanAdmission<'a> {
-    target_stale: bool,
+struct UpOnlyReplanAdmission<'a> {
     staging: SchedulerStageAdmission<'a>,
 }
 
-fn stage_up_only_after_target_replan(
+fn stage_up_only_after_mixed_replan(
     up_mask: u16,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    admission: UpOnlyTargetReplanAdmission<'_>,
+    admission: UpOnlyReplanAdmission<'_>,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
     if up_mask == 0
-        || !admission.target_stale
         || !focus_matches(admission.staging.require_focus, admission.staging.focus_active)
         || !matches!(
             final_control_precheck(admission.staging.control_signals),
@@ -210,13 +208,10 @@ fn stage_scheduler_action_preserving_due_up(
         runtime,
     )? {
         Some(candidate) => Ok(Some(candidate)),
-        None if has_down && up_mask != 0 => stage_up_only_after_target_replan(
+        None if has_down && up_mask != 0 => stage_up_only_after_mixed_replan(
             up_mask,
             timing_window,
-            UpOnlyTargetReplanAdmission {
-                target_stale: true,
-                staging: admission,
-            },
+            UpOnlyReplanAdmission { staging: admission },
             resources,
             runtime,
         ),
@@ -224,23 +219,19 @@ fn stage_scheduler_action_preserving_due_up(
     }
 }
 
-fn stage_up_only_for_stale_mixed_candidate(
+fn stage_up_only_for_mixed_replan(
     candidate: &StagedCandidate,
     staging: SchedulerStageAdmission<'_>,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
-    let Some(expected) = candidate.preflight_target else {
+    if candidate.target_stamp.is_none() {
         return Ok(None);
-    };
-    stage_up_only_after_target_replan(
+    }
+    stage_up_only_after_mixed_replan(
         candidate.up_mask,
         candidate.timing_window,
-        UpOnlyTargetReplanAdmission {
-            target_stale: candidate.packet_masks.down_mask != 0
-                && !target_stamp_still_current(staging.target, expected),
-            staging,
-        },
+        UpOnlyReplanAdmission { staging },
         resources,
         runtime,
     )
@@ -254,9 +245,9 @@ fn pre_wait_candidate_admission(
     control_signals: FinalControlSignals<'_>,
     runtime: &mut super::WorkerRuntime,
 ) -> StagedDispatchOutcome {
-    if candidate.packet_masks.down_mask != 0 {
+    if candidate.packet_masks.down_mask != 0 || candidate.packet_masks.up_mask != 0 {
         let expected = candidate
-            .preflight_target
+            .target_stamp
             .expect("target stamp checked in staging");
         if !target_stamp_still_current(target, expected)
             || !focus_matches(require_focus, focus_active)

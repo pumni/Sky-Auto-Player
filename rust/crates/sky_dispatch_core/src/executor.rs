@@ -1341,6 +1341,49 @@ impl DispatchExecutor {
         Ok(active_count)
     }
 
+    /// Consume the current authored Down chord after an attempted packet was
+    /// reconciled by verified safety cleanup. The attempted onset is cancelled
+    /// exactly once; the completion timestamp belongs to cleanup and is already
+    /// represented by the resume barrier installed by `on_verified_cleanup_at`.
+    /// No sender completion is inferred for the attempted musical packet.
+    pub fn consume_attempted_down_after_verified_cleanup(
+        &mut self,
+        source_action_index: u32,
+        down_mask: u16,
+    ) -> Result<(), String> {
+        if self.active_mask() != 0 {
+            return Err(
+                "attempted Down cannot be consumed before active slots are cleaned up".into(),
+            );
+        }
+        if self.resume_barrier_qpc.is_none() {
+            return Err(
+                "attempted Down cannot be consumed without a verified cleanup barrier".into(),
+            );
+        }
+        let chord = self
+            .current_chord()
+            .ok_or_else(|| "attempted Down chord cursor is exhausted".to_string())?;
+        if chord.source_action_index != source_action_index || chord.down_mask != down_mask {
+            return Err(format!(
+                "attempted Down identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
+                source_action_index, down_mask, chord.source_action_index, chord.down_mask,
+            ));
+        }
+        let next_cancelled = self
+            .counters
+            .cancelled
+            .checked_add(chord.intents.len() as u64)
+            .ok_or("cancelled counter overflow while consuming attempted Down")?;
+        let next_cursor = self
+            .chord_cursor
+            .checked_add(1)
+            .ok_or("Down chord cursor overflow while consuming attempted Down")?;
+        self.counters.cancelled = next_cancelled;
+        self.chord_cursor = next_cursor;
+        Ok(())
+    }
+
     /// Cancel every remaining generation after the terminal cleanup attempt.
     /// Scheduled generations are included because terminal shutdown cannot resume.
     pub fn cancel_remaining_generations_for_terminal_shutdown(&mut self) -> Result<u64, String> {

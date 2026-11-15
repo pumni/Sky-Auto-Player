@@ -473,10 +473,6 @@ pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static
     }
 }
 
-pub(crate) fn modifier_guard_rejection_step(mask: ModifierMask) -> DispatchStep {
-    DispatchStep::Terminate(format!("physical_modifier_held:{:02X}", mask.bits()))
-}
-
 pub(crate) fn enter_focus_pause(
     clock_state: &mut PlaybackClockState,
     runtime: &mut super::WorkerRuntime,
@@ -504,9 +500,6 @@ pub(crate) fn handle_final_focus_loss(
     runtime: &mut super::WorkerRuntime,
     progress_clock: &SharedProgressClock,
 ) -> Result<(), DispatchStep> {
-    if !runtime.musical_physical_commit_started {
-        return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
-    }
     let focus_ticks = qpc_clock
         .now()
         .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
@@ -534,6 +527,49 @@ pub(crate) fn target_stamp_still_current(target: &SessionTarget, expected: Targe
     target.is_current(expected.hwnd, expected.generation)
 }
 
+/// Validate retained ownership before invoking the tracked safety-release
+/// path after a post-call anomaly. This intentionally does not require current
+/// foreground focus: safety Up is a distinct ownership-verified path.
+pub(crate) fn verify_safety_cleanup_target(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_owner_identity: bool,
+) -> Result<(), String> {
+    if !target_stamp_still_current(target, expected) {
+        return Err("target HWND/generation changed before tracked safety cleanup".into());
+    }
+    if require_owner_identity {
+        match target.owner_identity_status(expected.generation) {
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {}
+            OwnerIdentityStatus::Bound(_) | OwnerIdentityStatus::NotRequired => {
+                return Err("tracked safety cleanup has no bound target owner PID".into());
+            }
+            OwnerIdentityStatus::Missing => {
+                return Err("tracked safety cleanup target owner identity is missing".into());
+            }
+            OwnerIdentityStatus::Stale => {
+                return Err("tracked safety cleanup target owner identity is stale".into());
+            }
+            OwnerIdentityStatus::ProcessTerminated => {
+                return Err("tracked safety cleanup target process terminated".into());
+            }
+            OwnerIdentityStatus::OwnerMismatch => {
+                return Err("tracked safety cleanup target owner mismatched".into());
+            }
+            OwnerIdentityStatus::WindowUnavailable => {
+                return Err("tracked safety cleanup target window is unavailable".into());
+            }
+            OwnerIdentityStatus::ProcessIdentityMismatch => {
+                return Err("tracked safety cleanup process identity drifted".into());
+            }
+            OwnerIdentityStatus::QueryUnavailable => {
+                return Err("tracked safety cleanup target owner query is unavailable".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum FinalDownAdmissionResult {
     Allowed,
@@ -555,6 +591,71 @@ pub(crate) fn verify_final_down_admission(
     playback: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     metrics: &mut WorkerMetricsLocal,
+) -> FinalDownAdmissionResult {
+    verify_final_musical_packet_admission(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        backend,
+        playback,
+        runtime,
+        metrics,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_final_musical_up_admission(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+) -> FinalDownAdmissionResult {
+    verify_final_musical_packet_admission(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        backend,
+        playback,
+        runtime,
+        metrics,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_final_musical_packet_admission(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+    check_modifiers: bool,
 ) -> FinalDownAdmissionResult {
     if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
         return FinalDownAdmissionResult::Replan;
@@ -585,19 +686,19 @@ pub(crate) fn verify_final_down_admission(
         return FinalDownAdmissionResult::Replan;
     }
 
-    let modifier_verdict = final_down_modifier_verdict(backend);
-    if modifier_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(modifier_verdict, runtime, metrics);
-        match modifier_verdict {
-            FinalDownVerdict::ModifierHeld(mask) => {
-                return match modifier_guard_rejection_step(mask) {
-                    DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                    DispatchStep::TerminateStatic(err) => {
-                        FinalDownAdmissionResult::Terminal(err.to_string())
-                    }
-                };
-            }
-            _ => return FinalDownAdmissionResult::Replan,
+    // Model state changes at the final boundary before checking modifiers and
+    // making the fresh foreground/owner proof. This keeps musical Up and Down
+    // packets from relying on a focus stamp sampled before a wait.
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = runtime.final_gate_before_syscall_hook.as_ref() {
+        hook();
+    }
+
+    if check_modifiers {
+        let modifier_verdict = final_down_modifier_verdict(backend);
+        if modifier_verdict != FinalDownVerdict::Allowed {
+            apply_final_down_rejection(modifier_verdict, runtime, metrics);
+            return FinalDownAdmissionResult::Replan;
         }
     }
 
@@ -667,6 +768,41 @@ pub(crate) fn verify_final_down_admission(
             }
             _ => return FinalDownAdmissionResult::Replan,
         }
+    }
+
+    // A publication or focus/control race after the fresh OS identity query
+    // must still fail before the caller reaches the prepared sender.
+    let final_target_verdict =
+        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
+    if final_target_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_target_verdict, runtime, metrics);
+        match final_target_verdict {
+            FinalDownVerdict::FocusLost => {
+                if let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+                {
+                    return match step {
+                        DispatchStep::Terminate(error) => FinalDownAdmissionResult::Terminal(error),
+                        DispatchStep::TerminateStatic(error) => {
+                            FinalDownAdmissionResult::Terminal(error.to_string())
+                        }
+                    };
+                }
+            }
+            FinalDownVerdict::OwnerRejected(failure) => {
+                return FinalDownAdmissionResult::Terminal(
+                    owner_rejection_reason(failure).to_string(),
+                );
+            }
+            _ => {}
+        }
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    let final_control_verdict = final_down_control_verdict(control_signals);
+    if final_control_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_control_verdict, runtime, metrics);
+        return FinalDownAdmissionResult::Replan;
     }
 
     FinalDownAdmissionResult::Allowed
