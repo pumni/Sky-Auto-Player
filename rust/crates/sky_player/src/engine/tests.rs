@@ -9,10 +9,10 @@ use super::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeDispatchSession, NativeSessionOptions, PriorityOptions,
     RtTraceRecord, SharedMetrics, StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
     TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
-    TraceDelivery, TraceTiming, WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal,
-    adjust_spin_threshold, anchored_dispatch_target_ticks, cpu_metrics_sample_due,
-    deadline_target_ticks, derive_spin_threshold_us, focus_gate_matches, record_input_path_health,
-    record_termination_error, trace_outcome_code, try_publish_metrics,
+    TraceDelivery, TraceTiming, WaitOptions, Worker, WorkerMetricsLocal,
+    anchored_dispatch_target_ticks, cpu_metrics_sample_due, deadline_target_ticks,
+    focus_gate_matches, record_input_path_health, record_termination_error, trace_outcome_code,
+    try_publish_metrics,
 };
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;

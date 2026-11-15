@@ -165,22 +165,6 @@ pub(crate) fn select_spin_threshold_us(stats: Option<WakeErrorStats>) -> u64 {
         .unwrap_or(super::super::config::DEFAULT_SPIN_THRESHOLD_US)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) fn derive_spin_threshold_us(wake_error_us: u64, spin_floor_us: u64) -> u64 {
-    wake_error_us
-        .saturating_add(200)
-        .clamp(spin_floor_us, 3_000)
-}
-
-#[cfg(test)]
-pub(crate) fn adjust_spin_threshold(current_us: u64, candidate_us: u64) -> u64 {
-    if candidate_us >= current_us {
-        candidate_us
-    } else {
-        current_us.saturating_sub(current_us.saturating_sub(candidate_us).min(50))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{calibrated_spin_threshold_us, select_spin_threshold_us};

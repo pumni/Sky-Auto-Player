@@ -568,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn m3_offline_fixture_separates_down_cursor_hol_from_sender_occupancy() {
+    fn executor_cursor_wait_is_distinct_from_sender_occupancy() {
         // A is first Downed with independent C. A's repeat chord stays at the
         // Down cursor until its Up completion + G, so B cannot pass it. C's
         // independent Up remains eligible and is sent at its authored time.
@@ -624,7 +624,7 @@ mod tests {
             },
         ];
         let schedule = compile_runtime_intents(&actions, &[0x15, 0x16, 0x17])
-            .expect("deterministic M3 fixture schedule");
+            .expect("deterministic executor fixture schedule");
         let config = WholeStreamModelConfig {
             qpc_frequency_hz: 1_000_000,
             effective_min_hold_us: 17_167,

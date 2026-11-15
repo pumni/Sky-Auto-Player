@@ -1028,25 +1028,6 @@ fn input_path_health_uses_full_window_and_recovers_without_latching() {
 }
 
 #[test]
-fn spin_threshold_rises_immediately_and_decays_with_hysteresis() {
-    assert_eq!(adjust_spin_threshold(700, 1_000), 1_000);
-    assert_eq!(adjust_spin_threshold(1_000, 700), 950);
-    assert_eq!(adjust_spin_threshold(1_000, 100), 950);
-}
-
-#[test]
-fn single_outlier_in_periodic_reprobe_does_not_raise_threshold_to_cap() {
-    let stats = WakeErrorStats {
-        p50_us: 300,
-        p95_us: 1_500,
-        p99_us: 1_500,
-        max_us: 1_500,
-        robust_us: 300,
-    };
-    assert_eq!(derive_spin_threshold_us(stats.robust_us, 700), 700);
-}
-
-#[test]
 fn only_live_dispatch_executor_sources_remain() {
     let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine");
     for legacy in [

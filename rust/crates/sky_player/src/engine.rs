@@ -87,17 +87,10 @@ pub mod dispatch_primitives {
     pub const PRODUCTION_STARTUP_READINESS_RESERVE_US: u64 =
         super::config::STARTUP_READINESS_RESERVE_US;
     pub const PRODUCTION_MIN_PREROLL_US: u64 = super::config::MIN_PRODUCTION_PREROLL_US;
-    pub const LEGACY_ADAPTIVE_SPIN_FLOOR_US: u64 = 700;
 
     /// Apply the frozen production calibration policy to benchmark wake stats.
     pub fn calibrated_spin_threshold_us(stats: sky_dispatch_win32::wait::WakeErrorStats) -> u64 {
         super::worker::calibrated_spin_threshold_us(stats)
-    }
-
-    /// Derive the retired adaptive policy for A/B diagnostics only. It is not
-    /// part of the production worker configuration or control path.
-    pub fn legacy_adaptive_spin_threshold_us(wake_error_us: u64) -> u64 {
-        super::worker::derive_spin_threshold_us(wake_error_us, LEGACY_ADAPTIVE_SPIN_FLOOR_US)
     }
 }
 
@@ -146,8 +139,6 @@ use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_ti
 use sky_dispatch_win32::event::OwnedEvent;
 pub(crate) use sky_dispatch_win32::input::TrackedKeyState;
 use sky_dispatch_win32::wait::HybridWaiter;
-#[cfg(test)]
-pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
