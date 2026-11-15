@@ -109,7 +109,7 @@ The clean-checkout report is [dispatch-lifecycle-report.json](dispatch-lifecycle
 
 ## Remote status at handoff
 
-CI for the final pushed HEAD: pending lookup after push.
+The CI run triggered by the initial M2 push (commit `8d2bcdcae8f0d9830b2faf06ca6964ce115f4154`) was in progress at the first status query (run `43691665068`). The latest full M2 HEAD status is recorded in the PR handoff comment.
 
 Blockers / Leader decisions: none identified.
 
