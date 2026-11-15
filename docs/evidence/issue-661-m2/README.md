@@ -7,7 +7,7 @@
 **Branch:** `refactor/dispatch-runtime-cleanup`
 
 **Accepted M1 base:** `1538c29c443fdfa3d815a92a83dabd2ab06ea93c` (tree `3abb133b0cc8ba337d2bf41535023abd6849abd9`)
-**M2 implementation commit / tree:** fill after the implementation commit. The final evidence-only documentation commit and full M2 HEAD are reported in the handoff.
+**M2 implementation commit / tree:** `d00191aad6e82b3d655f9b1b96f5514902ad7ace` / `d2e2940f4e6df24e1fc84bb2db251e9190323b81`. The final evidence-only documentation commit and full M2 HEAD are reported in the handoff.
 
 This report covers M2 only. M3 remains on hold. No gameplay transport, timing policy, deadline, key mapping, final admission gate, or wire schema was changed.
 
@@ -97,13 +97,15 @@ All commands below ran on Windows against the final M2 code. The diff check ran 
 | `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --features test-support tracked_note_on_uses_one_send_attempt_without_retry` | 0 | 1 passed |
 | `git diff --check` | 0 | Pass. |
 
-**First-run failures:** An intermediate focused scheduler test compile failed while the test module and mutable metrics signatures were being edited; it passed after those edits. The first draft clippy run failed on a test-only wrapper import and two staging functions over the argument-count lint. Both were corrected; the final clippy command above passed. These were implementation-draft failures, not flaky runs. No flaky result was observed.
+**First-run failures:** An intermediate focused scheduler test compile failed while the test module and mutable metrics signatures were being edited; it passed after those edits. The first draft clippy run failed on a test-only wrapper import and two staging functions over the argument-count lint. The first cached diff check also flagged the generated CRLF report before its Windows line-ending rule was recorded. These were corrected; the final clippy and cached diff checks passed. These were implementation/evidence-draft failures, not flaky runs. No flaky result was observed.
 
 **Not run:** native Final qualification; `cargo xtask check all` (both are later qualification gates).
 
 ## Lifecycle evidence
 
-The clean-checkout lifecycle probe is scheduled after the implementation commit. Its report source SHA/tree, output path, SHA-256, and process exit code will be appended here after it runs.
+Command: `pwsh -NoProfile -File scripts/run_dispatch_lifecycle_evidence.ps1` — exit 0.
+
+The clean-checkout report is [dispatch-lifecycle-report.json](dispatch-lifecycle-report.json), SHA-256 `6bd5844ee4ffd6c132eda5292e992e12b766d532b007a4a5ae89cd0a79ad0e63` for the generated Windows CRLF bytes. Git stores the text-normalized blob and the repository rule checks it out with CRLF on Windows. The report identifies source commit `d00191aad6e82b3d655f9b1b96f5514902ad7ace`, tree `d2e2940f4e6df24e1fc84bb2db251e9190323b81`, schema v2, `live_scheduler`, and `offline_test_support` with deterministic mock transport. Result: PASS; no native `SendInput` calls. No-pause lifecycle: four musical attempts, zero cleanup attempts, final obligation mask zero. Pause/cleanup/resume: two musical attempts, two cleanup attempts, `G-1` waits, exact `G` sends, final obligation mask zero.
 
 ## Remote status at handoff
 
