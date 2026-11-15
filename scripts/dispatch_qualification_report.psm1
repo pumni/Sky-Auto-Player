@@ -21,6 +21,10 @@ function Get-QualificationReportRowLabel {
         if ($Role -eq 'control') { return 'FrameSnapshot-Baseline' }
         return 'FrameSnapshot-Candidate'
     }
+    if ($Profile -eq 'DispatchCleanupM3') {
+        if ($Role -eq 'control') { return 'DispatchCleanupM3-Baseline' }
+        return 'DispatchCleanupM3-Candidate'
+    }
     if ($Profile -eq 'Scheduler') {
         if ($Role -eq 'control') { return 'Scheduler-Baseline' }
         return 'Scheduler-Candidate'
@@ -32,7 +36,7 @@ function Get-QualificationReportRowLabel {
 
 function New-QualificationReportProjection {
     param(
-        [Parameter(Mandatory)] [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot')] [string]$Profile,
+        [Parameter(Mandatory)] [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')] [string]$Profile,
         [Parameter(Mandatory)] $Candidate,
         $Control,
         [Parameter(Mandatory)] [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')] [string]$Stage,
@@ -43,6 +47,7 @@ function New-QualificationReportProjection {
 
     $candidateLabel = switch ($Profile) {
         'FrameSnapshot' { 'FrameSnapshot-Candidate' }
+        'DispatchCleanupM3' { 'DispatchCleanupM3-Candidate' }
         'Scheduler' { 'Scheduler-Candidate' }
         default { 'Candidate-R2' }
     }
@@ -50,6 +55,8 @@ function New-QualificationReportProjection {
         $null
     } elseif ($Profile -eq 'FrameSnapshot') {
         'FrameSnapshot-Baseline'
+    } elseif ($Profile -eq 'DispatchCleanupM3') {
+        'DispatchCleanupM3-Baseline'
     } elseif ($Profile -eq 'Scheduler') {
         'C0-Scheduler-Baseline'
     } elseif ([bool](Get-ReportOptionalProperty $Control 'c1_timed_verified')) {
@@ -61,6 +68,8 @@ function New-QualificationReportProjection {
         'not applicable'
     } elseif ($Profile -eq 'FrameSnapshot') {
         'FrameSnapshot-Baseline'
+    } elseif ($Profile -eq 'DispatchCleanupM3') {
+        'DispatchCleanupM3-Baseline'
     } elseif ([bool](Get-ReportOptionalProperty $Control 'c1_timed_verified')) {
         'C1-TIMED-R2'
     } else {
@@ -68,6 +77,8 @@ function New-QualificationReportProjection {
     }
     $markdownCandidatePrefix = if ($Profile -eq 'FrameSnapshot') {
         'FrameSnapshot-Candidate '
+    } elseif ($Profile -eq 'DispatchCleanupM3') {
+        'DispatchCleanupM3-Candidate '
     } else { '' }
     $candidateMargins = [ordered]@{
         performance_timing_margin_us = Get-ReportOptionalProperty $Candidate 'performance_timing_margin_us'
@@ -90,8 +101,8 @@ function New-QualificationReportProjection {
         quiet = 'no benchmark CPU workers'
         contention = 'two hidden pwsh busy workers at BelowNormal priority'
         sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID'
-        receiveonly_observer_mode = if ($Profile -in @('Scheduler', 'FrameSnapshot')) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
-        receiveonly_observer_version = if ($Profile -in @('Scheduler', 'FrameSnapshot')) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null }
+        receiveonly_observer_mode = if ($Profile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
+        receiveonly_observer_version = if ($Profile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null }
     }
     $manifestParameters = [ordered]@{
         pairs = if ($shortStage) { 1 } else { 6 }
