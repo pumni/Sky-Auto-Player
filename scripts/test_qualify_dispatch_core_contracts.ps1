@@ -1144,5 +1144,181 @@ try {
     Remove-Item -LiteralPath $reportRoot -Recurse -Force
 }
 
+# M3 timing floors mirror acceptance/scenarios.rs: the ordinary acceptance
+# hold uses one configured frame; HolInterleaved alone holds for two frames.
+$acceptanceLimitsSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'rust\crates\sky_player\src\bin\acceptance\acceptance_limits.rs') -Raw
+$acceptanceScenariosSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'rust\crates\sky_player\src\bin\acceptance\scenarios.rs') -Raw
+if ($acceptanceLimitsSource -notmatch 'ACCEPTANCE_HOLD_FRAMES:\s*u64\s*=\s*1\s*;' -or
+    $acceptanceScenariosSource -notmatch 'Scenario::HolInterleaved\s*\{\s*2\s*\}\s*else\s*\{\s*ACCEPTANCE_HOLD_FRAMES') {
+    throw 'native acceptance hold-frame source contract changed; M3 timing expectations need review'
+}
+$m3Floors60Margin0 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 60 -TimingMarginUs 0
+$m3Floors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 60 -TimingMarginUs 500
+$m3Floors120Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 120 -TimingMarginUs 500
+$m3HolFloors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'hol-interleaved' -GameFps 60 -TimingMarginUs 500
+if ($m3Floors60Margin0.configured_H_us -ne 16667 -or $m3Floors60Margin0.configured_G_us -ne 16667 -or
+    $m3Floors60Margin500.configured_H_us -ne 17167 -or $m3Floors60Margin500.configured_G_us -ne 17167 -or
+    $m3Floors120Margin500.configured_H_us -ne 8834 -or $m3Floors120Margin500.configured_G_us -ne 8834 -or
+    $m3HolFloors60Margin500.configured_H_us -ne 33834 -or $m3HolFloors60Margin500.configured_G_us -ne 17167 -or
+    $m3HolFloors60Margin500.hold_frames -ne 2) {
+    throw 'DispatchCleanupM3 frame, hold, or release-gap arithmetic does not match native scenario configuration'
+}
+
+$m3ReportCandidate = [pscustomobject]@{
+    qualification_profile = 'DispatchCleanupM3'; source_role = 'Candidate'
+    workload_version = 'dispatch-runtime-cleanup-m3-v1'; observer_mode = 'SchedulerQueuedV3Compat3'
+    guard_mode = 'frozen'; performance_timing_margin_us = 0; safety_timing_margin_us = 500
+}
+$m3ReportBaseline = [pscustomobject]@{
+    qualification_profile = 'DispatchCleanupM3'; source_role = 'Baseline'
+    workload_version = 'dispatch-runtime-cleanup-m3-v1'; observer_mode = 'SchedulerQueuedV3Compat3'
+    guard_mode = 'frozen'; performance_timing_margin_us = 0; safety_timing_margin_us = 500
+}
+$m3SafetyScenarioNames = @(
+    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+    'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
+    'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor',
+    'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
+    'lease-age-watchdog-delayed', 'noncanonical-profile'
+)
+$m3CompareWorkloads = @('dense-alternating', 'mixed-up-down', 'canonical-max-chord')
+$m3FinalWorkloads = @('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
+$m3CanaryProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Stage Canary -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -SafetyScenarios $m3SafetyScenarioNames
+$m3SmokeProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Stage Smoke -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -SafetyScenarios $m3SafetyScenarioNames
+$m3CompareProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Control $m3ReportBaseline -Stage Compare -Pairs 6 -SampleSeconds 15 -TimingMarginUs 0 `
+    -SafetyScenarios $m3SafetyScenarioNames -PerformanceWorkloads $m3CompareWorkloads
+$m3FinalProjection = New-QualificationReportProjection -Profile DispatchCleanupM3 -Candidate $m3ReportCandidate `
+    -Control $m3ReportBaseline -Stage Final -Pairs 6 -SampleSeconds 15 -TimingMarginUs 0 `
+    -SafetyScenarios $m3SafetyScenarioNames -PerformanceWorkloads $m3FinalWorkloads
+
+if ($m3CanaryProjection.StageSummary.planned_session_count -ne 1 -or
+    $m3CanaryProjection.StageSummary.stage_kind -ne 'candidate-only safety Canary' -or
+    $m3CanaryProjection.StageSummary.candidate_session_count -ne 1 -or
+    $m3CanaryProjection.StageSummary.control_session_count -ne 0 -or
+    $m3CanaryProjection.StageSummary.configured_H_us -ne 17167 -or
+    $m3CanaryProjection.StageSummary.configured_G_us -ne 17167 -or
+    $m3CanaryProjection.SummaryParameters.pairs -ne $null -or
+    $m3CanaryProjection.SummaryParameters.sample_seconds -ne $null -or
+    $m3CanaryProjection.ManifestParameters.pairs -ne $null -or
+    $m3CanaryProjection.ManifestParameters.sample_seconds -ne $null -or
+    $m3CanaryProjection.ManifestParameters.pair_order -ne $null -or
+    $m3CanaryProjection.SummaryParameters.performance_timing_margin_us -ne 0 -or
+    $m3CanaryProjection.SummaryParameters.safety_timing_margin_us -ne 500 -or
+    -not $m3CanaryProjection.MarkdownStageLines[0].Contains('Canary') -or
+    -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('candidate-only safety stage')) -or
+    -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('no timed performance samples')) -or
+    (($m3CanaryProjection.MarkdownStageLines -join "`n") -match 'AB/BA|six pairs|15 seconds per performance session')) {
+    throw 'DispatchCleanupM3 Canary projection implies a comparison/sample or reports incorrect H/G/session identity'
+}
+if ($m3SmokeProjection.StageSummary.planned_session_count -ne 22 -or
+    $m3SmokeProjection.StageSummary.stage_kind -ne 'safety-only; candidate-only' -or
+    $m3SmokeProjection.StageSummary.candidate_session_count -ne 22 -or
+    $m3SmokeProjection.StageSummary.control_session_count -ne 0 -or
+    $m3SmokeProjection.StageSummary.workload_summary -ne '22 candidate-only safety scenarios' -or
+    -not $m3SmokeProjection.MarkdownStageLines[0].Contains('safety-only') -or
+    $m3SmokeProjection.StageSummary.timed_performance_samples -or
+    $m3SmokeProjection.StageSummary.configured_H_us -ne 17167 -or
+    $m3SmokeProjection.StageSummary.configured_G_us -ne 17167) {
+    throw 'DispatchCleanupM3 Smoke projection does not describe its candidate-only safety cases'
+}
+if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
+    $m3CompareProjection.StageSummary.stage_kind -ne 'paired performance' -or
+    $m3CompareProjection.StageSummary.candidate_session_count -ne 36 -or
+    $m3CompareProjection.StageSummary.control_session_count -ne 36 -or
+    $m3CompareProjection.StageSummary.game_fps -ne 60 -or
+    $m3CompareProjection.StageSummary.timing_margin_us -ne 0 -or
+    $m3CompareProjection.StageSummary.configured_H_us -ne 16667 -or
+    $m3CompareProjection.StageSummary.configured_G_us -ne 16667 -or
+    $m3CompareProjection.StageSummary.pairs -ne 6 -or
+    -not $m3CompareProjection.StageSummary.pair_order.Contains('AB/BA') -or
+    -not $m3CompareProjection.ManifestParameters.pair_order.Contains('AB/BA') -or
+    $m3CompareProjection.SummaryParameters.performance_timing_margin_us -ne 0 -or
+    $m3CompareProjection.SummaryParameters.safety_timing_margin_us -ne 500) {
+    throw 'DispatchCleanupM3 Compare projection lost its paired performance protocol or per-session timing settings'
+}
+if ($m3FinalProjection.StageSummary.planned_session_count -ne 166 -or
+    $m3FinalProjection.StageSummary.stage_kind -ne 'paired performance plus candidate-only safety and boundaries' -or
+    $m3FinalProjection.StageSummary.candidate_session_count -ne 106 -or
+    $m3FinalProjection.StageSummary.control_session_count -ne 60 -or
+    $null -ne $m3FinalProjection.StageSummary.game_fps -or
+    $null -ne $m3FinalProjection.StageSummary.timing_margin_us -or
+    $null -ne $m3FinalProjection.StageSummary.configured_H_us -or
+    $null -ne $m3FinalProjection.StageSummary.configured_G_us -or
+    $m3FinalProjection.StageSummary.configured_H_G_mode -ne 'varies_by_session' -or
+    -not $m3FinalProjection.StageSummary.configured_H_G_summary.Contains('varies by session') -or
+    -not $m3FinalProjection.ManifestParameters.configured_H_G_summary.Contains('varies by session') -or
+    -not $m3FinalProjection.StageSummary.timing_margin_summary.Contains('0 us performance; 500 us safety') -or
+    $m3FinalProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
+    throw 'DispatchCleanupM3 Final projection fabricated aggregate timing values for a mixed stage'
+}
+
+$m3RunConfig = [pscustomobject]@{
+    qualification_profile = 'DispatchCleanupM3'; scenario = 'canonical-single'; workload = 'canonical-single'
+    game_fps = 60; timing_margin_us = 500; expected_hold_us = 17167; expected_release_gap_us = 17167
+    configured_H_us = 17167; configured_G_us = 17167
+}
+$verifiedCanaryFloors = Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario 'canonical-single' `
+    -RunConfig $m3RunConfig -ExpectedWorkload 'canonical-single' -ExpectedGameFps 60 -ExpectedTimingMarginUs 500
+$m3CanaryRow = [pscustomobject]@{
+    stage = $m3CanaryProjection.StageSummary.stage
+    qualification_profile = $m3CanaryProjection.StageSummary.qualification_profile
+    planned_session_count = $m3CanaryProjection.StageSummary.planned_session_count
+    attempted_session_count = 1; role = 'candidate'; scenario = $m3RunConfig.scenario
+    game_fps = $m3RunConfig.game_fps; timing_margin_us = $m3RunConfig.timing_margin_us
+    configured_H_us = $m3RunConfig.configured_H_us; configured_G_us = $m3RunConfig.configured_G_us
+}
+$m3ReportRoot = Join-Path $env:TEMP ('m3-report-contract-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $m3ReportRoot | Out-Null
+try {
+    $m3CanaryRow | Export-Csv -LiteralPath (Join-Path $m3ReportRoot 'sessions.csv') -NoTypeInformation -Encoding UTF8
+    [ordered]@{
+        stage = $m3CanaryProjection.StageSummary.stage
+        qualification_profile = $m3CanaryProjection.StageSummary.qualification_profile
+        session_plan = $m3CanaryProjection.StageSummary
+        parameters = $m3CanaryProjection.SummaryParameters
+    } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $m3ReportRoot 'summary.json') -Encoding UTF8
+    $csvCanary = Import-Csv -LiteralPath (Join-Path $m3ReportRoot 'sessions.csv') | Select-Object -First 1
+    $jsonCanary = Get-Content -LiteralPath (Join-Path $m3ReportRoot 'summary.json') -Raw | ConvertFrom-Json
+    if ([long]$m3RunConfig.expected_hold_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
+        [long]$m3RunConfig.expected_release_gap_us -ne [long]$jsonCanary.session_plan.configured_G_us -or
+        [long]$csvCanary.configured_H_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
+        [long]$csvCanary.configured_G_us -ne [long]$jsonCanary.session_plan.configured_G_us -or
+        $csvCanary.stage -ne $jsonCanary.stage -or
+        $csvCanary.qualification_profile -ne $jsonCanary.qualification_profile -or
+        $csvCanary.planned_session_count -ne $jsonCanary.session_plan.planned_session_count -or
+        $csvCanary.role -ne 'candidate' -or $csvCanary.game_fps -ne $jsonCanary.session_plan.game_fps -or
+        $csvCanary.timing_margin_us -ne $jsonCanary.session_plan.timing_margin_us -or
+        $verifiedCanaryFloors.configured_H_us -ne 17167 -or $verifiedCanaryFloors.configured_G_us -ne 17167) {
+        throw 'DispatchCleanupM3 Canary run-config, CSV, and JSON timing/stage identity disagree'
+    }
+} finally {
+    Remove-Item -LiteralPath $m3ReportRoot -Recurse -Force
+}
+$badM3HRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$badM3HRunConfig.configured_H_us = 33834
+$badM3HRunConfig.expected_hold_us = 33834
+$badM3HRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3HRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3HRejected = $true }
+if (-not $badM3HRejected) { throw 'DispatchCleanupM3 accepted the old two-frame H on canonical-single' }
+$m3NegativeContractCount++
+$wrongScenarioRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$wrongScenarioRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario hol-interleaved -RunConfig $wrongScenarioRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $wrongScenarioRejected = $true }
+if (-not $wrongScenarioRejected) { throw 'DispatchCleanupM3 accepted incorrect scenario attribution for H/G reporting' }
+$m3NegativeContractCount++
+$badM3GRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$badM3GRunConfig.configured_G_us = $badM3GRunConfig.configured_G_us + 1
+$badM3GRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3GRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3GRejected = $true }
+if (-not $badM3GRejected) { throw 'DispatchCleanupM3 accepted a release gap different from frame interval plus margin' }
+$m3NegativeContractCount++
+
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

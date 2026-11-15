@@ -64,6 +64,20 @@ captured M3 runner source files. Per-session reports capture FPS, margin, the
 configured H/G floors, and workload version. These workload definitions accept
 no PRNG seed; reports record a null seed and that deterministic seed mode.
 
+M3 per-session H/G reporting follows the native acceptance scenario: the
+ordinary hold uses `ACCEPTANCE_HOLD_FRAMES = 1`; `hol-interleaved` explicitly
+uses two hold frames; G always uses one frame. A frame is
+`ceil(1,000,000 / FPS)` µs and the selected margin is added to both floors.
+At 60 FPS / 500 µs, `canonical-single` therefore reports H/G 17,167/17,167 µs.
+The report validator checks run-config H/G against its scenario, FPS, and
+margin before including a session row. Canary is one candidate-only Quiet
+`canonical-single` safety session with no timed performance sample. Smoke is a
+candidate-only Quiet safety sequence. Compare reports its AB/BA performance
+pairs. Final includes paired performance sessions, candidate-only safety
+sessions, and 60/120 FPS boundary sessions; its aggregate H/G, FPS, and margin
+are explicitly `varies by session`, with actual values retained per row in
+`sessions.csv`.
+
 From the clean, pushed runner checkout, add two detached worktrees outside the
 runner directory and use new empty output directories outside both worktrees:
 
@@ -84,11 +98,12 @@ Verify both with `Assert-DispatchCleanupM3ManifestIdentity` and
 `Assert-ImmutableHarnessManifestIntegrity` before requesting any native session.
 
 Offline manifest builds and integrity checks do not start the acceptance
-runner. The current M3 checkpoint has a native session budget of zero: Canary,
-Smoke, Compare, and Final remain unexecuted until separately authorized. The
-proposed first native session is one candidate-only Quiet `canonical-single`
-case at 60 FPS and 500 µs safety margin. That Canary is not authorized by the
-runner-contract implementation approval itself.
+runner. The candidate-only Quiet `canonical-single` Canary at 60 FPS and 500 µs
+safety margin was separately authorized and run once. Its reporting correction
+is documented append-only in
+[`docs/evidence/issue-661-m3/canary-reporting-erratum.md`](evidence/issue-661-m3/canary-reporting-erratum.md).
+The reporting-correction checkpoint authorizes zero further native sessions;
+Smoke, Compare, and Final require separate Leader decisions.
 
 ## Final workload
 

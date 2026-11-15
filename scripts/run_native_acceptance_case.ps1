@@ -31,8 +31,12 @@ $PSNativeCommandUseErrorActionPreference = $false
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
+$m3TimingFloors = if ($isDispatchCleanupM3) {
+    Get-DispatchCleanupM3TimingFloors -Scenario $Scenario -GameFps $GameFps -TimingMarginUs $TimingMarginUs
+} else { $null }
 if ($isDispatchCleanupM3) {
     if (-not $HarnessPath -or -not $HarnessManifestPath -or -not $OutputRoot) {
         throw 'DispatchCleanupM3 requires explicit immutable binary, manifest, and external evidence paths'
@@ -543,8 +547,8 @@ try {
         sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
         hol_stall_us = $HolStallUs
         hol_cycles = $HolCycles
-        expected_hold_us = [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs
-        expected_release_gap_us = [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs
+        expected_hold_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.expected_hold_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs }
+        expected_release_gap_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.expected_release_gap_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs }
         profile = 'production'
         cargo_profile = if ($harnessManifest) { $harnessManifest.cargo_profile } else { 'legacy-checkout-release' }
         cargo_features = if ($harnessManifest) { @($harnessManifest.cargo_features) } else { @() }
@@ -600,8 +604,8 @@ try {
         $runConfig['workload_version'] = $harnessManifest.workload_version
         $runConfig['session_seed'] = $null
         $runConfig['seed_mode'] = 'none; deterministic workload definitions do not accept a PRNG seed'
-        $runConfig['configured_H_us'] = [long]$runConfig.expected_hold_us
-        $runConfig['configured_G_us'] = [long]$runConfig.expected_release_gap_us
+        $runConfig['configured_H_us'] = [long]$m3TimingFloors.configured_H_us
+        $runConfig['configured_G_us'] = [long]$m3TimingFloors.configured_G_us
     }
     $runConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runConfigPath -Encoding UTF8
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $runDir 'runner.ps1')
@@ -769,8 +773,8 @@ try {
         workload_version = if ($isDispatchCleanupM3 -and $harnessManifest) { $harnessManifest.workload_version } else { $null }
         session_seed = $null
         seed_mode = if ($isDispatchCleanupM3) { 'none; deterministic workload definitions do not accept a PRNG seed' } else { $null }
-        configured_H_us = if ($isDispatchCleanupM3) { [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs } else { $null }
-        configured_G_us = if ($isDispatchCleanupM3) { [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs } else { $null }
+        configured_H_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.configured_H_us } else { $null }
+        configured_G_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.configured_G_us } else { $null }
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_source_role = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_role' } else { $null }
