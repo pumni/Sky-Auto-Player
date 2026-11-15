@@ -20,6 +20,7 @@ fn signed_qpc_delta(value: u64, baseline: u64) -> Option<i64> {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PrecisionPacketTimingObservation {
+    pub(crate) sendinput_attempts: u8,
     pub(crate) authored_target_qpc: u64,
     pub(crate) packet_not_before_qpc: u64,
     pub(crate) pre_call_qpc: Option<u64>,
@@ -305,11 +306,12 @@ impl WorkerMetricsLocal {
     /// Record fixed-width evidence for one physical sender attempt. Missing or
     /// unrepresentable intervals are left unavailable by omitting their sample
     /// count; no timestamp is guessed or replaced with a schedule value.
-    pub(crate) fn observe_precision_packet_timing(
+    pub(crate) fn observe_precision_packet_result(
         &mut self,
         observation: PrecisionPacketTimingObservation,
     ) {
         let PrecisionPacketTimingObservation {
+            sendinput_attempts,
             authored_target_qpc,
             packet_not_before_qpc,
             pre_call_qpc,
@@ -318,16 +320,23 @@ impl WorkerMetricsLocal {
             previous_sender_completion_known,
             transport_anomaly,
         } = observation;
-        self.precision_packet_attempts = self.precision_packet_attempts.saturating_add(1);
+        let sendinput_attempts = u64::from(sendinput_attempts);
+        self.precision_packet_attempts = self
+            .precision_packet_attempts
+            .saturating_add(sendinput_attempts);
         self.pre_call_qpc_unavailable_attempts = self
             .pre_call_qpc_unavailable_attempts
-            .saturating_add(u64::from(pre_call_qpc.is_none()));
+            .saturating_add(sendinput_attempts * u64::from(pre_call_qpc.is_none()));
         self.sendinput_completion_qpc_unavailable_attempts = self
             .sendinput_completion_qpc_unavailable_attempts
-            .saturating_add(u64::from(sendinput_completion_qpc.is_none()));
+            .saturating_add(sendinput_attempts * u64::from(sendinput_completion_qpc.is_none()));
         self.transport_anomalies = self
             .transport_anomalies
             .saturating_add(u64::from(transport_anomaly));
+
+        if sendinput_attempts == 0 {
+            return;
+        }
 
         match packet_not_before_qpc.checked_sub(authored_target_qpc) {
             Some(displacement) => {

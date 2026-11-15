@@ -34,14 +34,17 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
     sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
 
     assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
-    assert!(
+    assert!(harness.runtime.terminal_error.as_ref().unwrap().contains(
+        "SendInput successful status without complete QPC evidence"
+    ));
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(
         harness
-            .runtime
-            .terminal_error
-            .as_ref()
-            .unwrap()
-            .contains("SendInput completion QPC unavailable")
+            .local_metrics
+            .sendinput_completion_qpc_unavailable_attempts,
+        1
     );
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
     assert_eq!(
         harness
             .resources
@@ -57,7 +60,7 @@ fn completion_qpc_missing_and_clock_error_fails_closed() {
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
 }
 #[test]
-fn completion_qpc_missing_and_clock_success_dispatches() {
+fn complete_status_without_completion_qpc_fails_closed_even_when_qpc_is_available() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness
         .resources
@@ -90,107 +93,24 @@ fn completion_qpc_missing_and_clock_success_dispatches() {
     sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
-    assert!(matches!(outcome, super::StagedDispatchOutcome::Dispatched));
-    assert!(harness.runtime.terminal_error.is_none());
+    assert!(matches!(outcome, super::StagedDispatchOutcome::Exit));
+    assert!(harness
+        .runtime
+        .terminal_error
+        .as_deref()
+        .is_some_and(|error| error.contains("completion_qpc=unavailable")));
     assert_eq!(
         harness
             .resources
             .scheduler
             .chord_cursor(),
-        1
+        0
     );
-}
-
-#[test]
-fn successful_send_keeps_missing_pre_call_unavailable_with_real_completion_qpc() {
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
-    harness.attach_executor_for_test().expect("attach executor");
-    let chord = harness.current_executor_chord_for_test();
-    let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-        .expect("stage candidate")
-        .expect("Down candidate");
-    let qpc_clock = harness.resources.clock;
-    let completion_qpc = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let completion_capture = std::sync::Arc::clone(&completion_qpc);
-    harness
-        .resources
-        .backend
-        .disable_pre_call_qpc_sample_for_test();
-    harness
-        .resources
-        .backend
-        .set_packet_emitter(move |packet| {
-            let completion_qpc = qpc_clock.now().expect("real sender completion QPC");
-            completion_capture.store(completion_qpc.as_u64(), Ordering::Release);
-            SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask: packet.up_mask | packet.down_mask,
-                    confirmed_mask: packet.up_mask | packet.down_mask,
-                    skipped_mask: 0,
-                    first_inserted: packet.event_count(),
-                    attempts: 1,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: None,
-                    completed_ticks: Some(completion_qpc),
-                    timing_error: None,
-                },
-            }
-        });
-
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, true),
-        super::StagedDispatchOutcome::Dispatched
-    ));
-    let completion_qpc = sky_dispatch_win32::clock::QpcTicks::from_raw(
-        completion_qpc.load(Ordering::Acquire),
-    );
-    let observation = match harness.observer.pop_front().expect("Down observation") {
-        crate::engine::worker::dispatch::observation::DispatchObservation::Down(observation) => {
-            observation
-        }
-        other => panic!("unexpected observation: {other:?}"),
-    };
-    assert_eq!(
-        observation.trace.result_status,
-        SendTransactionStatus::Complete
-    );
-    assert_eq!(observation.pre_call_qpc, None);
-    assert_eq!(observation.sendinput_completion_qpc, completion_qpc);
-
-    let mut telemetry = crate::engine::TelemetryCollector::new(
-        crate::engine::TelemetryMode::Ring,
-        1,
-    );
-    crate::engine::worker::dispatch::observation::record_down_send_telemetry(
-        &observation,
-        &mut telemetry,
-        0,
-        0,
-        false,
-        0,
-        0,
-        None,
-        Some(TimelineTicks::from_raw(completion_qpc.as_u64())),
-        None,
-        completion_qpc,
-        false,
-        false,
-    )
-    .expect("serialize successful sender evidence");
-    let record = telemetry.output.records.back().expect("trace record");
-    assert!(!record.pre_call_qpc_available);
-    assert_eq!(record.pre_call_qpc_ticks, 0);
-    assert_eq!(record.pre_call_qpc_provenance, crate::engine::TimestampProvenance::Unavailable);
-    assert!(record.sendinput_completion_qpc_available);
-    assert_eq!(record.sendinput_completion_qpc_ticks, completion_qpc.as_u64());
-    assert_eq!(record.sendinput_completion_qpc_provenance, crate::engine::TimestampProvenance::Measured);
-    assert!(!record.authored_lateness_available);
-    assert!(!record.sendinput_envelope_available);
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    let _ = harness.finalize_for_test();
 }
 
 #[test]
@@ -492,6 +412,7 @@ fn final_control_rejects_staged_down_and_up_before_send() {
         super::StagedDispatchOutcome::Replan
     ));
     assert!(down_packets.lock().expect("Down packets").is_empty());
+    assert_eq!(down.local_metrics.precision_packet_attempts, 0);
 
     let mut up = ProductionDispatchTestHarness::new_down_only();
     let up_packets = up.configure_mock_packet_sender_for_test(&[0, 0]);
@@ -515,6 +436,7 @@ fn final_control_rejects_staged_down_and_up_before_send() {
         super::StagedDispatchOutcome::Exit
     ));
     assert_eq!(up_packets.lock().expect("Up packets").len(), 1);
+    assert_eq!(up.local_metrics.precision_packet_attempts, 1);
 }
 
 #[test]

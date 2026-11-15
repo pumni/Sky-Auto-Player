@@ -1190,6 +1190,11 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
 
     let snapshot = session.snapshot();
     assert_eq!(snapshot.status, "error", "zero progress must be terminal");
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 1);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.transport_anomalies, 1);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
     assert!(
         snapshot
             .terminal_error
@@ -1206,6 +1211,48 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
             .iter()
             .any(|record| { record["event_index"] == 2 && record["runtime_outcome"] == "sent" })
     );
+}
+
+#[test]
+fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::qpc_failure_after_send();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let session = NativeDispatchSession::new(test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    ))
+    .expect("test session admission");
+
+    session.arm(0).expect("worker arm");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "error");
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 1);
+    assert_eq!(snapshot.sendinput_envelope_samples, 0);
+    assert_eq!(snapshot.transport_anomalies, 1);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
+    assert!(
+        snapshot
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("ClockFailureAfterSend"))
+    );
+    assert_eq!(
+        send_calls.load(Ordering::SeqCst),
+        2,
+        "one musical packet and one terminal cleanup Up were sent"
+    );
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
 }
 
 #[test]
@@ -1246,13 +1293,16 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid disjoint mixed schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
     let mut options = test_session_options(
         schedule,
         1,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
-            fault_script: FaultInjectionScript::none(),
+            fault_script,
         },
     );
     // This test asserts mixed-packet telemetry cardinality, not the production
@@ -1271,6 +1321,9 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
         "terminal error: {:?}",
         snapshot.terminal_error
     );
+    assert_eq!(snapshot.precision_packet_attempts, 3);
+    assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 3);
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))

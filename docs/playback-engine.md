@@ -126,12 +126,15 @@ Worker Loop -> Wait Deadline Reached
 
 The physical path stages a bounded packet, waits to its deadline, checks the
 final focus/identity/modifier/lease/control gates, then calls the prepared
-`SendInput` sender. Healthy dispatch uses fixed buffers and does not allocate.
-Packets contain no more than 15 inputs, with Up before Down. Full Down ownership
-commits only after complete insertion and valid completion QPC. Zero, partial,
-or invalid-QPC outcomes preserve possibly-active release obligations for cleanup.
-Cleanup succeeds only after physical state is verified resolved; pause/focus
-resume then observes the absolute cleanup-completion plus $G$ barrier.
+`SendInput` sender once. Healthy dispatch uses fixed buffers and does not
+allocate. Packets contain no more than 15 inputs, with Up before Down. Musical
+commit requires complete transport evidence and valid sender-side pre-call and
+completion QPC values in order. The worker never replaces missing sender
+completion with a later clock read. A syscall with unavailable or invalid QPC is
+counted from its raw evidence, is not committed to the scheduler, and retains
+the transport journal for cleanup. Zero and short insertion status remains
+visible in the corresponding error counter. Terminal safety Up is tracked
+separately from musical packet metrics.
 
 Unmatched-Up diagnostic metadata is committed by the normal authored-frame
 Prepare path. Test-only metadata wake instrumentation is not a production path.
@@ -141,11 +144,16 @@ Metadata has no physical dispatch boundary and does not issue `SendInput`.
 - The target window must be the exact foreground window (`GetForegroundWindow() == target_hwnd`).
 - The process owning the foreground window must match the retained target PID and
   image verified at startup.
-- If focus is lost, Down transmission halts immediately, and any active keys are
-  safely released.
+- Focus loss pauses musical dispatch without proactively sending musical Up or
+  starting cleanup while the target is in the background. On return, the exact
+  target must remain stable through the configured grace period. The worker then
+  reconciles and verifies cleanup, and requires a Down barrier at verified
+  cleanup completion plus $G$.
+- Stop, Skip, Panic, and Suspend retain their terminal safety cleanup path,
+  including an Up attempt when the target is not foreground.
 
 ### Resume Barrier (cleanup completion + $G$)
-After verified pause or focus cleanup completes at QPC $Q$:
+After verified pause or focus-restoration cleanup completes at QPC $Q$:
 - All active key obligations are cleared or verified released.
 - A mandatory delay barrier of $Q + G$ is imposed before any subsequent Down chord
   may be transmitted. This sender-side barrier does not control game sampling.

@@ -767,12 +767,23 @@ impl TrackedKeyState {
             SendTransactionStatus::ClockFailureBeforeSend
             | SendTransactionStatus::ClockFailureAfterSend => {
                 self.timing_error = outcome.evidence.timing_error;
-                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend)
-                    && !packet_outcome_proves_zero_transport(packet, outcome)
-                {
-                    let uncertain_mask = packet.up_mask | packet.down_mask;
-                    self.active_mask &= !uncertain_mask;
-                    self.possibly_active_mask |= uncertain_mask;
+                if matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend) {
+                    if outcome.evidence.attempts != 0 && outcome.evidence.first_inserted == 0 {
+                        self.sendinput_zero_progress_failures =
+                            self.sendinput_zero_progress_failures.saturating_add(1);
+                    } else if outcome.evidence.attempts != 0
+                        && u16::from(outcome.evidence.first_inserted)
+                            < u16::from(packet.event_count())
+                    {
+                        self.sendinput_partial_events =
+                            self.sendinput_partial_events.saturating_add(1);
+                        self.chord_split_events = self.chord_split_events.saturating_add(1);
+                    }
+                    if !packet_outcome_proves_zero_transport(packet, outcome) {
+                        let uncertain_mask = packet.up_mask | packet.down_mask;
+                        self.active_mask &= !uncertain_mask;
+                        self.possibly_active_mask |= uncertain_mask;
+                    }
                 }
                 self.chords_rejected = self.chords_rejected.saturating_add(1);
                 self.authored_keys_rejected = self

@@ -313,7 +313,8 @@ fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
 #[test]
 fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
     let mut metrics = WorkerMetricsLocal::default();
-    metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+    metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
+        sendinput_attempts: 1,
         authored_target_qpc: 100,
         packet_not_before_qpc: 110,
         pre_call_qpc: Some(125),
@@ -344,7 +345,8 @@ fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
 #[test]
 fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_ordering() {
     let mut metrics = WorkerMetricsLocal::default();
-    metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+    metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
+        sendinput_attempts: 1,
         authored_target_qpc: 200,
         packet_not_before_qpc: 190,
         ..PrecisionPacketTimingObservation::default()
@@ -358,4 +360,21 @@ fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_order
     assert_eq!(metrics.physical_floor_displacement_samples, 0);
     assert_eq!(metrics.timing_arithmetic_anomalies, 1);
     assert_eq!(metrics.overdue_packet_observations, 0);
+}
+
+#[test]
+fn precision_packet_result_without_a_syscall_does_not_count_an_attempt() {
+    let mut metrics = WorkerMetricsLocal::default();
+    metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
+        sendinput_attempts: 0,
+        transport_anomaly: true,
+        ..PrecisionPacketTimingObservation::default()
+    });
+
+    assert_eq!(metrics.precision_packet_attempts, 0);
+    assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.authored_lateness_samples, 0);
+    assert_eq!(metrics.sendinput_envelope_samples, 0);
+    assert_eq!(metrics.transport_anomalies, 1);
 }

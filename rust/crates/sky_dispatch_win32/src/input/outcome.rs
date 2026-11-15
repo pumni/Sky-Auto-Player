@@ -164,6 +164,10 @@ impl SendTransactionOutcome {
             && self.evidence.skipped_mask == 0
             && self.evidence.first_inserted == requested
             && self.evidence.attempts == 1
+            && self.evidence.zero_progress_retries == 0
+            && self.evidence.retry_reason == PacketRetryReason::None
+            && self.evidence.first_win32_error.is_none()
+            && self.evidence.last_win32_error.is_none()
     }
 
     pub fn sent_scan_codes(&self) -> SmallVec<[u16; 15]> {

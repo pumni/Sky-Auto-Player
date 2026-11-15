@@ -97,6 +97,116 @@ fn failed_sender_paths_retain_bounded_attempt_and_clock_evidence() {
 }
 
 #[test]
+fn pre_call_qpc_failure_records_zero_physical_attempts() {
+    use sky_dispatch_win32::clock::QpcError;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+    harness
+        .resources
+        .backend
+        .set_packet_emitter(|packet| SendTransactionOutcome {
+            status: SendTransactionStatus::ClockFailureBeforeSend,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 0,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: None,
+                completed_ticks: None,
+                timing_error: Some(QpcError::CounterUnavailable),
+            },
+        });
+
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        super::StagedDispatchOutcome::Exit
+    ));
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 0);
+    assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(
+        harness
+            .local_metrics
+            .sendinput_completion_qpc_unavailable_attempts,
+        0
+    );
+    assert_eq!(harness.local_metrics.transport_anomalies, 1);
+    assert!(harness
+        .runtime
+        .terminal_error
+        .as_deref()
+        .is_some_and(|error| error.contains("ClockFailureBeforeSend")));
+    let _ = harness.finalize_for_test();
+}
+
+#[test]
+fn suspend_after_sender_return_keeps_musical_attempt_evidence() {
+    use std::sync::Arc;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+    let clock = harness.resources.clock;
+    let system_power = Arc::clone(&harness.system_power);
+    let interrupt = Arc::clone(&harness.interrupt);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        assert!(system_power.notify(true, &interrupt));
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        super::StagedDispatchOutcome::Exit
+    ));
+    assert_eq!(
+        harness.runtime.terminal_trigger,
+        Some(crate::engine::worker::TerminalTrigger::SystemSuspend)
+    );
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.local_metrics.sendinput_envelope_samples, 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+
+    let evidence = harness.finalize_for_test();
+    assert_eq!(evidence.release_obligation_mask, 0);
+    assert!(!cleanup.lock().expect("terminal cleanup capture").is_empty());
+}
+
+#[test]
 fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
     for (confirmed_mask, attempts, expected_evidence) in [
         (0b0001, 1, "confirmed_count=0 first_inserted=2 attempts=1"),
@@ -264,6 +374,14 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
             super::StagedDispatchOutcome::Exit
         ));
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(harness.local_metrics.precision_packet_attempts, 2);
+        assert_eq!(
+            harness
+                .local_metrics
+                .sendinput_completion_qpc_unavailable_attempts,
+            1
+        );
+        assert_eq!(harness.local_metrics.transport_anomalies, 1);
         assert_eq!(harness.generation_accounting_for_test(), accounting_before);
         assert_eq!(
             harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
@@ -275,10 +393,16 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
             0 => {
                 assert_eq!(obligation, 0b01, "zero insertion retains only prior held A");
                 assert_eq!(harness.resources.backend.in_flight_mask, 0);
+                assert_eq!(harness.resources.backend.sendinput_zero_progress_failures, 1);
+                assert_eq!(harness.resources.backend.sendinput_partial_events, 0);
             }
             1 | 2 => {
                 assert_eq!(obligation, 0b11, "partial/full insert without completion is uncertain");
                 assert_eq!(harness.resources.backend.in_flight_mask, 0b11);
+                assert_eq!(
+                    harness.resources.backend.sendinput_partial_events,
+                    u64::from(inserted_count == 1)
+                );
             }
             _ => unreachable!(),
         }

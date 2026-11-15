@@ -557,6 +557,33 @@ pub(crate) fn dispatch_staged_candidate(
         });
     }
 
+    local_metrics.observe_precision_packet_result(
+        crate::engine::telemetry::metrics::PrecisionPacketTimingObservation {
+            sendinput_attempts: send_result.evidence.attempts,
+            authored_target_qpc: candidate.timing_window.authored_target_qpc.as_u64(),
+            packet_not_before_qpc: candidate.timing_window.packet_not_before_qpc.as_u64(),
+            pre_call_qpc: send_result
+                .evidence
+                .started_ticks
+                .map(|ticks| ticks.as_u64()),
+            sendinput_completion_qpc: send_result
+                .evidence
+                .completed_ticks
+                .map(|ticks| ticks.as_u64()),
+            previous_sendinput_completion_qpc: previous_sendinput_completion_qpc
+                .map(|ticks| ticks.as_u64()),
+            previous_sender_completion_known,
+            transport_anomaly: !send_result.is_success()
+                || send_result.evidence.first_win32_error.is_some()
+                || send_result.evidence.last_win32_error.is_some()
+                || send_result.evidence.skipped_mask != 0
+                || send_result.evidence.attempts != 1
+                || send_result.evidence.started_ticks.is_none()
+                || send_result.evidence.completed_ticks.is_none()
+                || send_result.evidence.duration_ticks().is_err(),
+        },
+    );
+
     if system_power.system_suspend_terminal() {
         runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
         return StagedDispatchOutcome::Exit;
@@ -594,37 +621,22 @@ pub(crate) fn dispatch_staged_candidate(
         hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::FirstDownCommitted);
     }
 
-    let completion_qpc = match send_result.evidence.completed_ticks {
-        Some(ticks) => ticks,
-        None => match qpc_clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                runtime.terminal_error =
-                    Some(format!("SendInput completion QPC unavailable: {error:?}"));
-                return StagedDispatchOutcome::Exit;
-            }
-        },
+    let (Some(_pre_call_qpc), Some(completion_qpc)) = (
+        send_result.evidence.started_ticks,
+        send_result.evidence.completed_ticks,
+    ) else {
+        runtime.terminal_error = Some(format!(
+            "SendInput successful status without complete QPC evidence: {}",
+            sender_failure_record(&candidate, &send_result),
+        ));
+        return StagedDispatchOutcome::Exit;
     };
-
-    if send_result.evidence.attempts != 0 {
-        local_metrics.observe_precision_packet_timing(
-            crate::engine::telemetry::metrics::PrecisionPacketTimingObservation {
-                authored_target_qpc: candidate.timing_window.authored_target_qpc.as_u64(),
-                packet_not_before_qpc: candidate.timing_window.packet_not_before_qpc.as_u64(),
-                pre_call_qpc: send_result
-                    .evidence
-                    .started_ticks
-                    .map(|ticks| ticks.as_u64()),
-                sendinput_completion_qpc: Some(completion_qpc.as_u64()),
-                previous_sendinput_completion_qpc: previous_sendinput_completion_qpc
-                    .map(|ticks| ticks.as_u64()),
-                previous_sender_completion_known,
-                transport_anomaly: !send_result.is_success()
-                    || send_result.evidence.last_win32_error.is_some()
-                    || send_result.evidence.skipped_mask != 0
-                    || send_result.evidence.attempts != 1,
-            },
-        );
+    if send_result.evidence.duration_ticks().is_err() {
+        runtime.terminal_error = Some(format!(
+            "SendInput returned invalid QPC ordering: {}",
+            sender_failure_record(&candidate, &send_result),
+        ));
+        return StagedDispatchOutcome::Exit;
     }
     let (source_action_target_ticks, source_action_target_qpc) = source_action_target(
         candidate.authored_target_ticks,
@@ -1035,7 +1047,11 @@ pub(super) fn dispatch(
                     }
                     #[cfg(any(test, feature = "test-support"))]
                     if let Some(hook) = core.runtime.restore_race_hook.as_ref() {
-                        hook(focus_active, target);
+                        hook(
+                            focus_active,
+                            target,
+                            resources.scheduler.resume_barrier_qpc(),
+                        );
                     }
                     let Some(post_restore_target) = load_target_stamp(target) else {
                         core.runtime.verified_target = None;

@@ -22,24 +22,24 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
             },
             KeyActionInput {
                 source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 2_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "focus-restore-up".to_string().into(),
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-restore-next-down".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 2,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "focus-restore-sentinel".to_string().into(),
+                kind: ActionKind::Up,
+                scheduled_us: 300_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "focus-restore-first-up".to_string().into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
-                scheduled_us: 10_100_000,
+                scheduled_us: 320_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "focus-restore-sentinel-up".to_string().into(),
+                reason: "focus-restore-next-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],
@@ -48,10 +48,16 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     let force_inconclusive_probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let send_call_count = Arc::new(AtomicU64::new(0));
     let full_release_count = Arc::new(AtomicU64::new(0));
+    let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let startup_hook = Arc::new(StartupOrderingHook::default());
+    startup_hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+    let resume_barrier_qpc = Arc::new(AtomicU64::new(0));
+    let resume_barrier_capture = Arc::clone(&resume_barrier_qpc);
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
     let mut options = test_session_options(
         schedule,
         1,
@@ -62,31 +68,26 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         },
     );
     options.focus.require_focus = true;
+    options.focus.focus_restore_grace_us = 120_000;
+    options.startup_ordering_hook = Some(Arc::clone(&startup_hook));
+    options.restore_race_hook = Some(Arc::new(move |_, _, barrier| {
+        resume_barrier_capture.store(barrier.map_or(0, |ticks| ticks.as_u64()), Ordering::Release);
+    }));
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_override_reset = ForegroundOverrideReset;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     let session = NativeDispatchSession::new(options).expect("test session admission");
     session.set_target_hwnd(123);
-    start_with_test_wall_clock_slack(&session);
+    session.arm(0).expect("session arm");
+    assert!(startup_hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
+    assert_eq!(send_call_count.load(Ordering::Acquire), 1);
 
-    let deadline = Instant::now() + Duration::from_secs(1);
-    let mut snapshot = session.snapshot_lite();
-    while snapshot.recent_latencies_us.is_empty()
-        && !snapshot.is_finished
-        && Instant::now() < deadline
-    {
-        session
-            .publish_supervisor_progress()
-            .expect("heartbeat while waiting for Down");
-        std::thread::sleep(Duration::from_millis(1));
-        snapshot = session.snapshot_lite();
-    }
-    assert!(!snapshot.recent_latencies_us.is_empty());
-
-    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
     force_inconclusive_probe.store(true, Ordering::Release);
     session.set_focus_hint(false);
+    startup_hook.release_startup_checkpoint();
     let focus_loss_deadline = Instant::now() + Duration::from_secs(1);
+    let mut snapshot = session.snapshot_lite();
     while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < focus_loss_deadline {
         session
             .publish_supervisor_progress()
@@ -99,33 +100,108 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         "focus loss did not enter pause: {snapshot:?}"
     );
     assert!(!snapshot.has_terminal_error);
+    assert_eq!(send_call_count.load(Ordering::Acquire), 1);
+
+    let pause_token = session
+        .pause_with_timing_token()
+        .expect("manual pause request while focus is lost");
+    let pause_deadline = Instant::now() + Duration::from_secs(1);
+    let mut pause_observed = false;
+    while !pause_observed && Instant::now() < pause_deadline {
+        pause_observed = session
+            .pause_timing_result(pause_token)
+            .expect("manual pause timing")
+            .is_some();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        pause_observed,
+        "manual pause was not observed while focus was lost"
+    );
+    std::thread::sleep(Duration::from_millis(40));
+    assert_eq!(
+        send_call_count.load(Ordering::Acquire),
+        1,
+        "focus loss must not send a musical Up or start cleanup in the background"
+    );
 
     force_inconclusive_probe.store(false, Ordering::Release);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
+    std::thread::sleep(Duration::from_millis(30));
+    assert!(
+        session.snapshot_lite().is_paused,
+        "focus grace remains active"
+    );
+    assert_eq!(send_call_count.load(Ordering::Acquire), 1);
+
     let restore_deadline = Instant::now() + Duration::from_secs(2);
-    while snapshot.is_paused && !snapshot.is_finished && Instant::now() < restore_deadline {
+    while resume_barrier_qpc.load(Ordering::Acquire) == 0
+        && !snapshot.is_finished
+        && Instant::now() < restore_deadline
+    {
         session
             .publish_supervisor_progress()
-            .expect("heartbeat while focus is restored");
+            .expect("heartbeat while focus returns through grace");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
-    assert!(
-        !snapshot.is_paused,
-        "stable focus did not resume after grace: {snapshot:?}"
+    let barrier_qpc = resume_barrier_qpc.load(Ordering::Acquire);
+    assert_ne!(
+        barrier_qpc, 0,
+        "verified focus cleanup published its G barrier"
     );
     assert!(
-        !snapshot.is_finished,
-        "restore finished before assertions: lite={snapshot:?}, full={:?}",
-        session.snapshot()
+        session.snapshot_lite().is_paused,
+        "manual pause still holds playback"
     );
-    assert!(!snapshot.has_terminal_error);
     assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        captures
+            .lock()
+            .expect("mock input capture")
+            .as_slice()
+            .len(),
+        2,
+        "the worker captured Down A and the verified focus cleanup Up"
+    );
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
+    session
+        .resume()
+        .expect("manual resume after focus restoration");
+    let down_deadline = Instant::now() + Duration::from_secs(2);
+    while startup_hook.down_sender_attempt_count() < 2 && Instant::now() < down_deadline {
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while waiting for post-cleanup Down");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(startup_hook.down_sender_attempt_count(), 2);
+    assert!(
+        startup_hook.last_down_sender_start_qpc_ticks() >= barrier_qpc,
+        "next Down must not precede the verified cleanup + G barrier"
+    );
+    assert_eq!(send_call_count.load(Ordering::Acquire), 3);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    session.set_focus_hint(false);
     session.quit().expect("quit restored session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Quit.as_str());
+    assert_eq!(snapshot.precision_packet_attempts, 2);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.sendinput_partial_events, 0);
+    assert_eq!(snapshot.generation_accounting.active, 0);
+    assert!(snapshot.generation_accounting.cancelled >= 1);
+    let captures = captures.lock().expect("final mock input captures");
+    assert!(matches!(
+        captures.last(),
+        Some(MockSendInputCapture::SingleEmitter { key_up: true, .. })
+    ));
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 4);
 }
 
 #[cfg(all(feature = "test-support", windows))]

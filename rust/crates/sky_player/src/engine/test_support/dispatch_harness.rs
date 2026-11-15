@@ -88,7 +88,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) panic_requested: AtomicBool,
     pub(crate) supervisor_expired: SupervisorLeaseState,
     pub(crate) desired_pause: AtomicBool,
-    pub(super) system_power: Arc<SystemPowerState>,
+    pub(crate) system_power: Arc<SystemPowerState>,
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: crate::engine::worker::dispatch::PendingObservationQueue,
