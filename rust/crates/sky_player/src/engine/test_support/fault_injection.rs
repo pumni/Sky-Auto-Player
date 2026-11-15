@@ -45,6 +45,8 @@ pub enum InjectedSendOutcome {
     PanicAfterSend,
     /// Return a complete send receipt but fail the post-send QPC boundary.
     QpcFailureAfterSend,
+    /// Return a complete transport receipt with completion QPC before pre-call.
+    InvalidQpcOrderAfterSend,
 }
 
 /// Script that maps call-index → `InjectedSendOutcome`.
@@ -242,6 +244,13 @@ impl FaultInjectionScript {
     pub fn qpc_failure_after_send() -> Self {
         Self {
             entries: vec![(0, InjectedSendOutcome::QpcFailureAfterSend)],
+            ..Default::default()
+        }
+    }
+
+    pub fn invalid_qpc_order_after_send() -> Self {
+        Self {
+            entries: vec![(0, InjectedSendOutcome::InvalidQpcOrderAfterSend)],
             ..Default::default()
         }
     }

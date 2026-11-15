@@ -136,6 +136,11 @@ the transport journal for cleanup. Zero and short insertion status remains
 visible in the corresponding error counter. Terminal safety Up is tracked
 separately from musical packet metrics.
 
+Latency, envelope, and hold timing samples are qualified only when transport is
+complete and sender QPC evidence is ordered with no timing error. Unqualified
+syscalls still contribute their raw attempt, missing-QPC, and transport-error
+counters without entering those timing distributions.
+
 Unmatched-Up diagnostic metadata is committed by the normal authored-frame
 Prepare path. Test-only metadata wake instrumentation is not a production path.
 Metadata has no physical dispatch boundary and does not issue `SendInput`.

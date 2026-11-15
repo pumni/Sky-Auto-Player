@@ -315,13 +315,14 @@ fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
     let mut metrics = WorkerMetricsLocal::default();
     metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
         sendinput_attempts: 1,
+        healthy_completion: true,
         authored_target_qpc: 100,
         packet_not_before_qpc: 110,
         pre_call_qpc: Some(125),
         sendinput_completion_qpc: Some(132),
         previous_sendinput_completion_qpc: Some(115),
         previous_sender_completion_known: true,
-        transport_anomaly: true,
+        transport_anomaly: false,
     });
     assert_eq!(metrics.precision_packet_attempts, 1);
     assert_eq!(metrics.authored_lateness_samples, 1);
@@ -338,27 +339,34 @@ fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
     assert_eq!(metrics.sendinput_envelope_samples, 1);
     assert_eq!(metrics.max_sendinput_envelope_ticks, 7);
     assert_eq!(metrics.overdue_packet_observations, 1);
-    assert_eq!(metrics.transport_anomalies, 1);
+    assert_eq!(metrics.transport_anomalies, 0);
     assert_eq!(metrics.timing_arithmetic_anomalies, 0);
 }
 
 #[test]
-fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_ordering() {
+fn unqualified_sender_result_keeps_raw_counters_without_timing_samples() {
     let mut metrics = WorkerMetricsLocal::default();
     metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
         sendinput_attempts: 1,
-        authored_target_qpc: 200,
-        packet_not_before_qpc: 190,
-        ..PrecisionPacketTimingObservation::default()
+        healthy_completion: false,
+        authored_target_qpc: 100,
+        packet_not_before_qpc: 110,
+        pre_call_qpc: Some(125),
+        sendinput_completion_qpc: Some(124),
+        previous_sendinput_completion_qpc: Some(115),
+        previous_sender_completion_known: true,
+        transport_anomaly: true,
     });
     assert_eq!(metrics.precision_packet_attempts, 1);
-    assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 1);
-    assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 1);
+    assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 0);
+    assert_eq!(metrics.transport_anomalies, 1);
     assert_eq!(metrics.authored_lateness_samples, 0);
     assert_eq!(metrics.residual_lateness_samples, 0);
+    assert_eq!(metrics.hol_delay_lower_bound_samples, 0);
+    assert_eq!(metrics.unattributed_lateness_samples, 0);
     assert_eq!(metrics.sendinput_envelope_samples, 0);
     assert_eq!(metrics.physical_floor_displacement_samples, 0);
-    assert_eq!(metrics.timing_arithmetic_anomalies, 1);
     assert_eq!(metrics.overdue_packet_observations, 0);
 }
 

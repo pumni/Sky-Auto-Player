@@ -21,6 +21,7 @@ fn signed_qpc_delta(value: u64, baseline: u64) -> Option<i64> {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PrecisionPacketTimingObservation {
     pub(crate) sendinput_attempts: u8,
+    pub(crate) healthy_completion: bool,
     pub(crate) authored_target_qpc: u64,
     pub(crate) packet_not_before_qpc: u64,
     pub(crate) pre_call_qpc: Option<u64>,
@@ -303,15 +304,16 @@ pub struct WorkerMetricsLocal {
 }
 
 impl WorkerMetricsLocal {
-    /// Record fixed-width evidence for one physical sender attempt. Missing or
-    /// unrepresentable intervals are left unavailable by omitting their sample
-    /// count; no timestamp is guessed or replaced with a schedule value.
+    /// Record raw sender-result accounting once, then admit timing samples only
+    /// for a complete transport with valid sender QPC evidence. Missing or
+    /// unrepresentable intervals are never replaced with a schedule/clock value.
     pub(crate) fn observe_precision_packet_result(
         &mut self,
         observation: PrecisionPacketTimingObservation,
     ) {
         let PrecisionPacketTimingObservation {
             sendinput_attempts,
+            healthy_completion,
             authored_target_qpc,
             packet_not_before_qpc,
             pre_call_qpc,
@@ -334,7 +336,7 @@ impl WorkerMetricsLocal {
             .transport_anomalies
             .saturating_add(u64::from(transport_anomaly));
 
-        if sendinput_attempts == 0 {
+        if sendinput_attempts == 0 || !healthy_completion {
             return;
         }
 

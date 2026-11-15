@@ -537,6 +537,13 @@ pub(crate) fn dispatch_staged_candidate(
         .send_prepared_physical_packet_at_final_boundary_deferred_commit(
             &candidate.prepared_packet,
         );
+    let physical_packet = sky_dispatch_win32::input::PhysicalPacket::new(
+        candidate.packet_masks.up_mask,
+        candidate.packet_masks.down_mask,
+    );
+    let complete_transport_evidence = send_result.has_complete_evidence_for(physical_packet);
+    let valid_sender_timing_evidence = send_result.has_valid_sender_timing_evidence();
+    let healthy_completion_evidence = complete_transport_evidence && valid_sender_timing_evidence;
 
     #[cfg(any(test, feature = "test-support"))]
     if send_result.evidence.attempts != 0
@@ -560,6 +567,7 @@ pub(crate) fn dispatch_staged_candidate(
     local_metrics.observe_precision_packet_result(
         crate::engine::telemetry::metrics::PrecisionPacketTimingObservation {
             sendinput_attempts: send_result.evidence.attempts,
+            healthy_completion: healthy_completion_evidence,
             authored_target_qpc: candidate.timing_window.authored_target_qpc.as_u64(),
             packet_not_before_qpc: candidate.timing_window.packet_not_before_qpc.as_u64(),
             pre_call_qpc: send_result
@@ -573,14 +581,14 @@ pub(crate) fn dispatch_staged_candidate(
             previous_sendinput_completion_qpc: previous_sendinput_completion_qpc
                 .map(|ticks| ticks.as_u64()),
             previous_sender_completion_known,
-            transport_anomaly: !send_result.is_success()
+            transport_anomaly: !healthy_completion_evidence
                 || send_result.evidence.first_win32_error.is_some()
                 || send_result.evidence.last_win32_error.is_some()
                 || send_result.evidence.skipped_mask != 0
                 || send_result.evidence.attempts != 1
                 || send_result.evidence.started_ticks.is_none()
                 || send_result.evidence.completed_ticks.is_none()
-                || send_result.evidence.duration_ticks().is_err(),
+                || send_result.evidence.timing_error.is_some(),
         },
     );
 
@@ -608,17 +616,19 @@ pub(crate) fn dispatch_staged_candidate(
         return StagedDispatchOutcome::Exit;
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    if candidate.up_mask != 0
-        && candidate.packet_masks.down_mask == 0
-        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
-    {
-        hook.wait_after_successful_up();
+    if !complete_transport_evidence {
+        runtime.terminal_error = Some(format!(
+            "SendInput Complete status without complete transport evidence: {}",
+            sender_failure_record(&candidate, &send_result),
+        ));
+        return StagedDispatchOutcome::Exit;
     }
-
-    #[cfg(any(test, feature = "test-support"))]
-    if has_down && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-        hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::FirstDownCommitted);
+    if let Some(timing_error) = send_result.evidence.timing_error {
+        runtime.terminal_error = Some(format!(
+            "SendInput Complete status with sender timing error ({timing_error:?}): {}",
+            sender_failure_record(&candidate, &send_result),
+        ));
+        return StagedDispatchOutcome::Exit;
     }
 
     let (Some(_pre_call_qpc), Some(completion_qpc)) = (
@@ -631,12 +641,25 @@ pub(crate) fn dispatch_staged_candidate(
         ));
         return StagedDispatchOutcome::Exit;
     };
-    if send_result.evidence.duration_ticks().is_err() {
+    if !valid_sender_timing_evidence {
         runtime.terminal_error = Some(format!(
             "SendInput returned invalid QPC ordering: {}",
             sender_failure_record(&candidate, &send_result),
         ));
         return StagedDispatchOutcome::Exit;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    if candidate.up_mask != 0
+        && candidate.packet_masks.down_mask == 0
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.wait_after_successful_up();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    if has_down && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+        hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::FirstDownCommitted);
     }
     let (source_action_target_ticks, source_action_target_qpc) = source_action_target(
         candidate.authored_target_ticks,
