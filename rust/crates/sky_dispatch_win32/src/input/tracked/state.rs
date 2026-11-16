@@ -75,6 +75,8 @@ impl TrackedKeyState {
             let slot = remaining.trailing_zeros() as usize;
             let bit = 1_u16 << slot;
             remaining &= !bit;
+            #[cfg(any(test, feature = "test-support"))]
+            super::TEST_RELEASE_OWNER_LEDGER_VISITS.increment();
             if self.release_owner_ledger.conflicted_mask & bit != 0 {
                 return Err(format!(
                     "tracked release owner is ambiguous for slot {slot}"
@@ -96,6 +98,59 @@ impl TrackedKeyState {
         Ok(proof)
     }
 
+    /// Clear only the conservative journal residue created by one proven
+    /// raw-zero Down-only attempt. The caller must classify the sender result
+    /// before using this; unrelated active or uncertain slots are preserved.
+    pub fn clear_proven_raw_zero_down_attempt(&mut self, down_mask: u16) -> Result<(), String> {
+        if down_mask == 0
+            || self.in_flight_mask != down_mask
+            || self.possibly_active_mask & down_mask != down_mask
+            || self.active_mask & down_mask != 0
+            || self.failed_release_mask & down_mask != 0
+        {
+            return Err(format!(
+                "proven-zero Down journal is inconsistent: down={down_mask:#06x}, active={:#06x}, possible={:#06x}, failed={:#06x}, in_flight={:#06x}",
+                self.active_mask,
+                self.possibly_active_mask,
+                self.failed_release_mask,
+                self.in_flight_mask,
+            ));
+        }
+        self.possibly_active_mask &= !down_mask;
+        self.in_flight_mask &= !down_mask;
+        self.clear_unobligated_release_owners(down_mask);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn reset_owner_ledger_visits_for_test(&self) {
+        super::TEST_RELEASE_OWNER_LEDGER_VISITS.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn owner_ledger_visits_for_test(&self) -> u64 {
+        super::TEST_RELEASE_OWNER_LEDGER_VISITS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn forget_release_owner_proof_for_test(&mut self, mask: u16) {
+        let mut remaining = mask;
+        while remaining != 0 {
+            let slot = remaining.trailing_zeros() as usize;
+            let bit = 1_u16 << slot;
+            remaining &= !bit;
+            if slot < RELEASE_OWNER_SLOT_COUNT {
+                self.release_owner_ledger.owner_by_slot[slot] = None;
+                self.release_owner_ledger.conflicted_mask &= !bit;
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn conflict_release_owner_proof_for_test(&mut self, mask: u16) {
+        self.release_owner_ledger.conflicted_mask |= mask;
+    }
+
     pub(super) fn remember_release_owner_for_down(
         &mut self,
         down_mask: u16,
@@ -107,6 +162,8 @@ impl TrackedKeyState {
             let slot = remaining.trailing_zeros() as usize;
             let bit = 1_u16 << slot;
             remaining &= !bit;
+            #[cfg(any(test, feature = "test-support"))]
+            super::TEST_RELEASE_OWNER_LEDGER_VISITS.increment();
             if slot >= RELEASE_OWNER_SLOT_COUNT {
                 self.release_owner_ledger.conflicted_mask |= bit;
                 continue;
@@ -126,10 +183,15 @@ impl TrackedKeyState {
         }
     }
 
-    pub(super) fn clear_unobligated_release_owners(&mut self) {
+    pub(super) fn clear_unobligated_release_owners(&mut self, mask: u16) {
         let obligations = self.release_obligation_mask();
-        for slot in 0..RELEASE_OWNER_SLOT_COUNT {
+        let mut remaining = mask & ((1_u16 << RELEASE_OWNER_SLOT_COUNT) - 1);
+        while remaining != 0 {
+            let slot = remaining.trailing_zeros() as usize;
             let bit = 1_u16 << slot;
+            remaining &= !bit;
+            #[cfg(any(test, feature = "test-support"))]
+            super::TEST_RELEASE_OWNER_LEDGER_VISITS.increment();
             if obligations & bit == 0 {
                 self.release_owner_ledger.owner_by_slot[slot] = None;
                 self.release_owner_ledger.conflicted_mask &= !bit;

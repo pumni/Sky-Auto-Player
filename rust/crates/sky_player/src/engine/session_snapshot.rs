@@ -1,17 +1,52 @@
+struct SessionSnapshotProjection {
+    lifecycle: u8,
+    elapsed_us: u64,
+    pre_roll_remaining_us: u64,
+    paused: bool,
+    startup_armed: bool,
+    startup_ready: bool,
+    status: EnginePollStatus,
+    local: WorkerMetricsLocal,
+    last_error: Option<String>,
+    terminal_error: Option<String>,
+    outcome: Option<&'static str>,
+}
+
 impl NativeDispatchSession {
-    pub fn snapshot(&self) -> EngineSnapshot {
+    /// Capture the shared live projection once for both public snapshot DTOs.
+    /// Lifecycle, playback progress, common metrics, and error/status
+    /// semantics must stay identical between full and lite consumers.
+    fn snapshot_projection(&self) -> SessionSnapshotProjection {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
         let (((elapsed_us, paused), pre_roll_remaining_us), startup) = self.live_projection();
-        let status = self
-            .poll_status(lifecycle, paused, pre_roll_remaining_us, startup)
-            .as_str();
-        let local = self.shared.publication.metrics.snapshot.load();
-        let startup_armed = startup.armed_published;
-        let startup_ready = startup.ready_published;
-        EngineSnapshot {
+        let status = self.poll_status(lifecycle, paused, pre_roll_remaining_us, startup);
+        SessionSnapshotProjection {
+            lifecycle,
             elapsed_us,
-            total_us: local.total_us,
             pre_roll_remaining_us,
+            paused,
+            startup_armed: startup.armed_published,
+            startup_ready: startup.ready_published,
+            status,
+            local: self.shared.publication.metrics.snapshot.load(),
+            last_error: self.shared.publication.metrics.last_error.lock().clone(),
+            terminal_error: self.shared.publication.metrics.terminal_error.lock().clone(),
+            outcome: self.terminal_outcome(),
+        }
+    }
+}
+
+impl NativeDispatchSession {
+    pub fn snapshot(&self) -> EngineSnapshot {
+        let projection = self.snapshot_projection();
+        let local = &projection.local;
+        let status = projection.status.as_str();
+        let startup_armed = projection.startup_armed;
+        let startup_ready = projection.startup_ready;
+        EngineSnapshot {
+            elapsed_us: projection.elapsed_us,
+            total_us: local.total_us,
+            pre_roll_remaining_us: projection.pre_roll_remaining_us,
             lateness_us: local.lateness_us,
             max_lateness_us: local.max_lateness_us,
             late_2ms: local.late_2ms,
@@ -53,14 +88,14 @@ impl NativeDispatchSession {
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
             recent_latency_samples_available: self.observer_enabled,
-            is_running: lifecycle == LIFECYCLE_RUNNING,
-            is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
-            is_paused: paused,
+            is_running: projection.lifecycle == LIFECYCLE_RUNNING,
+            is_finished: matches!(projection.lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
+            is_paused: projection.paused,
             status: status.to_string(),
             active_count: local.active_count as usize,
             possibly_active_count: local.possibly_active_count as usize,
             failed_release_count: local.failed_release_count as usize,
-            last_error: self.shared.publication.metrics.last_error.lock().clone(),
+            last_error: projection.last_error.clone(),
             keys_dropped: local.keys_dropped,
             chord_split_events: local.chord_split_events,
             sendinput_partial_events: local.sendinput_partial_events,
@@ -122,7 +157,7 @@ impl NativeDispatchSession {
             recovered_zero_progress_but_late: local.recovered_zero_progress_but_late,
             recovered_zero_progress_retries: local.recovered_zero_progress_retries,
             recovered_partial_up_retries: local.recovered_partial_up_retries,
-            outcome: self.terminal_outcome().map(str::to_string),
+            outcome: projection.outcome.map(str::to_string),
             requested_rt_priority_mode: self
                 .shared
                 .publication
@@ -254,13 +289,7 @@ impl NativeDispatchSession {
             observer_duration_max_us: local.observer_duration_max_us,
             observer_dropped_samples: local.observer_dropped_samples,
             observer_queue_high_watermark: local.observer_queue_high_watermark,
-            terminal_error: self
-                .shared
-                .publication
-                .metrics
-                .terminal_error
-                .lock()
-                .clone(),
+            terminal_error: projection.terminal_error.clone(),
             terminal_trigger_reason: self
                 .shared
                 .publication

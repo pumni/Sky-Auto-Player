@@ -4,6 +4,32 @@ use super::filetime_ticks;
 #[cfg(feature = "test-support")]
 use std::sync::atomic::{AtomicU8, Ordering};
 
+#[cfg(feature = "test-support")]
+std::thread_local! {
+    static FINAL_PROCESS_IDENTITY_CHECK_COUNT: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+    static GET_PROCESS_TIMES_CALL_COUNT: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(feature = "test-support")]
+pub fn reset_process_identity_counts_for_test() {
+    FINAL_PROCESS_IDENTITY_CHECK_COUNT.with(|count| count.set(0));
+    GET_PROCESS_TIMES_CALL_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(feature = "test-support")]
+pub fn process_identity_check_count_for_test() -> u64 {
+    FINAL_PROCESS_IDENTITY_CHECK_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(feature = "test-support")]
+pub fn get_process_times_call_count_for_test() -> u64 {
+    GET_PROCESS_TIMES_CALL_COUNT.with(std::cell::Cell::get)
+}
+
 /// Identity of a live window and the process that owns it.
 ///
 /// This is deliberately a read-only boundary for qualification tooling. It
@@ -117,6 +143,8 @@ impl WindowIdentityAuthority {
         expected_hwnd: isize,
         expected_owner_pid: u32,
     ) -> WindowIdentityContinuity {
+        #[cfg(feature = "test-support")]
+        FINAL_PROCESS_IDENTITY_CHECK_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         if self.identity.hwnd != expected_hwnd || self.identity.owner_pid != expected_owner_pid {
             return WindowIdentityContinuity::OwnerMismatch;
         }
@@ -161,6 +189,8 @@ impl WindowIdentityAuthority {
                 dwLowDateTime: 0,
                 dwHighDateTime: 0,
             };
+            #[cfg(feature = "test-support")]
+            GET_PROCESS_TIMES_CALL_COUNT.with(|count| count.set(count.get().saturating_add(1)));
             if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) }
                 == 0
             {

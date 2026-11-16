@@ -1,6 +1,19 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
+fn consume_owner_identity_poll_result(
+    result: sky_player::engine::OwnerIdentityPollResult,
+    identity_authority_invalidated: &mut bool,
+    panic_release: impl FnOnce(),
+) {
+    if result == sky_player::engine::OwnerIdentityPollResult::CurrentInvalid
+        && !*identity_authority_invalidated
+    {
+        *identity_authority_invalidated = true;
+        panic_release();
+    }
+}
+
 pub(in crate::native_runtime) struct NativeDispatchStartupContext<'a> {
     startup_cancellation: &'a AtomicBool,
     event_delivery_failure: &'a AtomicBool,
@@ -1811,12 +1824,17 @@ impl NativePlaybackService {
                 let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
                 player.set_focus_hint(focused);
             }
-            if last_identity_check.elapsed() >= Duration::from_millis(100) {
-                if let Some(player) = &active.player
-                    && !player.poll_window_identity_authority()
-                {
-                    identity_authority_invalidated = true;
-                    let _ = player.panic_release();
+            if !identity_authority_invalidated
+                && last_identity_check.elapsed() >= Duration::from_millis(100)
+            {
+                if let Some(player) = &active.player {
+                    consume_owner_identity_poll_result(
+                        player.poll_window_identity_authority_result(),
+                        &mut identity_authority_invalidated,
+                        || {
+                            let _ = player.panic_release();
+                        },
+                    );
                 }
                 last_identity_check = Instant::now();
             }
@@ -4419,5 +4437,55 @@ mod preparation_cancellation_tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(cache[0].0, prepared_id);
         assert_eq!(cache[0].1.generation, 2);
+    }
+}
+
+#[cfg(test)]
+mod owner_identity_poll_consumer_tests {
+    use super::consume_owner_identity_poll_result;
+    use sky_player::engine::OwnerIdentityPollResult;
+
+    #[test]
+    fn stale_owner_poll_does_not_panic_or_mark_the_active_binding_invalid() {
+        let mut invalidated = false;
+        let mut panic_release_calls = 0;
+        consume_owner_identity_poll_result(
+            OwnerIdentityPollResult::StaleSuperseded,
+            &mut invalidated,
+            || panic_release_calls += 1,
+        );
+
+        assert!(!invalidated);
+        assert_eq!(panic_release_calls, 0);
+    }
+
+    #[test]
+    fn current_valid_owner_poll_does_not_panic() {
+        let mut invalidated = false;
+        let mut panic_release_calls = 0;
+        consume_owner_identity_poll_result(
+            OwnerIdentityPollResult::CurrentValid,
+            &mut invalidated,
+            || panic_release_calls += 1,
+        );
+
+        assert!(!invalidated);
+        assert_eq!(panic_release_calls, 0);
+    }
+
+    #[test]
+    fn current_invalid_owner_poll_panics_once_even_if_polled_again() {
+        let mut invalidated = false;
+        let mut panic_release_calls = 0;
+        for _ in 0..2 {
+            consume_owner_identity_poll_result(
+                OwnerIdentityPollResult::CurrentInvalid,
+                &mut invalidated,
+                || panic_release_calls += 1,
+            );
+        }
+
+        assert!(invalidated);
+        assert_eq!(panic_release_calls, 1);
     }
 }

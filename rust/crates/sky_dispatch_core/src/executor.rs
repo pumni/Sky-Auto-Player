@@ -15,6 +15,23 @@ pub use memory::MAX_EXECUTOR_BYTES;
 pub(crate) use memory::checked_executor_storage_bytes;
 use memory::{reserve_executor_chords, reserve_executor_intents};
 
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static SCHEDULER_EVALUATION_COUNT: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_scheduler_evaluation_count_for_test() {
+    SCHEDULER_EVALUATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn scheduler_evaluation_count_for_test() -> u64 {
+    SCHEDULER_EVALUATION_COUNT.with(std::cell::Cell::get)
+}
+
 /// Per-slot musical ownership state for the 15 instrument keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MusicalSlot {
@@ -992,6 +1009,8 @@ impl DispatchExecutor {
         now_qpc: QpcTicks,
         epoch_qpc: QpcTicks,
     ) -> Result<DispatchDecision<'_>, TimeArithmeticError> {
+        #[cfg(any(test, feature = "test-support"))]
+        SCHEDULER_EVALUATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         let mut up_ready_mask = 0u16;
         let mut earliest_active_up_due_qpc: Option<QpcTicks> = None;
         let mut up_packet_not_before_qpc: Option<QpcTicks> = None;
@@ -1379,6 +1398,41 @@ impl DispatchExecutor {
             .chord_cursor
             .checked_add(1)
             .ok_or("Down chord cursor overflow while consuming attempted Down")?;
+        self.counters.cancelled = next_cancelled;
+        self.chord_cursor = next_cursor;
+        Ok(())
+    }
+
+    /// Consume a Down-only onset after one internally consistent raw-zero
+    /// transport result. No completion QPC or cleanup barrier is created:
+    /// the packet was attempted once, while unrelated active slots and their
+    /// existing H/G floors remain live.
+    pub fn consume_attempted_down_after_proven_raw_zero(
+        &mut self,
+        source_action_index: u32,
+        down_mask: u16,
+    ) -> Result<(), String> {
+        if down_mask == 0 || self.active_mask() & down_mask != 0 {
+            return Err("proven-zero Down overlaps an active musical slot".into());
+        }
+        let chord = self
+            .current_chord()
+            .ok_or_else(|| "proven-zero Down chord cursor is exhausted".to_string())?;
+        if chord.source_action_index != source_action_index || chord.down_mask != down_mask {
+            return Err(format!(
+                "proven-zero Down identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
+                source_action_index, down_mask, chord.source_action_index, chord.down_mask,
+            ));
+        }
+        let next_cancelled = self
+            .counters
+            .cancelled
+            .checked_add(chord.intents.len() as u64)
+            .ok_or("cancelled counter overflow while consuming proven-zero Down")?;
+        let next_cursor = self
+            .chord_cursor
+            .checked_add(1)
+            .ok_or("Down chord cursor overflow while consuming proven-zero Down")?;
         self.counters.cancelled = next_cancelled;
         self.chord_cursor = next_cursor;
         Ok(())

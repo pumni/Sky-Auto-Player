@@ -2,6 +2,35 @@ use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TargetProofOperationCounts {
+    pub(super) authority_arc_clones: u64,
+    pub(super) authority_mutex_attempts: u64,
+    pub(super) writer_permit_attempts: u64,
+    pub(super) generation_revalidations: u64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static TARGET_PROOF_OPERATION_COUNTS: std::cell::Cell<TargetProofOperationCounts> =
+        const { std::cell::Cell::new(TargetProofOperationCounts {
+            authority_arc_clones: 0,
+            authority_mutex_attempts: 0,
+            writer_permit_attempts: 0,
+            generation_revalidations: 0,
+        }) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn record_target_proof_operation(update: impl FnOnce(&mut TargetProofOperationCounts)) {
+    TARGET_PROOF_OPERATION_COUNTS.with(|counts| {
+        let mut current = counts.get();
+        update(&mut current);
+        counts.set(current);
+    });
+}
+
 /// Session-owned target publication and its retained process authority.
 ///
 /// The worker and watchdog share this object. Publishing a new target epoch
@@ -184,6 +213,10 @@ impl SessionTarget {
         expected_generation: u64,
     ) -> Result<Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, OwnerAuthorityReadError>
     {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.authority_mutex_attempts = counts.authority_mutex_attempts.saturating_add(1)
+        });
         let Some(authority) = self.owner_authority.try_lock() else {
             return Err(OwnerAuthorityReadError::Busy);
         };
@@ -210,6 +243,10 @@ impl SessionTarget {
                 OwnerIdentityStatus::OwnerMismatch,
             ));
         }
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.authority_arc_clones = counts.authority_arc_clones.saturating_add(1)
+        });
         Ok(Arc::clone(authority))
     }
 
@@ -331,6 +368,22 @@ impl SessionTarget {
         }
     }
 
+    /// Try to hold the current owner binding stable through one musical
+    /// SendInput call. Unlike cleanup, the realtime path must not wait behind
+    /// target publication: contention rejects this candidate before syscall.
+    pub(super) fn try_lock_current_release_owner_proof(
+        &self,
+        proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
+    ) -> Option<MutexGuard<'_, ()>> {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.writer_permit_attempts = counts.writer_permit_attempts.saturating_add(1)
+        });
+        let writer = self.writer.try_lock()?;
+        self.release_owner_proof_is_current_locked(proof)
+            .then_some(writer)
+    }
+
     fn release_owner_proof_is_current_locked(
         &self,
         proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
@@ -347,6 +400,10 @@ impl SessionTarget {
         {
             return false;
         }
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.authority_mutex_attempts = counts.authority_mutex_attempts.saturating_add(1)
+        });
         let retained = self.owner_authority.lock();
         match (proof.authority(), retained.as_ref()) {
             (Some(expected), Some((current, generation))) => {
@@ -488,6 +545,10 @@ impl SessionTarget {
     /// writer in progress or any publication during the read fails closed.
     #[inline(always)]
     pub(super) fn load_stable(&self) -> Option<(isize, u64)> {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.generation_revalidations = counts.generation_revalidations.saturating_add(1)
+        });
         self.load_stable_inner(
             #[cfg(test)]
             None,
@@ -536,6 +597,17 @@ impl SessionTarget {
         F: FnMut(TargetSnapshotReadPoint),
     {
         self.load_stable_inner(Some(&mut hook))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn reset_proof_operation_counts_for_test(&self) {
+        TARGET_PROOF_OPERATION_COUNTS
+            .with(|counts| counts.set(TargetProofOperationCounts::default()));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn proof_operation_counts_for_test(&self) -> TargetProofOperationCounts {
+        TARGET_PROOF_OPERATION_COUNTS.with(std::cell::Cell::get)
     }
 
     #[inline(always)]

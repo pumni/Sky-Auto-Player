@@ -16,16 +16,48 @@ mod up_transaction;
 
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static RELEASE_OWNER_PROOF_ARC_CLONE_COUNT: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_release_owner_proof_arc_clone_count_for_test() {
+    RELEASE_OWNER_PROOF_ARC_CLONE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn release_owner_proof_arc_clone_count_for_test() -> u64 {
+    RELEASE_OWNER_PROOF_ARC_CLONE_COUNT.with(std::cell::Cell::get)
+}
+
 /// Frozen target ownership evidence attached to a tracked release obligation.
 /// Playback code keeps this value with the physical key journal so terminal
 /// and resumable safety Up paths cannot borrow proof from a later target
 /// generation. This is internal transport metadata, not a playback DTO.
-#[derive(Clone)]
 pub struct ReleaseOwnerProof {
     target_hwnd: isize,
     target_generation: u64,
     owner_pid: Option<u32>,
     authority: Option<Arc<crate::focus::WindowIdentityAuthority>>,
+}
+
+impl Clone for ReleaseOwnerProof {
+    fn clone(&self) -> Self {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.authority.is_some() {
+            RELEASE_OWNER_PROOF_ARC_CLONE_COUNT
+                .with(|count| count.set(count.get().saturating_add(1)));
+        }
+        Self {
+            target_hwnd: self.target_hwnd,
+            target_generation: self.target_generation,
+            owner_pid: self.owner_pid,
+            authority: self.authority.as_ref().map(Arc::clone),
+        }
+    }
 }
 
 impl ReleaseOwnerProof {

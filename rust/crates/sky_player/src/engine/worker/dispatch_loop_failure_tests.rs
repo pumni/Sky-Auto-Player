@@ -419,7 +419,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
 }
 
 #[test]
-fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
+fn stale_target_does_not_send_origin_up_to_new_generation() {
     use sky_dispatch_core::executor::DispatchDecision;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
@@ -509,18 +509,6 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
         .expect("stage mixed candidate")
         .expect("mixed candidate");
     assert_eq!(mixed.packet_masks.down_mask, 0b10);
-    let expected_up_summary = mixed
-        .up_slot_timing_summary
-        .expect("mixed packet retains its Up timing summary");
-    assert!(
-        timing_window.authored_target_qpc < expected_up_summary.authored_target_qpc,
-        "the Down target precedes the Up target in this mixed packet"
-    );
-    let expected_up_window = (
-        expected_up_summary.authored_target_qpc,
-        expected_up_summary.musical_up_not_before_qpc,
-        expected_up_summary.hold_floor_mask,
-    );
     let accounting_before_replan = harness.generation_accounting_for_test();
 
     assert!(harness.target.publish(2), "publish a new target generation");
@@ -529,29 +517,17 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     );
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(mixed, true),
-        super::StagedDispatchOutcome::Dispatched
+        super::StagedDispatchOutcome::Exit
     ));
-
-    let fallback = match harness.observer.pop_front().expect("Up-only observation") {
-        crate::engine::worker::dispatch::observation::DispatchObservation::Down(packet) => packet,
-        other => panic!("expected Up-only packet observation, got {other:?}"),
-    };
-    assert_eq!(fallback.requested_packet, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
-    assert_eq!(fallback.physical_target_qpc, expected_up_window.0);
-    assert_eq!(
-        fallback.physical_timing_window.packet_not_before_qpc,
-        expected_up_window.1
-    );
-    assert_eq!(fallback.physical_timing_window.hold_floor_mask, expected_up_window.2);
+    assert!(harness.observer.pop_front().is_none(), "no Up observation without a sender call");
 
     let captured = packets.lock().expect("mock packet capture");
-    assert_eq!(captured.len(), 2, "stale target sends only the independent Up");
+    assert_eq!(captured.len(), 1, "stale target sends no Up to the new generation");
     assert_eq!(captured[0].0, sky_dispatch_win32::input::PhysicalPacket::new(0, 1));
-    assert_eq!(captured[1].0, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
-    assert_eq!(harness.generation_accounting_for_test().released, 1);
-    assert_eq!(harness.generation_accounting_for_test().active, 0);
-    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.generation_accounting_for_test().released, 0);
+    assert_eq!(harness.generation_accounting_for_test().active, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0b01);
     assert_eq!(
         harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
         Some(1),
@@ -559,11 +535,12 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     );
     assert_eq!(accounting_before_replan.activated, 1);
     assert_eq!(accounting_before_replan.released, 0);
-    assert_eq!(
-        harness.resources.backend.in_flight_mask,
-        0,
-        "successful Up clears its journal entry"
-    );
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert!(harness
+        .runtime
+        .terminal_error
+        .as_deref()
+        .is_some_and(|error| error.contains("musical Up origin owner differs")));
 }
 
 #[test]

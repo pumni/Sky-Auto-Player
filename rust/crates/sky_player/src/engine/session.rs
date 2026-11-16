@@ -16,6 +16,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerIdentityPollResult {
+    CurrentValid,
+    StaleSuperseded,
+    CurrentInvalid,
+}
+
 fn join_thread_until(
     handle: &mut Option<std::thread::JoinHandle<()>>,
     started: Instant,
@@ -1106,11 +1113,16 @@ impl NativeDispatchSession {
 
     /// Poll the retained process object and exact target HWND on the desktop
     /// supervisor thread. This function never runs in the precision suffix.
-    pub fn poll_window_identity_authority(&self) -> bool {
+    pub fn poll_window_identity_authority_result(&self) -> OwnerIdentityPollResult {
         let Some((authority, bound_generation)) = self.shared.target.owner_authority_snapshot()
         else {
-            return self.shared.target.owner_identity_status(0)
-                == super::target::OwnerIdentityStatus::NotRequired;
+            return if self.shared.target.owner_identity_status(0)
+                == super::target::OwnerIdentityStatus::NotRequired
+            {
+                OwnerIdentityPollResult::CurrentValid
+            } else {
+                OwnerIdentityPollResult::CurrentInvalid
+            };
         };
         let Some(target) = self.shared.target.load_stable() else {
             #[cfg(test)]
@@ -1127,17 +1139,15 @@ impl NativeDispatchSession {
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
             let _ = self.shared.commands.interrupt.signal();
-            return false;
+            return if applied {
+                OwnerIdentityPollResult::CurrentInvalid
+            } else {
+                OwnerIdentityPollResult::StaleSuperseded
+            };
         };
         if target != (authority.identity().hwnd, bound_generation) {
-            if self.startup_active() {
-                self.shared
-                    .commands
-                    .system_power
-                    .cancel_prearm(StartupAbortReason::OwnerInvalidated);
-            }
             let _ = self.shared.commands.interrupt.signal();
-            return false;
+            return OwnerIdentityPollResult::StaleSuperseded;
         }
         let continuity = authority.continuity();
         #[cfg(test)]
@@ -1151,7 +1161,11 @@ impl NativeDispatchSession {
                 if !current {
                     let _ = self.shared.commands.interrupt.signal();
                 }
-                return current;
+                return if current {
+                    OwnerIdentityPollResult::CurrentValid
+                } else {
+                    OwnerIdentityPollResult::StaleSuperseded
+                };
             }
             sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
                 OwnerIdentityFailure::ProcessTerminated
@@ -1181,7 +1195,18 @@ impl NativeDispatchSession {
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
         let _ = self.shared.commands.interrupt.signal();
-        false
+        if applied {
+            OwnerIdentityPollResult::CurrentInvalid
+        } else {
+            OwnerIdentityPollResult::StaleSuperseded
+        }
+    }
+
+    /// Compatibility wrapper for callers that only need a current-valid bit.
+    /// New supervisor consumers must use the typed result so stale samples are
+    /// not interpreted as current-owner loss.
+    pub fn poll_window_identity_authority(&self) -> bool {
+        self.poll_window_identity_authority_result() == OwnerIdentityPollResult::CurrentValid
     }
 
     /// Release the retained process object exactly once at terminal session
@@ -1331,15 +1356,15 @@ impl NativeDispatchSession {
     }
 
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
-        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let (((elapsed_us, paused), pre_roll_remaining_us), startup) = self.live_projection();
-        let poll_status = self.poll_status(lifecycle, paused, pre_roll_remaining_us, startup);
+        let projection = self.snapshot_projection();
+        let lifecycle = projection.lifecycle;
+        let poll_status = projection.status;
         let status = poll_status.as_str();
-        let local = self.shared.publication.metrics.snapshot.load();
+        let local = &projection.local;
         EngineProgressSnapshot {
-            elapsed_us,
+            elapsed_us: projection.elapsed_us,
             total_us: local.total_us,
-            pre_roll_remaining_us,
+            pre_roll_remaining_us: projection.pre_roll_remaining_us,
             max_lateness_us: local.max_lateness_us,
             late_2ms: local.late_2ms,
             late_5ms: local.late_5ms,
@@ -1382,20 +1407,14 @@ impl NativeDispatchSession {
             recent_latency_samples_available: self.observer_enabled,
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
-            is_paused: paused,
+            is_paused: projection.paused,
             status: status.to_string(),
             terminal_outcome: poll_status.is_terminal().then_some(poll_status),
-            has_terminal_error: self
-                .shared
-                .publication
-                .metrics
-                .terminal_error
-                .lock()
-                .is_some(),
+            has_terminal_error: projection.terminal_error.is_some(),
             active_count: local.active_count as usize,
             possibly_active_count: local.possibly_active_count as usize,
             failed_release_count: local.failed_release_count as usize,
-            last_error: self.shared.publication.metrics.last_error.lock().clone(),
+            last_error: projection.last_error.clone(),
             keys_dropped: local.keys_dropped,
             chord_split_events: local.chord_split_events,
             sendinput_partial_events: local.sendinput_partial_events,

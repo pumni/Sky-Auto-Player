@@ -75,6 +75,39 @@ std::thread_local! {
     };
 }
 
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct TestReleaseOwnerLedgerVisitCount;
+
+#[cfg(any(test, feature = "test-support"))]
+impl TestReleaseOwnerLedgerVisitCount {
+    pub(crate) fn store(&self, value: u64, _ordering: std::sync::atomic::Ordering) {
+        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.set(value);
+    }
+
+    pub(crate) fn load(&self, _ordering: std::sync::atomic::Ordering) -> u64 {
+        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.get()
+    }
+
+    pub(crate) fn increment(&self) {
+        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.set(
+            TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE
+                .get()
+                .saturating_add(1),
+        );
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) static TEST_RELEASE_OWNER_LEDGER_VISITS: TestReleaseOwnerLedgerVisitCount =
+    TestReleaseOwnerLedgerVisitCount;
+
 #[cfg(test)]
 pub(crate) struct TestReleaseSleepCount;
 

@@ -29,6 +29,8 @@ fn staged_send_at(
 }
 
 include!("dispatch_loop_m2_review_tests.rs");
+include!("dispatch_loop_m3_up_owner_tests.rs");
+include!("dispatch_loop_m4_zero_tests.rs");
 
 fn qpc_offset(harness: &ProductionDispatchTestHarness, us: u64) -> TimelineTicks {
     TimelineTicks::from_raw(
@@ -266,7 +268,11 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
                 first_win32_error: Some(5),
                 last_win32_error: Some(5),
                 started_ticks: Some(now),
-                completed_ticks: Some(now),
+                // The raw count looks like zero progress, but contradictory
+                // QPC ordering keeps this on the conservative cleanup path.
+                completed_ticks: Some(QpcTicks::from_raw(
+                    now.as_u64().saturating_sub(1),
+                )),
                 timing_error: None,
             },
         }

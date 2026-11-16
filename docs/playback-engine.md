@@ -184,20 +184,27 @@ pre-call rejection has no attempt; once the sender reports a syscall attempt,
 the onset is consumed even when insertion is zero, short, complete with missing
 QPC evidence, or otherwise ambiguous. The worker preserves the raw count,
 Win32 error, attempt, and timing evidence, does not commit the packet as a
-successful musical completion, and never invents a sender completion QPC.
-Attempted Down keys remain tracked as a conservative release obligation until
-the separate ownership-verified safety path proves cleanup. If cleanup succeeds,
+successful musical completion, and never invents a sender completion QPC. The
+one narrow exception is an internally consistent, one-attempt Down-only raw
+zero: the attempted onset is consumed and its zero-insertion journal bits are
+cleared without a safety Up or a new H/G completion floor. Existing active
+slots and their physical floors remain intact, and later unattempted onsets
+remain eligible at their authored times. Any Up-bearing or mixed packet, short
+insertion, unavailable or contradictory transport evidence, invalid QPC
+interval, control change, or target change follows the conservative
+ownership-verified cleanup path. Attempted Down keys then remain tracked as a
+release obligation until safety cleanup proves release. If cleanup succeeds,
 the actual cleanup completion QPC starts the resume barrier at $Q + G$; only
 later Down onsets that have never been attempted may continue, in authored
 order, after all final gates pass again. If ownership, release, or timing cannot
 be proved, playback stays blocked or exits fail-closed with the obligation
 retained. Recovering the physical key state does not convert the anomalous
 transport into a successful packet. The worker keeps an attempted-anomaly latch
-while it recovers, then promotes that latch to a terminal error during
-finalization. Later unattempted onsets may still run after verified cleanup and
-G, but a completed session with any attempted post-call anomaly ends in error.
-An already stronger terminal error remains primary; a concurrent terminal
-control cause remains recorded alongside the anomaly evidence.
+during recovery, then promotes that latch to a terminal error during
+finalization. A session with any attempted post-call anomaly therefore ends in
+error even if later unattempted onsets ran. An already stronger terminal error
+remains primary; a concurrent terminal control cause remains recorded alongside
+the anomaly evidence.
 
 Attempted-anomaly diagnostics have bounded storage: the worker counts every
 attempt, counts omitted detail records, and retains at most 16 records (the
@@ -209,11 +216,15 @@ latch depends on the total counter, not on which detail records remain. This is
 internal diagnostic evidence; telemetry schema 25 and public DTOs do not
 change.
 
-Musical Up-only packets use the same fresh focus/identity/control gate and may
-be replanned when that gate fails. Terminal and pause safety Up use the existing
-tracked cleanup policy, including its ownership proof, without requiring current
-foreground focus. This keeps a stale musical Up from reaching a new target
-while preserving cleanup when focus is absent. Healthy dispatch uses fixed
+Every musical Up bit, including an Up-only packet and a mixed-to-Up-only
+replan, must carry the frozen release-owner proof recorded when its Down
+created the obligation. The final gate proves the current target and compares
+that current proof with every Up origin under a generation-conditional permit
+held through the syscall. Missing, conflicted, mixed-generation, or drifted
+proof fails closed without calling the sender or clearing the obligation.
+Independent Up bits with one matching owner remain eligible. Terminal and
+pause safety Up use the tracked cleanup policy and its originating owner proof
+without requiring current foreground focus. Healthy dispatch uses fixed
 buffers and does not allocate. Packets contain at most 15 inputs, with Up
 before Down. H/G decisions use real sender completion QPC on healthy packets or
 verified cleanup completion QPC after recovery; missing evidence is never
@@ -258,10 +269,13 @@ Supervisor poll results and authority close are conditional on the exact
 retained `Arc<WindowIdentityAuthority>` and target generation that were
 snapshotted. Querying process continuity happens without holding the writer
 lock; applying its result rechecks the target stamp and retained authority
-under the same writer serialization used by publication and binding. A stale
-poll can wake the worker, but cannot change the replacement owner's live bit,
-failure reason, or pre-Arm cancellation. Late close uses the same conditional
-rule and cannot clear a newly bound authority.
+under the same writer serialization used by publication and binding. A poll
+returns `CurrentValid`, `CurrentInvalid`, or `StaleSuperseded`. The desktop
+monitor only turns `CurrentInvalid` into panic-release; a stale result cannot
+invalidate the replacement owner's live bit, failure reason, or pre-Arm
+startup. A stale poll can wake the worker, but does not authorize a musical
+syscall: each packet still performs fresh final admission. Late close uses the
+same conditional rule and cannot clear a newly bound authority.
 
 For each focus-required musical packet, the worker samples the current
 foreground HWND and owner PID, then queries the retained process handle for its

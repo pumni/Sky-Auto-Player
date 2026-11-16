@@ -10,9 +10,9 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::{
-    StagedCandidate, StagedControlSignals, StagedDispatchContext, StagedDispatchOutcome,
-    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
-    dispatch_staged_candidate, stage_candidate,
+    FinalControlSignals, StagedCandidate, StagedControlSignals, StagedDispatchContext,
+    StagedDispatchOutcome, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
+    WorkerTimingState, dispatch_staged_candidate, pre_wait_candidate_admission, stage_candidate,
 };
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
@@ -83,10 +83,10 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) local_metrics: WorkerMetricsLocal,
     pub(crate) focus_active: Arc<AtomicBool>,
     pub(crate) target: Arc<SessionTarget>,
-    pub(crate) quit_requested: AtomicBool,
-    pub(crate) skip_requested: AtomicBool,
+    pub(crate) quit_requested: Arc<AtomicBool>,
+    pub(crate) skip_requested: Arc<AtomicBool>,
     pub(crate) panic_requested: AtomicBool,
-    pub(crate) supervisor_expired: SupervisorLeaseState,
+    pub(crate) supervisor_expired: Arc<SupervisorLeaseState>,
     pub(crate) desired_pause: AtomicBool,
     pub(crate) system_power: Arc<SystemPowerState>,
     pub(crate) metrics: SharedMetrics,
@@ -259,10 +259,10 @@ impl ProductionDispatchTestHarness {
             local_metrics: WorkerMetricsLocal::default(),
             focus_active: Arc::new(AtomicBool::new(true)),
             target,
-            quit_requested: AtomicBool::new(false),
-            skip_requested: AtomicBool::new(false),
+            quit_requested: Arc::new(AtomicBool::new(false)),
+            skip_requested: Arc::new(AtomicBool::new(false)),
             panic_requested: AtomicBool::new(false),
-            supervisor_expired: SupervisorLeaseState::new(QpcTicks::from_raw(1)),
+            supervisor_expired: Arc::new(SupervisorLeaseState::new(QpcTicks::from_raw(1))),
             desired_pause: AtomicBool::new(false),
             system_power: Arc::new(SystemPowerState::default()),
             metrics: SharedMetrics::default(),
@@ -433,6 +433,27 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    pub fn pre_wait_candidate_admission_for_test(
+        &mut self,
+        candidate: &StagedCandidate,
+    ) -> StagedDispatchOutcome {
+        pre_wait_candidate_admission(
+            candidate,
+            &self.target,
+            self.config.focus.require_focus,
+            &self.focus_active,
+            FinalControlSignals {
+                quit_requested: &self.quit_requested,
+                skip_requested: &self.skip_requested,
+                panic_requested: &self.panic_requested,
+                desired_pause: &self.desired_pause,
+                supervisor_expired: &self.supervisor_expired,
+                system_power: Some(&self.system_power),
+            },
+            &mut self.runtime,
+        )
+    }
+
     pub fn attach_executor_for_test(&mut self) -> Result<(), String> {
         self.resources.scheduler.check_invariants()
     }
@@ -541,6 +562,20 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.release_obligation_mask()
     }
 
+    pub fn reset_target_proof_counts_for_test(&self) {
+        self.target.reset_proof_operation_counts_for_test();
+    }
+
+    pub fn target_proof_counts_for_test(&self) -> (u64, u64, u64, u64) {
+        let counts = self.target.proof_operation_counts_for_test();
+        (
+            counts.authority_arc_clones,
+            counts.authority_mutex_attempts,
+            counts.writer_permit_attempts,
+            counts.generation_revalidations,
+        )
+    }
+
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
         &mut self,
     ) -> Result<(), String> {
@@ -617,6 +652,13 @@ impl ProductionDispatchTestHarness {
         self.runtime.final_gate_before_syscall_hook = Some(Arc::new(hook));
     }
 
+    pub fn set_final_gate_before_owner_permit_hook<F>(&mut self, hook: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.runtime.final_gate_before_owner_permit_hook = Some(Arc::new(hook));
+    }
+
     /// Enable deterministic foreground and retained owner identity for tests
     /// that exercise the production focus-required final gate.
     pub fn configure_focus_owner_for_test(&mut self, hwnd: isize, owner_pid: u32) {
@@ -642,7 +684,16 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn republish_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
-        assert!(self.target.publish_for_test(hwnd));
+        let same_hwnd = self
+            .target
+            .load_stable()
+            .is_some_and(|(current_hwnd, _)| current_hwnd == hwnd);
+        let published = if same_hwnd {
+            self.target.republish_same_hwnd(hwnd)
+        } else {
+            self.target.publish_for_test(hwnd)
+        };
+        assert!(published);
         let (published_hwnd, generation) = self
             .target
             .load_stable()

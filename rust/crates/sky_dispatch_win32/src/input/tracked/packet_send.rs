@@ -106,8 +106,8 @@ impl TrackedKeyState {
                 && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
             {
                 self.in_flight_mask = previous_in_flight_mask;
+                self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
             }
-            self.clear_unobligated_release_owners();
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
             return outcome;
@@ -153,8 +153,8 @@ impl TrackedKeyState {
             && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
         {
             self.in_flight_mask = previous_in_flight_mask;
+            self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
         }
-        self.clear_unobligated_release_owners();
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
@@ -662,7 +662,7 @@ impl TrackedKeyState {
             ));
         }
         self.in_flight_mask = 0;
-        self.clear_unobligated_release_owners();
+        self.clear_unobligated_release_owners(packet_mask);
         Ok(())
     }
 
@@ -783,7 +783,9 @@ impl TrackedKeyState {
         if !defer_journal_commit {
             self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
         }
-        self.clear_unobligated_release_owners();
+        if !defer_journal_commit {
+            self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
+        }
         outcome
     }
 

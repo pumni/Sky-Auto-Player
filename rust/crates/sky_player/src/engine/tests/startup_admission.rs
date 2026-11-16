@@ -429,22 +429,24 @@ fn stale_owner_poll_failure_cannot_invalidate_rebinding_or_block_final_admission
 
     let poll_result = std::thread::scope(|scope| {
         let poll_session = &session;
-        let poll = scope.spawn(move || poll_session.poll_window_identity_authority());
+        let poll = scope.spawn(move || poll_session.poll_window_identity_authority_result());
         query_complete.wait();
         bind_synthetic_owner(&session, 456, 88);
         allow_apply.wait();
         poll.join().expect("supervisor poll thread")
     });
-    assert!(
-        !poll_result,
-        "the stale A poll is not current after publication"
+    assert_eq!(
+        poll_result,
+        crate::engine::OwnerIdentityPollResult::StaleSuperseded,
+        "the stale A poll is distinguished from a current-owner failure"
     );
     let authority_b = session
         .window_identity_authority_weak_for_test()
         .expect("B authority remains retained");
     assert!(authority_b.upgrade().is_some());
-    assert!(
-        session.poll_window_identity_authority(),
+    assert_eq!(
+        session.poll_window_identity_authority_result(),
+        crate::engine::OwnerIdentityPollResult::CurrentValid,
         "B's own continuous authority remains Bound after stale A failure"
     );
 
@@ -498,7 +500,10 @@ fn current_owner_poll_failure_still_fails_closed_before_first_down() {
     assert!(session.set_window_process_identity_status_for_test(
         sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable,
     ));
-    assert!(!session.poll_window_identity_authority());
+    assert_eq!(
+        session.poll_window_identity_authority_result(),
+        crate::engine::OwnerIdentityPollResult::CurrentInvalid
+    );
     hook.release_startup_checkpoint();
     assert!(
         session
@@ -544,7 +549,10 @@ fn late_authority_close_cannot_clear_a_newly_bound_generation() {
         .window_identity_authority_weak_for_test()
         .expect("new authority remains retained");
     assert!(authority_b.upgrade().is_some());
-    assert!(session.poll_window_identity_authority());
+    assert_eq!(
+        session.poll_window_identity_authority_result(),
+        crate::engine::OwnerIdentityPollResult::CurrentValid
+    );
 }
 
 #[cfg(feature = "test-support")]

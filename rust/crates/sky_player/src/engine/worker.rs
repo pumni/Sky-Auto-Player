@@ -44,7 +44,8 @@ pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for
 pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::{
-    StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate, stage_candidate,
+    StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate,
+    pre_wait_candidate_admission, stage_candidate,
 };
 
 #[cfg(any(test, feature = "test-support"))]
@@ -200,6 +201,8 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_before_syscall_hook: Option<super::config::FinalGateBeforeSyscallHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_before_owner_permit_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_count_for_test: u64,
     #[cfg(test)]

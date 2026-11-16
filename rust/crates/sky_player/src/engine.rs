@@ -25,7 +25,7 @@ pub use config::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
-pub use session::{NativeDispatchSession, SystemPowerSnapshot};
+pub use session::{NativeDispatchSession, OwnerIdentityPollResult, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
 pub use shared::SystemPowerState;

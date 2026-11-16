@@ -175,6 +175,32 @@ do not call real `SendInput`, suspend Windows, or qualify gameplay reception.
 The M3 evidence report maps each lifecycle invariant to its test and states
 which paths still need OS/native qualification.
 
+## Issue #666 integration correction checkpoint
+
+The integrated correctness corrections are recorded in
+[`issue-666-integration.md`](evidence/issue-666-integration.md). The regression
+suite exercises musical Up origin matching at the production worker boundary,
+the desktop supervisor's typed stale-poll consumer, and the narrow proven
+Down-only raw-zero continuation case. These are deterministic Windows tests
+with mock packet senders. They do not call real `SendInput`, manipulate the
+interactive foreground, perform system suspend/resume, or qualify gameplay.
+
+The raw-zero exception is valid only when the sender evidence proves one actual
+Down-only attempt with exact inserted count zero, consistent status/masks,
+ordered QPC evidence, and unchanged target/control state. It consumes that
+attempt without a replay, safety Up, or synthetic H/G completion. Prior
+confirmed H/G floors remain in force. Mixed/Up packets and incomplete, short,
+or contradictory evidence keep the conservative cleanup path and its
+owner-origin policy. Every anomaly remains a terminal error in the final
+outcome, even when safe unattempted notes continue.
+
+Snapshot full/lite parity and schema-25 key-set tests remain separate from the
+playback timing and native qualification profiles. Snapshot compatibility does
+not increase the healthy dispatch allocation budget. The operation counts in
+the evidence are test-hook counts for the actual worker/harness boundary;
+sender QPC and `GetProcessTimes` counts are separately identified from
+production source because the mock does not call those native APIs.
+
 ## Offline lifecycle and manifest checks
 
 The current offline scheduler lifecycle report is produced and validated with:

@@ -270,6 +270,61 @@ pub struct StagedCandidate {
     pub(crate) up_slot_timings: Option<SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
 }
 
+fn proven_raw_zero_down_only(
+    candidate: &StagedCandidate,
+    outcome: sky_dispatch_win32::input::SendTransactionOutcome,
+) -> bool {
+    let packet = candidate.packet_masks;
+    let evidence = outcome.evidence;
+    let Some(started) = evidence.started_ticks else {
+        return false;
+    };
+    let Some(completed) = evidence.completed_ticks else {
+        return false;
+    };
+
+    candidate.up_mask == 0
+        && packet.up_mask == 0
+        && packet.down_mask != 0
+        && candidate.down_chord.is_some_and(|chord| {
+            chord.source_action_index == candidate.source_action_index
+                && chord.down_mask == packet.down_mask
+        })
+        && packet.event_count() == packet.down_mask.count_ones() as u8
+        && outcome.status == sky_dispatch_win32::input::SendTransactionStatus::ZeroProgress
+        && evidence.requested_mask == packet.down_mask
+        && evidence.confirmed_mask == 0
+        && evidence.skipped_mask == 0
+        && evidence.first_inserted == 0
+        && evidence.attempts == 1
+        && evidence.zero_progress_retries == 0
+        && evidence.retry_reason == sky_dispatch_win32::input::PacketRetryReason::ZeroProgress
+        && evidence.first_win32_error == evidence.last_win32_error
+        && evidence.timing_error.is_none()
+        && completed.checked_duration_since(started).is_ok()
+}
+
+fn raw_zero_continuation_is_safe(
+    expected_target: TargetStamp,
+    target: &SessionTarget,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+) -> bool {
+    let Some(system_power) = control_signals.system_power else {
+        return false;
+    };
+    target_stamp_still_current(target, expected_target)
+        && focus_matches(require_focus, focus_active)
+        && !control_signals.quit_requested.load(Ordering::Acquire)
+        && !control_signals.skip_requested.load(Ordering::Acquire)
+        && !control_signals.panic_requested.load(Ordering::Acquire)
+        && !control_signals.desired_pause.load(Ordering::Acquire)
+        && !control_signals.supervisor_expired.is_expired()
+        && !system_power.down_blocked()
+        && !system_power.system_suspend_terminal()
+}
+
 fn down_authored_target(
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
     down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
@@ -489,7 +544,31 @@ pub(crate) fn dispatch_staged_candidate(
     let expected_target = candidate
         .target_stamp
         .expect("musical packet target stamp is captured during staging");
-    if has_down {
+    let up_origin = if candidate.up_mask != 0 {
+        match resources
+            .backend
+            .release_owner_proof_for_mask(candidate.up_mask)
+        {
+            Ok(Some(proof)) => Some(proof),
+            Ok(None) => {
+                runtime.terminal_error = Some(format!(
+                    "musical Up owner proof is missing for mask 0x{:04x}; release obligation retained",
+                    candidate.up_mask
+                ));
+                return StagedDispatchOutcome::Exit;
+            }
+            Err(error) => {
+                runtime.terminal_error = Some(format!(
+                    "musical Up owner proof is missing or conflicted for mask 0x{:04x}; release obligation retained: {error}",
+                    candidate.up_mask
+                ));
+                return StagedDispatchOutcome::Exit;
+            }
+        }
+    } else {
+        None
+    };
+    let (release_owner, release_permit) = if has_down {
         match verify_final_down_admission(
             target,
             expected_target,
@@ -504,7 +583,10 @@ pub(crate) fn dispatch_staged_candidate(
             runtime,
             local_metrics,
         ) {
-            FinalDownAdmissionResult::Allowed => {}
+            FinalDownAdmissionResult::Allowed {
+                release_owner,
+                permit,
+            } => (release_owner, permit),
             FinalDownAdmissionResult::Replan => {
                 match stage_up_only_for_mixed_replan(
                     &candidate,
@@ -591,29 +673,27 @@ pub(crate) fn dispatch_staged_candidate(
             runtime,
             local_metrics,
         ) {
-            FinalDownAdmissionResult::Allowed => {}
+            FinalDownAdmissionResult::Allowed {
+                release_owner,
+                permit,
+            } => (release_owner, permit),
             FinalDownAdmissionResult::Replan => return StagedDispatchOutcome::Replan,
             FinalDownAdmissionResult::Terminal(error) => {
                 runtime.terminal_error = Some(gate_rejection_record(&candidate, &error));
                 return StagedDispatchOutcome::Exit;
             }
         }
-    }
-
-    let release_owner = if has_down {
-        match target.try_release_owner_proof_for_generation(
-            expected_target.hwnd,
-            expected_target.generation,
-        ) {
-            Ok(proof) => Some(proof),
-            Err(_) => {
-                runtime.verified_target = None;
-                return StagedDispatchOutcome::Replan;
-            }
-        }
-    } else {
-        None
     };
+
+    if let Some(up_origin) = up_origin.as_ref()
+        && !up_origin.same_owner(&release_owner)
+    {
+        runtime.terminal_error = Some(format!(
+            "musical Up origin owner differs from current packet owner; up_mask=0x{:04x}; release obligation retained",
+            candidate.up_mask
+        ));
+        return StagedDispatchOutcome::Exit;
+    }
 
     let previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
     let previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();
@@ -624,20 +704,12 @@ pub(crate) fn dispatch_staged_candidate(
         candidate.packet_masks.up_mask,
         candidate.packet_masks.down_mask,
     );
-    let send_result = if let Some(release_owner) = release_owner.as_ref() {
-        resources
-            .backend
-            .send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
-                &candidate.prepared_packet,
-                release_owner,
-            )
-    } else {
-        resources
-            .backend
-            .send_prepared_physical_packet_at_final_boundary_deferred_commit(
-                &candidate.prepared_packet,
-            )
-    };
+    let send_result = resources
+        .backend
+        .send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
+            &candidate.prepared_packet,
+            &release_owner,
+        );
     let complete_transport_evidence = send_result.has_complete_evidence_for(physical_packet);
     let valid_sender_timing_evidence = send_result.has_valid_sender_timing_evidence();
     let healthy_completion_evidence = complete_transport_evidence && valid_sender_timing_evidence;
@@ -697,6 +769,7 @@ pub(crate) fn dispatch_staged_candidate(
 
     if system_power.system_suspend_terminal() {
         runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+        drop(release_permit);
         return StagedDispatchOutcome::Exit;
     }
     if send_result.evidence.attempts == 0 {
@@ -704,6 +777,7 @@ pub(crate) fn dispatch_staged_candidate(
             "SendInput rejected before syscall; authored onset remains unattempted: {}",
             sender_failure_record(&candidate, &send_result),
         ));
+        drop(release_permit);
         return StagedDispatchOutcome::Exit;
     }
 
@@ -717,12 +791,70 @@ pub(crate) fn dispatch_staged_candidate(
         runtime.last_physical_send_completion_qpc = None;
 
         let Some(expected_target) = candidate.target_stamp else {
+            drop(release_permit);
             runtime.verified_target = None;
             runtime.terminal_error = Some(format!(
                 "post-call anomaly has no retained target stamp; release remains pending: {anomaly_record}"
             ));
             return StagedDispatchOutcome::Exit;
         };
+        if proven_raw_zero_down_only(&candidate, send_result)
+            && raw_zero_continuation_is_safe(
+                expected_target,
+                target,
+                config.focus.require_focus,
+                focus_active,
+                control_signals,
+            )
+        {
+            let chord = candidate
+                .down_chord
+                .expect("proven raw-zero Down retains its authored chord identity");
+            if let Err(error) = resources
+                .scheduler
+                .consume_attempted_down_after_proven_raw_zero(
+                    chord.source_action_index,
+                    chord.down_mask,
+                )
+            {
+                drop(release_permit);
+                let _ = suspend_live_input_for_dispatch(
+                    &mut resources.backend,
+                    &mut resources.scheduler,
+                    target,
+                    Some(expected_target),
+                    config.focus.require_focus,
+                    runtime,
+                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                );
+                runtime.terminal_error = Some(format!(
+                    "proven-zero Down could not consume its attempted scheduler identity ({error}); tracked cleanup was requested: {anomaly_record}"
+                ));
+                return StagedDispatchOutcome::Exit;
+            }
+            if let Err(error) = resources
+                .backend
+                .clear_proven_raw_zero_down_attempt(chord.down_mask)
+            {
+                drop(release_permit);
+                let _ = suspend_live_input_for_dispatch(
+                    &mut resources.backend,
+                    &mut resources.scheduler,
+                    target,
+                    Some(expected_target),
+                    config.focus.require_focus,
+                    runtime,
+                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                );
+                runtime.terminal_error = Some(format!(
+                    "proven-zero Down journal did not match its raw packet ({error}); tracked cleanup was requested: {anomaly_record}"
+                ));
+                return StagedDispatchOutcome::Exit;
+            }
+            drop(release_permit);
+            return StagedDispatchOutcome::Dispatched;
+        }
+        drop(release_permit);
         if let Err(error) = suspend_live_input_for_dispatch(
             &mut resources.backend,
             &mut resources.scheduler,
@@ -772,6 +904,8 @@ pub(crate) fn dispatch_staged_candidate(
         }
         return StagedDispatchOutcome::Dispatched;
     }
+
+    drop(release_permit);
 
     let Some(completion_qpc) = send_result.evidence.completed_ticks else {
         runtime.terminal_error = Some(format!(
@@ -1539,28 +1673,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 continue;
             }
 
-            let action = match evaluate_scheduler_action(
-                &resources.scheduler,
-                now_ticks,
-                resources.playback.epoch,
-            ) {
-                Ok(action) => action,
-                Err(error) => {
-                    core.runtime.terminal_error = Some(error);
-                    break;
-                }
-            };
-            if matches!(&action, SchedulerAction::Finished) {
-                break;
-            }
-            if matches!(&action, SchedulerAction::Wait { deadline_qpc } if *deadline_qpc <= now_ticks)
-            {
-                continue;
-            }
-            let (scheduler_wait_target_qpc, action_to_stage) =
-                match project_scheduler_action_for_staging(
+            let (action, scheduler_wait_target_qpc, action_to_stage) =
+                match evaluate_scheduler_action_for_staging(
                     &resources.scheduler,
-                    action,
                     now_ticks,
                     resources.playback.epoch,
                 ) {
@@ -1570,6 +1685,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         break;
                     }
                 };
+            if matches!(&action, SchedulerAction::Finished) {
+                break;
+            }
+            if matches!(&action, SchedulerAction::Wait { deadline_qpc } if *deadline_qpc <= now_ticks)
+            {
+                continue;
+            }
             let packet_not_before_qpc = match &action_to_stage {
                 Some(SchedulerAction::Send { timing_window, .. }) => {
                     timing_window.packet_not_before_qpc
