@@ -2237,8 +2237,16 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
 
 #[cfg(test)]
 mod tests {
-    #[path = "../../dispatch_loop_deadline_trace_tests.rs"]
-    mod deadline_trace;
+    #[path = "../../dispatch_loop_deadline_hg_projection_tests.rs"]
+    mod deadline_hg_projection;
+    #[path = "../../dispatch_loop_deadline_interrupted_tests.rs"]
+    mod deadline_interrupted;
+    #[path = "../../dispatch_loop_deadline_late_due_tests.rs"]
+    mod deadline_late_due;
+    #[path = "../../dispatch_loop_deadline_post_due_control_tests.rs"]
+    mod deadline_post_due_control;
+    #[path = "../../dispatch_loop_deadline_real_waiter_tests.rs"]
+    mod deadline_real_waiter;
     #[path = "../../dispatch_loop_failure_tests.rs"]
     mod failure;
     #[path = "../../dispatch_loop_late_retry_tests.rs"]
