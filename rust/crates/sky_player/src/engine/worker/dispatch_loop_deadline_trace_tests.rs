@@ -262,14 +262,14 @@ fn stop_skip_panic_and_expired_lease_preempt_busy_permit_backoff() {
                 super::DispatchAttemptOutcome::PermitBusy,
                 candidate.target_stamp,
                 candidate.timing_window.packet_not_before_qpc,
-                super::take_permit_busy_retry(&mut retry_pending),
+                std::mem::take(&mut retry_pending),
                 &mut retry_pending,
             ),
-            super::DispatchReplanAction::WaitCompleted {
-                interrupted: false,
-                ..
-            }
+            super::DispatchReplanAction::WaitCompleted
         ));
+        let wait_trace = super::last_dispatch_replan_wait_for_test()
+            .expect("bounded wait trace");
+        assert!(!wait_trace.interrupted);
         assert!(!retry_pending, "bounded backoff does not leave a spin token");
 
         match control {
@@ -290,7 +290,7 @@ fn stop_skip_panic_and_expired_lease_preempt_busy_permit_backoff() {
             super::DispatchAttemptOutcome::PermitBusy,
             candidate.target_stamp,
             candidate.timing_window.packet_not_before_qpc,
-            super::take_permit_busy_retry(&mut retry_pending),
+            std::mem::take(&mut retry_pending),
             &mut retry_pending,
         );
         assert_eq!(
@@ -342,11 +342,13 @@ fn interrupt_wakes_the_bounded_owner_permit_retry_wait() {
     );
     assert!(matches!(
         action,
-        super::DispatchReplanAction::WaitCompleted {
-            interrupted: true,
-            ..
-        }
+        super::DispatchReplanAction::WaitCompleted
     ));
+    assert!(
+        super::last_dispatch_replan_wait_for_test()
+            .expect("interrupted wait trace")
+            .interrupted
+    );
     assert_eq!(harness.local_metrics.wait_interrupted_count, 1);
     assert!(packets.lock().expect("packet capture").is_empty());
 }

@@ -228,4 +228,4 @@ mod tests {
 // SendInput. It is not run as part of ordinary unit suites.
 #[cfg(all(test, windows))]
 #[path = "timing_guard_ab_benchmark.rs"]
-mod m4_guard_ab_benchmark;
+mod guard_ab_benchmark;

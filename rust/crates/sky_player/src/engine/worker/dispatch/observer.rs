@@ -265,10 +265,6 @@ impl ObserverRuntime {
                             terminal_error = Some(error);
                             break;
                         }
-                        Err(DispatchStep::TerminateStatic(error)) => {
-                            terminal_error = Some((*error).to_string());
-                            break;
-                        }
                     }
                 }
                 ObserverOutput {

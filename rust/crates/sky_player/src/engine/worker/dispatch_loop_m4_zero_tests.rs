@@ -1,3 +1,4 @@
+use super::*;
 use std::sync::atomic::AtomicU64;
 
 fn raw_zero_action(
@@ -338,7 +339,6 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
             // has become active. The exception must preserve A and create no
             // barrier or completion QPC for B.
             let b_at = qpc_at_offset(&harness, epoch, 15_000);
-            wait_until_qpc(&harness, b_at);
             sender_qpc.store(b_at.as_u64(), Ordering::Release);
             let (_, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
             assert_eq!(b_down.map(|chord| chord.source_action_index), Some(611));
@@ -357,7 +357,6 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
                 timing.effective_hold_ticks,
             );
             let hold_probe = qpc_with_tick_delta(hold_floor, hold_probe_delta);
-            wait_until_qpc(&harness, hold_probe);
             let hold_decision = harness
                 .evaluate_live_scheduler_for_test(hold_probe, epoch)
                 .expect("evaluate A hold floor");
@@ -393,7 +392,6 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
                 timing.min_release_gap_ticks,
             );
             let release_probe = qpc_with_tick_delta(release_floor, release_probe_delta);
-            wait_until_qpc(&harness, release_probe);
             let release_decision = harness
                 .evaluate_live_scheduler_for_test(release_probe, epoch)
                 .expect("evaluate A release-gap floor");
@@ -444,6 +442,37 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
             assert_eq!(finalized.active_mask, 0);
         }
     }
+}
+
+#[test]
+fn h_g_real_waiter_smoke_wakes_on_a_future_boundary() {
+    let actions = [
+        raw_zero_action(616, ActionKind::Down, 0, &[0x15]),
+        raw_zero_action(617, ActionKind::Up, 1_000_000, &[0x15]),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let now = harness.qpc_now_for_test().expect("wait smoke QPC");
+    let deadline = now
+        .checked_add_duration(
+            harness
+                .resources
+                .clock
+                .duration_from_us(5_000)
+                .expect("5 ms smoke interval"),
+        )
+        .expect("wait smoke deadline");
+    let result = super::super::super::wait_after_unstable_target(
+        now,
+        deadline,
+        harness.resources.clock,
+        &harness.resources.waiter,
+        &harness.interrupt,
+        &mut harness.local_metrics,
+        &mut harness.runtime.terminal_error,
+    );
+    assert!(matches!(result, super::super::super::WaitBoundary::Due { .. }));
+    assert!(harness.qpc_now_for_test().expect("wake QPC") >= deadline);
+    assert!(harness.runtime.terminal_error.is_none());
 }
 
 #[test]

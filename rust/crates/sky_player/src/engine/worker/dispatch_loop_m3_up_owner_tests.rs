@@ -1,3 +1,5 @@
+use super::*;
+
 fn dispatch_while_final_authority_mutex_is_held(
     harness: &mut ProductionDispatchTestHarness,
     candidate: StagedCandidate,

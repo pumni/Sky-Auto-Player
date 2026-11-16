@@ -422,6 +422,8 @@ pub(crate) fn final_down_modifier_verdict(backend: &TrackedKeyState) -> FinalDow
 #[inline(always)]
 pub(crate) fn apply_final_down_rejection(
     verdict: FinalDownVerdict,
+    target: &SessionTarget,
+    expected: TargetStamp,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
 ) {
@@ -439,15 +441,30 @@ pub(crate) fn apply_final_down_rejection(
 
     match verdict {
         FinalDownVerdict::ControlRejected => runtime.verified_target = None,
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
+            retain_current_preflight_for_retry(target, expected, runtime);
+        }
         FinalDownVerdict::TargetChanged
         | FinalDownVerdict::OwnerRejected(_)
         | FinalDownVerdict::LeaseExpired
-        | FinalDownVerdict::LeaseUnproven => {
-            runtime.verified_target = None;
-        }
+        | FinalDownVerdict::LeaseUnproven => runtime.verified_target = None,
         FinalDownVerdict::Allowed
         | FinalDownVerdict::ModifierHeld(_)
         | FinalDownVerdict::FocusLost => {}
+    }
+}
+
+/// A transient owner-lock miss says nothing about the startup physical-key
+/// scan. Retain only the exact, already validated target stamp when that same
+/// HWND/generation is still published; never create or transfer a stamp.
+#[inline(always)]
+fn retain_current_preflight_for_retry(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    runtime: &mut WorkerRuntime,
+) {
+    if runtime.verified_target != Some(expected) || !target_stamp_still_current(target, expected) {
+        runtime.verified_target = None;
     }
 }
 
@@ -715,14 +732,8 @@ pub(crate) enum FinalDownAdmissionResult<'a> {
         permit: MutexGuard<'a, ()>,
     },
     Replan,
-    PermitBusy(OwnerPermitBusySource),
+    PermitBusy,
     Terminal(String),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnerPermitBusySource {
-    WriterMutex,
-    OwnerAuthorityMutex,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -820,15 +831,12 @@ fn verify_final_musical_packet_admission<'a>(
         post_focus_control_signals: Some(control_signals),
     });
     if target_hint != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(target_hint, runtime, metrics);
+        apply_final_down_rejection(target_hint, target, expected, runtime, metrics);
         if target_hint == FinalDownVerdict::FocusLost
             && let Err(step) = handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
         {
             return match step {
                 DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                DispatchStep::TerminateStatic(err) => {
-                    FinalDownAdmissionResult::Terminal(err.to_string())
-                }
             };
         }
         return FinalDownAdmissionResult::Replan;
@@ -845,7 +853,7 @@ fn verify_final_musical_packet_admission<'a>(
     if check_modifiers {
         let modifier_verdict = final_down_modifier_verdict(backend);
         if modifier_verdict != FinalDownVerdict::Allowed {
-            apply_final_down_rejection(modifier_verdict, runtime, metrics);
+            apply_final_down_rejection(modifier_verdict, target, expected, runtime, metrics);
             return FinalDownAdmissionResult::Replan;
         }
     }
@@ -861,7 +869,7 @@ fn verify_final_musical_packet_admission<'a>(
         post_focus_control_signals: Some(control_signals),
     });
     if fresh_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(fresh_target_verdict, runtime, metrics);
+        apply_final_down_rejection(fresh_target_verdict, target, expected, runtime, metrics);
         match fresh_target_verdict {
             FinalDownVerdict::FocusLost => {
                 if let Err(step) =
@@ -869,9 +877,6 @@ fn verify_final_musical_packet_admission<'a>(
                 {
                     return match step {
                         DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                        DispatchStep::TerminateStatic(err) => {
-                            FinalDownAdmissionResult::Terminal(err.to_string())
-                        }
                     };
                 }
             }
@@ -906,7 +911,7 @@ fn verify_final_musical_packet_admission<'a>(
         }
     };
     if verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(verdict, runtime, metrics);
+        apply_final_down_rejection(verdict, target, expected, runtime, metrics);
         match verdict {
             FinalDownVerdict::LeaseExpired => {
                 return FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string());
@@ -923,7 +928,7 @@ fn verify_final_musical_packet_admission<'a>(
     let final_target_verdict =
         final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
     if final_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_target_verdict, runtime, metrics);
+        apply_final_down_rejection(final_target_verdict, target, expected, runtime, metrics);
         match final_target_verdict {
             FinalDownVerdict::FocusLost => {
                 if let Err(step) =
@@ -931,9 +936,6 @@ fn verify_final_musical_packet_admission<'a>(
                 {
                     return match step {
                         DispatchStep::Terminate(error) => FinalDownAdmissionResult::Terminal(error),
-                        DispatchStep::TerminateStatic(error) => {
-                            FinalDownAdmissionResult::Terminal(error.to_string())
-                        }
                     };
                 }
             }
@@ -949,7 +951,7 @@ fn verify_final_musical_packet_admission<'a>(
 
     let final_control_verdict = final_down_control_verdict(control_signals);
     if final_control_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_control_verdict, runtime, metrics);
+        apply_final_down_rejection(final_control_verdict, target, expected, runtime, metrics);
         return FinalDownAdmissionResult::Replan;
     }
 
@@ -960,10 +962,10 @@ fn verify_final_musical_packet_admission<'a>(
     let release_owner = match fresh_final_release_owner_proof(target, expected, require_focus) {
         Ok(proof) => proof,
         Err(verdict) => {
-            apply_final_down_rejection(verdict, runtime, metrics);
+            apply_final_down_rejection(verdict, target, expected, runtime, metrics);
             return match verdict {
                 FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
-                    FinalDownAdmissionResult::PermitBusy(OwnerPermitBusySource::OwnerAuthorityMutex)
+                    FinalDownAdmissionResult::PermitBusy
                 }
                 FinalDownVerdict::OwnerRejected(failure) => {
                     FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
@@ -976,7 +978,13 @@ fn verify_final_musical_packet_admission<'a>(
     let final_identity_target_verdict =
         final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
     if final_identity_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_identity_target_verdict, runtime, metrics);
+        apply_final_down_rejection(
+            final_identity_target_verdict,
+            target,
+            expected,
+            runtime,
+            metrics,
+        );
         return match final_identity_target_verdict {
             FinalDownVerdict::OwnerRejected(failure) => {
                 FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
@@ -989,9 +997,6 @@ fn verify_final_musical_packet_admission<'a>(
                         DispatchStep::Terminate(error) => {
                             return FinalDownAdmissionResult::Terminal(error);
                         }
-                        DispatchStep::TerminateStatic(error) => {
-                            return FinalDownAdmissionResult::Terminal(error.to_string());
-                        }
                     }
                 }
                 FinalDownAdmissionResult::Replan
@@ -1002,7 +1007,7 @@ fn verify_final_musical_packet_admission<'a>(
 
     let final_control_verdict = final_down_control_verdict(control_signals);
     if final_control_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_control_verdict, runtime, metrics);
+        apply_final_down_rejection(final_control_verdict, target, expected, runtime, metrics);
         return FinalDownAdmissionResult::Replan;
     }
 
@@ -1013,15 +1018,16 @@ fn verify_final_musical_packet_admission<'a>(
     let permit = match target.try_lock_current_release_owner_proof(&release_owner) {
         Ok(permit) => permit,
         Err(error) => {
-            runtime.verified_target = None;
             return match error {
-                ReleaseOwnerPermitError::WriterBusy => {
-                    FinalDownAdmissionResult::PermitBusy(OwnerPermitBusySource::WriterMutex)
+                ReleaseOwnerPermitError::WriterBusy
+                | ReleaseOwnerPermitError::OwnerAuthorityBusy => {
+                    retain_current_preflight_for_retry(target, expected, runtime);
+                    FinalDownAdmissionResult::PermitBusy
                 }
-                ReleaseOwnerPermitError::OwnerAuthorityBusy => {
-                    FinalDownAdmissionResult::PermitBusy(OwnerPermitBusySource::OwnerAuthorityMutex)
+                ReleaseOwnerPermitError::NotCurrent => {
+                    runtime.verified_target = None;
+                    FinalDownAdmissionResult::Replan
                 }
-                ReleaseOwnerPermitError::NotCurrent => FinalDownAdmissionResult::Replan,
             };
         }
     };

@@ -62,6 +62,13 @@ pub enum ObserverLifecycle {
 }
 
 #[derive(Debug)]
+#[cfg_attr(
+    not(any(test, feature = "test-support")),
+    expect(
+        clippy::large_enum_variant,
+        reason = "Down observations remain inline in the bounded queue to preserve zero-allocation dispatch"
+    )
+)]
 pub enum DispatchObservation {
     Down(DownObservation),
     #[cfg(any(test, feature = "test-support"))]

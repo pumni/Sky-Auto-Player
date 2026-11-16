@@ -11,7 +11,6 @@ pub(crate) mod timing;
 #[derive(Debug)]
 pub enum DispatchStep {
     Terminate(String),
-    TerminateStatic(&'static str),
 }
 
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue};

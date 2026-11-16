@@ -148,6 +148,7 @@ impl SessionTarget {
             .store(true, Ordering::Release);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn bind_owner_identity(&self, hwnd: isize, generation: u64, owner_pid: u32) -> bool {
         self.bind_owner_identity_inner(hwnd, generation, owner_pid, None)
     }

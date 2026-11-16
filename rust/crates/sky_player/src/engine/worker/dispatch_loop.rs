@@ -195,7 +195,7 @@ fn suspend_live_input_for_dispatch(
     target: &SessionTarget,
     expected_target: Option<TargetStamp>,
     require_owner_identity: bool,
-    runtime: &super::WorkerRuntime,
+    #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
     let release_mask = backend.release_obligation_mask();
@@ -365,6 +365,7 @@ pub(crate) enum DispatchAttemptOutcome {
 }
 
 impl DispatchAttemptOutcome {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn public_outcome(self) -> StagedDispatchOutcome {
         match self {
             Self::Dispatched => StagedDispatchOutcome::Dispatched,
@@ -387,12 +388,26 @@ pub(crate) struct StagedControlSignals<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DispatchReplanAction {
     ContinueImmediately,
-    WaitCompleted {
-        retry_from_qpc: sky_dispatch_win32::clock::QpcTicks,
-        deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
-        interrupted: bool,
-    },
+    WaitCompleted,
     Exit,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DispatchReplanWaitTrace {
+    retry_from_qpc: sky_dispatch_win32::clock::QpcTicks,
+    deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
+    interrupted: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAST_DISPATCH_REPLAN_WAIT: std::cell::Cell<Option<DispatchReplanWaitTrace>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn last_dispatch_replan_wait_for_test() -> Option<DispatchReplanWaitTrace> {
+    LAST_DISPATCH_REPLAN_WAIT.with(std::cell::Cell::get)
 }
 
 struct DispatchReplanWaitContext<'a> {
@@ -419,6 +434,9 @@ fn wait_after_dispatch_replan(
     permit_busy_retry_pending: &mut bool,
     context: DispatchReplanWaitContext<'_>,
 ) -> DispatchReplanAction {
+    #[cfg(test)]
+    LAST_DISPATCH_REPLAN_WAIT.with(|trace| trace.set(None));
+
     let is_permit_busy = matches!(outcome, DispatchAttemptOutcome::PermitBusy);
     let controls_allow_wait = matches!(
         final_control_precheck(context.control_signals),
@@ -429,13 +447,6 @@ fn wait_after_dispatch_replan(
         return DispatchReplanAction::ContinueImmediately;
     }
 
-    let replan_now = match context.qpc_clock.now() {
-        Ok(now) => now,
-        Err(error) => {
-            *context.terminal_error = Some(format!("target replan QPC unavailable: {error:?}"));
-            return DispatchReplanAction::Exit;
-        }
-    };
     let target_stale = context
         .expected_target
         .is_some_and(|expected| !target_stamp_still_current(context.target, expected));
@@ -446,6 +457,13 @@ fn wait_after_dispatch_replan(
             return DispatchReplanAction::ContinueImmediately;
         }
         *permit_busy_retry_pending = false;
+        let replan_now = match context.qpc_clock.now() {
+            Ok(now) => now,
+            Err(error) => {
+                *context.terminal_error = Some(format!("target replan QPC unavailable: {error:?}"));
+                return DispatchReplanAction::Exit;
+            }
+        };
         return wait_after_dispatch_replan_deadline(
             replan_now,
             replan_now,
@@ -458,6 +476,13 @@ fn wait_after_dispatch_replan(
     }
 
     *permit_busy_retry_pending = false;
+    let replan_now = match context.qpc_clock.now() {
+        Ok(now) => now,
+        Err(error) => {
+            *context.terminal_error = Some(format!("target replan QPC unavailable: {error:?}"));
+            return DispatchReplanAction::Exit;
+        }
+    };
     wait_after_dispatch_replan_deadline(
         replan_now,
         if target_stale {
@@ -471,10 +496,6 @@ fn wait_after_dispatch_replan(
         context.local_metrics,
         context.terminal_error,
     )
-}
-
-fn take_permit_busy_retry(pending: &mut bool) -> bool {
-    std::mem::take(pending)
 }
 
 fn wait_after_dispatch_replan_deadline(
@@ -497,23 +518,33 @@ fn wait_after_dispatch_replan_deadline(
     );
     match boundary {
         WaitBoundary::Due { .. } => {
-            deadline_qpc.map_or(DispatchReplanAction::Exit, |deadline_qpc| {
-                DispatchReplanAction::WaitCompleted {
+            if deadline_qpc.is_none() {
+                return DispatchReplanAction::Exit;
+            }
+            #[cfg(test)]
+            LAST_DISPATCH_REPLAN_WAIT.with(|trace| {
+                trace.set(deadline_qpc.map(|deadline_qpc| DispatchReplanWaitTrace {
                     retry_from_qpc: now_qpc,
                     deadline_qpc,
                     interrupted: false,
-                }
-            })
+                }))
+            });
+            DispatchReplanAction::WaitCompleted
         }
         WaitBoundary::Interrupted(_, _, _) => {
             let _ = interrupt.try_take();
-            deadline_qpc.map_or(DispatchReplanAction::Exit, |deadline_qpc| {
-                DispatchReplanAction::WaitCompleted {
+            if deadline_qpc.is_none() {
+                return DispatchReplanAction::Exit;
+            }
+            #[cfg(test)]
+            LAST_DISPATCH_REPLAN_WAIT.with(|trace| {
+                trace.set(deadline_qpc.map(|deadline_qpc| DispatchReplanWaitTrace {
                     retry_from_qpc: now_qpc,
                     deadline_qpc,
                     interrupted: true,
-                }
-            })
+                }))
+            });
+            DispatchReplanAction::WaitCompleted
         }
         WaitBoundary::Exit => DispatchReplanAction::Exit,
     }
@@ -740,16 +771,8 @@ pub(crate) fn dispatch_staged_candidate(
                 release_owner,
                 permit,
             } => (release_owner, permit),
-            replan @ (FinalDownAdmissionResult::Replan
-            | FinalDownAdmissionResult::PermitBusy(_)) => {
-                let permit_busy = match replan {
-                    FinalDownAdmissionResult::Replan => false,
-                    FinalDownAdmissionResult::PermitBusy(
-                        super::admission::OwnerPermitBusySource::WriterMutex
-                        | super::admission::OwnerPermitBusySource::OwnerAuthorityMutex,
-                    ) => true,
-                    _ => unreachable!("only a replan or permit Busy enters this arm"),
-                };
+            replan @ (FinalDownAdmissionResult::Replan | FinalDownAdmissionResult::PermitBusy) => {
+                let permit_busy = matches!(replan, FinalDownAdmissionResult::PermitBusy);
                 match stage_up_only_for_mixed_replan(
                     &candidate,
                     SchedulerStageAdmission {
@@ -845,12 +868,7 @@ pub(crate) fn dispatch_staged_candidate(
                 release_owner,
                 permit,
             } => (release_owner, permit),
-            FinalDownAdmissionResult::PermitBusy(
-                super::admission::OwnerPermitBusySource::WriterMutex
-                | super::admission::OwnerPermitBusySource::OwnerAuthorityMutex,
-            ) => {
-                return DispatchAttemptOutcome::PermitBusy;
-            }
+            FinalDownAdmissionResult::PermitBusy => return DispatchAttemptOutcome::PermitBusy,
             FinalDownAdmissionResult::Replan => return DispatchAttemptOutcome::Replan,
             FinalDownAdmissionResult::Terminal(error) => {
                 runtime.terminal_error = Some(gate_rejection_record(&candidate, &error));
@@ -871,8 +889,6 @@ pub(crate) fn dispatch_staged_candidate(
 
     let previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
     let previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();
-    runtime.previous_sendinput_completion_qpc = previous_sendinput_completion_qpc;
-    runtime.previous_sender_completion_known = previous_sender_completion_known;
 
     let physical_packet = sky_dispatch_win32::input::PhysicalPacket::new(
         candidate.packet_masks.up_mask,
@@ -998,6 +1014,7 @@ pub(crate) fn dispatch_staged_candidate(
                     target,
                     Some(expected_target),
                     config.focus.require_focus,
+                    #[cfg(any(test, feature = "test-support"))]
                     runtime,
                     || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 );
@@ -1017,6 +1034,7 @@ pub(crate) fn dispatch_staged_candidate(
                     target,
                     Some(expected_target),
                     config.focus.require_focus,
+                    #[cfg(any(test, feature = "test-support"))]
                     runtime,
                     || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 );
@@ -1035,6 +1053,7 @@ pub(crate) fn dispatch_staged_candidate(
             target,
             Some(expected_target),
             config.focus.require_focus,
+            #[cfg(any(test, feature = "test-support"))]
             runtime,
             || qpc_clock.now().map_err(|error| format!("{error:?}")),
         ) {
@@ -1310,7 +1329,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
         let qpc_clock = resources.clock;
         let mut permit_busy_retry_pending = false;
         while core.runtime.terminal_error.is_none() {
-            let permit_busy_retry_allowed = take_permit_busy_retry(&mut permit_busy_retry_pending);
+            let permit_busy_retry_allowed = std::mem::take(&mut permit_busy_retry_pending);
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
             // after interrupts, replans, command transitions, or failures.
@@ -1470,6 +1489,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 target,
                                 Some(preflight_target),
                                 config.focus.require_focus,
+                                #[cfg(any(test, feature = "test-support"))]
                                 &core.runtime,
                                 || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             )
@@ -1501,6 +1521,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             target,
                             Some(preflight_target),
                             config.focus.require_focus,
+                            #[cfg(any(test, feature = "test-support"))]
                             &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
@@ -1614,6 +1635,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         target,
                         load_target_stamp(target),
                         config.focus.require_focus,
+                        #[cfg(any(test, feature = "test-support"))]
                         &core.runtime,
                         || qpc_clock.now().map_err(|error| format!("{error:?}")),
                     ) {
@@ -1661,6 +1683,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             target,
                             load_target_stamp(target),
                             config.focus.require_focus,
+                            #[cfg(any(test, feature = "test-support"))]
                             &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
@@ -2189,7 +2212,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     );
                     match replan_action {
                         DispatchReplanAction::ContinueImmediately
-                        | DispatchReplanAction::WaitCompleted { .. } => {}
+                        | DispatchReplanAction::WaitCompleted => {}
                         DispatchReplanAction::Exit => break,
                     }
                     continue;
@@ -2228,6 +2251,13 @@ mod tests {
     include!("dispatch_loop_failure_tests.rs");
     include!("dispatch_loop_deadline_trace_tests.rs");
     include!("dispatch_loop_replan_timing_tests.rs");
+    mod preflight_busy {
+        use super::{
+            apply_outer_replan_policy, stage_from_worker_outer_evaluation, timing_owner_harness,
+        };
+
+        include!("dispatch_loop_preflight_busy_tests.rs");
+    }
     mod m2_tests {
         include!("dispatch_loop_m2_tests.rs");
     }

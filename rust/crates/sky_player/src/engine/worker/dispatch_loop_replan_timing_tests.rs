@@ -145,8 +145,7 @@ fn run_worker_outer_iteration(
     harness: &mut ProductionDispatchTestHarness,
     permit_busy_retry_pending: &mut bool,
 ) -> OuterIterationEvidence {
-    let permit_busy_retry_allowed =
-        super::take_permit_busy_retry(permit_busy_retry_pending);
+    let permit_busy_retry_allowed = std::mem::take(permit_busy_retry_pending);
     let eval_qpc = harness.qpc_now_for_test().expect("outer-loop QPC");
     let (candidate, eval_count) = stage_from_worker_outer_evaluation(harness, eval_qpc);
     assert!(
@@ -306,14 +305,16 @@ fn due_down_owner_permit_contention_uses_outer_loop_retry_and_bounded_wait() {
     let second_wait = second
         .replan_action
         .expect("repeated contention takes a bounded wait");
-    let super::DispatchReplanAction::WaitCompleted {
+    if second_wait != super::DispatchReplanAction::WaitCompleted {
+        panic!("repeated stable-target Busy did not back off: {second_wait:?}");
+    }
+    let trace = super::last_dispatch_replan_wait_for_test()
+        .expect("bounded wait test trace");
+    let super::DispatchReplanWaitTrace {
         retry_from_qpc,
         deadline_qpc,
         interrupted,
-    } = second_wait
-    else {
-        panic!("repeated stable-target Busy did not back off: {second_wait:?}");
-    };
+    } = trace;
     assert!(!interrupted);
     let expected_backoff = harness
         .resources

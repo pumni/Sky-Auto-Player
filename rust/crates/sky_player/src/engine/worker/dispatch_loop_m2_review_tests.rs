@@ -1,29 +1,9 @@
+use super::*;
+
 #[derive(Clone, Copy)]
 enum UpOnlyQpcFault {
     ReversedCompletion,
     MissingCompletion,
-}
-
-fn target_at(
-    harness: &ProductionDispatchTestHarness,
-    epoch: QpcTicks,
-    at_us: u64,
-) -> QpcTicks {
-    epoch
-        .checked_add_duration(DurationTicks::from_raw(qpc_offset(harness, at_us).as_u64()))
-        .expect("authored QPC target")
-}
-
-fn candidate_at(
-    harness: &mut ProductionDispatchTestHarness,
-    at: QpcTicks,
-    epoch: QpcTicks,
-) -> crate::engine::worker::StagedCandidate {
-    let (up_mask, down_chord, timing_window) = staged_send_at(harness, at, epoch);
-    harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
-        .expect("stage production candidate")
-        .expect("candidate is due")
 }
 
 fn candidate_after_scheduler_waits_at(

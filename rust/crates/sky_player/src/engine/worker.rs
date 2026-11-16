@@ -38,6 +38,7 @@ use control::{
 pub(super) use dispatch::DispatchStep;
 pub(crate) use dispatch::ObserverRuntime;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::DispatchAttemptOutcome;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
@@ -215,8 +216,6 @@ pub(crate) struct WorkerRuntime {
     /// Measured completion boundary of the most recent physical sender
     /// transaction, retained so sequential HOL evidence survives queue drops.
     pub(crate) last_physical_send_completion_qpc: Option<QpcTicks>,
-    pub(crate) previous_sendinput_completion_qpc: Option<QpcTicks>,
-    pub(crate) previous_sender_completion_known: bool,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) terminal_error: Option<String>,
     pub(crate) terminal_trigger: Option<TerminalTrigger>,
@@ -238,6 +237,11 @@ impl WorkerRuntime {
             verified_target,
             ..Self::default()
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verified_target_for_test(&self) -> Option<TargetStamp> {
+        self.verified_target
     }
 }
 
