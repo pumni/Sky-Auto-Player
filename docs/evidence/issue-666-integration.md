@@ -264,7 +264,7 @@ Platform/toolchain: Windows x64 MSVC, Rust/Cargo 1.99.1.
 | Focused desktop consumer suite above | 0 | 3 passed. |
 | `cargo xtask check desktop-native` | 0 | PASS. Three `cargo check` variants (desktop-runtime/no-default, default, all-features), Tauri-test lib suite, and binding check completed; subcommand output was summarized by xtask. |
 | `cargo xtask check all` (final serial run, after journal and owner-drift regressions) | 0 | PASS. Static checks: 67 advisory architecture warnings, 0 security findings; Rust format, workspace Clippy, and all-features tests passed; Bun frozen-lockfile install/check and browser E2E passed; three desktop-native cargo-check variants, Tauri-test lib, and bindings passed. No xtask retry or skipped stage was reported. Xtask captured child output, so it did not expose aggregate workspace test counts; package-focused counts are recorded above. The separate ignored waiter-only A/B benchmark remains ignored and is not gameplay qualification. |
-| CI on final pushed SHA | pending | Record observed GitHub status; reviewed-SHA workflow `43790581987` is not a final-SHA result. |
+| CI after first checkpoint push (`51789df4271d7e6a8baf0e1b8cbd0ba8ba12f2d6`) | in progress | `gh pr checks 667 --repo pumni/Sky-Auto-Player` reported `Classify validation layers` pending; workflow run `43807337966` (`https://github.com/pumni/Sky-Auto-Player/actions/runs/43807337966`) reported `status=in_progress`, `headSha=51789df4271d7e6a8baf0e1b8cbd0ba8ba12f2d6`. CI was not awaited. The earlier workflow `43790581987` passed only on reviewed base `f3fe3de7f622f94a9f548e0913bf4903dfefd5f2`. |
 
 Other intermediate results: the H/G boundary regression needed a missing
 `AtomicU64` import and then an owned `Arc` in its sender closure; the operation
