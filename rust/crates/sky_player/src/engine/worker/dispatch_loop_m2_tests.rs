@@ -1,5 +1,5 @@
 use crate::engine::test_support::ProductionDispatchTestHarness;
-use crate::engine::worker::StagedDispatchOutcome;
+use crate::engine::worker::{StagedCandidate, StagedDispatchOutcome};
 use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};

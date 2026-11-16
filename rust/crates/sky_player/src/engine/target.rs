@@ -105,6 +105,7 @@ pub(super) enum TargetSnapshotReadPoint {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TargetPublicationWritePoint {
+    BeforeOwnerAuthorityReset,
     InProgress,
     HwndPublished,
     GenerationPublished,
@@ -361,7 +362,7 @@ impl SessionTarget {
         proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
     ) -> Option<MutexGuard<'_, ()>> {
         let writer = self.writer.lock();
-        if self.release_owner_proof_is_current_locked(proof) {
+        if self.release_owner_proof_is_current_serialized(proof) {
             Some(writer)
         } else {
             None
@@ -380,13 +381,52 @@ impl SessionTarget {
             counts.writer_permit_attempts = counts.writer_permit_attempts.saturating_add(1)
         });
         let writer = self.writer.try_lock()?;
-        self.release_owner_proof_is_current_locked(proof)
+        self.try_release_owner_proof_is_current(proof)?
             .then_some(writer)
     }
 
-    fn release_owner_proof_is_current_locked(
+    #[cfg(test)]
+    pub(super) fn lock_owner_authority_for_test(
+        &self,
+    ) -> parking_lot::MutexGuard<
+        '_,
+        Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)>,
+    > {
+        self.owner_authority.lock()
+    }
+
+    /// The musical final suffix must never wait for the authority mutex. A
+    /// busy snapshot/publication drops this candidate before its sender call.
+    fn try_release_owner_proof_is_current(
         &self,
         proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
+    ) -> Option<bool> {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.authority_mutex_attempts = counts.authority_mutex_attempts.saturating_add(1)
+        });
+        let retained = self.owner_authority.try_lock()?;
+        Some(self.release_owner_proof_matches_current(proof, &retained))
+    }
+
+    /// Safety cleanup may use serialized synchronization after its retained
+    /// proof validation; unlike musical admission this path is allowed to wait.
+    fn release_owner_proof_is_current_serialized(
+        &self,
+        proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
+    ) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_proof_operation(|counts| {
+            counts.authority_mutex_attempts = counts.authority_mutex_attempts.saturating_add(1)
+        });
+        let retained = self.owner_authority.lock();
+        self.release_owner_proof_matches_current(proof, &retained)
+    }
+
+    fn release_owner_proof_matches_current(
+        &self,
+        proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
+        retained: &Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)>,
     ) -> bool {
         if self.load_stable() != Some((proof.target_hwnd(), proof.target_generation())) {
             return false;
@@ -400,11 +440,6 @@ impl SessionTarget {
         {
             return false;
         }
-        #[cfg(any(test, feature = "test-support"))]
-        record_target_proof_operation(|counts| {
-            counts.authority_mutex_attempts = counts.authority_mutex_attempts.saturating_add(1)
-        });
-        let retained = self.owner_authority.lock();
         match (proof.authority(), retained.as_ref()) {
             (Some(expected), Some((current, generation))) => {
                 *generation == proof.target_generation() && Arc::ptr_eq(expected, current)
@@ -675,6 +710,10 @@ impl SessionTarget {
         self.owner_failure
             .store(OwnerIdentityFailure::None as u32, Ordering::SeqCst);
         self.owner_live.store(false, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some(hook) = hook.as_mut() {
+            (**hook)(TargetPublicationWritePoint::BeforeOwnerAuthorityReset);
+        }
         self.owner_authority.lock().take();
         #[cfg(test)]
         if let Some(hook) = hook.as_mut() {
