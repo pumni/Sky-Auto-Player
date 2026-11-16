@@ -160,6 +160,109 @@ struct DownChordHeaderTicks {
     intent_count: usize,
 }
 
+struct DownArena {
+    chords: Vec<DownChordHeaderTicks>,
+    intents: Vec<DownIntentTicks>,
+}
+
+#[derive(Clone, Copy)]
+enum DownArenaTimestampKind {
+    Chord,
+    PairedUp,
+}
+
+/// Shared compact-arena construction for prepared plans and fresh raw
+/// executors. Callers retain their own validation, tick conversion, and
+/// cancellation policy around this storage mechanism.
+fn build_down_arena<C, F>(
+    schedule: &RuntimeSchedule,
+    mut checkpoint: C,
+    checkpoint_first_chord: bool,
+    checkpoint_after_count: bool,
+    count_changed_error: &'static str,
+    check_actual_capacity: bool,
+    mut timestamp_ticks: F,
+) -> Result<DownArena, String>
+where
+    C: FnMut() -> Result<(), String>,
+    F: FnMut(u64, DownArenaTimestampKind) -> Result<TimelineTicks, String>,
+{
+    let chord_count = schedule.down_chords.len();
+    let mut intent_count = 0usize;
+    for (index, chord) in schedule.down_chords.iter().enumerate() {
+        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
+            && (checkpoint_first_chord || index != 0)
+        {
+            checkpoint()?;
+        }
+        intent_count = intent_count
+            .checked_add(chord.intents.len())
+            .ok_or_else(|| "executor Down intent count overflow".to_string())?;
+    }
+    checked_executor_storage_bytes(chord_count, intent_count)?;
+    if checkpoint_after_count {
+        checkpoint()?;
+    }
+
+    let mut chords = Vec::new();
+    reserve_executor_chords(&mut chords, chord_count)?;
+    let mut intents = Vec::new();
+    reserve_executor_intents(&mut intents, intent_count)?;
+
+    for (index, chord) in schedule.down_chords.iter().enumerate() {
+        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
+            && (checkpoint_first_chord || index != 0)
+        {
+            checkpoint()?;
+        }
+        let scheduled_ticks = timestamp_ticks(chord.scheduled_us, DownArenaTimestampKind::Chord)?;
+        let intent_start = intents.len();
+        for intent in &chord.intents {
+            let paired_up_offset_ticks =
+                timestamp_ticks(intent.paired_up_offset_us, DownArenaTimestampKind::PairedUp)?;
+            intents.push(DownIntentTicks {
+                generation_id: intent.generation_id,
+                key_slot: intent.key_slot,
+                scan_code: intent.scan_code,
+                source_action_index: intent.source_action_index,
+                reason_id: intent.reason_id,
+                paired_up_offset_ticks,
+                paired_up_offset_us: intent.paired_up_offset_us,
+                paired_up_source_action_index: intent.paired_up_source_action_index,
+            });
+        }
+        let intent_len = intents
+            .len()
+            .checked_sub(intent_start)
+            .ok_or_else(|| "executor Down intent range underflow".to_string())?;
+        let range_end = intent_start
+            .checked_add(intent_len)
+            .ok_or_else(|| "executor Down intent range overflow".to_string())?;
+        if range_end != intents.len() || range_end > intents.capacity() {
+            return Err("executor Down intent range exceeds reserved arena".to_string());
+        }
+        chords.push(DownChordHeaderTicks {
+            chord_index: chord.chord_index,
+            scheduled_ticks,
+            scheduled_us: chord.scheduled_us,
+            down_mask: chord.down_mask,
+            source_action_index: chord.source_action_index,
+            reason_id: chord.reason_id,
+            intent_start,
+            intent_count: intent_len,
+        });
+    }
+
+    if intents.len() != intent_count {
+        return Err(count_changed_error.to_string());
+    }
+    if check_actual_capacity {
+        checked_executor_storage_bytes(chords.capacity(), intents.capacity())?;
+    }
+
+    Ok(DownArena { chords, intents })
+}
+
 /// Absolute-QPC decision made by the production scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchDecision<'a> {
@@ -343,69 +446,30 @@ impl PreparedDispatchSchedule {
         checkpoint()?;
 
         let chord_count = schedule.down_chords.len();
-        let mut intent_count = 0usize;
-        for (index, chord) in schedule.down_chords.iter().enumerate() {
-            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            intent_count = intent_count
-                .checked_add(chord.intents.len())
-                .ok_or_else(|| "executor Down intent count overflow".to_string())?;
-        }
-        checked_executor_storage_bytes(chord_count, intent_count)?;
-
-        let mut down_chords = Vec::new();
-        reserve_executor_chords(&mut down_chords, chord_count)?;
-        let mut down_intents = Vec::new();
-        reserve_executor_intents(&mut down_intents, intent_count)?;
-        for (index, chord) in schedule.down_chords.iter().enumerate() {
-            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            let scheduled_ticks = qpc_to_ticks(chord.scheduled_us).ok_or_else(|| {
-                format!(
-                    "scheduled timestamp conversion failed for chord at {}us",
-                    chord.scheduled_us
-                )
-            })?;
-            let intent_start = down_intents.len();
-            for intent in &chord.intents {
-                let paired_up_offset_ticks =
-                    qpc_to_ticks(intent.paired_up_offset_us).ok_or_else(|| {
+        let DownArena {
+            chords: down_chords,
+            intents: down_intents,
+        } = build_down_arena(
+            schedule,
+            || checkpoint(),
+            true,
+            false,
+            "executor Down intent count changed during preparation",
+            false,
+            |microseconds, kind| {
+                qpc_to_ticks(microseconds).ok_or_else(|| match kind {
+                    DownArenaTimestampKind::Chord => {
                         format!(
-                            "paired Up offset timestamp conversion failed at {}us",
-                            intent.paired_up_offset_us
+                            "scheduled timestamp conversion failed for chord at {microseconds}us"
                         )
-                    })?;
-                down_intents.push(DownIntentTicks {
-                    generation_id: intent.generation_id,
-                    key_slot: intent.key_slot,
-                    scan_code: intent.scan_code,
-                    source_action_index: intent.source_action_index,
-                    reason_id: intent.reason_id,
-                    paired_up_offset_ticks,
-                    paired_up_offset_us: intent.paired_up_offset_us,
-                    paired_up_source_action_index: intent.paired_up_source_action_index,
-                });
-            }
-            let intent_len = down_intents
-                .len()
-                .checked_sub(intent_start)
-                .ok_or_else(|| "executor Down intent range underflow".to_string())?;
-            down_chords.push(DownChordHeaderTicks {
-                chord_index: chord.chord_index,
-                scheduled_ticks,
-                scheduled_us: chord.scheduled_us,
-                down_mask: chord.down_mask,
-                source_action_index: chord.source_action_index,
-                reason_id: chord.reason_id,
-                intent_start,
-                intent_count: intent_len,
-            });
-        }
-        if down_intents.len() != intent_count {
-            return Err("executor Down intent count changed during preparation".to_string());
-        }
+                    }
+                    DownArenaTimestampKind::PairedUp => {
+                        format!("paired Up offset timestamp conversion failed at {microseconds}us")
+                    }
+                })
+            },
+        )?;
+        let intent_count = down_intents.len();
 
         let mut unmatched_up_count = 0usize;
         for (index, batch) in schedule.batches.iter().enumerate() {
@@ -688,82 +752,31 @@ impl DispatchExecutor {
         E: std::fmt::Display,
         C: FnMut() -> Result<(), String>,
     {
-        let chord_count = schedule.down_chords.len();
-        let mut intent_count = 0usize;
-        for (idx, chord) in schedule.down_chords.iter().enumerate() {
-            if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            intent_count = intent_count
-                .checked_add(chord.intents.len())
-                .ok_or_else(|| "executor Down intent count overflow".to_string())?;
-        }
-        checked_executor_storage_bytes(chord_count, intent_count)?;
-
-        checkpoint()?;
-
-        let mut down_chords = Vec::new();
-        reserve_executor_chords(&mut down_chords, chord_count)?;
-        let mut down_intents = Vec::new();
-        reserve_executor_intents(&mut down_intents, intent_count)?;
-
-        for (idx, chord) in schedule.down_chords.iter().enumerate() {
-            if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            let scheduled_ticks = us_to_ticks(chord.scheduled_us).map_err(|e| {
-                format!(
-                    "scheduled timestamp conversion failed for chord at {}us: {e}",
-                    chord.scheduled_us
-                )
-            })?;
-            let intent_start = down_intents.len();
-            for intent in &chord.intents {
-                let paired_up_offset_ticks =
-                    us_to_ticks(intent.paired_up_offset_us).map_err(|e| {
+        let DownArena {
+            chords: down_chords,
+            intents: down_intents,
+        } = build_down_arena(
+            schedule,
+            || checkpoint(),
+            false,
+            true,
+            "executor Down intent count changed during compilation",
+            true,
+            |microseconds, kind| {
+                us_to_ticks(microseconds).map_err(|error| match kind {
+                    DownArenaTimestampKind::Chord => {
                         format!(
-                            "paired Up offset timestamp conversion failed at {}us: {e}",
-                            intent.paired_up_offset_us
+                            "scheduled timestamp conversion failed for chord at {microseconds}us: {error}"
                         )
-                    })?;
-                down_intents.push(DownIntentTicks {
-                    generation_id: intent.generation_id,
-                    key_slot: intent.key_slot,
-                    scan_code: intent.scan_code,
-                    source_action_index: intent.source_action_index,
-                    reason_id: intent.reason_id,
-                    paired_up_offset_ticks,
-                    paired_up_offset_us: intent.paired_up_offset_us,
-                    paired_up_source_action_index: intent.paired_up_source_action_index,
-                });
-            }
-            let intent_count = down_intents
-                .len()
-                .checked_sub(intent_start)
-                .ok_or_else(|| "executor Down intent range underflow".to_string())?;
-            let range_end = intent_start
-                .checked_add(intent_count)
-                .ok_or_else(|| "executor Down intent range overflow".to_string())?;
-            if range_end != down_intents.len() || range_end > down_intents.capacity() {
-                return Err("executor Down intent range exceeds reserved arena".to_string());
-            }
-            down_chords.push(DownChordHeaderTicks {
-                chord_index: chord.chord_index,
-                scheduled_ticks,
-                scheduled_us: chord.scheduled_us,
-                down_mask: chord.down_mask,
-                source_action_index: chord.source_action_index,
-                reason_id: chord.reason_id,
-                intent_start,
-                intent_count,
-            });
-        }
-
-        if down_intents.len() != intent_count {
-            return Err("executor Down intent count changed during compilation".to_string());
-        }
-        checked_executor_storage_bytes(down_chords.capacity(), down_intents.capacity())?;
-
+                    }
+                    DownArenaTimestampKind::PairedUp => {
+                        format!(
+                            "paired Up offset timestamp conversion failed at {microseconds}us: {error}"
+                        )
+                    }
+                })
+            },
+        )?;
         checkpoint()?;
 
         let schedule_end_offset_ticks =
@@ -1594,3 +1607,6 @@ mod absolute_tests;
 mod scale_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod arena_oracle_tests;
