@@ -6,18 +6,22 @@ M4 review checkpoint, not an acceptance verdict. The native qualification budget
 has not been authorized and no native input, interactive focus, real suspend /
 resume, or Sky gameplay session was run.
 
-The M4 implementation commit used for both offline A/B arms is
-`cede054d0c1f6617ed8cb1e95e52a70988c4e0fc` (tree
-`fff324c835e37c0c4d1ebed354858d9b00e52a6c`; binary identity is in the external
-run manifest). The final documentation/evidence commit may advance HEAD without
-changing the measured Rust source; this report names the exact measurement
-revision so the paired arms remain reproducible.
+The M4 measurement commit used for both offline A/B arms is
+`5d21ec074ffd8462a4ff0d255e75c326dc68bbf1` (tree
+`c2a29baf98369cfdc108ab002cbd71d313180fb5`; binary identity is in the external
+run manifest). After that run, only the test-only
+`candidate_after_scheduler_waits_at` helper was added to stabilize the separate
+40-anomaly regression. Production sources and
+`timing_guard_ab_benchmark.rs` are unchanged. This report names the exact
+measurement revision so the paired arms remain reproducible.
 
 Production diagnostics, playback policy, public DTOs, fingerprints, and
 telemetry schema were already satisfying the M1–M3 contracts at the accepted
-M3 base. M4 adds compatibility regressions and a test-only, ignored Windows
-waiter comparison; it does not add runtime telemetry fields or change how
-packets are admitted, attempted, classified, cleaned up, or published.
+M3 base. M4 adds compatibility regressions, a test-only ignored Windows waiter
+comparison, and a test-only scheduler reevaluation helper so the accepted
+40-anomaly regression follows the production scheduler's returned wait
+boundary under test-load jitter. No production telemetry field or packet,
+admission, cleanup, or publication behavior changed.
 
 ## Diagnostics and compatibility matrix
 
@@ -40,7 +44,12 @@ an attempted timing anomaly is preserved by the worker's bounded internal
 anomaly history and terminal error latch rather than silently redefining that
 schema field.
 
-The retained 50 ms live-snapshot cadence, empty/terminal cleanup behavior,
+An exact source diff from accepted M3 returned exit 0 for `snapshot.rs`,
+`session_snapshot.rs`, the desktop playback status DTO and session projection,
+and the telemetry output/record definitions. The accepted M3 source reports
+`NATIVE_TELEMETRY_SCHEMA_VERSION = 25`; M4's serialized-key fixture and
+missing/invalid-QPC tests preserve that contract. The retained 50 ms
+live-snapshot cadence, empty/terminal cleanup behavior,
 owner-generation release proof, one-attempt Down rule, verified cleanup + G
 barrier, and final terminal aggregation are unchanged. Existing regressions
 cover zero-obligation cleanup (no owner check or syscall), verified positive
@@ -67,6 +76,12 @@ continuity:
 - Snapshot/error aggregation and terminal DTO tests for verified, inconclusive,
   and failed release; owner-generation isolation and cleanup + G.
 
+The 40-anomaly test now reevaluates at the scheduler's returned `Wait`
+deadline, with at most eight strictly advancing QPC reevaluations. This keeps
+the expected `Send` assertion tied to the actual H/G or cleanup barrier rather
+than assuming that an authored deadline itself is eligible after scheduler
+load. It changes no runtime or test fault outcome.
+
 The 40-anomaly test asserts exact total 40, omitted 24, retained 16, evidence
 from the first and last source actions, 80 total packet attempts with no Down
 replay, verified cleanup before each following onset, and final Error. This
@@ -75,7 +90,7 @@ remains a mock QPC/sender test, not a game-reception test.
 ## Same-revision guard A/B experiment
 
 **Status: completed offline**. The single candidate revision is
-`cede054d0c1f6617ed8cb1e95e52a70988c4e0fc`; both arms use
+`5d21ec074ffd8462a4ff0d255e75c326dc68bbf1`; both arms use
 the same test binary. This is a paired fixed-guard versus calibrated-guard
 experiment on the waiter only. It is not an exact-base-vs-candidate A/B and it
 does not change the production guard.
@@ -112,10 +127,10 @@ that a game received a note.
 
 | Condition | Arm | Samples | Wake lateness p50 / p95 / p99 / p99.9 / max (µs) | Integer-µs positive lateness | Spin / wall | Worker CPU / process CPU (s) |
 |---|---|---:|---|---:|---:|---:|
-| Quiet | Fixed 1 ms | 5,400 | 0 / 0 / 0 / 75 / 9,314 | 43 | 3.7904% | 2.766 / 2.766 |
-| Quiet | Calibrated | 5,400 | 0 / 97 / 279 / 474 / 2,311 | 605 | 2.5630% | 2.375 / 2.375 |
-| Contention | Fixed 1 ms | 5,400 | 0 / 0 / 0 / 259 / 3,933 | 40 | 3.8752% | 4.016 / 90.719 |
-| Contention | Calibrated | 5,400 | 0 / 0 / 10 / 2,587 / 16,659 | 70 | 3.4873% | 4.266 / 90.766 |
+| Quiet | Fixed 1 ms | 5,400 | 0 / 0 / 0 / 493 / 4,598 | 44 | 3.7652% | 4.016 / 4.016 |
+| Quiet | Calibrated | 5,400 | 0 / 0 / 123 / 1,303 / 17,328 | 199 | 3.3770% | 3.500 / 3.500 |
+| Contention | Fixed 1 ms | 5,400 | 0 / 0 / 1 / 781 / 3,722 | 57 | 3.8588% | 4.719 / 91.391 |
+| Contention | Calibrated | 5,400 | 0 / 0 / 0 / 202 / 6,010 | 51 | 3.6828% | 3.688 / 90.391 |
 
 Each cell had six measured runs (three AB, three BA), one warm-up per arm,
 zero missing/invalid QPC samples, zero early wakes, zero failed waits, and zero
@@ -125,37 +140,43 @@ Raw `target_qpc` and `wake_qpc` remain in the CSV for exact tick-level review.
 
 | Condition / arm | Wait-return-to-observation gap p50 / p95 / p99 / p99.9 / max (µs) | Selected guard per measured run (µs) | Startup probe duration p50 / p95 / max (µs) |
 |---|---|---|---|
-| Quiet / fixed | 6 / 8 / 9 / 20 / 60 | 1000, 1000, 1000, 1000, 1000, 1000 | 15015 / 15116 / 15116 |
-| Quiet / calibrated | 6 / 8 / 9 / 39 / 121 | 441, 1000, 758, 456, 1000, 1000 | 14225 / 14777 / 14777 |
-| Contention / fixed | 5 / 8 / 9 / 17 / 35 | 1000, 1000, 1000, 1000, 1000, 1000 | 14120 / 15075 / 15075 |
-| Contention / calibrated | 5 / 8 / 9 / 43 / 99 | 1000, 1000, 906, 1000, 691, 1000 | 14518 / 15177 / 15177 |
+| Quiet / fixed | 6 / 8 / 10 / 36 / 236 | 1000, 1000, 1000, 1000, 1000, 1000 | 14279 / 14977 / 14977 |
+| Quiet / calibrated | 6 / 8 / 11 / 31 / 179 | 1000, 1000, 561, 1000, 990, 1000 | 14521 / 15548 / 15548 |
+| Contention / fixed | 5 / 8 / 9 / 18 / 679 | 1000, 1000, 1000, 1000, 1000, 1000 | 14172 / 15372 / 15372 |
+| Contention / calibrated | 5 / 8 / 9 / 16 / 56 | 1000, 819, 915, 1000, 1000, 1000 | 14462 / 14889 / 14889 |
 
 Contention used two workers at 5 ms active / 5 ms sleep, normal/inherited
-priority, unmodified affinity. The workers accumulated 202.719 CPU seconds and
-2,858,035,480 loop iterations over the contention condition (including its
+priority, unmodified affinity. The workers accumulated 202.828 CPU seconds and
+2,942,595,312 loop iterations over the contention condition (including its
 warm-ups). The machine was Windows 11 Home build 10.0.26300, AMD Ryzen 5 5500U,
 12 logical processors, QPC 10,000,000 Hz; Rust/Cargo 1.99.1, host
 `x86_64-pc-windows-msvc`.
 
-The fixed arm had fewer integer-µs late observations in this run, while the
-calibrated arm used less spin time and had a smaller Quiet maximum; under
-Contention the calibrated arm also had a 16.659 ms outlier. Six pairs on one
-host and a waiter-only path do not establish a general winner or justify a
-production policy change. The median of the per-run startup-probe p99 values
-was 645/548 µs for Quiet fixed / calibrated and 603/687 µs for Contention fixed
-/ calibrated. No H/G or sender timing distributions exist in this experiment.
+The calibrated arm used less spin time in both cells, while the fixed arm had
+fewer integer-µs late observations in Quiet and the calibrated arm had fewer
+in Contention. Tail behavior also varied by condition: calibrated Quiet had a
+17.328 ms maximum; fixed Quiet was 4.598 ms; fixed Contention was 3.722 ms;
+calibrated Contention was 6.010 ms. Six pairs on one host and a waiter-only
+path do not establish a general winner or justify a production policy change.
+The median of per-run startup-probe p99 values was 547/613 µs for Quiet fixed /
+calibrated and 576/669 µs for Contention fixed / calibrated. No H/G or sender
+timing distributions exist in this experiment.
 
-External artifact root: `%TEMP%\issue-666-m4-ab-cede054d`.
+External artifact root: `%TEMP%\issue-666-m4-ab-5d21ec07`.
 
 - Candidate tree clean before run: yes.
 - Command exit: 0; `1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered`;
   420.70 s test duration.
 - Test binary SHA-256:
-  `f469f54be6c29e3e9ab894e6d6afb850a35f9806172b290ecf334eb9e815f4ff`.
+  `0c63523481d2774511b4aa4c8e4d07be9510c289a778561a9207187349cc6d33`.
 - `wait-samples.csv` SHA-256:
-  `0ad5715d37decf8c48573e1a17d35f35ad8f38cb777eaa2beb22c599c8729d09`.
+  `f0989f3339305ec007b5b7a19d753303b479de138b42a728a74c455eb64f99d4`.
 - `wait-runs.csv` SHA-256:
-  `e15c7686c7cb5e18768fcab81c7615ae5a8a415a2a133187269cb5d75c735afa`.
+  `da4352f190c809851377bac3033af02547ac343bd0ea7861ac82dfbae8cd8d5c`.
+- `result.json` SHA-256:
+  `8863dd6c109912f44da7a198a916491d4c894afe11183f654ee8ca4500a4e74d`.
+- `run-manifest.json` SHA-256:
+  `d5fead6b9b332f7f6fdd3ab047cdfa32f8f3fac7a562a9c0d8095111343131bc`.
 - Cargo.lock SHA-256:
   `3a73099420f14704af7eaff54f2acb1e80ea89f52b876696bbc83b9015467110`.
 - QPC frequency 10 MHz; all four cells have 5,400 / 5,400 valid samples.
@@ -192,13 +213,18 @@ from game reception. No real Windows suspend/resume was performed.
 
 Windows x64 MSVC, Rust/Cargo 1.99.1. This ledger records intermediate results
 as well as final required gates; a zero-test invocation is not counted as a
-pass. Full required gates and test counts will be appended before handoff.
+pass.
 
 | Command / run | Exit | Result |
 |---|---:|---|
-| Initial focused compile/test attempt (schema regression) | 1 | Failed before test execution: benchmark CSV format had unused arguments and telemetry references used the wrong parent module. Fixed before later runs. |
+| Initial focused compile/test attempt: `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib native_telemetry_schema_25_serialized_key_sets_are_pinned` | 1 | Failed before test execution: benchmark CSV format had unused arguments and telemetry references used the wrong parent module. Fixed before later runs. |
 | First corrected schema-key test run | 0 | 1 passed; 287 filtered; emitted an unused benchmark run-order field warning, fixed by asserting and recording AB/BA/pair evidence. |
 | `cargo fmt --manifest-path rust/Cargo.toml --all` | 0 | Rust formatting applied. |
+| `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` after scheduler-wait helper change | 0 | Rust workspace format check passed. |
+| `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check` | 0 | Desktop Tauri format check passed. |
+| `cargo clippy --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core -p sky_dispatch_win32 -p sky_player --all-targets --all-features -- -D warnings` after helper change | 0 | All targets/features clean, no warnings. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core --features test-support` | 0 | 80 unit + 1 executor properties + 1 golden + 2 properties = 84 passed; 0 failed/ignored; doctests selected 0. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --features test-support` | 0 | 277 passed, 1 ignored retained-child process test, 0 failed; binary/doc targets selected 0. |
 | `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib native_telemetry_schema_25_serialized_key_sets_are_pinned` | 0 | 1 passed; 287 filtered. |
 | `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib schema_25_` | 0 | 3 passed; 285 filtered. |
 | `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib up_only` | 1 | 10 passed, 1 failed, 277 filtered. The existing realtime-QPC anomaly-retention test returned a scheduler `Wait` before an authored onset during the grouped run. |
@@ -206,12 +232,24 @@ pass. Full required gates and test counts will be appended before handoff.
 | Corrected isolated `forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_downs` retry | 0 | 1 passed; 287 filtered. |
 | `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib nearest_rank_percentiles_use_ceiling_rank_and_preserve_empty_as_null` | 0 | 1 passed; 288 filtered. |
 | `git diff --check` before the implementation commit | 0 | No whitespace errors. |
+| `git diff --exit-code e12f87fd69522941c9581eadc710744824b79097 -- rust/crates/sky_player/src/engine/snapshot.rs rust/crates/sky_player/src/engine/session_snapshot.rs apps/desktop/src-tauri/src/commands.rs apps/desktop/src-tauri/src/native_runtime/playback/session.rs rust/crates/sky_player/src/engine/telemetry/output.rs rust/crates/sky_player/src/engine/telemetry/record.rs` | 0 | Snapshot/status DTO and telemetry production projection definitions unchanged from accepted M3. |
 | PowerShell AST parser for `scripts/run_issue666_m4_guard_ab_offline.ps1` | 0 | No parse errors. |
-| First complete offline guard A/B wrapper on `cede054d0c1f6617ed8cb1e95e52a70988c4e0fc` | 0 | 1 explicitly selected ignored experiment passed; 5,400 valid samples per arm/condition, zero missing, failed or interrupted waits. Its raw results are superseded by a final-source rerun below. |
+| First complete offline guard A/B wrapper on `cede054d0c1f6617ed8cb1e95e52a70988c4e0fc` | 0 | 1 explicitly selected ignored experiment passed; 5,400 valid samples per arm/condition, zero missing, failed or interrupted waits. Superseded by the measurement-source run below. |
 | Required Clippy gate, first invocation | 1 | Found `run_once` had 9 arguments (`clippy::too_many_arguments`). Refactored benchmark-only run-order inputs into `RunOrder`; no measured algorithm or runtime path changed. |
 | Required Clippy gate after `RunOrder` refactor | 0 | `sky_dispatch_core`, `sky_dispatch_win32`, and `sky_player` all-target/all-feature Clippy clean with `-D warnings`. |
-| Final-source offline guard A/B wrapper | pending | Will run after committing the lint-only signature refactor so the final source SHA is recorded. |
-| Required formatting, Clippy, Rust suites, no-allocation, desktop-native, and `xtask check all` gates | pending | To run serially and append with actual exit codes and test counts. |
+| `pwsh -NoProfile -File scripts/run_issue666_m4_guard_ab_offline.ps1 -OutputRoot "$env:TEMP\issue-666-m4-ab-5d21ec07"` | 0 | 1 explicitly selected ignored experiment passed; 5,400 valid samples per arm/condition; zero missing, failed, early, or interrupted waits; 420.69 s. Exact measurement SHA/tree and hashes are above. |
+| First `cargo xtask check all` | 1 | Static/doc/security/trust gates passed; workspace test target `sky_desktop_shell --lib` exited 101. Its captured tool output was truncated before the failing test name. |
+| `cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked` | 0 | 345 passed, 4 ignored. This direct rerun used the tauri-test feature set and is not a substitute for the all-features workspace rerun below. |
+| Second `cargo xtask check all` | 1 | All static gates passed; `sky_player --lib`: 287 passed, 1 failed, 1 ignored. Failure was `forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_downs`; it supplied authored deadline QPC `440111133777` while scheduler correctly returned `Wait` until `440111151739`. |
+| Isolated 40-anomaly test after scheduler-wait helper change | 0 | 1 passed; 288 filtered. The test helper now advances at returned scheduler deadlines, bounded to eight progress-making reevaluations. |
+| Grouped `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib up_only` after helper change | 0 | 11 passed; 0 failed/ignored; 278 filtered, including the previously flaky 40-anomaly case. |
+| Full `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support` after helper change | 0 | Unit tests: 288 passed, 1 ignored opt-in A/B; RT no-allocation integration target: 4 passed; doc tests: 0 selected. The 40-anomaly test passed. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc` after helper change | 0 | 4 passed; 0 failed/ignored. |
+| Required `cargo xtask check desktop-native` | 0 | Desktop native check and Tauri test target passed. |
+| Final `cargo xtask check desktop-native` after helper change | 0 | Desktop native check and Tauri test target passed. |
+| Final `git diff --check` after helper change | 0 | No whitespace errors; Git warned the working copy's CRLF will be normalized to LF on the next Git write. |
+| Final `cargo xtask check all` | 0 | Static/docs/security/trust checks, workspace Rust tests, Bun check, and E2E all passed. Architecture check reported 66 advisory/baseline warnings; security reported 0 findings. `xtask` suppresses aggregate per-test counts on success; exact direct crate/target counts are listed above. |
+| `cargo xtask check static` after final M4 evidence/manifest edits | 0 | Documentation integrity, architecture, security, trust-material, branding, and static contracts passed; 66 existing architecture advisory/baseline warnings, 0 security findings. |
 
 ## Limits and risks
 
@@ -219,9 +257,11 @@ pass. Full required gates and test counts will be appended before handoff.
   Windows suspend/resume, or Sky gameplay has been performed.
 - The A/B has only waiter timing evidence. It cannot explain the observed
   full dispatch latency distribution or prove notes were received.
-- The existing QPC-driven anomaly test is timing-sensitive when run grouped;
-  it failed once and passed when isolated. The full suite must be reported
-  without masking any later recurrence.
+- The QPC-driven anomaly test previously assumed its authored deadline was
+  immediately eligible even when the scheduler returned a later H/G or
+  cleanup wait. The test-only helper now follows the production wait deadline;
+  focused and full `sky_player` runs passed after that change. The final
+  workspace gate passed after that change.
 - No change is proposed to production calibration/defaults, timing margins,
   FPS, tempo, DTO/schema, cleanup, ownership, lease/watchdog, or gameplay
   semantics.

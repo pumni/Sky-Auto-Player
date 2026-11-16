@@ -6,8 +6,8 @@
   "native_test_budget_authorized": false,
   "repository": "pumni/Sky-Auto-Player",
   "branch": "refactor/prepared-playback-runtime",
-  "candidate_revision_at_manifest_authoring": "cede054d0c1f6617ed8cb1e95e52a70988c4e0fc",
-  "candidate_tree_at_manifest_authoring": "fff324c835e37c0c4d1ebed354858d9b00e52a6c",
+  "candidate_revision_at_manifest_authoring": "d65690c6f324f862aa997361f0b0bea0c11dd714",
+  "candidate_tree_at_manifest_authoring": "df5490b00edc7a0579a4f243101058b6aa44dc26",
   "purpose": "Prepare a bounded ReceiveOnly native qualification and a separate optional Sky gameplay study. This manifest grants no execution authority.",
   "non_negotiable_safety": [
     "Only the public Windows SendInput API may be used for native input.",
