@@ -1,4 +1,4 @@
-use super::{candidate_at, target_at, test_action, wait_until_qpc};
+use super::support::{candidate_at, target_at, test_action, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::{StagedCandidate, StagedDispatchOutcome};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -117,11 +117,13 @@ fn assert_musical_up_rejected_after_rebind(republish_same_hwnd: bool) {
     assert_eq!(captured.len(), 1, "no Up was sent to the new owner");
     assert_eq!(captured[0].0, PhysicalPacket::new(0, 1));
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    assert!(harness
-        .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("musical Up origin owner differs")));
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("musical Up origin owner differs"))
+    );
 }
 
 #[test]
@@ -161,13 +163,22 @@ fn mixed_up_a_down_b_is_withheld_without_consuming_down_b() {
     assert_eq!(captured.len(), 1, "Down(B) was not attempted");
     assert_eq!(captured[0].0, PhysicalPacket::new(0, 1));
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
-    assert_eq!(harness.resources.scheduler.current_chord().map(|chord| chord.source_action_index), Some(22));
+    assert_eq!(
+        harness
+            .resources
+            .scheduler
+            .current_chord()
+            .map(|chord| chord.source_action_index),
+        Some(22)
+    );
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    assert!(harness
-        .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("musical Up origin owner differs")));
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("musical Up origin owner differs"))
+    );
 }
 
 #[test]
@@ -218,15 +229,21 @@ fn mixed_to_up_only_modifier_replan_keeps_origin_a_and_withholds_up_on_b() {
     ));
 
     let captured = packets.lock().expect("mock sender capture");
-    assert_eq!(captured.len(), 1, "neither mixed Up nor fallback Up was sent");
+    assert_eq!(
+        captured.len(),
+        1,
+        "neither mixed Up nor fallback Up was sent"
+    );
     assert_eq!(captured[0].0, PhysicalPacket::new(0, 1));
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    assert!(harness
-        .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("musical Up origin owner differs")));
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("musical Up origin owner differs"))
+    );
 }
 
 #[test]
@@ -250,9 +267,7 @@ fn generation_change_after_final_identity_query_fails_before_sender() {
             generation,
             202,
             Arc::new(
-                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
-                    hwnd, 202,
-                ),
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(hwnd, 202,),
             ),
         ));
     });
@@ -324,12 +339,15 @@ fn same_owner_independent_ups_keep_separate_origin_obligations() {
     ));
 
     let captured = packets.lock().expect("mock sender capture");
-    assert_eq!(captured.iter().map(|entry| entry.0).collect::<Vec<_>>(), [
-        PhysicalPacket::new(0, 1),
-        PhysicalPacket::new(0, 2),
-        PhysicalPacket::new(1, 0),
-        PhysicalPacket::new(2, 0),
-    ]);
+    assert_eq!(
+        captured.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+        [
+            PhysicalPacket::new(0, 1),
+            PhysicalPacket::new(0, 2),
+            PhysicalPacket::new(1, 0),
+            PhysicalPacket::new(2, 0),
+        ]
+    );
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
 }
 
@@ -355,11 +373,11 @@ fn musical_down_final_permit_replans_without_waiting_for_owner_authority_mutex()
 
     let (returned_while_locked, outcome) =
         dispatch_while_final_authority_mutex_is_held(&mut harness, down);
-    assert!(returned_while_locked, "musical permit waited for authority mutex");
-    assert_eq!(
-        outcome,
-        StagedDispatchOutcome::Replan
+    assert!(
+        returned_while_locked,
+        "musical permit waited for authority mutex"
     );
+    assert_eq!(outcome, StagedDispatchOutcome::Replan);
     assert!(packets.lock().expect("mock packet capture").is_empty());
     assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -401,11 +419,11 @@ fn musical_up_final_permit_replans_without_waiting_then_sends_once() {
 
     let (returned_while_locked, outcome) =
         dispatch_while_final_authority_mutex_is_held(&mut harness, up);
-    assert!(returned_while_locked, "musical permit waited for authority mutex");
-    assert_eq!(
-        outcome,
-        StagedDispatchOutcome::Replan
+    assert!(
+        returned_while_locked,
+        "musical permit waited for authority mutex"
     );
+    assert_eq!(outcome, StagedDispatchOutcome::Replan);
     assert_eq!(packets.lock().expect("mock packet capture").len(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resources.backend.active_mask, 1);
@@ -480,12 +498,12 @@ fn owner_generation_publication_during_authority_contention_never_borrows_new_pr
     let first_attempt = harness.dispatch_staged_candidate_for_test(up, false);
 
     let target_for_publisher = Arc::clone(&harness.target);
-    let (before_authority_reset_tx, before_authority_reset_rx) =
-        std::sync::mpsc::channel();
+    let (before_authority_reset_tx, before_authority_reset_rx) = std::sync::mpsc::channel();
     let (publish_complete_tx, publish_complete_rx) = std::sync::mpsc::channel();
     let publisher = std::thread::spawn(move || {
         let published = target_for_publisher.publish_with_hook_for_test(2, |point| {
-            if point == crate::engine::target::TargetPublicationWritePoint::BeforeOwnerAuthorityReset
+            if point
+                == crate::engine::target::TargetPublicationWritePoint::BeforeOwnerAuthorityReset
             {
                 before_authority_reset_tx
                     .send(())
@@ -527,10 +545,15 @@ fn owner_generation_publication_during_authority_contention_never_borrows_new_pr
     let publication = publish_complete_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("target publication completes after authority unlock");
-    publisher.join().expect("target publisher test thread joins");
+    publisher
+        .join()
+        .expect("target publisher test thread joins");
 
     assert_eq!(first_attempt, StagedDispatchOutcome::Replan);
-    assert!(supervisor_released, "final permit did not return while authority was held");
+    assert!(
+        supervisor_released,
+        "final permit did not return while authority was held"
+    );
     assert!(publisher_reached_authority_reset);
     assert!(target_was_unstable, "B was not held behind authority reset");
     assert_eq!(publication, (true, true));
@@ -552,11 +575,13 @@ fn owner_generation_publication_during_authority_contention_never_borrows_new_pr
     );
     assert_eq!(packets.lock().expect("mock packet capture").len(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    assert!(harness
-        .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("musical Up origin owner differs")));
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("musical Up origin owner differs"))
+    );
 }
 
 fn assert_missing_or_conflicted_up_origin_fails_closed(conflicted: bool) {

@@ -1,4 +1,4 @@
-use super::wait_until_qpc;
+use super::support::wait_until_qpc;
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
 use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
@@ -66,11 +66,7 @@ fn stage_at_qpc(
         } => {
             let down_chord = down_chord.map(Into::into);
             let candidate = harness
-                .stage_candidate_with_scheduler_window_for_test(
-                    up_mask,
-                    down_chord,
-                    timing_window,
-                )
+                .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
                 .expect("stage production candidate")
                 .expect("candidate is available");
             (up_mask, down_chord, candidate)
@@ -238,12 +234,23 @@ fn proven_raw_zero_down_only_keeps_a_hold_and_dispatches_c_without_a_fake_floor(
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     assert_eq!(harness.resume_barrier_qpc_for_test(), None);
     assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
-    assert_eq!(harness.current_executor_chord_for_test().map(|chord| chord.source_action_index), Some(602));
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.source_action_index),
+        Some(602)
+    );
     assert_eq!(
         harness.resources.backend.sendinput_zero_progress_failures,
         1
     );
-    assert_eq!(harness.runtime.attempted_dispatch_anomalies.retained_count(), 1);
+    assert_eq!(
+        harness
+            .runtime
+            .attempted_dispatch_anomalies
+            .retained_count(),
+        1
+    );
     assert!(cleanup.lock().expect("cleanup capture").is_empty());
 
     // C is only 10 ms after the attempted B packet. A fabricated B completion
@@ -282,7 +289,11 @@ fn proven_raw_zero_down_only_keeps_a_hold_and_dispatches_c_without_a_fake_floor(
     );
 
     let captured = packets.lock().expect("captured physical packets");
-    assert_eq!(captured.len(), 5, "one syscall per authored packet; B Up is suppressed");
+    assert_eq!(
+        captured.len(),
+        5,
+        "one syscall per authored packet; B Up is suppressed"
+    );
     assert_eq!(captured[0].0, PhysicalPacket::new(0, 0b0001));
     assert_eq!(captured[1].0, PhysicalPacket::new(0, 0b0010));
     assert_eq!(captured[1].1.first_inserted, 0);
@@ -290,10 +301,12 @@ fn proven_raw_zero_down_only_keeps_a_hold_and_dispatches_c_without_a_fake_floor(
     assert_eq!(captured[2].0, PhysicalPacket::new(0, 0b0100));
     assert_eq!(captured[3].0, PhysicalPacket::new(0b0100, 0));
     assert_eq!(captured[4].0, PhysicalPacket::new(0b0001, 0));
-    assert!(captured[4]
-        .1
-        .started_ticks
-        .is_some_and(|started| started >= a_up_at));
+    assert!(
+        captured[4]
+            .1
+            .started_ticks
+            .is_some_and(|started| started >= a_up_at)
+    );
     drop(captured);
 
     let finalized = harness.finalize_for_test();
@@ -361,10 +374,7 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
             assert_eq!(harness.resume_barrier_qpc_for_test(), None);
             assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
 
-            let hold_floor = qpc_at_tick_offset(
-                a_completion,
-                timing.effective_hold_ticks,
-            );
+            let hold_floor = qpc_at_tick_offset(a_completion, timing.effective_hold_ticks);
             let hold_probe = qpc_with_tick_delta(hold_floor, hold_probe_delta);
             let hold_decision = harness
                 .evaluate_live_scheduler_for_test(hold_probe, epoch)
@@ -376,7 +386,13 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
                 ));
                 wait_until_qpc(&harness, hold_floor);
             } else {
-                assert!(matches!(hold_decision, DispatchDecision::Send { up_mask: 0b0001, .. }));
+                assert!(matches!(
+                    hold_decision,
+                    DispatchDecision::Send {
+                        up_mask: 0b0001,
+                        ..
+                    }
+                ));
             }
             let actual_up_qpc = if hold_probe_delta == -1 {
                 hold_floor
@@ -396,10 +412,7 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
             // The retrigger's authored timestamp is earlier than the physical
             // G floor because A's actual Up was delayed by H. Probe each exact
             // tick around that retained physical floor after the zero packet.
-            let release_floor = qpc_at_tick_offset(
-                actual_up_qpc,
-                timing.min_release_gap_ticks,
-            );
+            let release_floor = qpc_at_tick_offset(actual_up_qpc, timing.min_release_gap_ticks);
             let release_probe = qpc_with_tick_delta(release_floor, release_probe_delta);
             let release_decision = harness
                 .evaluate_live_scheduler_for_test(release_probe, epoch)
@@ -441,8 +454,17 @@ fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_ti
             assert_eq!(captured[2].0, PhysicalPacket::new(0b0001, 0));
             assert_eq!(captured[3].0, PhysicalPacket::new(0, 0b0001));
             drop(captured);
-            assert_eq!(harness.resources.backend.sendinput_zero_progress_failures, 1);
-            assert_eq!(harness.runtime.attempted_dispatch_anomalies.retained_count(), 1);
+            assert_eq!(
+                harness.resources.backend.sendinput_zero_progress_failures,
+                1
+            );
+            assert_eq!(
+                harness
+                    .runtime
+                    .attempted_dispatch_anomalies
+                    .retained_count(),
+                1
+            );
             assert_eq!(harness.resume_barrier_qpc_for_test(), None);
 
             let finalized = harness.finalize_for_test();
@@ -470,7 +492,7 @@ fn h_g_real_waiter_smoke_wakes_on_a_future_boundary() {
                 .expect("5 ms smoke interval"),
         )
         .expect("wait smoke deadline");
-    let result = super::super::super::wait_after_unstable_target(
+    let result = super::super::wait_after_unstable_target(
         now,
         deadline,
         harness.resources.clock,
@@ -479,7 +501,7 @@ fn h_g_real_waiter_smoke_wakes_on_a_future_boundary() {
         &mut harness.local_metrics,
         &mut harness.runtime.terminal_error,
     );
-    assert!(matches!(result, super::super::super::WaitBoundary::Due { .. }));
+    assert!(matches!(result, super::super::WaitBoundary::Due { .. }));
     assert!(harness.qpc_now_for_test().expect("wake QPC") >= deadline);
     assert!(harness.runtime.terminal_error.is_none());
 }
@@ -587,7 +609,10 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
             .first()
             .expect("attempted anomaly remains sticky");
         if contradictory_qpc {
-            assert!(anomaly.contains("timing_error=Some(CounterUnavailable)"), "{anomaly}");
+            assert!(
+                anomaly.contains("timing_error=Some(CounterUnavailable)"),
+                "{anomaly}"
+            );
         } else {
             assert!(anomaly.contains("status=PartialProgress"));
             assert!(anomaly.contains("inserted=1"));
@@ -640,7 +665,10 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
             completed_ticks: Some(completed),
             timing_error: None,
         };
-        captured.lock().expect("packet capture").push((packet, evidence));
+        captured
+            .lock()
+            .expect("packet capture")
+            .push((packet, evidence));
         SendTransactionOutcome {
             status: if raw_zero {
                 SendTransactionStatus::ZeroProgress
@@ -731,7 +759,12 @@ fn raw_zero_candidate_owner_drift_after_identity_query_fails_before_sender() {
     );
     assert!(packets.lock().expect("mock packet capture").is_empty());
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
-    assert_eq!(harness.current_executor_chord_for_test().map(|chord| chord.source_action_index), Some(600));
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.source_action_index),
+        Some(600)
+    );
     assert!(!harness.runtime.musical_physical_attempt_started);
 }
 
@@ -826,12 +859,20 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
         assert_eq!(harness.resources.backend.in_flight_mask, 0);
         assert_eq!(harness.release_obligation_mask_for_test(), 0);
         assert_eq!(
-            harness.current_executor_chord_for_test().map(|chord| chord.source_action_index),
+            harness
+                .current_executor_chord_for_test()
+                .map(|chord| chord.source_action_index),
             Some(602),
             "the attempted B cursor advances, but C is not attempted after a terminal signal"
         );
         assert!(!cleanup.lock().expect("cleanup capture").is_empty());
-        assert_eq!(harness.runtime.attempted_dispatch_anomalies.retained_count(), 1);
+        assert_eq!(
+            harness
+                .runtime
+                .attempted_dispatch_anomalies
+                .retained_count(),
+            1
+        );
         let _ = harness.finalize_for_test();
     }
 }
@@ -839,7 +880,7 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
 #[cfg(feature = "qpc-read-counting")]
 #[test]
 fn measured_final_admission_operations_for_healthy_packet_shapes() {
-    use super::{qpc_offset, staged_send_at};
+    use super::support::{qpc_offset, staged_send_at};
     use crate::engine::test_support::PacketCapture;
     use std::sync::atomic::AtomicBool;
 
@@ -849,7 +890,10 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         sky_dispatch_win32::focus::reset_foreground_query_count();
         sky_dispatch_win32::focus::reset_process_identity_counts_for_test();
         sky_dispatch_win32::input::reset_release_owner_proof_arc_clone_count_for_test();
-        harness.resources.backend.reset_owner_ledger_visits_for_test();
+        harness
+            .resources
+            .backend
+            .reset_owner_ledger_visits_for_test();
         harness.reset_target_proof_counts_for_test();
     }
 
@@ -943,11 +987,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     up.attach_executor_for_test().unwrap();
     up.set_mock_sender_start_qpc_for_test(epoch);
     let first = up
-        .stage_candidate_for_test(
-            0,
-            up.current_executor_chord_for_test(),
-            TimelineTicks::ZERO,
-        )
+        .stage_candidate_for_test(0, up.current_executor_chord_for_test(), TimelineTicks::ZERO)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1138,7 +1178,9 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     ];
     let mut modifier_blocked = ProductionDispatchTestHarness::create_harness(&actions);
     let epoch = modifier_blocked.qpc_now_for_test().expect("epoch");
-    modifier_blocked.reanchor_playback_clock_for_test(epoch).unwrap();
+    modifier_blocked
+        .reanchor_playback_clock_for_test(epoch)
+        .unwrap();
     modifier_blocked.configure_focus_owner_for_test(1, 177);
     let blocked_packets = modifier_blocked.configure_mock_packet_sender_for_test(&[]);
     modifier_blocked.attach_executor_for_test().unwrap();
@@ -1164,8 +1206,23 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         modifier_blocked.dispatch_staged_candidate_for_test(candidate, false),
         StagedDispatchOutcome::Replan
     );
-    report_counts("blocked-modifier-replan", &modifier_blocked, &blocked_packets);
-    assert!(blocked_packets.lock().expect("blocked packet capture").is_empty());
-    assert_eq!(modifier_blocked.current_executor_chord_for_test().unwrap().source_action_index, 750);
+    report_counts(
+        "blocked-modifier-replan",
+        &modifier_blocked,
+        &blocked_packets,
+    );
+    assert!(
+        blocked_packets
+            .lock()
+            .expect("blocked packet capture")
+            .is_empty()
+    );
+    assert_eq!(
+        modifier_blocked
+            .current_executor_chord_for_test()
+            .unwrap()
+            .source_action_index,
+        750
+    );
     let _ = modifier_blocked.finalize_for_test();
 }

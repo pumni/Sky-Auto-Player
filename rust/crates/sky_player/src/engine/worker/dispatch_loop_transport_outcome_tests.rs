@@ -1,4 +1,4 @@
-use super::{candidate_at, target_at, test_action, wait_until_qpc};
+use super::support::{candidate_at, target_at, test_action, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
 use sky_dispatch_core::executor::DispatchDecision;
@@ -74,7 +74,9 @@ fn assert_up_only_anomaly_recovers_and_latches_terminal_error(fault: UpOnlyQpcFa
     ];
     let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
-    harness.reanchor_playback_clock_for_test(epoch).expect("reanchor");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor");
     let (cleanup_capture, cleanup_completion_qpc) =
         harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
     let source = Arc::new(AtomicU32::new(u32::MAX));
@@ -156,7 +158,10 @@ fn assert_up_only_anomaly_recovers_and_latches_terminal_error(fault: UpOnlyQpcFa
 
     let anomaly = &harness.runtime.attempted_dispatch_anomalies.details()[0];
     assert!(anomaly.contains("source_action=11"), "{anomaly}");
-    assert!(anomaly.contains("up_mask=0x0001 down_mask=0x0000"), "{anomaly}");
+    assert!(
+        anomaly.contains("up_mask=0x0001 down_mask=0x0000"),
+        "{anomaly}"
+    );
     assert!(
         anomaly.contains("first_inserted=1 attempts=1 status=Complete"),
         "{anomaly}"
@@ -181,10 +186,12 @@ fn assert_up_only_anomaly_recovers_and_latches_terminal_error(fault: UpOnlyQpcFa
     } else {
         assert!(anomaly.contains("completion_qpc=unavailable"), "{anomaly}");
     }
-    assert!(!cleanup_capture
-        .lock()
-        .expect("verified safety cleanup")
-        .is_empty());
+    assert!(
+        !cleanup_capture
+            .lock()
+            .expect("verified safety cleanup")
+            .is_empty()
+    );
     let cleanup_completion = QpcTicks::from_raw(cleanup_completion_qpc.load(Ordering::Acquire));
     let barrier = harness
         .resume_barrier_qpc_for_test()
@@ -207,7 +214,10 @@ fn assert_up_only_anomaly_recovers_and_latches_terminal_error(fault: UpOnlyQpcFa
     dispatch_with_source(&mut harness, up_b, source.as_ref());
 
     assert_eq!(
-        packet_attempts.lock().expect("packet attempt log").as_slice(),
+        packet_attempts
+            .lock()
+            .expect("packet attempt log")
+            .as_slice(),
         &[
             (10, PhysicalPacket::new(0, 0b0001)),
             (11, PhysicalPacket::new(0b0001, 0)),
@@ -220,10 +230,12 @@ fn assert_up_only_anomaly_recovers_and_latches_terminal_error(fault: UpOnlyQpcFa
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let outcome = harness.finalize_worker_for_test(false, &mut observation);
     assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
-    assert!(observation
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("total=1 omitted=0 retained=1")));
+    assert!(
+        observation
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("total=1 omitted=0 retained=1"))
+    );
     assert!(observation.secondary_errors.iter().any(|error| {
         error.contains("post-call attempted anomaly")
             && error.contains("source_action=11")
@@ -284,11 +296,16 @@ fn attempted_anomaly_error_preserves_concurrent_skip_cause_at_finalize() {
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let outcome = harness.finalize_worker_for_test(false, &mut observation);
     assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
-    assert_eq!(observation.terminal_trigger_reason.as_deref(), Some("skipped"));
-    assert!(observation
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("total=1 omitted=0 retained=1")));
+    assert_eq!(
+        observation.terminal_trigger_reason.as_deref(),
+        Some("skipped")
+    );
+    assert!(
+        observation
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("total=1 omitted=0 retained=1"))
+    );
     assert!(observation.secondary_errors.iter().any(|error| {
         error.contains("post-call attempted anomaly") && error.contains("source_action=0")
     }));
@@ -314,7 +331,9 @@ fn forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_dow
     }
     let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
-    harness.reanchor_playback_clock_for_test(epoch).expect("reanchor");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor");
     let (cleanup_capture, cleanup_completion_qpc) =
         harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
     let source = Arc::new(AtomicU32::new(u32::MAX));
@@ -379,12 +398,15 @@ fn forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_dow
         let history = &harness.runtime.attempted_dispatch_anomalies;
         assert_eq!(history.total_count(), pair as u64 + 1);
         assert_eq!(history.retained_count(), (pair + 1).min(16));
-        assert_eq!(history.omitted_count(), (pair + 1).saturating_sub(16) as u64);
-        let cleanup_count = cleanup_capture
-            .lock()
-            .expect("verified cleanup")
-            .len();
-        assert!(cleanup_count > cleanup_sends, "anomaly {pair} must be cleaned up");
+        assert_eq!(
+            history.omitted_count(),
+            (pair + 1).saturating_sub(16) as u64
+        );
+        let cleanup_count = cleanup_capture.lock().expect("verified cleanup").len();
+        assert!(
+            cleanup_count > cleanup_sends,
+            "anomaly {pair} must be cleaned up"
+        );
         cleanup_sends = cleanup_count;
         let completed = QpcTicks::from_raw(cleanup_completion_qpc.load(Ordering::Acquire));
         let barrier = harness
@@ -434,16 +456,22 @@ fn forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_dow
     assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
     let mut anomaly_summary =
         std::iter::once(observation.terminal_error.as_deref().unwrap_or_default())
-        .chain(observation.secondary_errors.iter().map(String::as_str));
-    assert!(anomaly_summary.any(|error| {
-        error.contains("total=40 omitted=24 retained=16")
-    }));
+            .chain(observation.secondary_errors.iter().map(String::as_str));
+    assert!(anomaly_summary.any(|error| { error.contains("total=40 omitted=24 retained=16") }));
     let details = observation
         .secondary_errors
         .iter()
         .filter(|error| error.contains("post-call attempted anomaly"))
         .collect::<Vec<_>>();
     assert_eq!(details.len(), 16);
-    assert!(details.iter().any(|record| record.contains("source_action=1")));
-    assert!(details.iter().any(|record| record.contains("source_action=79")));
+    assert!(
+        details
+            .iter()
+            .any(|record| record.contains("source_action=1"))
+    );
+    assert!(
+        details
+            .iter()
+            .any(|record| record.contains("source_action=79"))
+    );
 }

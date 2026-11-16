@@ -2237,28 +2237,26 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
 
 #[cfg(test)]
 mod tests {
-
-    use crate::engine::test_support::ProductionDispatchTestHarness;
-    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-
-    use sky_dispatch_win32::input::{
-        PacketRetryReason, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
-    };
-
-    use std::sync::atomic::Ordering;
-
-    include!("dispatch_loop_observer_tests.rs");
-    include!("dispatch_loop_failure_tests.rs");
-    include!("dispatch_loop_deadline_trace_tests.rs");
-    include!("dispatch_loop_replan_timing_tests.rs");
-    mod preflight_busy {
-        use super::{
-            apply_outer_replan_policy, stage_from_worker_outer_evaluation, timing_owner_harness,
-        };
-
-        include!("dispatch_loop_preflight_busy_tests.rs");
-    }
-    mod m2_tests {
-        include!("dispatch_loop_m2_tests.rs");
-    }
+    #[path = "../../dispatch_loop_deadline_trace_tests.rs"]
+    mod deadline_trace;
+    #[path = "../../dispatch_loop_failure_tests.rs"]
+    mod failure;
+    #[path = "../../dispatch_loop_late_retry_tests.rs"]
+    mod late_retry;
+    #[path = "../../dispatch_loop_observer_tests.rs"]
+    mod observer;
+    #[path = "../../dispatch_loop_owner_proof_tests.rs"]
+    mod owner_proof;
+    #[path = "../../dispatch_loop_preflight_busy_tests.rs"]
+    mod preflight_busy;
+    #[path = "../../dispatch_loop_raw_zero_tests.rs"]
+    mod raw_zero;
+    #[path = "../../dispatch_loop_replan_timing_tests.rs"]
+    mod replan_timing;
+    #[path = "../../dispatch_loop_safety_tests.rs"]
+    mod safety;
+    #[path = "../../dispatch_loop_test_support.rs"]
+    mod support;
+    #[path = "../../dispatch_loop_transport_outcome_tests.rs"]
+    mod transport_outcome;
 }

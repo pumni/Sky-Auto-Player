@@ -1,3 +1,6 @@
+use super::replan_timing::{
+    apply_outer_replan_policy, stage_from_worker_outer_evaluation, timing_owner_harness,
+};
 use crate::engine::test_support::{PacketCapture, ProductionDispatchTestHarness};
 use crate::engine::worker::{DispatchAttemptOutcome, StagedDispatchOutcome};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
@@ -7,25 +10,25 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Clone, Copy)]
-enum FinalPermitLock {
+pub(super) enum FinalPermitLock {
     Writer,
     OwnerAuthority,
 }
 
-struct HeldFinalPermit {
-    release: std::sync::mpsc::Sender<()>,
-    supervisor: std::thread::JoinHandle<bool>,
+pub(super) struct HeldFinalPermit {
+    pub(super) release: std::sync::mpsc::Sender<()>,
+    pub(super) supervisor: std::thread::JoinHandle<bool>,
 }
 
-struct DueBAttempt {
-    source_action_index: u32,
-    target_stamp: Option<crate::engine::worker::TargetStamp>,
-    retry_deadline_qpc: QpcTicks,
-    outcome: DispatchAttemptOutcome,
-    retry_allowed: bool,
+pub(super) struct DueBAttempt {
+    pub(super) source_action_index: u32,
+    pub(super) target_stamp: Option<crate::engine::worker::TargetStamp>,
+    pub(super) retry_deadline_qpc: QpcTicks,
+    pub(super) outcome: DispatchAttemptOutcome,
+    pub(super) retry_allowed: bool,
 }
 
-struct PreflightOwnerForegroundReset;
+pub(super) struct PreflightOwnerForegroundReset;
 
 impl Drop for PreflightOwnerForegroundReset {
     fn drop(&mut self) {
@@ -49,7 +52,7 @@ fn preflight_action(
     }
 }
 
-fn make_active_a_preflight_harness() -> (
+pub(super) fn make_active_a_preflight_harness() -> (
     ProductionDispatchTestHarness,
     PacketCapture,
     QpcTicks,
@@ -127,7 +130,7 @@ fn make_active_a_preflight_harness() -> (
     )
 }
 
-fn install_final_permit_contention(
+pub(super) fn install_final_permit_contention(
     harness: &mut ProductionDispatchTestHarness,
     lock_kind: FinalPermitLock,
 ) -> HeldFinalPermit {
@@ -178,7 +181,7 @@ fn install_final_permit_contention(
     }
 }
 
-fn authored_qpc_at(
+pub(super) fn authored_qpc_at(
     harness: &ProductionDispatchTestHarness,
     epoch: QpcTicks,
     offset_us: u64,
@@ -194,7 +197,7 @@ fn authored_qpc_at(
         .expect("authored QPC deadline")
 }
 
-fn attempt_due_b_with_policy(
+pub(super) fn attempt_due_b_with_policy(
     harness: &mut ProductionDispatchTestHarness,
     epoch: QpcTicks,
     retry_pending: &mut bool,
@@ -209,7 +212,10 @@ fn attempt_due_b_with_policy(
         wait_until_qpc(harness, b_eval_qpc);
     }
     let (candidate, evaluations) = stage_from_worker_outer_evaluation(harness, b_eval_qpc);
-    assert_eq!(evaluations, 1, "the due B onset uses one scheduler evaluation");
+    assert_eq!(
+        evaluations, 1,
+        "the due B onset uses one scheduler evaluation"
+    );
     assert_eq!(candidate.packet_masks.up_mask, 0);
     assert_eq!(candidate.packet_masks.down_mask, 2);
     assert!(candidate.timing_window.packet_not_before_qpc <= b_eval_qpc);
@@ -231,7 +237,7 @@ fn attempt_due_b_with_policy(
     }
 }
 
-fn wait_until_qpc(harness: &mut ProductionDispatchTestHarness, deadline_qpc: QpcTicks) {
+pub(super) fn wait_until_qpc(harness: &mut ProductionDispatchTestHarness, deadline_qpc: QpcTicks) {
     loop {
         let now = harness.qpc_now_for_test().expect("deadline wait QPC");
         if now >= deadline_qpc {
@@ -255,7 +261,7 @@ fn wait_until_qpc(harness: &mut ProductionDispatchTestHarness, deadline_qpc: Qpc
     }
 }
 
-fn assert_a_obligation_unchanged(
+pub(super) fn assert_a_obligation_unchanged(
     harness: &ProductionDispatchTestHarness,
     packets: &PacketCapture,
     preflight_calls: &AtomicUsize,
@@ -280,13 +286,16 @@ fn assert_a_obligation_unchanged(
     );
 }
 
-fn assert_fresh_b_admission_ran(
+pub(super) fn assert_fresh_b_admission_ran(
     harness: &ProductionDispatchTestHarness,
     lease_control_checks: &AtomicUsize,
 ) {
     let (arc_clones, authority_attempts, writer_permits, generation_checks) =
         harness.target_proof_counts_for_test();
-    assert!(arc_clones > 0, "retry acquired a fresh owner authority proof");
+    assert!(
+        arc_clones > 0,
+        "retry acquired a fresh owner authority proof"
+    );
     assert!(authority_attempts > 0, "retry freshly read owner authority");
     assert!(writer_permits > 0, "retry entered the final writer permit");
     assert!(generation_checks > 0, "retry revalidated target generation");
@@ -330,7 +339,10 @@ fn finish_b_retry_and_release_a(
     lease_control_checks.store(0, Ordering::Release);
 
     let b = attempt_due_b_with_policy(harness, epoch, retry_pending);
-    assert!(b.retry_allowed, "the accepted immediate retry token was consumed");
+    assert!(
+        b.retry_allowed,
+        "the accepted immediate retry token was consumed"
+    );
     assert_eq!(b.outcome, DispatchAttemptOutcome::Dispatched);
     assert_fresh_b_admission_ran(harness, lease_control_checks);
     assert_eq!(preflight_calls.load(Ordering::Acquire), 1);
@@ -353,7 +365,10 @@ fn finish_b_retry_and_release_a(
         assert_eq!(sent[0].0.down_mask, 1);
         assert_eq!(sent[1].0.down_mask, 2);
         assert!(sent.iter().all(|(_, evidence)| evidence.attempts == 1));
-        assert!(sent.iter().all(|(_, evidence)| evidence.first_inserted == 1));
+        assert!(
+            sent.iter()
+                .all(|(_, evidence)| evidence.first_inserted == 1)
+        );
     }
 
     let up_eval = authored_qpc_at(harness, epoch, 80_000);
@@ -363,7 +378,9 @@ fn finish_b_retry_and_release_a(
     assert_eq!(up_a.packet_masks.up_mask, 1);
     assert_eq!(up_a.packet_masks.down_mask, 0);
     harness.set_mock_sender_start_qpc_for_test(
-        harness.qpc_now_for_test().expect("Up(A) real sender start QPC"),
+        harness
+            .qpc_now_for_test()
+            .expect("Up(A) real sender start QPC"),
     );
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up_a, false),
@@ -376,7 +393,10 @@ fn finish_b_retry_and_release_a(
         assert_eq!(sent[2].0.up_mask, 1);
         assert_eq!(sent[2].0.down_mask, 0);
         assert!(sent.iter().all(|(_, evidence)| evidence.attempts == 1));
-        assert!(sent.iter().all(|(_, evidence)| evidence.first_inserted == 1));
+        assert!(
+            sent.iter()
+                .all(|(_, evidence)| evidence.first_inserted == 1)
+        );
     }
     assert_eq!(harness.resources.backend.active_mask, 2);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
@@ -385,19 +405,9 @@ fn finish_b_retry_and_release_a(
     assert!(harness.runtime.terminal_error.is_none());
 }
 
-fn exercise_busy_preserving_preflight(
-    lock_kind: FinalPermitLock,
-    early_read: bool,
-    stall_before_retry_until_up_a: bool,
-) {
-    let (
-        mut harness,
-        packets,
-        epoch,
-        preflight_calls,
-        _physical_mask,
-        lease_control_checks,
-    ) = make_active_a_preflight_harness();
+fn exercise_busy_preserving_preflight(lock_kind: FinalPermitLock, early_read: bool) {
+    let (mut harness, packets, epoch, preflight_calls, _physical_mask, lease_control_checks) =
+        make_active_a_preflight_harness();
     let origin = harness
         .runtime
         .verified_target_for_test()
@@ -429,13 +439,15 @@ fn exercise_busy_preserving_preflight(
     assert_eq!(attempt.source_action_index, 6691);
     assert_eq!(attempt.outcome, DispatchAttemptOutcome::PermitBusy);
     assert_a_obligation_unchanged(&harness, &packets, &preflight_calls, 1, origin);
-    assert!(harness
-        .resources
-        .backend
-        .release_owner_proof_for_mask(1)
-        .expect("A release proof lookup after Busy")
-        .expect("A release proof after Busy")
-        .same_owner(&a_origin));
+    assert!(
+        harness
+            .resources
+            .backend
+            .release_owner_proof_for_mask(1)
+            .expect("A release proof lookup after Busy")
+            .expect("A release proof after Busy")
+            .same_owner(&a_origin)
+    );
     assert_eq!(lease_control_checks.load(Ordering::Acquire), 1);
 
     let replan = apply_outer_replan_policy(
@@ -460,14 +472,6 @@ fn exercise_busy_preserving_preflight(
             .expect("release final owner/writer permit lock");
         assert!(held.supervisor.join().expect("permit supervisor joins"));
     }
-    if stall_before_retry_until_up_a {
-        let up_a_deadline = authored_qpc_at(&harness, epoch, 80_000);
-        wait_until_qpc(&mut harness, up_a_deadline);
-        assert!(
-            harness.qpc_now_for_test().expect("post-stall real QPC") >= up_a_deadline,
-            "the controlled outer-loop stall crosses authored Up(A)"
-        );
-    }
     finish_b_retry_and_release_a(
         &mut harness,
         &packets,
@@ -483,35 +487,29 @@ fn exercise_busy_preserving_preflight(
 fn early_owner_proof_read_busy_preserves_active_a_preflight_across_b_restage() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, true, false);
+    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, true);
 }
 
 #[test]
 fn final_owner_authority_mutex_busy_preserves_active_a_preflight_across_b_restage() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, false, true);
+    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, false);
 }
 
 #[test]
 fn final_writer_mutex_busy_preserves_active_a_preflight_across_b_restage() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    exercise_busy_preserving_preflight(FinalPermitLock::Writer, false, false);
+    exercise_busy_preserving_preflight(FinalPermitLock::Writer, false);
 }
 
 #[test]
 fn same_hwnd_generation_aba_repreflights_new_target_stamp() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    let (
-        mut harness,
-        packets,
-        epoch,
-        preflight_calls,
-        physical_mask,
-        _lease_control_checks,
-    ) = make_active_a_preflight_harness();
+    let (mut harness, packets, epoch, preflight_calls, physical_mask, _lease_control_checks) =
+        make_active_a_preflight_harness();
     let original = harness
         .runtime
         .verified_target_for_test()
@@ -553,14 +551,8 @@ fn same_hwnd_generation_aba_repreflights_new_target_stamp() {
 fn focus_loss_invalidates_preflight_and_recovery_rechecks_after_cleanup() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    let (
-        mut harness,
-        packets,
-        epoch,
-        preflight_calls,
-        physical_mask,
-        _lease_control_checks,
-    ) = make_active_a_preflight_harness();
+    let (mut harness, packets, epoch, preflight_calls, physical_mask, _lease_control_checks) =
+        make_active_a_preflight_harness();
     let origin = harness
         .runtime
         .verified_target_for_test()
@@ -587,10 +579,12 @@ fn focus_loss_invalidates_preflight_and_recovery_rechecks_after_cleanup() {
         None,
         "focus loss invalidates the startup preflight stamp"
     );
-    assert!(harness
-        .resources
-        .playback
-        .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus));
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
 
     let (cleanup, _) = harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
     harness.focus_active.store(true, Ordering::Release);
@@ -622,14 +616,8 @@ fn focus_loss_invalidates_preflight_and_recovery_rechecks_after_cleanup() {
 fn lease_expiry_during_busy_replan_preempts_retry_without_rescanning_keys() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    let (
-        mut harness,
-        packets,
-        epoch,
-        preflight_calls,
-        _physical_mask,
-        lease_control_checks,
-    ) = make_active_a_preflight_harness();
+    let (mut harness, packets, epoch, preflight_calls, _physical_mask, lease_control_checks) =
+        make_active_a_preflight_harness();
     let origin = harness
         .runtime
         .verified_target_for_test()
@@ -652,8 +640,14 @@ fn lease_expiry_during_busy_replan_preempts_retry_without_rescanning_keys() {
         attempt.retry_allowed,
         &mut retry_pending,
     );
-    assert_eq!(action, super::super::DispatchReplanAction::ContinueImmediately);
-    assert!(!retry_pending, "expired lease clears the contention retry token");
+    assert_eq!(
+        action,
+        super::super::DispatchReplanAction::ContinueImmediately
+    );
+    assert!(
+        !retry_pending,
+        "expired lease clears the contention retry token"
+    );
     assert_eq!(packets.lock().expect("no B after lease expiry").len(), 1);
     assert_eq!(preflight_calls.load(Ordering::Acquire), 1);
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);

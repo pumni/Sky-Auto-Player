@@ -1,7 +1,8 @@
+use super::support::{qpc_offset, staged_send_at, test_action};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
-use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::executor::DispatchDecision;
+use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, SendEvidence,
@@ -9,80 +10,6 @@ use sky_dispatch_win32::input::{
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-
-fn staged_send_at(
-    harness: &mut ProductionDispatchTestHarness,
-    at: QpcTicks,
-    epoch: QpcTicks,
-) -> (u16, Option<DownChordMetadata>, sky_dispatch_core::executor::DispatchTimingWindow) {
-    match harness
-        .evaluate_live_scheduler_for_test(at, epoch)
-        .expect("evaluate production scheduler")
-    {
-        DispatchDecision::Send {
-            up_mask,
-            down_chord,
-            timing_window,
-        } => (up_mask, down_chord.map(Into::into), timing_window),
-        decision => panic!("expected packet send at {at:?}, got {decision:?}"),
-    }
-}
-
-fn target_at(
-    harness: &ProductionDispatchTestHarness,
-    epoch: QpcTicks,
-    at_us: u64,
-) -> QpcTicks {
-    epoch
-        .checked_add_duration(DurationTicks::from_raw(qpc_offset(harness, at_us).as_u64()))
-        .expect("authored QPC target")
-}
-
-fn candidate_at(
-    harness: &mut ProductionDispatchTestHarness,
-    at: QpcTicks,
-    epoch: QpcTicks,
-) -> crate::engine::worker::StagedCandidate {
-    let (up_mask, down_chord, timing_window) = staged_send_at(harness, at, epoch);
-    harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
-        .expect("stage production candidate")
-        .expect("candidate is due")
-}
-
-#[path = "dispatch_loop_m2_review_tests.rs"]
-mod transport_outcomes;
-
-#[path = "dispatch_loop_m3_up_owner_tests.rs"]
-mod owner_proof;
-
-#[path = "dispatch_loop_m4_zero_tests.rs"]
-mod proven_raw_zero;
-
-fn qpc_offset(harness: &ProductionDispatchTestHarness, us: u64) -> TimelineTicks {
-    TimelineTicks::from_raw(
-        harness
-            .qpc_duration_from_us_for_test(us)
-            .expect("convert authored offset")
-            .as_u64(),
-    )
-}
-
-fn wait_until_qpc(harness: &ProductionDispatchTestHarness, target: QpcTicks) {
-    while harness.qpc_now_for_test().expect("wait QPC") < target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
-
-fn test_action(index: u32, kind: ActionKind, scheduled_us: u64, scan: u16) -> KeyActionInput {
-    KeyActionInput {
-        source_action_index: index,
-        kind,
-        scheduled_us,
-        scan_codes: smallvec::smallvec![scan],
-        reason: "M2 deterministic dispatch regression".into(),
-    }
-}
 
 #[test]
 fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for_cleanup_g() {
@@ -106,7 +33,11 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
 
     let first_now = harness.qpc_now_for_test().expect("first Down QPC");
     let first = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage authored onset 10")
         .expect("first Down candidate");
     assert_eq!(first.source_action_index, 10);
@@ -118,7 +49,9 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
 
     let mixed_target = epoch
-        .checked_add_duration(DurationTicks::from_raw(qpc_offset(&harness, 20_000).as_u64()))
+        .checked_add_duration(DurationTicks::from_raw(
+            qpc_offset(&harness, 20_000).as_u64(),
+        ))
         .expect("mixed packet target");
     while harness.qpc_now_for_test().expect("wait for mixed target") < mixed_target {
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -171,11 +104,19 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
     ));
     assert_eq!(anomaly_calls.load(Ordering::Relaxed), 1);
     assert_eq!(
-        anomaly_packets.lock().expect("mixed packet capture").as_slice(),
+        anomaly_packets
+            .lock()
+            .expect("mixed packet capture")
+            .as_slice(),
         &[PhysicalPacket::new(0b0001, 0b0010)]
     );
     assert_eq!(first_capture.lock().expect("first packet capture").len(), 1);
-    assert_eq!(harness.current_executor_chord_for_test().map(|c| c.source_action_index), Some(13));
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|c| c.source_action_index),
+        Some(13)
+    );
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
     assert_eq!(harness.generation_accounting_for_test().cancelled, 2);
     assert_eq!(harness.generation_accounting_for_test().active, 0);
@@ -188,15 +129,17 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
         .first()
         .expect("preserved raw anomaly evidence");
     assert!(anomaly.contains("source_action=12"), "{anomaly}");
-    assert!(anomaly.contains("up_mask=0x0001 down_mask=0x0002"), "{anomaly}");
-    assert!(anomaly.contains("attempts=1 status=ClockFailureAfterSend"), "{anomaly}");
+    assert!(
+        anomaly.contains("up_mask=0x0001 down_mask=0x0002"),
+        "{anomaly}"
+    );
+    assert!(
+        anomaly.contains("attempts=1 status=ClockFailureAfterSend"),
+        "{anomaly}"
+    );
     assert!(anomaly.contains("completion_qpc=unavailable"), "{anomaly}");
-    assert!(!cleanup_capture
-        .lock()
-        .expect("cleanup capture")
-        .is_empty());
-    let cleanup_completion =
-        QpcTicks::from_raw(cleanup_completion_qpc.load(Ordering::Acquire));
+    assert!(!cleanup_capture.lock().expect("cleanup capture").is_empty());
+    let cleanup_completion = QpcTicks::from_raw(cleanup_completion_qpc.load(Ordering::Acquire));
     let barrier = harness
         .resume_barrier_qpc_for_test()
         .expect("cleanup establishes H/G resume barrier");
@@ -204,12 +147,11 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
     assert!(barrier > mixed_target, "C is still inside cleanup + G");
     assert_eq!(
         harness
-            .evaluate_live_scheduler_for_test(
-                QpcTicks::from_raw(barrier.as_u64() - 1),
-                epoch,
-            )
+            .evaluate_live_scheduler_for_test(QpcTicks::from_raw(barrier.as_u64() - 1), epoch,)
             .expect("evaluate just before resume barrier"),
-        DispatchDecision::Wait { deadline_qpc: barrier }
+        DispatchDecision::Wait {
+            deadline_qpc: barrier
+        }
     );
 
     let (next_up, next_chord, next_window) = staged_send_at(&mut harness, barrier, epoch);
@@ -268,7 +210,11 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
     let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
     let candidate = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage Down")
         .expect("Down candidate");
     let mask = candidate.packet_masks.down_mask;
@@ -297,9 +243,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
                 started_ticks: Some(now),
                 // The raw count looks like zero progress, but contradictory
                 // QPC ordering keeps this on the conservative cleanup path.
-                completed_ticks: Some(QpcTicks::from_raw(
-                    now.as_u64().saturating_sub(1),
-                )),
+                completed_ticks: Some(QpcTicks::from_raw(now.as_u64().saturating_sub(1))),
                 timing_error: None,
             },
         }
@@ -310,17 +254,30 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
         StagedDispatchOutcome::Exit
     ));
     assert_eq!(calls.load(Ordering::Relaxed), 1);
-    assert_eq!(harness.current_executor_chord_for_test().map(|c| c.source_action_index), Some(0));
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|c| c.source_action_index),
+        Some(0)
+    );
     assert_eq!(harness.resources.scheduler.accounting().activated, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, mask);
     assert_eq!(harness.release_obligation_mask_for_test() & mask, mask);
     assert!(harness.runtime.musical_physical_attempt_started);
-    assert!(harness
-        .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("tracked safety cleanup failed")));
-    assert_eq!(harness.runtime.attempted_dispatch_anomalies.retained_count(), 1);
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("tracked safety cleanup failed"))
+    );
+    assert_eq!(
+        harness
+            .runtime
+            .attempted_dispatch_anomalies
+            .retained_count(),
+        1
+    );
 }
 
 #[test]
@@ -349,7 +306,11 @@ fn musical_up_only_final_focus_loss_replans_without_crossing_sender_boundary() {
     harness.attach_executor_for_test().expect("attach executor");
     let first_now = harness.qpc_now_for_test().expect("first Down QPC");
     let first = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage initial Down")
         .expect("Down candidate");
     harness.set_mock_sender_start_qpc_for_test(first_now);
@@ -359,7 +320,9 @@ fn musical_up_only_final_focus_loss_replans_without_crossing_sender_boundary() {
     ));
 
     let up_target = epoch
-        .checked_add_duration(DurationTicks::from_raw(qpc_offset(&harness, 20_000).as_u64()))
+        .checked_add_duration(DurationTicks::from_raw(
+            qpc_offset(&harness, 20_000).as_u64(),
+        ))
         .expect("Up target");
     while harness.qpc_now_for_test().expect("wait for Up") < up_target {
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -422,7 +385,11 @@ fn focus_loss_before_first_down_keeps_onset_unattempted_until_safe_resume() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     harness.attach_executor_for_test().expect("attach executor");
     let candidate = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage first Down")
         .expect("Down candidate");
     let focus = Arc::clone(&harness.focus_active);
@@ -439,10 +406,12 @@ fn focus_loss_before_first_down_keeps_onset_unattempted_until_safe_resume() {
     assert!(packets.lock().expect("sender capture").is_empty());
     assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
-    assert!(harness
-        .resources
-        .playback
-        .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus));
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
 
     harness.runtime.final_gate_before_syscall_hook = None;
     harness.focus_active.store(true, Ordering::Release);
@@ -456,7 +425,11 @@ fn focus_loss_before_first_down_keeps_onset_unattempted_until_safe_resume() {
         .expect("close focus pause interval");
     harness.progress_clock.publish(&harness.resources.playback);
     let resumed = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("re-stage same onset after focus restore")
         .expect("same unattempted Down");
     assert_eq!(resumed.source_action_index, 25);
@@ -487,7 +460,11 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
         harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
     harness.attach_executor_for_test().expect("attach executor");
     let first = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage A Down")
         .expect("A candidate");
     let first_now = harness.qpc_now_for_test().expect("A sender QPC");
@@ -498,7 +475,9 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
     ));
 
     let up_target = epoch
-        .checked_add_duration(DurationTicks::from_raw(qpc_offset(&harness, 20_000).as_u64()))
+        .checked_add_duration(DurationTicks::from_raw(
+            qpc_offset(&harness, 20_000).as_u64(),
+        ))
         .expect("authored A Up target");
     while harness.qpc_now_for_test().expect("wait for A Up") < up_target {
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -543,9 +522,17 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
         harness.dispatch_staged_candidate_for_test(up, false),
         StagedDispatchOutcome::Dispatched
     ));
-    assert_eq!(up_packets.lock().expect("Up-only capture").as_slice(), &[PhysicalPacket::new(1, 0)]);
+    assert_eq!(
+        up_packets.lock().expect("Up-only capture").as_slice(),
+        &[PhysicalPacket::new(1, 0)]
+    );
     assert_eq!(first_capture.lock().expect("initial Down capture").len(), 1);
-    assert_eq!(harness.current_executor_chord_for_test().map(|c| c.source_action_index), Some(42));
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|c| c.source_action_index),
+        Some(42)
+    );
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
     assert_eq!(harness.generation_accounting_for_test().released, 0);
     assert_eq!(harness.generation_accounting_for_test().cancelled, 1);
@@ -559,9 +546,17 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
         .first()
         .expect("Up anomaly");
     assert!(anomaly.contains("source_action=41"), "{anomaly}");
-    assert!(anomaly.contains("up_mask=0x0001 down_mask=0x0000"), "{anomaly}");
-    assert!(anomaly.contains("attempts=1 status=IntegrityLost"), "{anomaly}");
-    let barrier = harness.resume_barrier_qpc_for_test().expect("verified cleanup + G");
+    assert!(
+        anomaly.contains("up_mask=0x0001 down_mask=0x0000"),
+        "{anomaly}"
+    );
+    assert!(
+        anomaly.contains("attempts=1 status=IntegrityLost"),
+        "{anomaly}"
+    );
+    let barrier = harness
+        .resume_barrier_qpc_for_test()
+        .expect("verified cleanup + G");
     assert!(barrier > up_target);
     assert!(!cleanup_capture.lock().expect("cleanup capture").is_empty());
     assert!(QpcTicks::from_raw(cleanup_completion.load(Ordering::Acquire)) <= barrier);
@@ -578,10 +573,7 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
     let b_packets = Arc::new(Mutex::new(Vec::with_capacity(1)));
     let captured_b = Arc::clone(&b_packets);
     harness.resources.backend.set_packet_emitter(move |packet| {
-        captured_b
-            .lock()
-            .expect("B sender capture")
-            .push(packet);
+        captured_b.lock().expect("B sender capture").push(packet);
         let completed = b_start
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("B completion QPC");
@@ -607,7 +599,10 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
         harness.dispatch_staged_candidate_for_test(next, false),
         StagedDispatchOutcome::Dispatched
     ));
-    assert_eq!(b_packets.lock().expect("B sender capture").as_slice(), &[PhysicalPacket::new(0, 2)]);
+    assert_eq!(
+        b_packets.lock().expect("B sender capture").as_slice(),
+        &[PhysicalPacket::new(0, 2)]
+    );
 }
 
 #[test]
@@ -634,7 +629,11 @@ fn target_generation_race_and_modifier_race_leave_down_unattempted() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     harness.attach_executor_for_test().expect("attach executor");
     let stale = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage target-bound Down")
         .expect("Down candidate");
     harness.republish_focus_owner_for_test(2, 222);
@@ -648,7 +647,11 @@ fn target_generation_race_and_modifier_race_leave_down_unattempted() {
     // Re-stage against the current HWND/PID/generation, then mutate modifier
     // state after owner proof and immediately before the bounded final suffix.
     let current = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("re-stage current target")
         .expect("Down candidate");
     let held = Arc::new(AtomicBool::new(false));
@@ -677,7 +680,11 @@ fn target_generation_race_and_modifier_race_leave_down_unattempted() {
     held.store(false, Ordering::Release);
     harness.runtime.final_gate_before_syscall_hook = None;
     let recovered = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("replan after modifier release")
         .expect("same unattempted Down candidate");
     assert_eq!(recovered.source_action_index, 30);
@@ -706,7 +713,11 @@ fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
     harness.attach_executor_for_test().expect("attach executor");
 
     let first = harness
-        .stage_candidate_for_test(0, harness.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
         .expect("stage first Down")
         .expect("first Down candidate");
     let first_now = harness.qpc_now_for_test().expect("first Down QPC");
@@ -717,7 +728,9 @@ fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
     ));
 
     let mixed_target = epoch
-        .checked_add_duration(DurationTicks::from_raw(qpc_offset(&harness, 20_000).as_u64()))
+        .checked_add_duration(DurationTicks::from_raw(
+            qpc_offset(&harness, 20_000).as_u64(),
+        ))
         .expect("mixed target");
     while harness.qpc_now_for_test().expect("wait for mixed target") < mixed_target {
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -766,7 +779,12 @@ fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
         vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)],
         "the rejected B Down is absent and A Up remains authored before any later Down"
     );
-    assert_eq!(harness.current_executor_chord_for_test().map(|chord| chord.source_action_index), Some(34));
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.source_action_index),
+        Some(34)
+    );
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
     assert_eq!(harness.generation_accounting_for_test().released, 1);
     assert_eq!(harness.generation_accounting_for_test().active, 0);
@@ -805,8 +823,8 @@ fn terminal_control_races_at_final_gate_do_not_attempt_or_advance_down_onset() {
         match race {
             Race::Quit | Race::Skip | Race::SystemSuspend => {
                 let interrupt = Arc::clone(&harness.interrupt);
-                harness.set_post_focus_revalidation_race_hook(move |_, _, quit, skip, _, _, power| {
-                    match race {
+                harness.set_post_focus_revalidation_race_hook(
+                    move |_, _, quit, skip, _, _, power| match race {
                         Race::Quit => quit.store(true, Ordering::Release),
                         Race::Skip => skip.store(true, Ordering::Release),
                         Race::SystemSuspend => {
@@ -814,8 +832,8 @@ fn terminal_control_races_at_final_gate_do_not_attempt_or_advance_down_onset() {
                         }
                         Race::PanicRelease => unreachable!(),
                         Race::LeaseExpiry => unreachable!(),
-                    }
-                });
+                    },
+                );
             }
             Race::PanicRelease => harness.panic_requested.store(true, Ordering::Release),
             Race::LeaseExpiry => harness.supervisor_expired.latch_expired(),

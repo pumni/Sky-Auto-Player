@@ -1,10 +1,10 @@
-use crate::engine::worker::StagedDispatchOutcome;
+use super::support::{ProductionDispatchTestHarness, StagedDispatchOutcome};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::QpcTicks;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-fn timing_action(index: u32, kind: ActionKind, scheduled_us: u64) -> KeyActionInput {
+pub(super) fn timing_action(index: u32, kind: ActionKind, scheduled_us: u64) -> KeyActionInput {
     KeyActionInput {
         source_action_index: index,
         kind,
@@ -14,7 +14,7 @@ fn timing_action(index: u32, kind: ActionKind, scheduled_us: u64) -> KeyActionIn
     }
 }
 
-fn timing_owner_harness(
+pub(super) fn timing_owner_harness(
     actions: &[KeyActionInput],
     sender_latencies_us: &[u64],
 ) -> (
@@ -35,7 +35,7 @@ fn timing_owner_harness(
     (harness, packets, epoch)
 }
 
-fn timing_harness_without_focus(
+pub(super) fn timing_harness_without_focus(
     actions: &[KeyActionInput],
     sender_latencies_us: &[u64],
 ) -> (
@@ -55,32 +55,29 @@ fn timing_harness_without_focus(
     (harness, packets, epoch)
 }
 
-fn stage_from_worker_outer_evaluation(
+pub(super) fn stage_from_worker_outer_evaluation(
     harness: &mut ProductionDispatchTestHarness,
     now_qpc: QpcTicks,
 ) -> (crate::engine::worker::StagedCandidate, u64) {
-    super::reset_scheduler_evaluation_count_for_test();
+    super::super::reset_scheduler_evaluation_count_for_test();
     let epoch = harness.resources.playback.epoch;
     let (action, _scheduler_wait_target_qpc, action_to_stage) =
-        super::evaluate_scheduler_action_for_staging(
+        super::super::evaluate_scheduler_action_for_staging(
             &harness.resources.scheduler,
             now_qpc,
             epoch,
         )
         .expect("worker scheduler evaluation");
-    assert!(matches!(
-        action,
-        super::SchedulerAction::Send { .. }
-    ));
+    assert!(matches!(action, super::super::SchedulerAction::Send { .. }));
     let send_action = action_to_stage.expect("due scheduler action stages a packet");
-    let candidate = super::stage_scheduler_action_preserving_due_up(
+    let candidate = super::super::stage_scheduler_action_preserving_due_up(
         send_action,
-        super::SchedulerStageAdmission {
+        super::super::SchedulerStageAdmission {
             target: &harness.target,
             require_focus: harness.config.focus.require_focus,
             focus_active: &harness.focus_active,
             capture_up_slot_timings: false,
-            control_signals: super::FinalControlSignals {
+            control_signals: super::super::FinalControlSignals {
                 quit_requested: &harness.quit_requested,
                 skip_requested: &harness.skip_requested,
                 panic_requested: &harness.panic_requested,
@@ -94,7 +91,7 @@ fn stage_from_worker_outer_evaluation(
     )
     .expect("stage worker packet")
     .expect("scheduler candidate is stageable");
-    let count = super::scheduler_evaluation_count_for_test();
+    let count = super::super::scheduler_evaluation_count_for_test();
     (candidate, count)
 }
 
@@ -102,29 +99,29 @@ struct OuterIterationEvidence {
     eval_qpc: QpcTicks,
     eval_count: u64,
     dispatch_return_qpc: QpcTicks,
-    outcome: super::DispatchAttemptOutcome,
-    replan_action: Option<super::DispatchReplanAction>,
+    outcome: super::super::DispatchAttemptOutcome,
+    replan_action: Option<super::super::DispatchReplanAction>,
 }
 
-fn apply_outer_replan_policy(
+pub(super) fn apply_outer_replan_policy(
     harness: &mut ProductionDispatchTestHarness,
-    outcome: super::DispatchAttemptOutcome,
-    expected_target: Option<super::TargetStamp>,
+    outcome: super::super::DispatchAttemptOutcome,
+    expected_target: Option<super::super::TargetStamp>,
     retry_deadline_qpc: QpcTicks,
     permit_busy_retry_allowed: bool,
     permit_busy_retry_pending: &mut bool,
-) -> super::DispatchReplanAction {
-    super::wait_after_dispatch_replan(
+) -> super::super::DispatchReplanAction {
+    super::super::wait_after_dispatch_replan(
         outcome,
         permit_busy_retry_allowed,
         permit_busy_retry_pending,
-        super::DispatchReplanWaitContext {
+        super::super::DispatchReplanWaitContext {
             target: &harness.target,
             expected_target,
             retry_deadline_qpc,
             require_focus: harness.config.focus.require_focus,
             focus_active: &harness.focus_active,
-            control_signals: super::FinalControlSignals {
+            control_signals: super::super::FinalControlSignals {
                 quit_requested: &harness.quit_requested,
                 skip_requested: &harness.skip_requested,
                 panic_requested: &harness.panic_requested,
@@ -161,7 +158,8 @@ fn run_worker_outer_iteration(
     let dispatch_return_qpc = harness.qpc_now_for_test().expect("dispatch return QPC");
     let replan_action = if matches!(
         outcome,
-        super::DispatchAttemptOutcome::Replan | super::DispatchAttemptOutcome::PermitBusy
+        super::super::DispatchAttemptOutcome::Replan
+            | super::super::DispatchAttemptOutcome::PermitBusy
     ) {
         Some(apply_outer_replan_policy(
             harness,
@@ -183,7 +181,7 @@ fn run_worker_outer_iteration(
     }
 }
 
-fn elapsed_us(
+pub(super) fn elapsed_us(
     clock: sky_dispatch_win32::clock::QpcClock,
     start: QpcTicks,
     end: QpcTicks,
@@ -245,10 +243,7 @@ fn due_down_owner_permit_contention_uses_outer_loop_retry_and_bounded_wait() {
             .send(())
             .expect("worker receives supervisor readiness");
         for attempt in 1..=3 {
-            if permit_gate_rx
-                .recv_timeout(Duration::from_secs(5))
-                .is_err()
-            {
+            if permit_gate_rx.recv_timeout(Duration::from_secs(5)).is_err() {
                 return false;
             }
             if attempt <= 2 {
@@ -278,11 +273,17 @@ fn due_down_owner_permit_contention_uses_outer_loop_retry_and_bounded_wait() {
 
     let mut permit_busy_retry_pending = false;
     let first = run_worker_outer_iteration(&mut harness, &mut permit_busy_retry_pending);
-    assert_eq!(first.eval_count, 1, "due Send uses one scheduler evaluation");
-    assert_eq!(first.outcome, super::DispatchAttemptOutcome::PermitBusy);
+    assert_eq!(
+        first.eval_count, 1,
+        "due Send uses one scheduler evaluation"
+    );
+    assert_eq!(
+        first.outcome,
+        super::super::DispatchAttemptOutcome::PermitBusy
+    );
     assert_eq!(
         first.replan_action,
-        Some(super::DispatchReplanAction::ContinueImmediately),
+        Some(super::super::DispatchReplanAction::ContinueImmediately),
         "the first stable-target permit Busy re-enters the scheduler without waiting"
     );
     assert!(permit_busy_retry_pending);
@@ -301,16 +302,19 @@ fn due_down_owner_permit_contention_uses_outer_loop_retry_and_bounded_wait() {
 
     let second = run_worker_outer_iteration(&mut harness, &mut permit_busy_retry_pending);
     assert_eq!(second.eval_count, 1);
-    assert_eq!(second.outcome, super::DispatchAttemptOutcome::PermitBusy);
+    assert_eq!(
+        second.outcome,
+        super::super::DispatchAttemptOutcome::PermitBusy
+    );
     let second_wait = second
         .replan_action
         .expect("repeated contention takes a bounded wait");
-    if second_wait != super::DispatchReplanAction::WaitCompleted {
+    if second_wait != super::super::DispatchReplanAction::WaitCompleted {
         panic!("repeated stable-target Busy did not back off: {second_wait:?}");
     }
-    let trace = super::last_dispatch_replan_wait_for_test()
-        .expect("bounded wait test trace");
-    let super::DispatchReplanWaitTrace {
+    let trace =
+        super::super::last_dispatch_replan_wait_for_test().expect("bounded wait test trace");
+    let super::super::DispatchReplanWaitTrace {
         retry_from_qpc,
         deadline_qpc,
         interrupted,
@@ -339,15 +343,24 @@ fn due_down_owner_permit_contention_uses_outer_loop_retry_and_bounded_wait() {
 
     let third = run_worker_outer_iteration(&mut harness, &mut permit_busy_retry_pending);
     assert_eq!(third.eval_count, 1);
-    assert_eq!(third.outcome, super::DispatchAttemptOutcome::Dispatched);
+    assert_eq!(
+        third.outcome,
+        super::super::DispatchAttemptOutcome::Dispatched
+    );
     assert_eq!(third.replan_action, None);
     assert!(!permit_busy_retry_pending);
     let supervisor_released = supervisor.join().expect("supervisor thread joins");
-    assert!(supervisor_released, "supervisor observed all three final gates");
+    assert!(
+        supervisor_released,
+        "supervisor observed all three final gates"
+    );
 
     let sent = packets.lock().expect("packet capture");
     assert_eq!(sent.len(), 1, "the authored Down onset is attempted once");
-    assert_eq!(sent[0].0, sky_dispatch_win32::input::PhysicalPacket::new(0, 1));
+    assert_eq!(
+        sent[0].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
+    );
     assert_eq!(sent[0].1.attempts, 1);
     assert_eq!(sent[0].1.first_inserted, 1);
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
@@ -368,18 +381,24 @@ fn due_down_owner_permit_contention_uses_outer_loop_retry_and_bounded_wait() {
         .expect("mock sender records its completion stamp");
     println!(
         "outer-replan production trace: scheduler_eval=[{}@{},{}@{},{}@{}], dispatch_outcome=[PermitBusy@{},PermitBusy@{},Dispatched@{}], busy1_to_eval2={}ticks/{}us, backoff=[selected_deadline@{},duration={}us,wake_re_evaluate@{},busy2_to_re_evaluate={}us], busy2_to_sender_pre_call={}us, sender=[start@{},attempts=1,raw_inserted=1,completion@{}], journal=[before=(active:0,possibly:0,release:0,inflight:0),after_commit=(active:1,possibly:0,release:1,inflight:0)], terminal=None",
-        first.eval_count, first.eval_qpc.as_u64(),
-        second.eval_count, second.eval_qpc.as_u64(),
-        third.eval_count, third.eval_qpc.as_u64(),
+        first.eval_count,
+        first.eval_qpc.as_u64(),
+        second.eval_count,
+        second.eval_qpc.as_u64(),
+        third.eval_count,
+        third.eval_qpc.as_u64(),
         first.dispatch_return_qpc.as_u64(),
         second.dispatch_return_qpc.as_u64(),
         third.dispatch_return_qpc.as_u64(),
         second.eval_qpc.as_u64() - first.dispatch_return_qpc.as_u64(),
         elapsed_us(clock, first.dispatch_return_qpc, second.eval_qpc),
-        deadline_qpc.as_u64(), elapsed_us(clock, retry_from_qpc, deadline_qpc),
-        third.eval_qpc.as_u64(), elapsed_us(clock, second.dispatch_return_qpc, third.eval_qpc),
+        deadline_qpc.as_u64(),
+        elapsed_us(clock, retry_from_qpc, deadline_qpc),
+        third.eval_qpc.as_u64(),
+        elapsed_us(clock, second.dispatch_return_qpc, third.eval_qpc),
         elapsed_us(clock, second.dispatch_return_qpc, sender_start),
-        sender_start.as_u64(), sender_completion.as_u64(),
+        sender_start.as_u64(),
+        sender_completion.as_u64(),
     );
 }
 
@@ -418,21 +437,21 @@ fn writer_mutex_busy_is_typed_as_pre_call_replan() {
         }
         let writer_guard = target_for_supervisor.lock_writer_for_test();
         let _ = continue_tx.send(());
-        let released_by_worker = release_rx
-            .recv_timeout(Duration::from_secs(2))
-            .is_ok();
+        let released_by_worker = release_rx.recv_timeout(Duration::from_secs(2)).is_ok();
         drop(writer_guard);
         released_by_worker
     });
 
     harness.set_mock_sender_start_qpc_for_test(now);
     let outcome = harness.dispatch_staged_candidate_with_reason_for_test(candidate, false);
-    assert_eq!(outcome, super::DispatchAttemptOutcome::PermitBusy);
+    assert_eq!(outcome, super::super::DispatchAttemptOutcome::PermitBusy);
     assert!(packets.lock().expect("packet capture").is_empty());
     assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    release_tx.send(()).expect("release writer mutex after assertion");
+    release_tx
+        .send(())
+        .expect("release writer mutex after assertion");
     assert!(supervisor.join().expect("writer supervisor joins"));
 
     harness.set_final_gate_before_owner_permit_hook(|| {});

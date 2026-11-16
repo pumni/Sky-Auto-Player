@@ -1,26 +1,32 @@
+use super::replan_timing::{
+    apply_outer_replan_policy, elapsed_us, stage_from_worker_outer_evaluation, timing_action,
+    timing_harness_without_focus,
+};
+use super::support::{ActionKind, ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome};
+
 fn wait_to_packet_deadline(
     harness: &mut ProductionDispatchTestHarness,
     candidate: &crate::engine::worker::StagedCandidate,
     scheduler_wait_target_qpc: QpcTicks,
-) -> (QpcTicks, super::WaitBoundary) {
+) -> (QpcTicks, super::super::WaitBoundary) {
     assert_eq!(
         harness.pre_wait_candidate_admission_for_test(candidate),
         StagedDispatchOutcome::Dispatched,
         "future candidate passes production pre-wait admission"
     );
-    let wait_target_qpc = scheduler_wait_target_qpc
-        .max(candidate.timing_window.packet_not_before_qpc);
-    let wake = super::wait_for_next_boundary(super::WaitBoundaryInput {
-        deadline: super::WaitDeadline {
+    let wait_target_qpc =
+        scheduler_wait_target_qpc.max(candidate.timing_window.packet_not_before_qpc);
+    let wake = super::super::wait_for_next_boundary(super::super::WaitBoundaryInput {
+        deadline: super::super::WaitDeadline {
             physical_target_qpc: Some(wait_target_qpc),
             spin_threshold_ticks: harness.timing.effective_spin_threshold_ticks,
             qpc_clock: harness.resources.clock,
         },
-        signals: super::WaitSignals {
+        signals: super::super::WaitSignals {
             waiter: &harness.resources.waiter,
             interrupt: &harness.interrupt,
         },
-        mutable: super::WaitMutable {
+        mutable: super::super::WaitMutable {
             local_metrics: &mut harness.local_metrics,
             terminal_error: &mut harness.runtime.terminal_error,
         },
@@ -65,28 +71,28 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
         .and_then(|(_, evidence)| evidence.completed_ticks)
         .expect("confirmed Down completion QPC");
     let up_eval_qpc = down_completed_qpc;
-    super::reset_scheduler_evaluation_count_for_test();
+    super::super::reset_scheduler_evaluation_count_for_test();
     let (up_action, up_scheduler_deadline, projected_up) =
-        super::evaluate_scheduler_action_for_staging(
+        super::super::evaluate_scheduler_action_for_staging(
             &harness.resources.scheduler,
             up_eval_qpc,
             epoch,
         )
         .expect("Up scheduler projection");
-    let up_projection_evaluations = super::scheduler_evaluation_count_for_test();
+    let up_projection_evaluations = super::super::scheduler_evaluation_count_for_test();
     assert!(matches!(
         up_action,
-        super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > up_eval_qpc
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > up_eval_qpc
     ));
     assert_eq!(up_projection_evaluations, 2, "now plus deadline projection");
-    let up = super::stage_scheduler_action_preserving_due_up(
+    let up = super::super::stage_scheduler_action_preserving_due_up(
         projected_up.expect("Up projects to a due action at its scheduler deadline"),
-        super::SchedulerStageAdmission {
+        super::super::SchedulerStageAdmission {
             target: &harness.target,
             require_focus: harness.config.focus.require_focus,
             focus_active: &harness.focus_active,
             capture_up_slot_timings: false,
-            control_signals: super::FinalControlSignals {
+            control_signals: super::super::FinalControlSignals {
                 quit_requested: &harness.quit_requested,
                 skip_requested: &harness.skip_requested,
                 panic_requested: &harness.panic_requested,
@@ -106,30 +112,33 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     let one_tick = sky_dispatch_core::time::DurationTicks::from_raw(1);
     let before_h = QpcTicks::from_raw(h_floor_qpc.as_u64() - 1);
     assert!(matches!(
-        super::evaluate_scheduler_action(&harness.resources.scheduler, before_h, epoch)
+        super::super::evaluate_scheduler_action(&harness.resources.scheduler, before_h, epoch)
             .expect("H floor minus one tick"),
-        super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == h_floor_qpc
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == h_floor_qpc
     ));
     assert!(matches!(
-        super::evaluate_scheduler_action(&harness.resources.scheduler, h_floor_qpc, epoch)
+        super::super::evaluate_scheduler_action(&harness.resources.scheduler, h_floor_qpc, epoch)
             .expect("exact H floor"),
-        super::SchedulerAction::Send { .. }
+        super::super::SchedulerAction::Send { .. }
     ));
     let after_h = h_floor_qpc
         .checked_add_duration(one_tick)
         .expect("H floor plus one tick");
     assert!(matches!(
-        super::evaluate_scheduler_action(&harness.resources.scheduler, after_h, epoch)
+        super::super::evaluate_scheduler_action(&harness.resources.scheduler, after_h, epoch)
             .expect("H floor plus one tick"),
-        super::SchedulerAction::Send { .. }
+        super::super::SchedulerAction::Send { .. }
     ));
 
     let (selected_h_deadline, h_wake) =
         wait_to_packet_deadline(&mut harness, &up, up_scheduler_deadline);
     assert_eq!(selected_h_deadline, h_floor_qpc);
-    assert!(matches!(h_wake, super::WaitBoundary::Due { .. }));
+    assert!(matches!(h_wake, super::super::WaitBoundary::Due { .. }));
     let h_wake_qpc = harness.qpc_now_for_test().expect("H wait wake QPC");
-    assert!(h_wake_qpc >= h_floor_qpc, "real waiter wakes no earlier than H");
+    assert!(
+        h_wake_qpc >= h_floor_qpc,
+        "real waiter wakes no earlier than H"
+    );
     harness.set_mock_sender_start_qpc_for_test(h_wake_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up, false),
@@ -146,28 +155,28 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     // exact synthetic boundary, even if the test thread is subsequently
     // stalled before projection.
     let down_b_eval_qpc = h_wake_qpc;
-    super::reset_scheduler_evaluation_count_for_test();
+    super::super::reset_scheduler_evaluation_count_for_test();
     let (down_b_action, down_b_scheduler_deadline, projected_down_b) =
-        super::evaluate_scheduler_action_for_staging(
+        super::super::evaluate_scheduler_action_for_staging(
             &harness.resources.scheduler,
             down_b_eval_qpc,
             epoch,
         )
         .expect("Down B scheduler projection");
-    let g_projection_evaluations = super::scheduler_evaluation_count_for_test();
+    let g_projection_evaluations = super::super::scheduler_evaluation_count_for_test();
     assert!(matches!(
         down_b_action,
-        super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > down_b_eval_qpc
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > down_b_eval_qpc
     ));
     assert_eq!(g_projection_evaluations, 2);
-    let down_b = super::stage_scheduler_action_preserving_due_up(
+    let down_b = super::super::stage_scheduler_action_preserving_due_up(
         projected_down_b.expect("Down B projects to its G deadline"),
-        super::SchedulerStageAdmission {
+        super::super::SchedulerStageAdmission {
             target: &harness.target,
             require_focus: harness.config.focus.require_focus,
             focus_active: &harness.focus_active,
             capture_up_slot_timings: false,
-            control_signals: super::FinalControlSignals {
+            control_signals: super::super::FinalControlSignals {
                 quit_requested: &harness.quit_requested,
                 skip_requested: &harness.skip_requested,
                 panic_requested: &harness.panic_requested,
@@ -186,31 +195,36 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     assert_ne!(down_b.timing_window.release_floor_mask, 0);
     let before_g = QpcTicks::from_raw(g_floor_qpc.as_u64() - 1);
     assert!(matches!(
-        super::evaluate_scheduler_action(&harness.resources.scheduler, before_g, epoch)
+        super::super::evaluate_scheduler_action(&harness.resources.scheduler, before_g, epoch)
             .expect("G floor minus one tick"),
-        super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == g_floor_qpc
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == g_floor_qpc
     ));
     assert!(matches!(
-        super::evaluate_scheduler_action(&harness.resources.scheduler, g_floor_qpc, epoch)
+        super::super::evaluate_scheduler_action(&harness.resources.scheduler, g_floor_qpc, epoch)
             .expect("exact G floor"),
-        super::SchedulerAction::Send { .. }
+        super::super::SchedulerAction::Send { .. }
     ));
     assert!(matches!(
-        super::evaluate_scheduler_action(
+        super::super::evaluate_scheduler_action(
             &harness.resources.scheduler,
-            g_floor_qpc.checked_add_duration(one_tick).expect("G plus one tick"),
+            g_floor_qpc
+                .checked_add_duration(one_tick)
+                .expect("G plus one tick"),
             epoch,
         )
         .expect("G floor plus one tick"),
-        super::SchedulerAction::Send { .. }
+        super::super::SchedulerAction::Send { .. }
     ));
 
     let (selected_g_deadline, g_wake) =
         wait_to_packet_deadline(&mut harness, &down_b, down_b_scheduler_deadline);
     assert_eq!(selected_g_deadline, g_floor_qpc);
-    assert!(matches!(g_wake, super::WaitBoundary::Due { .. }));
+    assert!(matches!(g_wake, super::super::WaitBoundary::Due { .. }));
     let g_wake_qpc = harness.qpc_now_for_test().expect("G wait wake QPC");
-    assert!(g_wake_qpc >= g_floor_qpc, "real waiter wakes no earlier than G");
+    assert!(
+        g_wake_qpc >= g_floor_qpc,
+        "real waiter wakes no earlier than G"
+    );
     harness.set_mock_sender_start_qpc_for_test(g_wake_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(down_b, false),
@@ -219,11 +233,23 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
 
     let sent = packets.lock().expect("packet capture");
     assert_eq!(sent.len(), 3);
-    assert_eq!(sent[0].0, sky_dispatch_win32::input::PhysicalPacket::new(0, 1));
-    assert_eq!(sent[1].0, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
-    assert_eq!(sent[2].0, sky_dispatch_win32::input::PhysicalPacket::new(0, 1));
+    assert_eq!(
+        sent[0].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
+    );
+    assert_eq!(
+        sent[1].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(1, 0)
+    );
+    assert_eq!(
+        sent[2].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
+    );
     assert!(sent.iter().all(|(_, evidence)| evidence.attempts == 1));
-    assert!(sent.iter().all(|(_, evidence)| evidence.first_inserted == 1));
+    assert!(
+        sent.iter()
+            .all(|(_, evidence)| evidence.first_inserted == 1)
+    );
     assert_eq!(harness.resources.scheduler.chord_cursor(), 2);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resources.backend.active_mask, 1);
@@ -235,13 +261,21 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
         h = h_floor_qpc.as_u64(),
         hsel = selected_h_deadline.as_u64(),
         hwake = h_wake_qpc.as_u64(),
-        hstart = sent[1].1.started_ticks.expect("Up sender start QPC").as_u64(),
+        hstart = sent[1]
+            .1
+            .started_ticks
+            .expect("Up sender start QPC")
+            .as_u64(),
         hwait = elapsed_us(clock, up_eval_qpc, h_wake_qpc),
         geval = down_b_eval_qpc.as_u64(),
         g = g_floor_qpc.as_u64(),
         gsel = selected_g_deadline.as_u64(),
         gwake = g_wake_qpc.as_u64(),
-        gstart = sent[2].1.started_ticks.expect("Down B sender start QPC").as_u64(),
+        gstart = sent[2]
+            .1
+            .started_ticks
+            .expect("Down B sender start QPC")
+            .as_u64(),
         gwait = elapsed_us(clock, down_b_eval_qpc, g_wake_qpc),
     );
 }
@@ -263,24 +297,27 @@ fn real_waiter_smoke_wakes_for_a_future_qpc_deadline() {
                 .expect("real waiter deadline offset"),
         )
         .expect("real waiter deadline");
-    let wake = super::wait_for_next_boundary(super::WaitBoundaryInput {
-        deadline: super::WaitDeadline {
+    let wake = super::super::wait_for_next_boundary(super::super::WaitBoundaryInput {
+        deadline: super::super::WaitDeadline {
             physical_target_qpc: Some(deadline_qpc),
             spin_threshold_ticks: harness.timing.effective_spin_threshold_ticks,
             qpc_clock: harness.resources.clock,
         },
-        signals: super::WaitSignals {
+        signals: super::super::WaitSignals {
             waiter: &harness.resources.waiter,
             interrupt: &harness.interrupt,
         },
-        mutable: super::WaitMutable {
+        mutable: super::super::WaitMutable {
             local_metrics: &mut harness.local_metrics,
             terminal_error: &mut harness.runtime.terminal_error,
         },
     });
     let wake_qpc = harness.qpc_now_for_test().expect("real waiter wake QPC");
-    assert!(matches!(wake, super::WaitBoundary::Due { .. }));
-    assert!(wake_qpc >= deadline_qpc, "waiter returned after its real QPC deadline");
+    assert!(matches!(wake, super::super::WaitBoundary::Due { .. }));
+    assert!(
+        wake_qpc >= deadline_qpc,
+        "waiter returned after its real QPC deadline"
+    );
 }
 
 #[test]
@@ -298,31 +335,34 @@ fn stop_skip_panic_and_expired_lease_preempt_busy_permit_backoff() {
         assert_eq!(
             apply_outer_replan_policy(
                 &mut harness,
-                super::DispatchAttemptOutcome::PermitBusy,
+                super::super::DispatchAttemptOutcome::PermitBusy,
                 candidate.target_stamp,
                 candidate.timing_window.packet_not_before_qpc,
                 false,
                 &mut retry_pending,
             ),
-            super::DispatchReplanAction::ContinueImmediately,
+            super::super::DispatchReplanAction::ContinueImmediately,
             "first transient miss gets one immediate full re-evaluation"
         );
         assert!(retry_pending);
         assert!(matches!(
             apply_outer_replan_policy(
                 &mut harness,
-                super::DispatchAttemptOutcome::PermitBusy,
+                super::super::DispatchAttemptOutcome::PermitBusy,
                 candidate.target_stamp,
                 candidate.timing_window.packet_not_before_qpc,
                 std::mem::take(&mut retry_pending),
                 &mut retry_pending,
             ),
-            super::DispatchReplanAction::WaitCompleted
+            super::super::DispatchReplanAction::WaitCompleted
         ));
-        let wait_trace = super::last_dispatch_replan_wait_for_test()
-            .expect("bounded wait trace");
+        let wait_trace =
+            super::super::last_dispatch_replan_wait_for_test().expect("bounded wait trace");
         assert!(!wait_trace.interrupted);
-        assert!(!retry_pending, "bounded backoff does not leave a spin token");
+        assert!(
+            !retry_pending,
+            "bounded backoff does not leave a spin token"
+        );
 
         match control {
             "stop" => harness
@@ -339,7 +379,7 @@ fn stop_skip_panic_and_expired_lease_preempt_busy_permit_backoff() {
         }
         let action = apply_outer_replan_policy(
             &mut harness,
-            super::DispatchAttemptOutcome::PermitBusy,
+            super::super::DispatchAttemptOutcome::PermitBusy,
             candidate.target_stamp,
             candidate.timing_window.packet_not_before_qpc,
             std::mem::take(&mut retry_pending),
@@ -347,7 +387,7 @@ fn stop_skip_panic_and_expired_lease_preempt_busy_permit_backoff() {
         );
         assert_eq!(
             action,
-            super::DispatchReplanAction::ContinueImmediately,
+            super::super::DispatchReplanAction::ContinueImmediately,
             "{control} must preempt permit contention backoff"
         );
         assert!(!retry_pending, "{control} clears the one-shot retry token");
@@ -367,17 +407,17 @@ fn interrupt_wakes_the_bounded_owner_permit_retry_wait() {
     let (candidate, _) = stage_from_worker_outer_evaluation(&mut harness, now);
     assert!(harness.interrupt.signal(), "signal retry-wait interrupt");
     let mut retry_pending = false;
-    let action = super::wait_after_dispatch_replan(
-        super::DispatchAttemptOutcome::PermitBusy,
+    let action = super::super::wait_after_dispatch_replan(
+        super::super::DispatchAttemptOutcome::PermitBusy,
         true,
         &mut retry_pending,
-        super::DispatchReplanWaitContext {
+        super::super::DispatchReplanWaitContext {
             target: &harness.target,
             expected_target: candidate.target_stamp,
             retry_deadline_qpc: candidate.timing_window.packet_not_before_qpc,
             require_focus: harness.config.focus.require_focus,
             focus_active: &harness.focus_active,
-            control_signals: super::FinalControlSignals {
+            control_signals: super::super::FinalControlSignals {
                 quit_requested: &harness.quit_requested,
                 skip_requested: &harness.skip_requested,
                 panic_requested: &harness.panic_requested,
@@ -394,10 +434,10 @@ fn interrupt_wakes_the_bounded_owner_permit_retry_wait() {
     );
     assert!(matches!(
         action,
-        super::DispatchReplanAction::WaitCompleted
+        super::super::DispatchReplanAction::WaitCompleted
     ));
     assert!(
-        super::last_dispatch_replan_wait_for_test()
+        super::super::last_dispatch_replan_wait_for_test()
             .expect("interrupted wait trace")
             .interrupted
     );
