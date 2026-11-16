@@ -467,3 +467,150 @@ fn telemetry_sets_truncated_only_when_capacity_is_exceeded() {
     );
     assert!(collector.output.truncated);
 }
+
+#[test]
+fn native_telemetry_schema_25_serialized_key_sets_are_pinned() {
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native-telemetry-schema-25-keys.json"
+    ))
+    .expect("schema-25 key fixture");
+    let record = record_with_index(7, TRACE_KIND_UP, 1, 1);
+    let mut output = super::NativeTelemetryOutput::new(TelemetryMode::Off, 0);
+    output.records.push_back(record);
+    output.summary.observe(&record);
+
+    let value = serde_json::to_value(output).expect("serialize current telemetry output");
+    assert_eq!(value["schema_version"], 25);
+    for (value, expected_key) in [
+        (&value, "NativeTelemetryOutput"),
+        (&value["summary"], "NativeTelemetrySummary"),
+        (&value["timing_semantics"], "TimingSemantics"),
+        (&value["records"][0], "RtTraceRecord"),
+    ] {
+        let mut actual_keys = value
+            .as_object()
+            .expect("serialized object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        actual_keys.sort_unstable();
+        let mut expected_keys = expected[expected_key]
+            .as_array()
+            .expect("fixture key array")
+            .iter()
+            .map(|key| key.as_str().expect("fixture string").to_string())
+            .collect::<Vec<_>>();
+        expected_keys.sort_unstable();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "serialized {expected_key} fields"
+        );
+    }
+    assert_eq!(value["timing_semantics"]["game_observed_available"], false);
+    assert_eq!(
+        value["timing_semantics"]["sender_completion_boundary"],
+        "sendinput_completion_qpc"
+    );
+}
+
+#[test]
+fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
+    let record = RtTraceRecord::dispatched(
+        TraceContext {
+            event_index: 41,
+            source_action_index: 41,
+            compiled_packet_index: Some(9),
+            kind: TRACE_KIND_UP,
+            outcome: trace_outcome_code("failed_note_off"),
+            polyphony: 1,
+            flags: super::TRACE_FLAG_ANOMALY,
+            send_status: super::TRACE_SEND_STATUS_COMPLETE,
+            win32_error: 0,
+            up_mask: 0x0001,
+            down_mask: 0,
+        },
+        TraceTiming {
+            authored_ticks: TimelineTicks::from_raw(80),
+            effective_deadline_ticks: TimelineTicks::from_raw(90),
+            physical_target_qpc_ticks: Some(500),
+            pre_call_qpc_ticks: Some(510),
+            sendinput_completion_qpc_ticks: None,
+            pre_call_ticks: Some(TimelineTicks::from_raw(100)),
+            sendinput_completion_ticks: None,
+            ..TraceTiming::default()
+        },
+        TraceDelivery {
+            requested: 1,
+            sent: 1,
+            skipped: 0,
+            send_attempts: 1,
+        },
+    )
+    .expect("representable missing-completion trace");
+    let mut output = super::NativeTelemetryOutput::new(TelemetryMode::Ring, 1);
+    output.records.push_back(record);
+    output.attempted = 1;
+    output.accepted = 1;
+    output.summary.observe(&record);
+
+    let value = serde_json::to_value(output).expect("serialize attempted anomaly evidence");
+    let trace = &value["records"][0];
+    assert_eq!(value["schema_version"], 25);
+    assert_eq!(trace["source_action_index"], 41);
+    assert_eq!(trace["compiled_packet_index"], 9);
+    assert_eq!(trace["up_mask"], 1);
+    assert_eq!(trace["down_mask"], 0);
+    assert_eq!(trace["send_status"], super::TRACE_SEND_STATUS_COMPLETE);
+    assert_eq!(trace["requested_count"], 1);
+    assert_eq!(trace["sent_count"], 1);
+    assert_eq!(trace["send_attempts"], 1);
+    assert_eq!(trace["win32_error"], 0);
+    assert_ne!(trace["flags"].as_u64().expect("flags") & 0b1000, 0);
+    assert_eq!(trace["outcome"], trace_outcome_code("failed_note_off"));
+    assert_eq!(trace["pre_call_qpc_ticks"], 510);
+    assert_eq!(trace["pre_call_qpc_provenance"], "measured");
+    assert_eq!(trace["sendinput_completion_qpc_ticks"], 0);
+    assert_eq!(trace["sendinput_completion_qpc_available"], false);
+    assert_eq!(trace["sendinput_completion_qpc_provenance"], "unavailable");
+    assert_eq!(trace["send_completed_ticks"], 0);
+    assert_eq!(trace["send_completed_ticks_provenance"], "unavailable");
+    assert_eq!(trace["sendinput_envelope_available"], false);
+    assert_eq!(value["summary"]["sender_envelope_samples"], 0);
+    assert_eq!(value["summary"]["transport_anomaly_count"], 0);
+}
+
+#[test]
+fn schema_25_reversed_sender_qpc_is_rejected_instead_of_clamped_or_reconstructed() {
+    let result = RtTraceRecord::dispatched(
+        TraceContext {
+            event_index: 42,
+            source_action_index: 42,
+            compiled_packet_index: None,
+            kind: TRACE_KIND_UP,
+            outcome: trace_outcome_code("failed_note_off"),
+            polyphony: 1,
+            flags: super::TRACE_FLAG_ANOMALY,
+            send_status: super::TRACE_SEND_STATUS_COMPLETE,
+            win32_error: 0,
+            up_mask: 1,
+            down_mask: 0,
+        },
+        TraceTiming {
+            pre_call_qpc_ticks: Some(510),
+            sendinput_completion_qpc_ticks: Some(509),
+            pre_call_ticks: Some(TimelineTicks::from_raw(100)),
+            sendinput_completion_ticks: Some(TimelineTicks::from_raw(99)),
+            ..TraceTiming::default()
+        },
+        TraceDelivery {
+            requested: 1,
+            sent: 1,
+            skipped: 0,
+            send_attempts: 1,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "reversed QPC must not become a zero duration"
+    );
+}
