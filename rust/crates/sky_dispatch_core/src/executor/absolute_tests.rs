@@ -428,6 +428,90 @@ fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_f
 }
 
 #[test]
+fn proven_raw_zero_uses_checked_cursor_transition_without_cleanup_or_active_a_release() {
+    let allowed = [0x15, 0x16];
+    let schedule = compile_actions(
+        &[
+            KeyActionInput {
+                source_action_index: 51,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "active A before proven-zero B".into(),
+            },
+            KeyActionInput {
+                source_action_index: 52,
+                kind: ActionKind::Down,
+                scheduled_us: 10,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "raw-zero B attempt".into(),
+            },
+            KeyActionInput {
+                source_action_index: 53,
+                kind: ActionKind::Up,
+                scheduled_us: 20,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "A authored release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 54,
+                kind: ActionKind::Up,
+                scheduled_us: 30,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "B authored release".into(),
+            },
+        ],
+        &allowed,
+    );
+    let mut executor = DispatchExecutor::new(
+        &schedule,
+        DurationTicks::ZERO,
+        DurationTicks::ZERO,
+        test_ticks,
+    )
+    .expect("absolute scheduler");
+    let epoch = QpcTicks::from_raw(1_000);
+    executor
+        .on_send_completed_at(0, 1, epoch)
+        .expect("commit A Down");
+    let b = executor.current_chord().expect("pending B chord");
+    assert_eq!(b.source_action_index, 52);
+    assert_eq!(b.down_mask, 2);
+
+    assert!(
+        executor
+            .consume_attempted_down_after_verified_cleanup(52, 2)
+            .is_err(),
+        "verified-cleanup consumption retains its active-slot guard"
+    );
+    assert!(
+        executor
+            .consume_attempted_down_after_proven_raw_zero(99, 2)
+            .is_err(),
+        "raw-zero still checks current authored identity"
+    );
+    assert!(
+        executor
+            .consume_attempted_down_after_proven_raw_zero(52, 1)
+            .is_err(),
+        "raw-zero still checks the exact Down mask"
+    );
+    assert_eq!(executor.chord_cursor(), 1);
+    assert_eq!(executor.active_mask(), 1);
+    assert_eq!(executor.accounting().cancelled, 0);
+
+    executor
+        .consume_attempted_down_after_proven_raw_zero(52, 2)
+        .expect("consume only the proven-zero B attempt");
+    assert_eq!(executor.chord_cursor(), 2);
+    assert_eq!(executor.active_mask(), 1, "A remains active");
+    assert_eq!(executor.accounting().activated, 1);
+    assert_eq!(executor.accounting().cancelled, 1);
+    assert_eq!(executor.resume_barrier_qpc(), None);
+    executor.check_invariants().expect("executor invariants");
+}
+
+#[test]
 fn attempted_down_consumption_rejects_a_different_authored_onset() {
     let allowed = [0x15];
     let schedule = compile_actions(

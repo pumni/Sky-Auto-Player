@@ -1380,27 +1380,11 @@ impl DispatchExecutor {
                 "attempted Down cannot be consumed without a verified cleanup barrier".into(),
             );
         }
-        let chord = self
-            .current_chord()
-            .ok_or_else(|| "attempted Down chord cursor is exhausted".to_string())?;
-        if chord.source_action_index != source_action_index || chord.down_mask != down_mask {
-            return Err(format!(
-                "attempted Down identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
-                source_action_index, down_mask, chord.source_action_index, chord.down_mask,
-            ));
-        }
-        let next_cancelled = self
-            .counters
-            .cancelled
-            .checked_add(chord.intents.len() as u64)
-            .ok_or("cancelled counter overflow while consuming attempted Down")?;
-        let next_cursor = self
-            .chord_cursor
-            .checked_add(1)
-            .ok_or("Down chord cursor overflow while consuming attempted Down")?;
-        self.counters.cancelled = next_cancelled;
-        self.chord_cursor = next_cursor;
-        Ok(())
+        self.checked_attempted_down_cursor_transition(
+            source_action_index,
+            down_mask,
+            "attempted Down",
+        )
     }
 
     /// Consume a Down-only onset after one internally consistent raw-zero
@@ -1415,12 +1399,25 @@ impl DispatchExecutor {
         if down_mask == 0 || self.active_mask() & down_mask != 0 {
             return Err("proven-zero Down overlaps an active musical slot".into());
         }
+        self.checked_attempted_down_cursor_transition(
+            source_action_index,
+            down_mask,
+            "proven-zero Down",
+        )
+    }
+
+    fn checked_attempted_down_cursor_transition(
+        &mut self,
+        source_action_index: u32,
+        down_mask: u16,
+        context: &'static str,
+    ) -> Result<(), String> {
         let chord = self
             .current_chord()
-            .ok_or_else(|| "proven-zero Down chord cursor is exhausted".to_string())?;
+            .ok_or_else(|| format!("{context} chord cursor is exhausted"))?;
         if chord.source_action_index != source_action_index || chord.down_mask != down_mask {
             return Err(format!(
-                "proven-zero Down identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
+                "{context} identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
                 source_action_index, down_mask, chord.source_action_index, chord.down_mask,
             ));
         }
@@ -1428,11 +1425,11 @@ impl DispatchExecutor {
             .counters
             .cancelled
             .checked_add(chord.intents.len() as u64)
-            .ok_or("cancelled counter overflow while consuming proven-zero Down")?;
+            .ok_or_else(|| format!("cancelled counter overflow while consuming {context}"))?;
         let next_cursor = self
             .chord_cursor
             .checked_add(1)
-            .ok_or("Down chord cursor overflow while consuming proven-zero Down")?;
+            .ok_or_else(|| format!("Down chord cursor overflow while consuming {context}"))?;
         self.counters.cancelled = next_cancelled;
         self.chord_cursor = next_cursor;
         Ok(())
