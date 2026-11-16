@@ -287,6 +287,13 @@ to check `IsWindow`, owner PID, process creation time, and image path on its
 control cadence. This final proof supplements the fresh OS window query; it
 does not replace it with a cached PID or identity value.
 
+The musical final permit uses nonblocking acquisition for both the target
+writer and retained owner-authority mutex. If either is busy, the worker
+returns to replan before SendInput and leaves the Down cursor and Up
+obligations untouched. On success, the writer permit remains held through the
+physical sender call. Terminal and resumable safety cleanup keep their
+serialized blocking permit path after validating the frozen release origin.
+
 Each tracked key slot freezes a release-owner proof before a Down can create an
 in-flight obligation. The proof includes the originating HWND and generation,
 PID when required, and retained process-authority object identity. An A-to-B

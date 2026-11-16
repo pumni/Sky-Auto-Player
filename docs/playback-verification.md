@@ -201,6 +201,16 @@ the evidence are test-hook counts for the actual worker/harness boundary;
 sender QPC and `GetProcessTimes` counts are separately identified from
 production source because the mock does not call those native APIs.
 
+The final musical permit also has deterministic authority-mutex contention
+coverage. A hook pauses after fresh foreground/PID/process verification; a
+supervisor test thread acquires the retained-authority mutex before allowing
+the worker to enter the permit. Down and Up return `Replan` without a packet,
+cursor advance, or obligation clear, then send once after fresh restaging.
+Concurrent target publication and same-HWND ABA keep the old Up origin
+fail-closed. Verified terminal cleanup continues to use its serialized path.
+These tests exercise the production worker/harness with mock senders and a
+test-only lock seam; they do not call real `SendInput`.
+
 ## Offline lifecycle and manifest checks
 
 The current offline scheduler lifecycle report is produced and validated with:

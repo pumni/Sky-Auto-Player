@@ -151,7 +151,51 @@ focus, and control checks remain at their established boundaries.
 | Target generation checks | Retained | Stage, pre-wait, final admission, permit, and cleanup | Stale staged candidates cannot become authority; same-HWND generation change remains distinguishable | Generation counts and ABA/permit regressions |
 | Process creation-time proof (`GetProcessTimes`) | Retained, consolidated to one final process check per healthy packet | `verify_final_musical_packet_admission` via the retained authority | PID/HWND reuse does not stand in for process identity | `verify_final_process_identity`; source and owner race tests |
 | Watchdog lease, control, and power/suspend protections | Retained | Worker wait and final admission; desktop owner monitor | Stale monitor results do not grant syscall authority; owner loss still fails closed | Lease/Stop/Skip/suspend regressions and desktop consumer tests |
-| Final owner writer permit | Added | `dispatch_staged_candidate` final gate and tracked cleanup | Target publication/binding/close cannot race from post-query validation through syscall; failed revalidation sends nothing | `generation_change_after_final_identity_query_fails_before_sender`; owner-permit operation hook |
+| Musical final owner permit, including the nested authority check | Corrected: writer `try_lock` plus owner-authority `try_lock` | `dispatch_staged_candidate` through `verify_final_musical_packet_admission` | Fresh generation/HWND/PID/`Arc::ptr_eq` proof remains required; either busy lock returns Replan before syscall; writer permit remains held through sender | `musical_down_final_permit_replans_without_waiting_for_owner_authority_mutex`, `musical_up_final_permit_replans_without_waiting_then_sends_once`, owner-generation publication contention regression |
+| Serialized release permit | Retained | `verify_safety_cleanup_target` for terminal/resumable tracked cleanup via `lock_current_release_owner_proof` | Cleanup still verifies the frozen origin and serializes proof with target publication through cleanup syscall | `terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement`; owner-origin cleanup regression suite |
+
+### Final permit mutex contention correction
+
+Leader review at `e55e9e06526c1ecaba6c5bd7d5cc93a97b09111f` identified that
+`try_lock_current_release_owner_proof` acquired `writer` with `try_lock`, then
+called `release_owner_proof_is_current_locked`, whose nested
+`owner_authority.lock()` could block if the supervisor held the authority
+mutex or was preempted while holding it. A nonblocking writer lock alone did
+not make the musical final permit nonblocking.
+
+The musical permit now runs in this order: fresh current-target and process
+creation-time proof; `writer.try_lock()`; `owner_authority.try_lock()`; then
+stable HWND/generation, owner-status/PID, retained generation and
+`Arc::ptr_eq` checks while the authority guard is held. Failure to acquire
+either lock or match proof returns pre-syscall Replan. The authority guard is
+dropped after validation; the writer guard remains held through physical
+sender return, serializing publish/bind/close. No proof is cached across
+replan. The safety-cleanup caller retains `writer.lock()` followed by
+`owner_authority.lock()` in `release_owner_proof_is_current_serialized`; that
+verified cleanup path is deliberately allowed to use serialized blocking
+synchronization. The new seam `lock_owner_authority_for_test` is `#[cfg(test)]`
+and adds no production lock accounting or allocation.
+
+The channel-controlled regressions use the actual dispatch worker harness. The
+final-gate hook signals only after fresh foreground/PID/process verification;
+the supervisor thread then holds the owner-authority mutex before releasing
+the worker into final permit. For Down, the worker returns Replan while the
+mutex is still held: sender count remains zero, chord cursor remains 0,
+active/possible/in-flight/release masks remain zero. After unlock and fresh
+restage, one Down is sent. For Up(A), the first attempt sends nothing and
+retains active/release mask `0x0001`; after unlock and fresh restage, one
+same-owner Up clears the mask. The timeout only bounds deadlock detection; the
+hook/channel establishes the interleaving.
+
+The generation control starts B publication while the authority mutex is
+held. A test-only publication hook pauses the publisher after it acquires the
+writer and before it resets the retained authority; final admission replans
+without a packet. After releasing the mutex, B is published at generation 1
+and bound. A newly staged Up(A) under B is rejected by the frozen-origin
+comparison, leaves A's obligation `0x0001`, and produces no additional
+sender call. Existing A→B and same-HWND ABA tests remain unchanged. Same-owner
+Down/Up and healthy mixed dispatch still pass. The positive terminal cleanup
+test proves the serialized safety path can complete.
 
 `EnginePollStatus` has no public `Blocked` variant. A scheduler wait or onset
 block continues to project the existing lifecycle status (`Playing` while
@@ -264,6 +308,15 @@ Platform/toolchain: Windows x64 MSVC, Rust/Cargo 1.99.1.
 | Focused desktop consumer suite above | 0 | 3 passed. |
 | `cargo xtask check desktop-native` | 0 | PASS. Three `cargo check` variants (desktop-runtime/no-default, default, all-features), Tauri-test lib suite, and binding check completed; subcommand output was summarized by xtask. |
 | `cargo xtask check all` (final serial run, after journal and owner-drift regressions) | 0 | PASS. Static checks: 67 advisory architecture warnings, 0 security findings; Rust format, workspace Clippy, and all-features tests passed; Bun frozen-lockfile install/check and browser E2E passed; three desktop-native cargo-check variants, Tauri-test lib, and bindings passed. No xtask retry or skipped stage was reported. Xtask captured child output, so it did not expose aggregate workspace test counts; package-focused counts are recorded above. The separate ignored waiter-only A/B benchmark remains ignored and is not gameplay qualification. |
+| Source SHA for final permit correction gates | — | `dcac1263e8ad923d5293d96a3ede5b4f018a2d14`, tree `92b3c87be40de23e6f672704bd99401c50b8cb97`, parent reviewed SHA `e55e9e06526c1ecaba6c5bd7d5cc93a97b09111f`. Final correction source was fully gated at this SHA; subsequent edits in this evidence update document the results and the owning contract. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib final_permit_replans_without_waiting -- --test-threads=1` | 0 | 2 passed: Down and Up both return Replan with `owner_authority` held after fresh identity proof; each dispatches exactly once after unlock and fresh restaging. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib owner_generation_publication_during_authority_contention_never_borrows_new_proof -- --test-threads=1` (first assertion) | 1 | Test expected generation 2; fixture publishes its first HWND transition as generation 1. Corrected the assertion and reran below; no product failure. |
+| Same owner-generation contention test (rerun) | 0 | 1 passed; B publication is held at the owner-authority reset while the mutex is owned; A's old Up proof remains withheld after B binds. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib dispatch_loop::tests:: -- --test-threads=1` | 0 | 49 passed, 0 failed/ignored; includes the three new permit-contention/publication regressions and the existing A→B, same-HWND ABA, mixed, raw-zero, and healthy sender cases. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib engine::target::tests:: -- --test-threads=1` | 0 | 10 passed, 0 failed/ignored. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement -- --test-threads=1` | 0 | 1 passed; verified terminal safety cleanup remains usable through its serialized path. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features "test-support qpc-read-counting" --lib measured_final_admission_operations_for_healthy_packet_shapes -- --nocapture --test-threads=1` (rerun after mutex fix) | 0 | 1 passed; healthy packet proof-operation counts are unchanged. Owner-authority acquisitions remain Down 2, Up 2, Mixed 2, Mixed→Up 2; the permit now uses a nonblocking authority acquisition. |
+| Required format, Clippy, core, Win32, player, no-allocation, desktop-native, and all-check commands on source SHA above | 0 | Rust/desktop fmt and requested Clippy clean. Core: 84 passed. Win32: 278 passed, 1 ignored helper. Player: 305 passed, 1 ignored waiter-only A/B benchmark. Standalone no-allocation: 4 passed. `cargo xtask check desktop-native` and serial `cargo xtask check all` passed; all-check reported 67 advisory architecture warnings and 0 security findings, with no skipped stage or retry. |
 | CI after first checkpoint push (`51789df4271d7e6a8baf0e1b8cbd0ba8ba12f2d6`) | in progress | `gh pr checks 667 --repo pumni/Sky-Auto-Player` reported `Classify validation layers` pending; workflow run `43807337966` (`https://github.com/pumni/Sky-Auto-Player/actions/runs/43807337966`) reported `status=in_progress`, `headSha=51789df4271d7e6a8baf0e1b8cbd0ba8ba12f2d6`. CI was not awaited. The earlier workflow `43790581987` passed only on reviewed base `f3fe3de7f622f94a9f548e0913bf4903dfefd5f2`. |
 
 Other intermediate results: the H/G boundary regression needed a missing
@@ -273,14 +326,22 @@ candidate setup. Those compile failures were fixed before the passing focused
 runs recorded above. The first final Clippy run rejected a 10-argument raw-zero
 predicate; after it reused `FinalControlSignals`, Clippy passed. The initial
 format checks reported rustfmt diffs; both manifest formatters were applied,
-and final format checks passed. No failed or unrun gate is reported as passed.
+and final format checks passed. The first permit test implementation attempted
+to move the production harness into a worker thread; compilation correctly
+rejected its non-Send MMCSS guard. The final test keeps the production worker
+on its harness thread and uses a separate supervisor thread to hold the
+authority mutex. An unused first lock seam was removed before full gates. The
+generation test's initial expected value was corrected from 2 to 1 after
+confirming the fixture's initial generation. No failed or unrun gate is
+reported as passed.
 
 ## Final checkpoint identity
 
 | Item | Value |
 |---|---|
 | Branch | `refactor/prepared-playback-runtime` |
-| New HEAD / tree / parent | Recorded in the checkpoint handoff; this evidence file is included in that commit and does not self-reference its own hash. |
-| Remote branch tip after push / worktree state | Recorded in the checkpoint handoff. |
-| Final-SHA CI | Queried after push and reported in the checkpoint handoff; CI was not awaited. |
+| Source code SHA / tree / parent on which correction gates ran | `dcac1263e8ad923d5293d96a3ede5b4f018a2d14` / `92b3c87be40de23e6f672704bd99401c50b8cb97` / `e55e9e06526c1ecaba6c5bd7d5cc93a97b09111f` |
+| Final docs follow-up HEAD / tree / parent | Reported in the checkpoint handoff; this evidence file avoids self-referencing its own hash. Product source is unchanged from the fully gated source SHA above. |
+| Remote branch tip after push / worktree state | Reported in the checkpoint handoff. |
+| Final-SHA CI | Queried after the final push and reported in the checkpoint handoff; CI was not awaited. |
 | Leader integration verdict | Await `ACCEPT INTEGRATION @<SHA>`; no merge or PR-ready action is authorized by CI alone |
