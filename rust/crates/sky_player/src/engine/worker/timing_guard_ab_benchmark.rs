@@ -61,6 +61,13 @@ struct RunResult {
     process_cpu_us: u64,
 }
 
+#[derive(Clone, Copy)]
+struct RunOrder {
+    pair: Option<usize>,
+    pair_order: &'static str,
+    warmup: bool,
+}
+
 struct ContentionLoad {
     stop: Arc<AtomicBool>,
     worker_cpu_us: Arc<AtomicU64>,
@@ -199,14 +206,17 @@ fn calibration_json(stats: Option<WakeErrorStats>) -> Value {
 fn run_once(
     condition: &'static str,
     arm: GuardArm,
-    pair: Option<usize>,
-    pair_order: &'static str,
-    warmup: bool,
+    order: RunOrder,
     clock: QpcClock,
     contention: Option<&ContentionLoad>,
     sample_writer: &mut BufWriter<File>,
     run_writer: &mut BufWriter<File>,
 ) -> RunResult {
+    let RunOrder {
+        pair,
+        pair_order,
+        warmup,
+    } = order;
     let waiter = HybridWaiter::production();
     assert!(
         waiter.initial_failure().is_none(),
@@ -535,9 +545,11 @@ fn offline_waiter_guard_ab_benchmark() {
             runs.push(run_once(
                 condition,
                 arm,
-                None,
-                "warmup",
-                true,
+                RunOrder {
+                    pair: None,
+                    pair_order: "warmup",
+                    warmup: true,
+                },
                 clock,
                 contention.as_ref(),
                 &mut sample_writer,
@@ -556,9 +568,11 @@ fn offline_waiter_guard_ab_benchmark() {
                 runs.push(run_once(
                     condition,
                     arm,
-                    Some(pair + 1),
-                    order_label,
-                    false,
+                    RunOrder {
+                        pair: Some(pair + 1),
+                        pair_order: order_label,
+                        warmup: false,
+                    },
                     clock,
                     contention.as_ref(),
                     &mut sample_writer,

@@ -105,6 +105,43 @@ is documented append-only in
 The reporting-correction checkpoint authorizes zero further native sessions;
 Smoke, Compare, and Final require separate Leader decisions.
 
+## Issue #666 M4 waiter-only guard A/B
+
+The opt-in offline A/B uses the production Windows `HybridWaiter` and the
+current startup-calibration selector from one clean candidate checkout and one
+`sky_player` test binary. Arm A is an **experimental fixed 1,000 µs** guard;
+Arm B uses the current calibrated selector/fallback. Both pay the same six
+sample calibration probe. Each Quiet and Contention cell has one warm-up per
+arm and six paired runs, alternating AB/BA order. Every run waits on 900
+60-FPS deadlines (15 seconds at 16,667 µs frame intervals). Percentiles use
+nearest rank `sorted[ceil(p*n)-1]`.
+
+Use a new output path outside the checkout. The wrapper refuses a dirty source
+tree, a different branch, or an existing/in-repository output directory; it
+records the exact source SHA/tree, Windows/CPU/toolchain, lockfile hash, test
+binary hash, test command/exit code, raw files, and result JSON:
+
+```powershell
+pwsh -NoProfile -File scripts/run_issue666_m4_guard_ab_offline.ps1 `
+  -OutputRoot "$env:TEMP\issue-666-m4-ab-<candidate-short-sha>"
+```
+
+The output contains `wait-samples.csv`, `wait-runs.csv`, `result.json`,
+`cargo-test.log`, and `run-manifest.json`. It reports wake-to-deadline QPC
+lateness, return-to-observation gap (explicitly **not** sender pre-call),
+waiter spin, worker/process CPU, and contention-worker CPU. It has no executor,
+focus/owner gate, sender, packet, H/G dispatch floor, cleanup, or Prepare/Arm
+timing, so those measures remain null/not measured. It neither calls
+`SendInput` nor qualifies game delivery. Do not describe this same-revision
+guard experiment as an exact-base-versus-candidate A/B; the M1
+baseline-equivalent structural benchmark is a separate evidence class.
+
+Native ReceiveOnly and optional gameplay planning is in
+[`issue-666-m4-native-qualification.json`](evidence/issue-666-m4-native-qualification.json).
+It is planning only and explicitly awaits separate Leader authorization; no
+native input, interactive focus, real suspend/resume, or Sky gameplay session
+is implied by running the offline waiter experiment.
+
 ## Final workload
 
 The Final stage runs these five performance workloads:

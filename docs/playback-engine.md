@@ -349,6 +349,42 @@ are projected only when that cadence is due and the snapshot writer slot is
 available. Focus/manual-pause lifecycle snapshots and terminal/finalization
 snapshots still refresh backend counters at their existing publication points.
 
+### M4 diagnostics compatibility and offline guard comparison
+
+M4 makes the existing evidence contract easier to audit without changing its
+projection. Telemetry schema 25, the `PlaybackStatusDto`, progress snapshots,
+fingerprints, and serialized field meanings remain unchanged. A pinned fixture
+checks the serialized key sets for `NativeTelemetryOutput`,
+`NativeTelemetrySummary`, `TimingSemantics`, and `RtTraceRecord`. The regression
+also covers attempted Up-only dispatch with a missing completion QPC: the raw
+attempt/status/count and source identity remain visible, the completion field
+retains the schema's unavailable encoding and provenance, and no sender-envelope
+sample is added. A reversed QPC interval is rejected rather than clamped or
+reconstructed. The current wire encoding uses a numeric zero sentinel for some
+unavailable timestamps; it is meaningful only together with the corresponding
+`available = false` and `provenance = unavailable` fields, and must not be read
+as a measured QPC value.
+
+An attempted post-call anomaly keeps its terminal-error latch even when
+origin-owned cleanup is verified and later unattempted events continue. The
+bounded session history separately preserves total/omitted counts and first/last
+evidence. Finalization projects the anomaly summary, primary/secondary errors,
+terminal trigger, release outcome, and remaining obligation through the
+existing snapshot and terminal DTO fields. Missing timing does not qualify a
+sender-duration sample, and a verified cleanup does not convert the anomalous
+packet to success.
+
+The opt-in Windows A/B test compares an experimental fixed 1,000 µs guard with
+the current startup-calibrated selector in Quiet and a declared Contention
+condition. It uses the production waiter and selector on one test binary, with
+the same six-sample startup probe, 60 FPS deadline cadence, warm-ups, and
+alternating AB/BA pairs. It stops at waiter return: it does not measure the
+worker's final gate, SendInput entry/completion, H/G eligibility, note delivery,
+cleanup, Prepare/Arm, or gameplay. The raw return-to-observation QPC gap is not
+a sender pre-call measurement. These results are an offline waiter experiment,
+not gameplay or native dispatch qualification, and they do not change the
+production guard.
+
 The healthy real-time dispatch path is checked for zero heap allocations by
 [`rt_dispatch_no_alloc.rs`](../rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs).
 The Prepare UI also shows an offline, read-only estimate from the authored song,
