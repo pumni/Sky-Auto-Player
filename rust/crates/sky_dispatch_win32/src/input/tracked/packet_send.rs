@@ -107,6 +107,7 @@ impl TrackedKeyState {
             {
                 self.in_flight_mask = previous_in_flight_mask;
             }
+            self.clear_unobligated_release_owners();
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
             return outcome;
@@ -153,6 +154,7 @@ impl TrackedKeyState {
         {
             self.in_flight_mask = previous_in_flight_mask;
         }
+        self.clear_unobligated_release_owners();
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
@@ -639,6 +641,17 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_view_with_commit_policy(prepared.as_view(), true)
     }
 
+    /// Worker-owned final-boundary sender which freezes the release origin
+    /// before the syscall can create an in-flight or uncertain Down obligation.
+    pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        release_owner: &crate::input::ReleaseOwnerProof,
+    ) -> SendTransactionOutcome {
+        self.remember_release_owner_for_down(prepared.packet().down_mask, Some(release_owner));
+        self.send_prepared_physical_packet_at_final_boundary_deferred_commit(prepared)
+    }
+
     /// Complete the transport half of a packet transaction after the
     /// scheduler state commit has succeeded.
     pub fn commit_physical_packet(&mut self, packet_mask: u16) -> Result<(), String> {
@@ -649,6 +662,7 @@ impl TrackedKeyState {
             ));
         }
         self.in_flight_mask = 0;
+        self.clear_unobligated_release_owners();
         Ok(())
     }
 
@@ -769,6 +783,7 @@ impl TrackedKeyState {
         if !defer_journal_commit {
             self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
         }
+        self.clear_unobligated_release_owners();
         outcome
     }
 

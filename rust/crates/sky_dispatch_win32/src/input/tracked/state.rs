@@ -8,8 +8,9 @@ use super::super::outcome::{
 #[cfg(any(test, feature = "test-support"))]
 use super::super::physical::InstrumentPhysicalState;
 use super::super::profile::MaterializedInstrumentKeyProfile;
-use super::TrackedKeyState;
+use super::{RELEASE_OWNER_SLOT_COUNT, TrackedKeyState};
 use crate::clock::QpcClock;
+use crate::input::ReleaseOwnerProof;
 use std::fmt;
 
 impl fmt::Debug for TrackedKeyState {
@@ -53,6 +54,87 @@ impl TrackedKeyState {
             | self.possibly_active_mask
             | self.failed_release_mask
             | self.in_flight_mask
+    }
+
+    /// Return the one frozen owner proof for a tracked cleanup mask. A mixed,
+    /// missing, or conflicted origin fails closed rather than borrowing the
+    /// currently published target's identity.
+    pub fn release_owner_proof_for_mask(
+        &self,
+        mask: u16,
+    ) -> Result<Option<ReleaseOwnerProof>, String> {
+        if mask == 0 {
+            return Ok(None);
+        }
+        if mask & !((1_u16 << RELEASE_OWNER_SLOT_COUNT) - 1) != 0 {
+            return Err("tracked release mask contains a non-instrument slot".into());
+        }
+        let mut remaining = mask;
+        let mut proof: Option<ReleaseOwnerProof> = None;
+        while remaining != 0 {
+            let slot = remaining.trailing_zeros() as usize;
+            let bit = 1_u16 << slot;
+            remaining &= !bit;
+            if self.release_owner_ledger.conflicted_mask & bit != 0 {
+                return Err(format!(
+                    "tracked release owner is ambiguous for slot {slot}"
+                ));
+            }
+            let Some(slot_proof) = self.release_owner_ledger.owner_by_slot[slot].as_ref() else {
+                return Err(format!(
+                    "tracked release owner proof is missing for slot {slot}"
+                ));
+            };
+            if let Some(existing) = proof.as_ref() {
+                if !existing.same_owner(slot_proof) {
+                    return Err("tracked release mask spans different owner generations".into());
+                }
+            } else {
+                proof = Some(slot_proof.clone());
+            }
+        }
+        Ok(proof)
+    }
+
+    pub(super) fn remember_release_owner_for_down(
+        &mut self,
+        down_mask: u16,
+        proof: Option<&ReleaseOwnerProof>,
+    ) {
+        let mut remaining = down_mask;
+        let obligations = self.release_obligation_mask();
+        while remaining != 0 {
+            let slot = remaining.trailing_zeros() as usize;
+            let bit = 1_u16 << slot;
+            remaining &= !bit;
+            if slot >= RELEASE_OWNER_SLOT_COUNT {
+                self.release_owner_ledger.conflicted_mask |= bit;
+                continue;
+            }
+            if obligations & bit == 0 {
+                self.release_owner_ledger.owner_by_slot[slot] = proof.cloned();
+                self.release_owner_ledger.conflicted_mask &= !bit;
+                continue;
+            }
+            let same_owner = self.release_owner_ledger.owner_by_slot[slot]
+                .as_ref()
+                .zip(proof)
+                .is_some_and(|(current, next)| current.same_owner(next));
+            if !same_owner {
+                self.release_owner_ledger.conflicted_mask |= bit;
+            }
+        }
+    }
+
+    pub(super) fn clear_unobligated_release_owners(&mut self) {
+        let obligations = self.release_obligation_mask();
+        for slot in 0..RELEASE_OWNER_SLOT_COUNT {
+            let bit = 1_u16 << slot;
+            if obligations & bit == 0 {
+                self.release_owner_ledger.owner_by_slot[slot] = None;
+                self.release_owner_ledger.conflicted_mask &= !bit;
+            }
+        }
     }
 
     /// Observe only fixed system modifiers at the final musical Down boundary.

@@ -36,6 +36,7 @@ impl TrackedKeyState {
         };
 
         if requested_mask == 0 {
+            self.clear_unobligated_release_owners();
             return TerminalReleaseEvidence {
                 release_outcome: ReleaseAllOutcome {
                     attempted_mask: 0,
@@ -138,6 +139,7 @@ impl TrackedKeyState {
             self.possibly_active_mask &= !resolved_this_transition;
             self.failed_release_mask &= !resolved_this_transition;
             self.in_flight_mask &= !resolved_this_transition;
+            self.clear_unobligated_release_owners();
 
             match reconciled {
                 ReconciledRelease::VerifiedAllUp => {

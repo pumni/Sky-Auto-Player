@@ -147,3 +147,109 @@ check returned PASS.
 - The accepted M1/M2 invariants remain in force, including one-attempt Down,
   actual sender-completion QPC for H/G, schema 25, and bounded cleanup. M3 adds
   no performance/gameplay qualification and changes no M4 policy.
+
+## M3 review corrections
+
+These corrections address Leader review of M3 commit
+`9d4907a81e51f2df53bfc831084f1d4ec38461f0` (tree
+`0f2090eaf51f3c267d310bbbd6ae777fa7270b11`). They do not change target-rebind
+policy or permit cleanup to cross an owner generation.
+
+### Owner poll and close race matrix
+
+| Race | Expected | Actual |
+| --- | --- | --- |
+| Poll snapshots A at generation N; A reports `ProcessTerminated`; publish and bind B at N+1 before applying the poll result | A's result must not change B's `owner_live`, failure, retained authority, or pre-Arm admission | PASS: stale poll returns false; B's retained authority remains live, B poll succeeds, final admission sends exactly one Down and one Up, and session finishes |
+| A remains current and reports `QueryUnavailable` | Invalidate A; cancel pre-Arm if applicable; no Down | PASS: current owner is invalidated; zero sender calls; final outcome is Error |
+| Close snapshots A; publish and bind B before late close applies | Close must not clear B | PASS: B's authority remains retained and its poll succeeds |
+
+Poll result application and late close compare the snapshotted target generation
+and retained authority `Arc` identity while holding the writer serialization
+shared with publication and bind. PID or HWND equality alone is insufficient.
+An old poll still wakes the worker so it can observe control-plane changes; it
+does not invalidate or cancel the new owner. Existing target-change-before-Arm
+startup cancellation remains unchanged.
+
+### Tracked release-owner matrix
+
+Each physical slot keeps a fixed-capacity origin proof before a Down can create
+an in-flight release obligation. The proof freezes HWND/generation, PID, and
+retained authority object identity where process identity is required. A
+verified cleanup holds the final generation-conditional writer permit through
+the safety syscall. It does not require foreground focus. Drift or uncertainty
+withholds the syscall and preserves the release mask.
+
+| Scenario | Expected | Actual |
+| --- | --- | --- |
+| Down(A), publish/bind B, terminal Quit | No Up on B; A obligation retained; Error | PASS: 1 Down call, 0 safety Up calls, mask `0x0001`, 0 release attempts, Error |
+| Down at HWND A / generation N, republish the same numeric HWND at N+1 and bind new authority | Numeric HWND equality must not transfer the release proof | PASS: same result as A-to-B; 1 Down, 0 safety Up, mask `0x0001`, Error |
+| Down(A), lose foreground, terminal Stop while A is unchanged and its retained authority is continuous | Safety Up may run without foreground; release is verified | PASS: 1 Down plus 1 safety Up; mask clears and requested Skip remains Skipped |
+| Down(A), manual pause, rebind B before pause cleanup | Resumable cleanup cannot use B's proof for A | PASS: 1 Down, 0 safety Up; mask `0x0001`, Error |
+| Down(A), terminal cleanup continuity query is in flight while B is published | Final generation check must reject before syscall | PASS: 1 Down, 0 safety Up; mask `0x0001`, Error |
+| A release proof is captured without owner identity, then an authority binds to that same target generation | A later binding cannot upgrade the older release obligation | PASS: final release permit rejects the stale unowned proof; no syscall can be admitted through the new proof |
+| Current target uses an explicitly PID-only owner binding | Preserve a valid PID proof when process-handle identity is not required | PASS: proof retains PID 77, has no authority object, and acquires the current-generation release permit |
+| No tracked release obligation | No proof required and no spurious safety syscall/error | PASS: 0 sender calls, mask `0`, 0 release attempts, Finished |
+
+The generation-change test uses deterministic barriers after the OS continuity
+query and before final permit acquisition. The final permit then serializes the
+last origin check with publication/bind/close and remains held through the
+cleanup syscall, so a later writer is ordered after a release already proved
+against the current owner. The same verifier is used by terminal finalization
+and actual resumable focus/manual-pause/post-anomaly cleanup paths. Musical
+Up-only admission is unchanged.
+
+The focus-restore mock fixture now binds its synthetic process identity and
+foreground PID explicitly. This exercises the same focus-required owner proof
+that the production gate requires; it does not add a real OS/game test.
+
+### Correction checkpoint verification
+
+Commands were run sequentially on Windows x64 MSVC with Rust/Cargo 1.99.1 and
+the checked-in lockfile. The rows below cover the correction checkpoint; the
+earlier table records the original M3 implementation run. Intermediate
+failures and reruns from this review correction are listed separately below.
+
+| Command | Exit | Result |
+| --- | ---: | --- |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support engine::tests::startup_admission -- --test-threads=1` (after static barrier conversion) | 0 | PASS, 42 passed; 0 failed; 240 filtered out |
+| `cargo clippy --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core -p sky_dispatch_win32 -p sky_player --all-targets --all-features -- -D warnings` (final direct invocation) | 0 | PASS, warnings denied |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core --features test-support` | 0 | PASS, 80 unit + 4 integration/property tests; 84 passed |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --features test-support` | 0 | PASS, 277 passed; 1 ignored |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support` (final direct invocation) | 0 | PASS, 284 unit + 4 RT integration tests; 0 failed |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc` (final direct invocation) | 0 | PASS, 4 passed; 0 failed |
+| `cargo xtask check desktop-native` (final direct invocation) | 0 | PASS; all three Tauri feature checks and `tauri-test` library tests completed |
+| `cargo xtask check all` (first correction run) | 1 | FAIL in architecture audit: three test-only `Box<dyn Fn()>` barriers were classified as production dynamic emitters; no later stage ran |
+| `cargo xtask check all` (after converting hooks to fixed barrier data; before this result table refresh) | 0 | PASS; Rust workspace Clippy/tests, Bun checks, Playwright E2E, and desktop checks completed; architecture audit emitted 66 advisory warnings |
+| `cargo xtask check all` (final invocation after the correction report was refreshed) | 0 | PASS; Rust workspace Clippy/tests, Bun checks, Playwright E2E, and desktop checks completed; architecture audit emitted 66 advisory warnings |
+| `cargo xtask check all` (after same-generation no-owner-upgrade regression) | 0 | PASS; Rust workspace Clippy/tests, Bun checks, Playwright E2E, and desktop checks completed; architecture audit emitted 66 advisory warnings |
+| `cargo xtask check all` (final invocation after PID-only proof compatibility regression and report refresh) | 0 | PASS; Rust workspace Clippy/tests, Bun checks, Playwright E2E, and desktop checks completed; architecture audit emitted 66 advisory warnings |
+| `git diff --check` (after source and correction report edits) | 0 | PASS |
+| `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` (after source and correction report edits) | 0 | PASS |
+| `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check` (after source and correction report edits) | 0 | PASS |
+
+Intermediate focused attempts, not counted as final-gate passes:
+
+| Command / attempt | Exit | Result and correction |
+| --- | ---: | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` followed by the startup-admission test run | 0 / 1 | Formatting passed; compile failed because `terminal_cleanup_target` needed a named borrow lifetime. Added the target lifetime and reran the 42-test suite successfully. |
+| `cargo clippy --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core -p sky_dispatch_win32 -p sky_player --all-targets --all-features -- -D warnings` (first run after adding the release permit) | 1 | FAIL: `collapsible_if` in the owner-proof check. Collapsed the condition; subsequent direct Clippy invocations passed. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support production_worker_focus_restore_resumes_after_grace_with_mock_sender -- --nocapture` (before mock fixture identity was bound) | 1 | FAIL: the focus-required mock fixture published a foreground HWND without a matching synthetic retained owner identity, so no Down was admitted. Bound a synthetic process authority and explicit owner PID; the focused test and full package suite passed. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_downs` (first focused attempt) | 1 | FAIL: timing-sensitive harness evaluation observed `Wait` just before the next packet target. The isolated rerun passed; the final package suite and workspace suite also passed this regression. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_obligation -- --exact engine::worker::dispatch_loop_m2_tests::failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_obligation` | 0 | 0 tests selected because the fully qualified name did not match the module path; not counted as evidence. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_obligation` | 0 | PASS, 1 selected |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support production_worker_focus_restore_resumes_after_grace_with_mock_sender` (after fixture correction) | 0 | PASS, 1 selected |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_downs` (isolated rerun) | 0 | PASS, 1 selected |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support release_proof` (after adding the PID-only proof compatibility check) | 0 | PASS, 3 selected |
+
+One exploratory full `sky_player` run was interrupted while diagnosing the
+mock target's `HWND=0` path; it did not produce an exit code or a test result
+and is not counted as a gate. A subsequent full package invocation before the
+fixture corrections returned exit 1 (278 passed, 4 failed): the failures were
+the explicit test-owner invalidation expectation, the cleanup diagnostic
+substring assertion, the mock focus fixture above, and the timing-sensitive
+anomaly case. The test invalidation behavior and diagnostic text were restored,
+the fixture was corrected, and timing was rerun in isolation. The final direct
+package run is PASS as recorded above.
+
+The final `git diff --check` and both format checks are rerun after this report
+edit; their actual exit codes are recorded in the gate table above.

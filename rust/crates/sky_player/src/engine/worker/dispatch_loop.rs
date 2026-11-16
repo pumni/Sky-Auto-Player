@@ -192,14 +192,38 @@ pub(crate) const fn preroll_manual_pause_cancels(
 fn suspend_live_input_for_dispatch(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
-    target_hwnd: isize,
-    _runtime: &super::WorkerRuntime,
+    target: &SessionTarget,
+    expected_target: Option<TargetStamp>,
+    require_owner_identity: bool,
+    runtime: &super::WorkerRuntime,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
+    let release_mask = backend.release_obligation_mask();
+    let target_hwnd = match expected_target {
+        Some(stamp) => stamp.hwnd,
+        None if release_mask == 0 => target.hwnd_for_safety_release(),
+        None => {
+            return Err("target generation unavailable while release obligations remain".into());
+        }
+    };
+    let _release_permit = if release_mask != 0 {
+        let stamp = expected_target.expect("nonempty release mask requires a target stamp");
+        let release_owner = backend
+            .release_owner_proof_for_mask(release_mask)?
+            .ok_or_else(|| "tracked release owner proof is missing".to_string())?;
+        Some(verify_safety_cleanup_target(
+            target,
+            stamp,
+            &release_owner,
+            require_owner_identity,
+        )?)
+    } else {
+        None
+    };
     super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
         let cleanup_qpc = post_cleanup_qpc()?;
         #[cfg(any(test, feature = "test-support"))]
-        if let Some(hook) = _runtime.startup_ordering_hook.as_ref() {
+        if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
             hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
         }
         Ok(cleanup_qpc)
@@ -216,7 +240,14 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    suspend_live_input_for_dispatch(backend, scheduler, target_hwnd, runtime, post_cleanup_qpc)
+    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
+        let cleanup_qpc = post_cleanup_qpc()?;
+        if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+            hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
+        }
+        Ok(cleanup_qpc)
+    })
+    .map(|_| ())
 }
 
 #[derive(Debug)]
@@ -569,6 +600,21 @@ pub(crate) fn dispatch_staged_candidate(
         }
     }
 
+    let release_owner = if has_down {
+        match target.try_release_owner_proof_for_generation(
+            expected_target.hwnd,
+            expected_target.generation,
+        ) {
+            Ok(proof) => Some(proof),
+            Err(_) => {
+                runtime.verified_target = None;
+                return StagedDispatchOutcome::Replan;
+            }
+        }
+    } else {
+        None
+    };
+
     let previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
     let previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();
     runtime.previous_sendinput_completion_qpc = previous_sendinput_completion_qpc;
@@ -578,11 +624,20 @@ pub(crate) fn dispatch_staged_candidate(
         candidate.packet_masks.up_mask,
         candidate.packet_masks.down_mask,
     );
-    let send_result = resources
-        .backend
-        .send_prepared_physical_packet_at_final_boundary_deferred_commit(
-            &candidate.prepared_packet,
-        );
+    let send_result = if let Some(release_owner) = release_owner.as_ref() {
+        resources
+            .backend
+            .send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
+                &candidate.prepared_packet,
+                release_owner,
+            )
+    } else {
+        resources
+            .backend
+            .send_prepared_physical_packet_at_final_boundary_deferred_commit(
+                &candidate.prepared_packet,
+            )
+    };
     let complete_transport_evidence = send_result.has_complete_evidence_for(physical_packet);
     let valid_sender_timing_evidence = send_result.has_valid_sender_timing_evidence();
     let healthy_completion_evidence = complete_transport_evidence && valid_sender_timing_evidence;
@@ -668,25 +723,18 @@ pub(crate) fn dispatch_staged_candidate(
             ));
             return StagedDispatchOutcome::Exit;
         };
-        if let Err(error) =
-            verify_safety_cleanup_target(target, expected_target, config.focus.require_focus)
-        {
-            runtime.verified_target = None;
-            runtime.terminal_error = Some(format!(
-                "post-call anomaly cleanup withheld pending ownership proof ({error}); release remains pending: {anomaly_record}"
-            ));
-            return StagedDispatchOutcome::Exit;
-        }
         if let Err(error) = suspend_live_input_for_dispatch(
             &mut resources.backend,
             &mut resources.scheduler,
-            expected_target.hwnd,
+            target,
+            Some(expected_target),
+            config.focus.require_focus,
             runtime,
             || qpc_clock.now().map_err(|error| format!("{error:?}")),
         ) {
             runtime.verified_target = None;
             runtime.terminal_error = Some(format!(
-                "post-call anomaly tracked safety cleanup failed ({error}): {anomaly_record}"
+                "post-call anomaly tracked safety cleanup failed or was withheld ({error}): {anomaly_record}"
             ));
             return StagedDispatchOutcome::Exit;
         }
@@ -1109,7 +1157,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             && let Err(error) = suspend_live_input_for_dispatch(
                                 &mut resources.backend,
                                 &mut resources.scheduler,
-                                preflight_target.hwnd,
+                                target,
+                                Some(preflight_target),
+                                config.focus.require_focus,
                                 &core.runtime,
                                 || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             )
@@ -1138,7 +1188,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
                             &mut resources.scheduler,
-                            preflight_target.hwnd,
+                            target,
+                            Some(preflight_target),
+                            config.focus.require_focus,
                             &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
@@ -1249,7 +1301,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     if let Err(error) = suspend_live_input_for_dispatch(
                         &mut resources.backend,
                         &mut resources.scheduler,
-                        target.hwnd_for_safety_release(),
+                        target,
+                        load_target_stamp(target),
+                        config.focus.require_focus,
                         &core.runtime,
                         || qpc_clock.now().map_err(|error| format!("{error:?}")),
                     ) {
@@ -1294,7 +1348,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
                             &mut resources.scheduler,
-                            target.hwnd_for_safety_release(),
+                            target,
+                            load_target_stamp(target),
+                            config.focus.require_focus,
                             &core.runtime,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {

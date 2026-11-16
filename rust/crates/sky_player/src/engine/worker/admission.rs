@@ -602,15 +602,24 @@ pub(crate) fn target_stamp_still_current(target: &SessionTarget, expected: Targe
 /// Validate retained ownership before invoking the tracked safety-release
 /// path after a post-call anomaly. This intentionally does not require current
 /// foreground focus: safety Up is a distinct ownership-verified path.
-pub(crate) fn verify_safety_cleanup_target(
-    target: &SessionTarget,
+pub(crate) fn verify_safety_cleanup_target<'a>(
+    target: &'a SessionTarget,
     expected: TargetStamp,
+    release_owner: &sky_dispatch_win32::input::ReleaseOwnerProof,
     require_owner_identity: bool,
-) -> Result<(), String> {
+) -> Result<parking_lot::MutexGuard<'a, ()>, String> {
+    if release_owner.target_hwnd() != expected.hwnd
+        || release_owner.target_generation() != expected.generation
+    {
+        return Err("tracked safety cleanup origin target generation drifted".into());
+    }
     if !target_stamp_still_current(target, expected) {
         return Err("target HWND/generation changed before tracked safety cleanup".into());
     }
-    if require_owner_identity || target.owner_process_identity_required() {
+    if require_owner_identity
+        || target.owner_process_identity_required()
+        || release_owner.owner_pid().is_some()
+    {
         let owner_pid = match target.owner_identity_status(expected.generation) {
             OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => owner_pid,
             OwnerIdentityStatus::Bound(_) | OwnerIdentityStatus::NotRequired => {
@@ -638,7 +647,13 @@ pub(crate) fn verify_safety_cleanup_target(
                 return Err("tracked safety cleanup target owner query is unavailable".into());
             }
         };
+        if release_owner.owner_pid() != Some(owner_pid) {
+            return Err("tracked safety cleanup origin owner PID changed".into());
+        }
         if target.owner_process_identity_required() {
+            let origin_authority = release_owner.authority().ok_or_else(|| {
+                "tracked safety cleanup origin process authority is missing".to_string()
+            })?;
             let authority = match target.try_owner_authority_for_generation(expected.generation) {
                 Ok(authority) => authority,
                 Err(OwnerAuthorityReadError::Busy) => {
@@ -648,21 +663,29 @@ pub(crate) fn verify_safety_cleanup_target(
                     return Err("tracked safety cleanup retained owner proof is unavailable".into());
                 }
             };
-            if authority.continuity()
-                != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
-                || authority.identity().owner_pid != owner_pid
-                || authority.identity().hwnd != expected.hwnd
+            if !std::sync::Arc::ptr_eq(origin_authority, &authority)
+                || origin_authority.continuity()
+                    != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+                || origin_authority.identity().owner_pid != owner_pid
+                || origin_authority.identity().hwnd != expected.hwnd
             {
                 return Err(
-                    "tracked safety cleanup retained owner proof is no longer current".into(),
+                    "tracked safety cleanup origin process proof is no longer current".into(),
                 );
             }
+            #[cfg(test)]
+            target.run_safety_release_validation_hook_for_test();
         }
     }
+    let release_permit = target
+        .lock_current_release_owner_proof(release_owner)
+        .ok_or_else(|| {
+            "tracked safety cleanup origin owner proof changed during validation".to_string()
+        })?;
     if !target_stamp_still_current(target, expected) {
         return Err("target HWND/generation changed during tracked safety proof".into());
     }
-    Ok(())
+    Ok(release_permit)
 }
 
 #[derive(Debug, PartialEq, Eq)]

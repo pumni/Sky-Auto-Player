@@ -1031,6 +1031,39 @@ impl NativeDispatchSession {
             .map(|(authority, _)| Arc::downgrade(&authority))
     }
 
+    #[cfg(test)]
+    pub(super) fn set_owner_poll_result_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        self.shared
+            .target
+            .set_owner_poll_result_barrier_for_test(reached, resume);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_owner_close_snapshot_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        self.shared
+            .target
+            .set_owner_close_snapshot_barrier_for_test(reached, resume);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_safety_release_validation_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        self.shared
+            .target
+            .set_safety_release_validation_barrier_for_test(reached, resume);
+    }
+
     fn bind_window_identity_authority_with_pid(
         &self,
         authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
@@ -1080,13 +1113,19 @@ impl NativeDispatchSession {
                 == super::target::OwnerIdentityStatus::NotRequired;
         };
         let Some(target) = self.shared.target.load_stable() else {
-            if self.startup_active() {
+            #[cfg(test)]
+            self.shared.target.run_owner_poll_result_hook_for_test();
+            let applied = self.shared.target.invalidate_polled_owner_if_current(
+                &authority,
+                bound_generation,
+                OwnerIdentityFailure::ProcessTerminated,
+            );
+            if applied && self.startup_active() {
                 self.shared
                     .commands
                     .system_power
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
-            self.shared.target.invalidate_owner_identity();
             let _ = self.shared.commands.interrupt.signal();
             return false;
         };
@@ -1100,8 +1139,20 @@ impl NativeDispatchSession {
             let _ = self.shared.commands.interrupt.signal();
             return false;
         }
-        let failure = match authority.continuity() {
-            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => return true,
+        let continuity = authority.continuity();
+        #[cfg(test)]
+        self.shared.target.run_owner_poll_result_hook_for_test();
+        let failure = match continuity {
+            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {
+                let current = self
+                    .shared
+                    .target
+                    .polled_owner_is_current(&authority, bound_generation);
+                if !current {
+                    let _ = self.shared.commands.interrupt.signal();
+                }
+                return current;
+            }
             sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
                 OwnerIdentityFailure::ProcessTerminated
             }
@@ -1118,13 +1169,17 @@ impl NativeDispatchSession {
                 OwnerIdentityFailure::QueryUnavailable
             }
         };
-        if self.startup_active() {
+        let applied = self.shared.target.invalidate_polled_owner_if_current(
+            &authority,
+            bound_generation,
+            failure,
+        );
+        if applied && self.startup_active() {
             self.shared
                 .commands
                 .system_power
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
-        self.shared.target.invalidate_owner_identity_with(failure);
         let _ = self.shared.commands.interrupt.signal();
         false
     }
@@ -1132,14 +1187,21 @@ impl NativeDispatchSession {
     /// Release the retained process object exactly once at terminal session
     /// teardown. The caller joins the worker/supervisor before closing it.
     pub fn close_window_identity_authority(&self) {
-        if self.startup_active() {
+        let Some((authority, generation)) = self.shared.target.owner_authority_snapshot() else {
+            return;
+        };
+        #[cfg(test)]
+        self.shared.target.run_owner_close_snapshot_hook_for_test();
+        let closed = self
+            .shared
+            .target
+            .close_owner_authority_if_current(&authority, generation);
+        if closed && self.startup_active() {
             self.shared
                 .commands
                 .system_power
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
-        self.shared.target.clear_owner_authority();
-        self.shared.target.invalidate_owner_identity();
     }
 
     /// Publish a transition-only supervisor focus hint. This wakes the worker

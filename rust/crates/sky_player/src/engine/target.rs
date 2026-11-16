@@ -1,4 +1,4 @@
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 
@@ -23,6 +23,15 @@ pub struct SessionTarget {
     /// immutable authority, and performs OS queries without holding this lock.
     owner_authority: Mutex<Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)>>,
     writer: Mutex<()>,
+    #[cfg(test)]
+    owner_poll_result_barrier_for_test:
+        Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    #[cfg(test)]
+    owner_close_snapshot_barrier_for_test:
+        Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    #[cfg(test)]
+    safety_release_validation_barrier_for_test:
+        Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +96,12 @@ impl SessionTarget {
             owner_process_identity_required: AtomicBool::new(false),
             owner_authority: Mutex::new(None),
             writer: Mutex::new(()),
+            #[cfg(test)]
+            owner_poll_result_barrier_for_test: Mutex::new(None),
+            #[cfg(test)]
+            owner_close_snapshot_barrier_for_test: Mutex::new(None),
+            #[cfg(test)]
+            safety_release_validation_barrier_for_test: Mutex::new(None),
         }
     }
 
@@ -198,6 +213,44 @@ impl SessionTarget {
         Ok(Arc::clone(authority))
     }
 
+    pub(super) fn try_release_owner_proof_for_generation(
+        &self,
+        expected_hwnd: isize,
+        expected_generation: u64,
+    ) -> Result<sky_dispatch_win32::input::ReleaseOwnerProof, OwnerAuthorityReadError> {
+        if self.load_stable() != Some((expected_hwnd, expected_generation)) {
+            return Err(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale));
+        }
+        let mut owner_pid = None;
+        let mut authority = None;
+        if self.owner_identity_required.load(Ordering::Acquire) {
+            match self.owner_identity_status(expected_generation) {
+                OwnerIdentityStatus::Bound(pid) if pid != 0 => owner_pid = Some(pid),
+                status => return Err(OwnerAuthorityReadError::Status(status)),
+            }
+            if self.owner_process_identity_required() {
+                let retained = self.try_owner_authority_for_generation(expected_generation)?;
+                if retained.identity().hwnd != expected_hwnd
+                    || Some(retained.identity().owner_pid) != owner_pid
+                {
+                    return Err(OwnerAuthorityReadError::Status(
+                        OwnerIdentityStatus::OwnerMismatch,
+                    ));
+                }
+                authority = Some(retained);
+            }
+        }
+        sky_dispatch_win32::input::ReleaseOwnerProof::new(
+            expected_hwnd,
+            expected_generation,
+            owner_pid,
+            authority,
+        )
+        .ok_or(OwnerAuthorityReadError::Status(
+            OwnerIdentityStatus::OwnerMismatch,
+        ))
+    }
+
     pub(super) fn owner_authority_snapshot(
         &self,
     ) -> Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)> {
@@ -207,8 +260,175 @@ impl SessionTarget {
             .map(|(authority, generation)| (Arc::clone(authority), *generation))
     }
 
-    pub(super) fn clear_owner_authority(&self) {
+    /// Apply a supervisor poll failure only while both the published target
+    /// and retained authority still identify the snapshot that was queried.
+    /// The writer lock serializes this comparison and invalidation with target
+    /// publication, owner binding, and close.
+    pub(super) fn invalidate_polled_owner_if_current(
+        &self,
+        authority: &Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+        generation: u64,
+        failure: OwnerIdentityFailure,
+    ) -> bool {
+        let _writer = self.writer.lock();
+        if !self.owner_authority_matches_locked(authority, generation)
+            || !self.owner_live.load(Ordering::SeqCst)
+        {
+            return false;
+        }
+        self.owner_failure.store(failure as u32, Ordering::SeqCst);
+        self.owner_live.store(false, Ordering::SeqCst);
+        true
+    }
+
+    /// A completed successful poll is useful only when it still describes
+    /// the current retained authority. It never mutates a newer binding.
+    pub(super) fn polled_owner_is_current(
+        &self,
+        authority: &Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+        generation: u64,
+    ) -> bool {
+        let _writer = self.writer.lock();
+        self.owner_authority_matches_locked(authority, generation)
+            && self.owner_live.load(Ordering::SeqCst)
+    }
+
+    /// Close a previously snapshotted authority without allowing a late
+    /// teardown callback to clear a replacement binding.
+    pub(super) fn close_owner_authority_if_current(
+        &self,
+        authority: &Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+        generation: u64,
+    ) -> bool {
+        let _writer = self.writer.lock();
+        if !self.owner_authority_matches_locked(authority, generation) {
+            return false;
+        }
         self.owner_authority.lock().take();
+        self.owner_failure.store(
+            OwnerIdentityFailure::ProcessTerminated as u32,
+            Ordering::SeqCst,
+        );
+        self.owner_live.store(false, Ordering::SeqCst);
+        true
+    }
+
+    /// Acquire a short-lived release permit which serializes the final origin
+    /// proof check with target publication, binding, close, and the ensuing
+    /// safety release syscall. Callers must hold the returned guard through
+    /// that syscall. The potentially slow process continuity query happens
+    /// before this method, so a generation change during that query rejects
+    /// the permit rather than being ordered after a stale release.
+    pub(super) fn lock_current_release_owner_proof(
+        &self,
+        proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
+    ) -> Option<MutexGuard<'_, ()>> {
+        let writer = self.writer.lock();
+        if self.release_owner_proof_is_current_locked(proof) {
+            Some(writer)
+        } else {
+            None
+        }
+    }
+
+    fn release_owner_proof_is_current_locked(
+        &self,
+        proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
+    ) -> bool {
+        if self.load_stable() != Some((proof.target_hwnd(), proof.target_generation())) {
+            return false;
+        }
+        if proof.owner_pid().is_none() && self.owner_identity_required.load(Ordering::Acquire) {
+            return false;
+        }
+        if let Some(expected_pid) = proof.owner_pid()
+            && self.owner_identity_status(proof.target_generation())
+                != OwnerIdentityStatus::Bound(expected_pid)
+        {
+            return false;
+        }
+        let retained = self.owner_authority.lock();
+        match (proof.authority(), retained.as_ref()) {
+            (Some(expected), Some((current, generation))) => {
+                *generation == proof.target_generation() && Arc::ptr_eq(expected, current)
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn owner_authority_matches_locked(
+        &self,
+        authority: &Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+        generation: u64,
+    ) -> bool {
+        if self.load_stable() != Some((authority.identity().hwnd, generation))
+            || self.owner_generation.load(Ordering::SeqCst) != generation
+            || self.owner_pid.load(Ordering::SeqCst) != authority.identity().owner_pid
+        {
+            return false;
+        }
+        self.owner_authority
+            .lock()
+            .as_ref()
+            .is_some_and(|(retained, retained_generation)| {
+                *retained_generation == generation && Arc::ptr_eq(retained, authority)
+            })
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_owner_poll_result_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        *self.owner_poll_result_barrier_for_test.lock() = Some((reached, resume));
+    }
+
+    #[cfg(test)]
+    pub(super) fn run_owner_poll_result_hook_for_test(&self) {
+        if let Some((reached, resume)) = self.owner_poll_result_barrier_for_test.lock().take() {
+            reached.wait();
+            resume.wait();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_owner_close_snapshot_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        *self.owner_close_snapshot_barrier_for_test.lock() = Some((reached, resume));
+    }
+
+    #[cfg(test)]
+    pub(super) fn run_owner_close_snapshot_hook_for_test(&self) {
+        if let Some((reached, resume)) = self.owner_close_snapshot_barrier_for_test.lock().take() {
+            reached.wait();
+            resume.wait();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_safety_release_validation_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        *self.safety_release_validation_barrier_for_test.lock() = Some((reached, resume));
+    }
+
+    #[cfg(test)]
+    pub(super) fn run_safety_release_validation_hook_for_test(&self) {
+        if let Some((reached, resume)) = self
+            .safety_release_validation_barrier_for_test
+            .lock()
+            .take()
+        {
+            reached.wait();
+            resume.wait();
+        }
     }
 
     #[inline(always)]
@@ -252,11 +472,14 @@ impl SessionTarget {
         OwnerIdentityStatus::Bound(owner_pid)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn invalidate_owner_identity(&self) {
         self.invalidate_owner_identity_with(OwnerIdentityFailure::ProcessTerminated);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn invalidate_owner_identity_with(&self, failure: OwnerIdentityFailure) {
+        let _writer = self.writer.lock();
         self.owner_failure.store(failure as u32, Ordering::SeqCst);
         self.owner_live.store(false, Ordering::Release);
     }
@@ -540,6 +763,42 @@ mod tests {
         assert_eq!(
             target.owner_identity_status(3),
             OwnerIdentityStatus::ProcessTerminated
+        );
+    }
+
+    #[test]
+    fn pid_only_release_proof_matches_current_pid_binding_without_process_authority() {
+        let target = SessionTarget::new(123, 1);
+        assert!(target.bind_owner_identity(123, 1, 77));
+
+        let proof = target
+            .try_release_owner_proof_for_generation(123, 1)
+            .expect("PID-bound target release proof");
+        assert_eq!(proof.owner_pid(), Some(77));
+        assert!(proof.authority().is_none());
+        assert!(target.lock_current_release_owner_proof(&proof).is_some());
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn release_proof_without_owner_cannot_be_upgraded_by_late_same_generation_bind() {
+        let target = SessionTarget::new(123, 1);
+        let proof = target
+            .try_release_owner_proof_for_generation(123, 1)
+            .expect("unbound target proof");
+        assert_eq!(proof.owner_pid(), None);
+        assert!(target.bind_owner_identity_authority(
+            123,
+            1,
+            77,
+            Arc::new(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77)
+            ),
+        ));
+
+        assert!(
+            target.lock_current_release_owner_proof(&proof).is_none(),
+            "a later owner binding cannot upgrade a release obligation created without identity"
         );
     }
 

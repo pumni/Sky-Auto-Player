@@ -108,9 +108,9 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // owner; resumable cleanup remains a separate lifecycle operation.
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_release_started");
-    let cleanup_result = match terminal_cleanup_target(target, backend.release_obligation_mask()) {
-        Ok(hwnd) => catch_unwind(AssertUnwindSafe(|| {
-            backend.release_terminal_tracked_scope(hwnd)
+    let cleanup_result = match terminal_cleanup_target(target, &backend) {
+        Ok(cleanup_target) => catch_unwind(AssertUnwindSafe(|| {
+            backend.release_terminal_tracked_scope(cleanup_target.hwnd)
         }))
         .map_err(TerminalCleanupFailure::Panicked),
         Err(reason) => Err(TerminalCleanupFailure::Withheld(reason)),
@@ -466,21 +466,44 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
 }
 
-fn terminal_cleanup_target(
-    target: &super::SessionTarget,
-    release_obligation_mask: u16,
-) -> Result<isize, String> {
+fn terminal_cleanup_target<'a>(
+    target: &'a super::SessionTarget,
+    backend: &sky_dispatch_win32::input::TrackedKeyState,
+) -> Result<TerminalCleanupTarget<'a>, String> {
+    let release_obligation_mask = backend.release_obligation_mask();
     let Some((hwnd, generation)) = target.load_stable() else {
         if release_obligation_mask == 0 {
-            return Ok(target.hwnd_for_safety_release());
+            return Ok(TerminalCleanupTarget {
+                hwnd: target.hwnd_for_safety_release(),
+                _release_permit: None,
+            });
         }
         return Err("target HWND/generation unavailable while release obligations remain".into());
     };
     let stamp = TargetStamp { hwnd, generation };
-    if release_obligation_mask != 0 {
-        verify_safety_cleanup_target(target, stamp, target.owner_process_identity_required())?;
-    }
-    Ok(hwnd)
+    let release_permit = if release_obligation_mask != 0 {
+        let release_owner = backend
+            .release_owner_proof_for_mask(release_obligation_mask)?
+            .ok_or_else(|| "tracked release owner proof is missing".to_string())?;
+        Some(verify_safety_cleanup_target(
+            target,
+            stamp,
+            &release_owner,
+            target.owner_process_identity_required(),
+        )?)
+    } else {
+        None
+    };
+    Ok(TerminalCleanupTarget {
+        hwnd,
+        _release_permit: release_permit,
+    })
+}
+
+struct TerminalCleanupTarget<'a> {
+    hwnd: isize,
+    // Retain writer serialization through the terminal safety syscall.
+    _release_permit: Option<parking_lot::MutexGuard<'a, ()>>,
 }
 
 fn describe_terminal_release_evidence(evidence: &TerminalReleaseEvidence) -> String {

@@ -254,6 +254,15 @@ that bounded query, but its final target-generation check rejects the old
 publication. A target publication cannot inherit the prior process proof, even
 when the numeric HWND is reused.
 
+Supervisor poll results and authority close are conditional on the exact
+retained `Arc<WindowIdentityAuthority>` and target generation that were
+snapshotted. Querying process continuity happens without holding the writer
+lock; applying its result rechecks the target stamp and retained authority
+under the same writer serialization used by publication and binding. A stale
+poll can wake the worker, but cannot change the replacement owner's live bit,
+failure reason, or pre-Arm cancellation. Late close uses the same conditional
+rule and cannot clear a newly bound authority.
+
 For each focus-required musical packet, the worker samples the current
 foreground HWND and owner PID, then queries the retained process handle for its
 live state and creation time after lease/control checks. It performs a final
@@ -264,16 +273,26 @@ to check `IsWindow`, owner PID, process creation time, and image path on its
 control cadence. This final proof supplements the fresh OS window query; it
 does not replace it with a cached PID or identity value.
 
-Tracked safety cleanup uses a separate retained-owner proof. It rechecks the
-exact HWND/process continuity without requiring that window to be foreground,
-then follows the existing release and quarantine policy. The target binding is
-stored under the same shared session state used by worker and watchdog, so an
-owner object unwind does not close the process handle while either thread can
-still perform terminal cleanup. The watchdog lease and desktop supervisor
-remain active; presentation events and progress snapshots are not worker
-authority. Presentation delivery failure still requests terminal cleanup,
-while a blocked presentation consumer cannot hold the supervisor's command,
-lease, or worker-join path.
+Each tracked key slot freezes a release-owner proof before a Down can create an
+in-flight obligation. The proof includes the originating HWND and generation,
+PID when required, and retained process-authority object identity. An A-to-B
+rebind or same-HWND generation change cannot transfer A's release obligation
+to B. Terminal and resumable safety cleanup read the proof from the tracked
+backend, recheck the exact origin HWND/process continuity without requiring
+foreground focus, and acquire a generation-conditional release permit. The
+permit serializes the final proof check with publication/binding/close and is
+held through the safety syscall. If validation observes drift or cannot prove
+the origin, cleanup sends no Up, preserves the obligation, and finalizes with
+an error. Zero-obligation cleanup needs no owner proof or syscall. The existing
+release and quarantine policy remains in force.
+
+The target binding is stored under the same shared session state used by worker
+and watchdog, so an owner object unwind does not close the process handle while
+either thread can still perform terminal cleanup. The watchdog lease and
+desktop supervisor remain active; presentation events and progress snapshots
+are not worker authority. Presentation delivery failure still requests
+terminal cleanup, while a blocked presentation consumer cannot hold the
+supervisor's command, lease, or worker-join path.
 
 ### Resume Barrier (cleanup completion + $G$)
 After verified pause or focus-restoration cleanup completes at QPC $Q$:
