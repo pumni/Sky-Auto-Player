@@ -26,6 +26,44 @@ fn candidate_at(
         .expect("candidate is due")
 }
 
+fn candidate_after_scheduler_waits_at(
+    harness: &mut ProductionDispatchTestHarness,
+    mut at: QpcTicks,
+    epoch: QpcTicks,
+) -> crate::engine::worker::StagedCandidate {
+    for _ in 0..8 {
+        match harness
+            .evaluate_live_scheduler_for_test(at, epoch)
+            .expect("evaluate production scheduler")
+        {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => {
+                return harness
+                    .stage_candidate_with_scheduler_window_for_test(
+                        up_mask,
+                        down_chord.map(Into::into),
+                        timing_window,
+                    )
+                    .expect("stage production candidate")
+                    .expect("scheduler Send decision has a candidate");
+            }
+            DispatchDecision::Wait { deadline_qpc } => {
+                assert!(
+                    deadline_qpc > at,
+                    "scheduler Wait must advance the QPC test boundary"
+                );
+                wait_until_qpc(harness, deadline_qpc);
+                at = deadline_qpc;
+            }
+            DispatchDecision::Finished => panic!("expected a due physical packet"),
+        }
+    }
+    panic!("scheduler did not produce a packet within eight bounded reevaluations")
+}
+
 fn dispatch_with_source(
     harness: &mut ProductionDispatchTestHarness,
     candidate: crate::engine::worker::StagedCandidate,
@@ -337,14 +375,14 @@ fn forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_dow
             .resume_barrier_qpc_for_test()
             .map_or(down_target, |barrier| barrier.max(down_target));
         wait_until_qpc(&harness, dispatch_at);
-        let down = candidate_at(&mut harness, dispatch_at, epoch);
+        let down = candidate_after_scheduler_waits_at(&mut harness, dispatch_at, epoch);
         assert_eq!(down.source_action_index, down_index);
         assert_eq!(down.packet_masks, PhysicalPacket::new(0, 1));
         dispatch_with_source(&mut harness, down, source.as_ref());
 
         let up_target = target_at(&harness, epoch, pair as u64 * PERIOD_US + UP_AFTER_US);
         wait_until_qpc(&harness, up_target);
-        let up = candidate_at(&mut harness, up_target, epoch);
+        let up = candidate_after_scheduler_waits_at(&mut harness, up_target, epoch);
         assert_eq!(up.source_action_index, down_index + 1);
         assert_eq!(up.packet_masks, PhysicalPacket::new(1, 0));
         dispatch_with_source(&mut harness, up, source.as_ref());
