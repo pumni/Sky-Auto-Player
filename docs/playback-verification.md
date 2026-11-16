@@ -228,6 +228,21 @@ tests, not latency distributions or gameplay qualification. See
 baseline/candidate operation-count comparison, race trace, and verification
 ledger.
 
+## Issue #666 mid-playback preflight and code-quality correction
+
+The production worker regressions keep a validated A-session preflight stamp
+across early owner-proof Busy and final writer/owner-authority Busy while a
+second authored Down is pending. The probe reports A physically held after the
+first Down, so any accidental all-keys rescan would fail. The tests assert no
+second sender call or journal/cursor mutation during Busy, then verify one B
+attempt, the retained A-origin proof, and A's authored Up. Separate controls
+cover same-HWND generation ABA, focus recovery, and lease expiry. H/G tick-edge
+checks use supplied QPC values; a separate real waiter smoke test covers a
+future deadline wake. These are mock-sender tests and do not establish Sky
+gameplay reception. See
+[`issue-666-preflight-code-quality.md`](evidence/issue-666-preflight-code-quality.md)
+for the exact cases, warning cleanup, and verification ledger.
+
 ## Offline lifecycle and manifest checks
 
 The current offline scheduler lifecycle report is produced and validated with:

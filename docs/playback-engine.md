@@ -179,6 +179,15 @@ mixed packet's Down gate is temporarily rejected while its independent Up is
 still eligible, the worker stages and admits that Up-only packet through the
 same fresh musical final gate; the rejected Down remains pending.
 
+The verified-target cache records only a successful all-instrument-keys-up
+preflight for one exact HWND/generation. It is not a cached foreground or
+process-owner proof. A transient owner-authority read or final-permit Busy
+preserves that stamp only when it was already present and the same target
+generation is still current. Every retry still repeats fresh focus, owner PID,
+process-identity, lease, power, and control admission. Missing or stale stamps,
+target generation changes, and focus recovery continue through their normal
+preflight path; a Busy result cannot create or transfer a stamp.
+
 A short writer or retained-owner-authority mutex miss at the final musical
 permit is classified separately from target drift. With target generation and
 focus still current, the worker performs one immediate full scheduler
