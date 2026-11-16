@@ -43,9 +43,8 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     let (down, down_eval_count) = stage_from_worker_outer_evaluation(&mut harness, down_eval_qpc);
     assert_eq!(down_eval_count, 1);
     assert!(down.timing_window.packet_not_before_qpc <= down_eval_qpc);
-    harness.set_mock_sender_start_qpc_for_test(
-        harness.qpc_now_for_test().expect("Down sender start"),
-    );
+    let down_sender_start_qpc = harness.qpc_now_for_test().expect("Down sender start");
+    harness.set_mock_sender_start_qpc_for_test(down_sender_start_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(down, false),
         StagedDispatchOutcome::Dispatched
@@ -56,7 +55,16 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     // Mock transport evidence places the confirmed Down completion 40 ms
     // after sender start. The production scheduler must retain its completion
     // relative H floor and project a future Up packet without advancing it.
-    let up_eval_qpc = harness.qpc_now_for_test().expect("Up scheduler QPC");
+    // Evaluate at the recorded completion QPC. The H projection oracle is
+    // independent of a runner being preempted between the Down commit and
+    // this scheduler evaluation.
+    let down_completed_qpc = packets
+        .lock()
+        .expect("Down completion capture")
+        .first()
+        .and_then(|(_, evidence)| evidence.completed_ticks)
+        .expect("confirmed Down completion QPC");
+    let up_eval_qpc = down_completed_qpc;
     super::reset_scheduler_evaluation_count_for_test();
     let (up_action, up_scheduler_deadline, projected_up) =
         super::evaluate_scheduler_action_for_staging(
@@ -121,6 +129,7 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     assert_eq!(selected_h_deadline, h_floor_qpc);
     assert!(matches!(h_wake, super::WaitBoundary::Due { .. }));
     let h_wake_qpc = harness.qpc_now_for_test().expect("H wait wake QPC");
+    assert!(h_wake_qpc >= h_floor_qpc, "real waiter wakes no earlier than H");
     harness.set_mock_sender_start_qpc_for_test(h_wake_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up, false),
@@ -131,7 +140,12 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
 
     // The confirmed Up completion starts the G floor. A same-key Down authored
     // at 60 ms remains pending through G-1 and becomes eligible at G exactly.
-    let down_b_eval_qpc = harness.qpc_now_for_test().expect("G scheduler QPC");
+    // The real H waiter returns at or after the selected deadline. Use its
+    // recorded wake as the deterministic G evaluation input: G starts from
+    // the Up's confirmed completion and is therefore still future at this
+    // exact synthetic boundary, even if the test thread is subsequently
+    // stalled before projection.
+    let down_b_eval_qpc = h_wake_qpc;
     super::reset_scheduler_evaluation_count_for_test();
     let (down_b_action, down_b_scheduler_deadline, projected_down_b) =
         super::evaluate_scheduler_action_for_staging(
@@ -196,6 +210,7 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     assert_eq!(selected_g_deadline, g_floor_qpc);
     assert!(matches!(g_wake, super::WaitBoundary::Due { .. }));
     let g_wake_qpc = harness.qpc_now_for_test().expect("G wait wake QPC");
+    assert!(g_wake_qpc >= g_floor_qpc, "real waiter wakes no earlier than G");
     harness.set_mock_sender_start_qpc_for_test(g_wake_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(down_b, false),
@@ -229,6 +244,43 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
         gstart = sent[2].1.started_ticks.expect("Down B sender start QPC").as_u64(),
         gwait = elapsed_us(clock, down_b_eval_qpc, g_wake_qpc),
     );
+}
+
+#[test]
+fn real_waiter_smoke_wakes_for_a_future_qpc_deadline() {
+    let actions = [
+        timing_action(6674, ActionKind::Down, 0),
+        timing_action(6675, ActionKind::Up, 1_000_000),
+    ];
+    let (mut harness, _, _) = timing_harness_without_focus(&actions, &[]);
+    let start_qpc = harness.qpc_now_for_test().expect("real waiter start QPC");
+    let deadline_qpc = start_qpc
+        .checked_add_duration(
+            harness
+                .resources
+                .clock
+                .duration_from_us(5_000)
+                .expect("real waiter deadline offset"),
+        )
+        .expect("real waiter deadline");
+    let wake = super::wait_for_next_boundary(super::WaitBoundaryInput {
+        deadline: super::WaitDeadline {
+            physical_target_qpc: Some(deadline_qpc),
+            spin_threshold_ticks: harness.timing.effective_spin_threshold_ticks,
+            qpc_clock: harness.resources.clock,
+        },
+        signals: super::WaitSignals {
+            waiter: &harness.resources.waiter,
+            interrupt: &harness.interrupt,
+        },
+        mutable: super::WaitMutable {
+            local_metrics: &mut harness.local_metrics,
+            terminal_error: &mut harness.runtime.terminal_error,
+        },
+    });
+    let wake_qpc = harness.qpc_now_for_test().expect("real waiter wake QPC");
+    assert!(matches!(wake, super::WaitBoundary::Due { .. }));
+    assert!(wake_qpc >= deadline_qpc, "waiter returned after its real QPC deadline");
 }
 
 #[test]

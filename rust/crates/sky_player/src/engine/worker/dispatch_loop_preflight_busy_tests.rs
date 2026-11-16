@@ -178,34 +178,49 @@ fn install_final_permit_contention(
     }
 }
 
+fn authored_qpc_at(
+    harness: &ProductionDispatchTestHarness,
+    epoch: QpcTicks,
+    offset_us: u64,
+) -> QpcTicks {
+    epoch
+        .checked_add_duration(
+            harness
+                .resources
+                .clock
+                .duration_from_us(offset_us)
+                .expect("authored QPC offset"),
+        )
+        .expect("authored QPC deadline")
+}
+
 fn attempt_due_b_with_policy(
     harness: &mut ProductionDispatchTestHarness,
     epoch: QpcTicks,
     retry_pending: &mut bool,
 ) -> DueBAttempt {
     let retry_allowed = std::mem::take(retry_pending);
+    let b_eval_qpc = authored_qpc_at(harness, epoch, 30_000);
+    assert!(
+        b_eval_qpc < authored_qpc_at(harness, epoch, 80_000),
+        "the deterministic retry projection remains before authored Up(A)"
+    );
     if !retry_allowed {
-        let b_deadline = epoch
-            .checked_add_duration(
-                harness
-                    .resources
-                    .clock
-                    .duration_from_us(30_000)
-                    .expect("B authored deadline"),
-            )
-            .expect("B authored QPC");
-        wait_until_qpc(harness, b_deadline);
+        wait_until_qpc(harness, b_eval_qpc);
     }
-    let eval_qpc = harness.qpc_now_for_test().expect("B outer-loop QPC");
-    let (candidate, evaluations) = stage_from_worker_outer_evaluation(harness, eval_qpc);
+    let (candidate, evaluations) = stage_from_worker_outer_evaluation(harness, b_eval_qpc);
     assert_eq!(evaluations, 1, "the due B onset uses one scheduler evaluation");
     assert_eq!(candidate.packet_masks.up_mask, 0);
     assert_eq!(candidate.packet_masks.down_mask, 2);
-    assert!(candidate.timing_window.packet_not_before_qpc <= eval_qpc);
+    assert!(candidate.timing_window.packet_not_before_qpc <= b_eval_qpc);
     let source_action_index = candidate.source_action_index;
     let target_stamp = candidate.target_stamp;
     let retry_deadline_qpc = candidate.timing_window.packet_not_before_qpc;
-    harness.set_mock_sender_start_qpc_for_test(eval_qpc);
+    // The scheduler input is deterministic, but transport evidence must use
+    // the real sender boundary sampled by the production final admission.
+    harness.set_mock_sender_start_qpc_for_test(
+        harness.qpc_now_for_test().expect("B real sender start QPC"),
+    );
     let outcome = harness.dispatch_staged_candidate_with_reason_for_test(candidate, false);
     DueBAttempt {
         source_action_index,
@@ -218,7 +233,7 @@ fn attempt_due_b_with_policy(
 
 fn wait_until_qpc(harness: &mut ProductionDispatchTestHarness, deadline_qpc: QpcTicks) {
     loop {
-        let now = harness.qpc_now_for_test().expect("wait QPC");
+        let now = harness.qpc_now_for_test().expect("deadline wait QPC");
         if now >= deadline_qpc {
             return;
         }
@@ -341,42 +356,15 @@ fn finish_b_retry_and_release_a(
         assert!(sent.iter().all(|(_, evidence)| evidence.first_inserted == 1));
     }
 
-    let up_a_target = epoch
-        .checked_add_duration(
-            harness
-                .resources
-                .clock
-                .duration_from_us(80_000)
-                .expect("A authored Up offset"),
-        )
-        .expect("A authored Up QPC");
-    loop {
-        let now = harness.qpc_now_for_test().expect("wait for authored Up(A)");
-        if now >= up_a_target {
-            break;
-        }
-        match super::super::wait_after_unstable_target(
-            now,
-            up_a_target,
-            harness.resources.clock,
-            &harness.resources.waiter,
-            &harness.interrupt,
-            &mut harness.local_metrics,
-            &mut harness.runtime.terminal_error,
-        ) {
-            super::super::WaitBoundary::Due { .. } => {}
-            super::super::WaitBoundary::Interrupted(_, _, _) => {
-                let _ = harness.interrupt.try_take();
-            }
-            super::super::WaitBoundary::Exit => panic!("authored Up(A) wait exited"),
-        }
-    }
-    let up_eval = harness.qpc_now_for_test().expect("Up(A) scheduler QPC");
+    let up_eval = authored_qpc_at(harness, epoch, 80_000);
+    wait_until_qpc(harness, up_eval);
     let (up_a, evaluations) = stage_from_worker_outer_evaluation(harness, up_eval);
     assert_eq!(evaluations, 1);
     assert_eq!(up_a.packet_masks.up_mask, 1);
     assert_eq!(up_a.packet_masks.down_mask, 0);
-    harness.set_mock_sender_start_qpc_for_test(up_eval);
+    harness.set_mock_sender_start_qpc_for_test(
+        harness.qpc_now_for_test().expect("Up(A) real sender start QPC"),
+    );
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up_a, false),
         StagedDispatchOutcome::Dispatched,
@@ -397,7 +385,11 @@ fn finish_b_retry_and_release_a(
     assert!(harness.runtime.terminal_error.is_none());
 }
 
-fn exercise_busy_preserving_preflight(lock_kind: FinalPermitLock, early_read: bool) {
+fn exercise_busy_preserving_preflight(
+    lock_kind: FinalPermitLock,
+    early_read: bool,
+    stall_before_retry_until_up_a: bool,
+) {
     let (
         mut harness,
         packets,
@@ -468,6 +460,14 @@ fn exercise_busy_preserving_preflight(lock_kind: FinalPermitLock, early_read: bo
             .expect("release final owner/writer permit lock");
         assert!(held.supervisor.join().expect("permit supervisor joins"));
     }
+    if stall_before_retry_until_up_a {
+        let up_a_deadline = authored_qpc_at(&harness, epoch, 80_000);
+        wait_until_qpc(&mut harness, up_a_deadline);
+        assert!(
+            harness.qpc_now_for_test().expect("post-stall real QPC") >= up_a_deadline,
+            "the controlled outer-loop stall crosses authored Up(A)"
+        );
+    }
     finish_b_retry_and_release_a(
         &mut harness,
         &packets,
@@ -483,21 +483,21 @@ fn exercise_busy_preserving_preflight(lock_kind: FinalPermitLock, early_read: bo
 fn early_owner_proof_read_busy_preserves_active_a_preflight_across_b_restage() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, true);
+    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, true, false);
 }
 
 #[test]
 fn final_owner_authority_mutex_busy_preserves_active_a_preflight_across_b_restage() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, false);
+    exercise_busy_preserving_preflight(FinalPermitLock::OwnerAuthority, false, true);
 }
 
 #[test]
 fn final_writer_mutex_busy_preserves_active_a_preflight_across_b_restage() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = PreflightOwnerForegroundReset;
-    exercise_busy_preserving_preflight(FinalPermitLock::Writer, false);
+    exercise_busy_preserving_preflight(FinalPermitLock::Writer, false, false);
 }
 
 #[test]
@@ -523,17 +523,8 @@ fn same_hwnd_generation_aba_repreflights_new_target_stamp() {
     assert_ne!(rebound.generation, original.generation);
     physical_mask.store(0, Ordering::Release);
 
-    let b_deadline = epoch
-        .checked_add_duration(
-            harness
-                .resources
-                .clock
-                .duration_from_us(30_000)
-                .expect("B authored deadline"),
-        )
-        .expect("B authored QPC");
-    wait_until_qpc(&mut harness, b_deadline);
-    let b_eval = harness.qpc_now_for_test().expect("rebound B QPC");
+    let b_eval = authored_qpc_at(&harness, epoch, 30_000);
+    wait_until_qpc(&mut harness, b_eval);
     let (b, evaluations) = stage_from_worker_outer_evaluation(&mut harness, b_eval);
     assert_eq!(evaluations, 1);
     assert_eq!(b.source_action_index, 6691);
@@ -574,17 +565,8 @@ fn focus_loss_invalidates_preflight_and_recovery_rechecks_after_cleanup() {
         .runtime
         .verified_target_for_test()
         .expect("validated preflight before focus loss");
-    let b_deadline = epoch
-        .checked_add_duration(
-            harness
-                .resources
-                .clock
-                .duration_from_us(30_000)
-                .expect("B authored deadline"),
-        )
-        .expect("B authored QPC");
-    wait_until_qpc(&mut harness, b_deadline);
-    let b_eval = harness.qpc_now_for_test().expect("B focus-loss QPC");
+    let b_eval = authored_qpc_at(&harness, epoch, 30_000);
+    wait_until_qpc(&mut harness, b_eval);
     let (b, _) = stage_from_worker_outer_evaluation(&mut harness, b_eval);
     assert_eq!(b.source_action_index, 6691);
     assert_eq!(preflight_calls.load(Ordering::Acquire), 1);

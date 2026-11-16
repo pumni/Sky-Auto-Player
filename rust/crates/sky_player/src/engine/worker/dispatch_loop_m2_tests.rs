@@ -1,5 +1,5 @@
 use crate::engine::test_support::ProductionDispatchTestHarness;
-use crate::engine::worker::{StagedCandidate, StagedDispatchOutcome};
+use crate::engine::worker::StagedDispatchOutcome;
 use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
@@ -7,7 +7,7 @@ use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, SendEvidence,
     SendTransactionOutcome, SendTransactionStatus,
 };
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn staged_send_at(

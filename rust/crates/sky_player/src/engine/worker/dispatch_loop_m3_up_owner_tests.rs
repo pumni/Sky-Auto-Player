@@ -1,4 +1,11 @@
-use super::*;
+use super::{candidate_at, target_at, test_action, wait_until_qpc};
+use crate::engine::test_support::ProductionDispatchTestHarness;
+use crate::engine::worker::{StagedCandidate, StagedDispatchOutcome};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::time::QpcTicks;
+use sky_dispatch_win32::input::PhysicalPacket;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 fn dispatch_while_final_authority_mutex_is_held(
     harness: &mut ProductionDispatchTestHarness,
@@ -50,7 +57,6 @@ fn dispatch_while_final_authority_mutex_is_held(
         .expect("authority supervisor test thread joins");
     (returned_without_waiting, outcome)
 }
-
 struct ForegroundTestReset;
 
 impl Drop for ForegroundTestReset {

@@ -1,5 +1,14 @@
-use super::*;
-use std::sync::atomic::AtomicU64;
+use super::wait_until_qpc;
+use crate::engine::test_support::ProductionDispatchTestHarness;
+use crate::engine::worker::StagedDispatchOutcome;
+use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
+use sky_dispatch_win32::input::{
+    PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 fn raw_zero_action(
     source_action_index: u32,
@@ -830,7 +839,9 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
 #[cfg(feature = "qpc-read-counting")]
 #[test]
 fn measured_final_admission_operations_for_healthy_packet_shapes() {
+    use super::{qpc_offset, staged_send_at};
     use crate::engine::test_support::PacketCapture;
+    use std::sync::atomic::AtomicBool;
 
     fn reset_counts(harness: &ProductionDispatchTestHarness) {
         sky_dispatch_core::executor::reset_scheduler_evaluation_count_for_test();

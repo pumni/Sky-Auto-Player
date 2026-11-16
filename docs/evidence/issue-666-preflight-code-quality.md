@@ -181,3 +181,112 @@ Implementation commit/tree/parent are listed at the top. The final evidence
 commit/tree/parent, remote branch tip, and exact-HEAD hosted CI run/status are
 recorded in the checkpoint handoff. The final serial `cargo xtask check all`
 passed with exit 0 after the evidence link was added.
+
+## Final test-stability correction
+
+- Reviewed baseline: `7446f6d37698d59aff5388c290e7a081bbd187f4`.
+- Scope: test-only. No production scheduler, admission, sender, owner-proof, or
+  lifecycle source changed. The final correction commit and tree are listed in
+  the checkpoint handoff.
+
+### Deadline projection and real waiter
+
+The prior deadline trace sampled `qpc_now_for_test()` after the Down sender and
+again before the G projection. Its assertions that the scheduler still had a
+future H/G boundary therefore depended on how long the test thread had run
+since the preceding syscall. A runner preemption could move those real samples
+past the short authored deadlines before projection.
+
+The arithmetic oracle now evaluates H at the mock sender's recorded Down
+completion QPC and evaluates G at the recorded H wake used as the mock Up
+sender-start QPC. These are fixed inputs for each projection and remain stable
+if the thread is stalled after the corresponding event. The test checks
+future-Wait projection and H/G at floor minus one tick, exact floor, and plus
+one tick at explicit QPC values. It stages each projected candidate and
+commits the expected mock packet once after the production waiter reports the
+deadline due; sender evidence continues to use the real waiter wake QPC.
+
+`real_waiter_smoke_wakes_for_a_future_qpc_deadline` is separate from the
+arithmetic assertions. It exercises `wait_for_next_boundary` with a fresh
+5,000 µs QPC deadline and checks both `Due` and that the observed QPC is at or
+after that deadline. It is a waiter smoke, not an arithmetic or gameplay
+qualification.
+
+### Preflight Busy restaging
+
+The preflight fixture uses the authored B QPC (`epoch + 30 ms`) as the
+scheduler's evaluation input both before and after PermitBusy. The first pass
+uses the real waiter to ensure B is due at final admission. After Busy, the
+bounded immediate replan restages at that same fixed scheduler QPC, while the
+final admission and mock sender evidence continue to sample fresh real QPC.
+This separates scheduler packet shape from runner wall time without bypassing
+fresh owner, focus, process, lease, power, control, generation, or writer
+checks.
+
+The final-owner-authority Busy case adds a controlled waiter boundary after
+Busy that crosses authored Up(A)'s 80 ms deadline before retry. It asserts the
+restaged candidate is still the B-only Down selected at B's authored QPC, no
+sender call occurred before permit, the preflight probe remains at one call,
+and A's release obligation and frozen origin remain intact. After contention,
+B commits exactly once; Up(A) then commits separately at its authored QPC
+under the original A proof. The early owner-proof Busy, final writer Busy,
+same-HWND ABA, focus recovery, and lease-expiry regressions retain their prior
+assertions. No arbitrary sleep is used to create or certify contention; mutex
+barriers use channels with timeout only for deadlock detection, and authored
+deadline waits use the production QPC waiter.
+
+### Explicit behavior-test dependencies
+
+`transport_outcomes`, `owner_proof`, and `proven_raw_zero` no longer import
+`super::*`. Each module imports only its shared harness helpers from the
+parent and names its concrete harness, dispatch, clock, transport, and
+synchronization types from their owning modules. Parent-only imports that
+became unused (`StagedCandidate` and `AtomicU32`) were removed. Test names,
+barriers, feature gates, and the `guard_ab_benchmark` offline runner/file/env/
+output contract are unchanged; the ignored benchmark remains discoverable.
+
+No architecture cleanup outside test stability and import scope was taken on.
+Production runtime behavior, accepted bounded PermitBusy policy, telemetry
+schema 25, timing defaults, and previously accepted safety fixes are
+unchanged. Mock sender results do not establish Sky gameplay reception.
+
+The final focused and full verification ledger for this correction is recorded
+in the checkpoint handoff against the exact pushed HEAD. `cargo xtask check all`
+is run sequentially after the other requested gates.
+
+### Verification ledger for this correction
+
+Toolchain: Windows x64 MSVC, `rustc 1.99.1 (58cf8f9c3)`, `cargo 1.99.1
+(5f94df478)`. All requested tests were run after the test source changes.
+
+| Command or regression | Result |
+|---|---|
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib preflight_busy::` | Pass: 6 passed, 0 failed, 0 ignored. Includes early owner-proof Busy, final authority Busy with a controlled stall beyond Up(A), final writer Busy, same-HWND ABA, focus recovery, and lease expiry. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit` | Pass: 1 passed. Fixed QPC inputs cover future Wait and H/G floor −1/exact/+1; sender sequence is Down(A), Up(A), Down(B), with one attempt and raw insertion 1 for each. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib real_waiter_smoke_wakes_for_a_future_qpc_deadline` | Pass: 1 passed. Separate production waiter smoke at a fresh 5,000 µs future deadline. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib offline_waiter_guard_ab_benchmark -- --list` | Pass: the ignored offline benchmark remains discoverable; one test listed, benchmark not run. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib --no-run` | Pass: test target compiled with no warnings after explicit-import cleanup. |
+| `cargo clippy --locked --manifest-path rust/Cargo.toml -p sky_player --lib --no-default-features -- -D warnings` | Pass: exit 0, no warnings. |
+| `cargo clippy --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core -p sky_dispatch_win32 -p sky_player --all-targets --all-features -- -D warnings` | Pass after corrections: exit 0, no warnings. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core --features test-support` | Pass: 84 passed across unit, integration, golden, and property targets; 0 ignored. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --features test-support` | Pass: 278 passed, 1 ignored child-process helper. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support` | Pass: 318 passed, 1 ignored offline benchmark. The included `rt_dispatch_no_alloc` target also passed all 4 tests. |
+| `cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc` | Pass: 4 passed, 0 failed, 0 ignored. |
+| `cargo xtask check desktop-native` | Pass: no-default production, default, all-feature Tauri checks and the `tauri-test` library suite completed. |
+| `cargo xtask check all` | Pass, exit 0, run sequentially after the requested package gates. Static/security checks, locked Rust workspace Clippy/tests, Bun desktop checks, browser E2E, and desktop-native checks passed. The architecture audit emitted 67 non-gating advisories. |
+
+Development corrections before the passing run: a first synthetic epoch placed
+B before A's confirmed hold floor, so three permit tests correctly failed to
+stage. The fixture was changed to keep the real final-admission clock and use
+the fixed authored B QPC for scheduler staging/retry. A first real-waiter smoke
+fixture had an unclosed Down and was rejected by production fixture admission;
+the matching Up was added. Removing wildcard imports first exposed missing
+symbols; the final modules use direct imports and the all-features test target
+compiles warning-free. All-features Clippy then found feature-only imports and
+an eight-argument test helper; those were narrowed before the final passing
+Clippy run. A trailing blank line reported by `git diff --check` was removed.
+None of these failed attempts is counted as passing evidence.
+
+The final `git diff --check`, Rust workspace `cargo fmt --check`, and final
+no-default-features Clippy rerun are recorded in the checkpoint handoff. Hosted
+CI status is also reported there because the exact workflow run starts on push.
