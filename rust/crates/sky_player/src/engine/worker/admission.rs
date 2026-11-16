@@ -5,7 +5,9 @@ use crate::engine::shared::{
     SessionTarget, SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseAgeProof,
     SupervisorLeaseState,
 };
-use crate::engine::target::{OwnerAuthorityReadError, OwnerIdentityStatus};
+use crate::engine::target::{
+    OwnerAuthorityReadError, OwnerIdentityStatus, ReleaseOwnerPermitError,
+};
 use crate::engine::telemetry::WorkerMetricsLocal;
 use parking_lot::MutexGuard;
 use sky_dispatch_core::clock::PauseReason;
@@ -713,7 +715,14 @@ pub(crate) enum FinalDownAdmissionResult<'a> {
         permit: MutexGuard<'a, ()>,
     },
     Replan,
+    PermitBusy(OwnerPermitBusySource),
     Terminal(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerPermitBusySource {
+    WriterMutex,
+    OwnerAuthorityMutex,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -954,7 +963,7 @@ fn verify_final_musical_packet_admission<'a>(
             apply_final_down_rejection(verdict, runtime, metrics);
             return match verdict {
                 FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
-                    FinalDownAdmissionResult::Replan
+                    FinalDownAdmissionResult::PermitBusy(OwnerPermitBusySource::OwnerAuthorityMutex)
                 }
                 FinalDownVerdict::OwnerRejected(failure) => {
                     FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
@@ -1001,9 +1010,20 @@ fn verify_final_musical_packet_admission<'a>(
     if let Some(hook) = runtime.final_gate_before_owner_permit_hook.as_ref() {
         hook();
     }
-    let Some(permit) = target.try_lock_current_release_owner_proof(&release_owner) else {
-        runtime.verified_target = None;
-        return FinalDownAdmissionResult::Replan;
+    let permit = match target.try_lock_current_release_owner_proof(&release_owner) {
+        Ok(permit) => permit,
+        Err(error) => {
+            runtime.verified_target = None;
+            return match error {
+                ReleaseOwnerPermitError::WriterBusy => {
+                    FinalDownAdmissionResult::PermitBusy(OwnerPermitBusySource::WriterMutex)
+                }
+                ReleaseOwnerPermitError::OwnerAuthorityBusy => {
+                    FinalDownAdmissionResult::PermitBusy(OwnerPermitBusySource::OwnerAuthorityMutex)
+                }
+                ReleaseOwnerPermitError::NotCurrent => FinalDownAdmissionResult::Replan,
+            };
+        }
     };
 
     FinalDownAdmissionResult::Allowed {

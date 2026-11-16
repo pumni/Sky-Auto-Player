@@ -348,7 +348,10 @@ fn musical_down_final_permit_replans_without_waiting_for_owner_authority_mutex()
     let (returned_while_locked, outcome) =
         dispatch_while_final_authority_mutex_is_held(&mut harness, down);
     assert!(returned_while_locked, "musical permit waited for authority mutex");
-    assert_eq!(outcome, StagedDispatchOutcome::Replan);
+    assert_eq!(
+        outcome,
+        StagedDispatchOutcome::Replan
+    );
     assert!(packets.lock().expect("mock packet capture").is_empty());
     assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -391,7 +394,10 @@ fn musical_up_final_permit_replans_without_waiting_then_sends_once() {
     let (returned_while_locked, outcome) =
         dispatch_while_final_authority_mutex_is_held(&mut harness, up);
     assert!(returned_while_locked, "musical permit waited for authority mutex");
-    assert_eq!(outcome, StagedDispatchOutcome::Replan);
+    assert_eq!(
+        outcome,
+        StagedDispatchOutcome::Replan
+    );
     assert_eq!(packets.lock().expect("mock packet capture").len(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resources.backend.active_mask, 1);

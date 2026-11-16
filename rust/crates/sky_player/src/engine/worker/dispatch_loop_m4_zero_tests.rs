@@ -649,6 +649,15 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
 
 #[test]
 fn raw_zero_candidate_owner_drift_after_identity_query_fails_before_sender() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
     let actions = raw_zero_sequence();
     let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
     let epoch = harness.qpc_now_for_test().expect("QPC epoch");

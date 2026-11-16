@@ -211,6 +211,23 @@ fail-closed. Verified terminal cleanup continues to use its serialized path.
 These tests exercise the production worker/harness with mock senders and a
 test-only lock seam; they do not call real `SendInput`.
 
+## Issue #666 post-integration replan timing correction
+
+The deterministic `sky_player` dispatch tests exercise the actual scheduler,
+staging, final admission, waiter, mock sender, and journal commit helpers. The
+permit-contention regression also runs the same outer replan/wait policy used
+by the worker loop. It holds the retained authority mutex only after fresh
+foreground, PID, and process-continuity admission, then verifies the immediate
+retry and interruptible 1 ms backoff. A separate H/G trace checks floor minus
+one tick, exact floor, and plus one tick, including future-deadline projection
+and wake selection. These tests use a mock sender and do not call native
+`SendInput`, change interactive focus, suspend the system, or measure game
+reception. The trace timings are individual QPC observations from deterministic
+tests, not latency distributions or gameplay qualification. See
+[`issue-666-replan-timing.md`](evidence/issue-666-replan-timing.md) for the
+baseline/candidate operation-count comparison, race trace, and verification
+ledger.
+
 ## Offline lifecycle and manifest checks
 
 The current offline scheduler lifecycle report is produced and validated with:

@@ -38,6 +38,7 @@ use control::{
 pub(super) use dispatch::DispatchStep;
 pub(crate) use dispatch::ObserverRuntime;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
+pub(crate) use dispatch_loop::DispatchAttemptOutcome;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]

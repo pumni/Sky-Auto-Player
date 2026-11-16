@@ -13,6 +13,21 @@ enum SchedulerAction {
 
 const UNSTABLE_TARGET_REPLAN_INTERVAL_US: u64 = 1_000;
 
+#[cfg(test)]
+thread_local! {
+    static SCHEDULER_EVALUATION_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_scheduler_evaluation_count_for_test() {
+    SCHEDULER_EVALUATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn scheduler_evaluation_count_for_test() -> u64 {
+    SCHEDULER_EVALUATION_COUNT.with(std::cell::Cell::get)
+}
+
 fn wait_after_unstable_target(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     packet_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
@@ -22,6 +37,27 @@ fn wait_after_unstable_target(
     local_metrics: &mut super::WorkerMetricsLocal,
     terminal_error: &mut Option<String>,
 ) -> WaitBoundary {
+    wait_after_unstable_target_with_deadline(
+        now_qpc,
+        packet_not_before_qpc,
+        qpc_clock,
+        waiter,
+        interrupt,
+        local_metrics,
+        terminal_error,
+    )
+    .0
+}
+
+fn wait_after_unstable_target_with_deadline(
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    packet_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    terminal_error: &mut Option<String>,
+) -> (WaitBoundary, Option<sky_dispatch_win32::clock::QpcTicks>) {
     let retry_deadline = if packet_not_before_qpc > now_qpc {
         packet_not_before_qpc
     } else {
@@ -31,30 +67,33 @@ fn wait_after_unstable_target(
                 *terminal_error = Some(format!(
                     "target replan interval conversion failed: {error:?}"
                 ));
-                return WaitBoundary::Exit;
+                return (WaitBoundary::Exit, None);
             }
         };
         match now_qpc.checked_add_duration(interval) {
             Ok(deadline) => deadline,
             Err(error) => {
                 *terminal_error = Some(format!("target replan deadline overflow: {error}"));
-                return WaitBoundary::Exit;
+                return (WaitBoundary::Exit, None);
             }
         }
     };
 
-    wait_for_next_boundary(WaitBoundaryInput {
-        deadline: WaitDeadline {
-            physical_target_qpc: Some(retry_deadline),
-            spin_threshold_ticks: DurationTicks::ZERO,
-            qpc_clock,
-        },
-        signals: WaitSignals { waiter, interrupt },
-        mutable: WaitMutable {
-            local_metrics,
-            terminal_error,
-        },
-    })
+    (
+        wait_for_next_boundary(WaitBoundaryInput {
+            deadline: WaitDeadline {
+                physical_target_qpc: Some(retry_deadline),
+                spin_threshold_ticks: DurationTicks::ZERO,
+                qpc_clock,
+            },
+            signals: WaitSignals { waiter, interrupt },
+            mutable: WaitMutable {
+                local_metrics,
+                terminal_error,
+            },
+        }),
+        Some(retry_deadline),
+    )
 }
 
 fn evaluate_scheduler_action(
@@ -62,6 +101,8 @@ fn evaluate_scheduler_action(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<SchedulerAction, String> {
+    #[cfg(test)]
+    SCHEDULER_EVALUATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     match executor
         .evaluate_at(now_qpc, epoch_qpc)
         .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))?

@@ -10,9 +10,10 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::{
-    FinalControlSignals, StagedCandidate, StagedControlSignals, StagedDispatchContext,
-    StagedDispatchOutcome, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
-    WorkerTimingState, dispatch_staged_candidate, pre_wait_candidate_admission, stage_candidate,
+    DispatchAttemptOutcome, FinalControlSignals, StagedCandidate, StagedControlSignals,
+    StagedDispatchContext, StagedDispatchOutcome, WorkerResources, WorkerRuntime,
+    WorkerSchedulingGuards, WorkerTimingState, dispatch_staged_candidate,
+    pre_wait_candidate_admission, stage_candidate,
 };
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
@@ -405,6 +406,15 @@ impl ProductionDispatchTestHarness {
         candidate: StagedCandidate,
         with_observer: bool,
     ) -> StagedDispatchOutcome {
+        self.dispatch_staged_candidate_with_reason_for_test(candidate, with_observer)
+            .public_outcome()
+    }
+
+    pub(crate) fn dispatch_staged_candidate_with_reason_for_test(
+        &mut self,
+        candidate: StagedCandidate,
+        with_observer: bool,
+    ) -> DispatchAttemptOutcome {
         let qpc_clock = self.resources.clock;
         let context = StagedDispatchContext {
             target: &self.target,

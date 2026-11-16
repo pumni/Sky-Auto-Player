@@ -93,6 +93,13 @@ pub(super) enum OwnerAuthorityReadError {
     Status(OwnerIdentityStatus),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReleaseOwnerPermitError {
+    WriterBusy,
+    OwnerAuthorityBusy,
+    NotCurrent,
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TargetSnapshotReadPoint {
@@ -375,14 +382,23 @@ impl SessionTarget {
     pub(super) fn try_lock_current_release_owner_proof(
         &self,
         proof: &sky_dispatch_win32::input::ReleaseOwnerProof,
-    ) -> Option<MutexGuard<'_, ()>> {
+    ) -> Result<MutexGuard<'_, ()>, ReleaseOwnerPermitError> {
         #[cfg(any(test, feature = "test-support"))]
         record_target_proof_operation(|counts| {
             counts.writer_permit_attempts = counts.writer_permit_attempts.saturating_add(1)
         });
-        let writer = self.writer.try_lock()?;
-        self.try_release_owner_proof_is_current(proof)?
-            .then_some(writer)
+        let writer = self
+            .writer
+            .try_lock()
+            .ok_or(ReleaseOwnerPermitError::WriterBusy)?;
+        let current = self
+            .try_release_owner_proof_is_current(proof)
+            .ok_or(ReleaseOwnerPermitError::OwnerAuthorityBusy)?;
+        if current {
+            Ok(writer)
+        } else {
+            Err(ReleaseOwnerPermitError::NotCurrent)
+        }
     }
 
     #[cfg(test)]
@@ -393,6 +409,11 @@ impl SessionTarget {
         Option<(Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>, u64)>,
     > {
         self.owner_authority.lock()
+    }
+
+    #[cfg(test)]
+    pub(super) fn lock_writer_for_test(&self) -> MutexGuard<'_, ()> {
+        self.writer.lock()
     }
 
     /// The musical final suffix must never wait for the authority mutex. A

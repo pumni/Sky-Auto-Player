@@ -179,6 +179,19 @@ mixed packet's Down gate is temporarily rejected while its independent Up is
 still eligible, the worker stages and admits that Up-only packet through the
 same fresh musical final gate; the rejected Down remains pending.
 
+A short writer or retained-owner-authority mutex miss at the final musical
+permit is classified separately from target drift. With target generation and
+focus still current, the worker performs one immediate full scheduler
+re-evaluation. If the next final permit is also busy, it waits on an
+interruptible 1 ms retry deadline before trying again; continued contention
+alternates one re-evaluation with one bounded wait. The wait uses the existing
+non-spinning boundary waiter and returns through the worker control state
+machine. Stop, Skip, Panic, Pause, lease, focus, power, and target-generation
+checks remain in force. A busy permit never calls the sender, advances a Down
+cursor, or changes the tracked release journal. The retry always stages and
+verifies a fresh candidate; it never reuses an old owner proof. Target drift
+and other replan causes retain their existing policy.
+
 Each authored Down onset can cross the syscall boundary at most once. A
 pre-call rejection has no attempt; once the sender reports a syscall attempt,
 the onset is consumed even when insertion is zero, short, complete with missing
