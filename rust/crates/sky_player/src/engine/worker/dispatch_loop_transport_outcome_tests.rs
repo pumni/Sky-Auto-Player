@@ -7,7 +7,7 @@ use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy)]
@@ -15,42 +15,32 @@ enum UpOnlyQpcFault {
     ReversedCompletion,
     MissingCompletion,
 }
-fn candidate_after_scheduler_waits_at(
+fn candidate_at_synthetic_qpc(
     harness: &mut ProductionDispatchTestHarness,
-    mut at: QpcTicks,
+    at: QpcTicks,
     epoch: QpcTicks,
 ) -> crate::engine::worker::StagedCandidate {
-    for _ in 0..8 {
-        match harness
-            .evaluate_live_scheduler_for_test(at, epoch)
-            .expect("evaluate production scheduler")
-        {
-            DispatchDecision::Send {
+    match harness
+        .evaluate_live_scheduler_for_test(at, epoch)
+        .expect("evaluate scheduler at controlled QPC")
+    {
+        DispatchDecision::Send {
+            up_mask,
+            down_chord,
+            timing_window,
+        } => harness
+            .stage_candidate_with_scheduler_window_for_test(
                 up_mask,
-                down_chord,
+                down_chord.map(Into::into),
                 timing_window,
-            } => {
-                return harness
-                    .stage_candidate_with_scheduler_window_for_test(
-                        up_mask,
-                        down_chord.map(Into::into),
-                        timing_window,
-                    )
-                    .expect("stage production candidate")
-                    .expect("scheduler Send decision has a candidate");
-            }
-            DispatchDecision::Wait { deadline_qpc } => {
-                assert!(
-                    deadline_qpc > at,
-                    "scheduler Wait must advance the QPC test boundary"
-                );
-                wait_until_qpc(harness, deadline_qpc);
-                at = deadline_qpc;
-            }
-            DispatchDecision::Finished => panic!("expected a due physical packet"),
+            )
+            .expect("stage candidate at controlled QPC")
+            .expect("Send decision produces a candidate"),
+        DispatchDecision::Wait { deadline_qpc } => {
+            panic!("unexpected scheduler wait at controlled QPC {at:?}: {deadline_qpc:?}")
         }
+        DispatchDecision::Finished => panic!("expected another authored packet"),
     }
-    panic!("scheduler did not produce a packet within eight bounded reevaluations")
 }
 
 fn dispatch_with_source(
@@ -334,20 +324,63 @@ fn forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_dow
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor");
-    let (cleanup_capture, cleanup_completion_qpc) =
-        harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    // This regression exercises bounded anomaly retention and no-replay
+    // accounting. Keep scheduler arithmetic deterministic; H/G boundary and
+    // real waiter behavior are covered by their dedicated tests.
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("compile anomaly-retention schedule");
+    let clock = harness.resources.clock;
+    harness.resources.scheduler = sky_dispatch_core::executor::DispatchExecutor::new(
+        &schedule,
+        sky_dispatch_core::time::DurationTicks::ZERO,
+        sky_dispatch_core::time::DurationTicks::ZERO,
+        |us| {
+            clock
+                .timeline_from_us(us)
+                .map_err(|error| format!("{error:?}"))
+        },
+    )
+    .expect("zero-floor anomaly-retention scheduler");
+    let mock_qpc = Arc::new(AtomicU64::new(epoch.as_u64()));
+    let cleanup_capture = Arc::new(Mutex::new(Vec::with_capacity(COUNT)));
+    let cleanup_completion_qpc = Arc::new(AtomicU64::new(0));
+    let cleanup_capture_for_emitter = Arc::clone(&cleanup_capture);
+    let cleanup_completion_for_emitter = Arc::clone(&cleanup_completion_qpc);
+    let cleanup_clock = clock;
+    harness
+        .resources
+        .backend
+        .set_emitter(move |scan_codes, key_up| {
+            // Cleanup establishes a real absolute resume barrier. Keep its raw
+            // completion in the same QPC domain as the production post-cleanup
+            // read; the authored scheduler projection above remains synthetic.
+            let now = cleanup_clock.now().expect("cleanup completion QPC");
+            cleanup_capture_for_emitter
+                .lock()
+                .expect("verified cleanup capture")
+                .push((scan_codes.to_vec(), key_up));
+            cleanup_completion_for_emitter.store(now.as_u64(), Ordering::Release);
+            sky_dispatch_win32::input::PlatformSendResult {
+                requested: scan_codes.len() as u8,
+                inserted: scan_codes.len() as u8,
+                started_ticks: now,
+                completed_ticks: Some(now),
+                win32_error: 0,
+                timing_error: None,
+            }
+        });
     let source = Arc::new(AtomicU32::new(u32::MAX));
     let captured_source = Arc::clone(&source);
     let packet_attempts = Arc::new(Mutex::new(Vec::with_capacity(COUNT * 2)));
     let captured_attempts = Arc::clone(&packet_attempts);
-    let clock = harness.resources.clock;
+    let sender_qpc = Arc::clone(&mock_qpc);
     harness.resources.backend.set_packet_emitter(move |packet| {
         let source_action = captured_source.load(Ordering::Acquire);
         captured_attempts
             .lock()
             .expect("packet attempt log")
             .push((source_action, packet));
-        let started = clock.now().expect("pre-call QPC");
+        let started = QpcTicks::from_raw(sender_qpc.load(Ordering::Acquire));
         let completed = if packet.up_mask != 0 && packet.down_mask == 0 {
             Some(QpcTicks::from_raw(
                 started.as_u64().checked_sub(1).expect("nonzero QPC"),
@@ -382,17 +415,17 @@ fn forty_up_only_anomalies_keep_bounded_first_last_evidence_and_never_replay_dow
         let dispatch_at = harness
             .resume_barrier_qpc_for_test()
             .map_or(down_target, |barrier| barrier.max(down_target));
-        wait_until_qpc(&harness, dispatch_at);
-        let down = candidate_after_scheduler_waits_at(&mut harness, dispatch_at, epoch);
+        let down = candidate_at_synthetic_qpc(&mut harness, dispatch_at, epoch);
         assert_eq!(down.source_action_index, down_index);
         assert_eq!(down.packet_masks, PhysicalPacket::new(0, 1));
+        mock_qpc.store(dispatch_at.as_u64(), Ordering::Release);
         dispatch_with_source(&mut harness, down, source.as_ref());
 
         let up_target = target_at(&harness, epoch, pair as u64 * PERIOD_US + UP_AFTER_US);
-        wait_until_qpc(&harness, up_target);
-        let up = candidate_after_scheduler_waits_at(&mut harness, up_target, epoch);
+        let up = candidate_at_synthetic_qpc(&mut harness, up_target, epoch);
         assert_eq!(up.source_action_index, down_index + 1);
         assert_eq!(up.packet_masks, PhysicalPacket::new(1, 0));
+        mock_qpc.store(up_target.as_u64(), Ordering::Release);
         dispatch_with_source(&mut harness, up, source.as_ref());
 
         let history = &harness.runtime.attempted_dispatch_anomalies;
