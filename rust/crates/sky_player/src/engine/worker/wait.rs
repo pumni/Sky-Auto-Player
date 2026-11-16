@@ -4,6 +4,36 @@ use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
+
+#[cfg(test)]
+thread_local! {
+    static TEST_WAITER_RESULT: std::cell::RefCell<Option<(QpcTicks, WaitResult)>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(crate) struct TestWaiterResultGuard;
+
+#[cfg(test)]
+impl Drop for TestWaiterResultGuard {
+    fn drop(&mut self) {
+        TEST_WAITER_RESULT.with(|result| result.borrow_mut().take());
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_waiter_result_for_test(
+    expected_target_qpc: QpcTicks,
+    result: WaitResult,
+) -> TestWaiterResultGuard {
+    TEST_WAITER_RESULT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(slot.is_none(), "waiter test result already installed");
+        *slot = Some((expected_target_qpc, result));
+    });
+    TestWaiterResultGuard
+}
 #[path = "wait/observation.rs"]
 mod observation;
 pub use observation::WaitObservation;
@@ -99,6 +129,21 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             return WaitBoundary::Exit;
         }
     };
+    #[cfg(test)]
+    let wait_result = if let Some((expected_target_qpc, result)) =
+        TEST_WAITER_RESULT.with(|result| result.borrow_mut().take())
+    {
+        assert_eq!(target_qpc, expected_target_qpc);
+        result
+    } else {
+        waiter.wait_until_ticks_with_metrics_typed(
+            qpc_clock,
+            target_qpc,
+            spin_threshold_ticks,
+            interrupt,
+        )
+    };
+    #[cfg(not(test))]
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
         target_qpc,

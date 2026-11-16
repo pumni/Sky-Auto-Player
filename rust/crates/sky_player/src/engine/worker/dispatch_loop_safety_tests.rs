@@ -1,6 +1,7 @@
+use super::replan_timing::stage_from_worker_outer_evaluation;
 use super::support::{qpc_offset, staged_send_at, test_action};
 use crate::engine::test_support::ProductionDispatchTestHarness;
-use crate::engine::worker::StagedDispatchOutcome;
+use crate::engine::worker::{FinalDownAdmissionResult, StagedDispatchOutcome};
 use sky_dispatch_core::executor::DispatchDecision;
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
@@ -281,7 +282,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
 }
 
 #[test]
-fn musical_up_only_final_focus_loss_replans_without_crossing_sender_boundary() {
+fn musical_up_only_fresh_foreground_loss_pauses_without_crossing_sender_boundary() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
         fn drop(&mut self) {
@@ -335,9 +336,7 @@ fn musical_up_only_final_focus_loss_replans_without_crossing_sender_boundary() {
         .expect("stage musical Up-only")
         .expect("Up candidate");
     assert_eq!(up.source_action_index, 21);
-    let focus = Arc::clone(&harness.focus_active);
     harness.set_final_gate_before_syscall_hook(move || {
-        focus.store(false, Ordering::Release);
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
     });
@@ -351,6 +350,14 @@ fn musical_up_only_final_focus_loss_replans_without_crossing_sender_boundary() {
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
     assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+    assert!(harness.focus_active.load(Ordering::Acquire));
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
+    assert_eq!(harness.runtime.verified_target_for_test(), None);
     let finalized = harness.finalize_for_test();
     assert_eq!(finalized.attempted_mask, 1);
     assert_eq!(finalized.release_obligation_mask, 0);
@@ -440,6 +447,538 @@ fn focus_loss_before_first_down_keeps_onset_unattempted_until_safe_resume() {
     ));
     assert_eq!(packets.lock().expect("sender capture").len(), 1);
     assert_eq!(harness.resources.scheduler.accounting().activated, 1);
+}
+
+#[test]
+fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanup() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+    let actions = [
+        test_action(6660, ActionKind::Down, 0, 0x15),
+        test_action(6661, ActionKind::Down, 150_000, 0x16),
+        test_action(6662, ActionKind::Up, 500_000, 0x15),
+        test_action(6663, ActionKind::Up, 600_000, 0x16),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let clock = harness.resources.clock;
+    let sampled_now = clock.now().expect("current QPC");
+    let historical_offset = clock
+        .duration_from_us(250_000)
+        .expect("historical playback offset");
+    let epoch = QpcTicks::from_raw(
+        sampled_now
+            .as_u64()
+            .checked_sub(historical_offset.as_u64())
+            .expect("historical playback epoch"),
+    );
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback before B is due");
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.timing.focus_restore_grace_ticks = clock
+        .duration_from_us(10_000)
+        .expect("focus restoration grace");
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    let (cleanup, _) = harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let origin = super::super::load_target_stamp(&harness.target).expect("original owner stamp");
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage committed A")
+        .expect("A candidate");
+    assert_eq!(first.packet_masks, PhysicalPacket::new(0, 1));
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.resources.backend.active_mask, 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    let a_origin = harness
+        .resources
+        .backend
+        .release_owner_proof_for_mask(1)
+        .expect("A release proof lookup")
+        .expect("A release proof committed");
+    assert_eq!(a_origin.target_hwnd(), origin.hwnd);
+    assert_eq!(a_origin.target_generation(), origin.generation);
+    assert_eq!(a_origin.owner_pid(), Some(101));
+
+    let b_eval_qpc = clock.now().expect("due B scheduler QPC");
+    let (b, evaluations) = stage_from_worker_outer_evaluation(&mut harness, b_eval_qpc);
+    assert_eq!(evaluations, 1);
+    assert_eq!(b.source_action_index, 6661);
+    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 2));
+    assert!(b.timing_window.packet_not_before_qpc <= b_eval_qpc);
+    assert_eq!(
+        harness.pre_wait_candidate_admission_for_test(&b),
+        StagedDispatchOutcome::Dispatched,
+        "monitor-published focus is still the original HWND"
+    );
+
+    // The foreground leaves and returns before the monitor publishes a new
+    // hint. The final owner proof observes the brief loss directly.
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
+    let admission = super::super::verify_final_down_admission(
+        &harness.target,
+        origin,
+        true,
+        &harness.focus_active,
+        super::super::FinalControlSignals {
+            quit_requested: &harness.quit_requested,
+            skip_requested: &harness.skip_requested,
+            panic_requested: &harness.panic_requested,
+            desired_pause: &harness.desired_pause,
+            supervisor_expired: &harness.supervisor_expired,
+            system_power: Some(&harness.system_power),
+        },
+        harness.timing.lease_timeout_ticks,
+        clock,
+        &harness.progress_clock,
+        &harness.resources.backend,
+        &mut harness.resources.playback,
+        &mut harness.runtime,
+        &mut harness.local_metrics,
+    );
+    assert!(matches!(admission, FinalDownAdmissionResult::Replan));
+    drop(admission);
+    assert_eq!(
+        sky_dispatch_win32::focus::foreground_query_count(),
+        1,
+        "the fresh gate performs one foreground-owner query"
+    );
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(101)));
+
+    assert!(harness.focus_active.load(Ordering::Acquire));
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
+    assert_eq!(harness.runtime.verified_target_for_test(), None);
+    assert_eq!(harness.runtime.focus_restore_started_ticks, None);
+    assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.generation_accounting_for_test().activated, 1);
+    assert_eq!(harness.resources.backend.active_mask, 1);
+    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert!(
+        harness
+            .resources
+            .backend
+            .release_owner_proof_for_mask(1)
+            .expect("A proof lookup after rejection")
+            .expect("A proof remains after rejection")
+            .same_owner(&a_origin),
+        "A keeps the frozen original HWND/PID/generation proof"
+    );
+    {
+        let sent = packets.lock().expect("packet capture");
+        assert_eq!(sent.len(), 1, "B never reached the sender");
+        assert_eq!(sent[0].0, PhysicalPacket::new(0, 1));
+    }
+    let paused_progress = harness
+        .progress_clock
+        .load()
+        .expect("published Focus pause progress");
+    assert!(paused_progress.paused);
+    assert!(paused_progress.pause_started_qpc.is_some());
+
+    // Recovery starts its grace clock only after the foreground has returned.
+    let restored_at = clock.now().expect("focus restoration observation QPC");
+    harness.runtime.focus_restore_started_ticks = Some(restored_at);
+    let grace_deadline = super::super::paused_focus_grace_deadline(
+        true,
+        harness.focus_active.load(Ordering::Acquire),
+        super::super::load_target_stamp(&harness.target).is_some(),
+        harness.runtime.focus_restore_started_ticks,
+        harness.timing.focus_restore_grace_ticks,
+    )
+    .expect("focus grace deadline calculation")
+    .expect("restored focus has a grace deadline");
+    assert_eq!(
+        grace_deadline,
+        restored_at
+            .checked_add_duration(harness.timing.focus_restore_grace_ticks)
+            .expect("focus grace arithmetic")
+    );
+    assert_eq!(cleanup.lock().expect("no early safety cleanup").len(), 0);
+    while clock.now().expect("focus grace QPC") < grace_deadline {
+        std::thread::yield_now();
+    }
+
+    let order = Arc::new(Mutex::new(Vec::with_capacity(2)));
+    let order_for_cleanup = Arc::clone(&order);
+    let cleanups = Arc::new(Mutex::new(Vec::with_capacity(1)));
+    let cleanups_for_emitter = Arc::clone(&cleanups);
+    harness
+        .resources
+        .backend
+        .set_emitter(move |scan_codes, key_up| {
+            order_for_cleanup
+                .lock()
+                .expect("recovery order lock")
+                .push("cleanup");
+            cleanups_for_emitter
+                .lock()
+                .expect("recovery cleanup capture")
+                .push((scan_codes.to_vec(), key_up));
+            let now = clock.now().expect("verified cleanup QPC");
+            sky_dispatch_win32::input::PlatformSendResult {
+                requested: scan_codes.len() as u8,
+                inserted: scan_codes.len() as u8,
+                started_ticks: now,
+                completed_ticks: Some(now),
+                win32_error: 0,
+                timing_error: None,
+            }
+        });
+    let preflight_calls = Arc::new(AtomicUsize::new(0));
+    let preflight_calls_for_probe = Arc::clone(&preflight_calls);
+    let order_for_preflight = Arc::clone(&order);
+    harness.set_preflight_physical_mask_probe_for_test(move || {
+        order_for_preflight
+            .lock()
+            .expect("recovery order lock")
+            .push("preflight");
+        preflight_calls_for_probe.fetch_add(1, Ordering::AcqRel);
+        0
+    });
+
+    let cleanup_qpc = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let cleanup_qpc_for_transition = Arc::clone(&cleanup_qpc);
+    super::super::suspend_live_input_for_dispatch(
+        &mut harness.resources.backend,
+        &mut harness.resources.scheduler,
+        &harness.target,
+        Some(origin),
+        true,
+        &harness.runtime,
+        || {
+            let completed = clock
+                .now()
+                .map_err(|error| format!("cleanup completion QPC: {error:?}"))?;
+            cleanup_qpc_for_transition.store(completed.as_u64(), Ordering::Release);
+            Ok(completed)
+        },
+    )
+    .expect("verified cleanup under A's frozen owner proof");
+    let cleanup_completed = QpcTicks::from_raw(cleanup_qpc.load(Ordering::Acquire));
+    assert_eq!(
+        cleanups
+            .lock()
+            .expect("verified cleanup capture")
+            .as_slice(),
+        &[(vec![0x15], true)]
+    );
+    assert_eq!(
+        order.lock().expect("cleanup before preflight").as_slice(),
+        &["cleanup"]
+    );
+    assert_eq!(harness.resources.backend.active_mask, 0);
+    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert!(
+        harness
+            .resources
+            .backend
+            .release_owner_proof_for_mask(1)
+            .is_err(),
+        "verified cleanup resolves A's release proof"
+    );
+    let resume_barrier = harness
+        .resume_barrier_qpc_for_test()
+        .expect("verified cleanup resume barrier");
+    let release_gap = clock
+        .duration_from_us(harness.config.timing.min_release_gap_us)
+        .expect("resume G conversion");
+    assert_eq!(
+        resume_barrier,
+        cleanup_completed
+            .checked_add_duration(release_gap)
+            .expect("cleanup G barrier")
+    );
+
+    let current = super::super::load_target_stamp(&harness.target).expect("same restored owner");
+    assert_eq!(current, origin);
+    super::super::ensure_preflight_for_target(
+        &harness.resources.backend,
+        current,
+        &mut harness.runtime.verified_target,
+    )
+    .expect("focus recovery preflight after cleanup");
+    assert_eq!(preflight_calls.load(Ordering::Acquire), 1);
+    assert_eq!(
+        order.lock().expect("cleanup then preflight").as_slice(),
+        &["cleanup", "preflight"]
+    );
+    assert_eq!(harness.runtime.verified_target_for_test(), Some(origin));
+
+    let resumed_at = clock.now().expect("resume clock QPC");
+    harness
+        .resources
+        .playback
+        .exit_pause(sky_dispatch_core::clock::PauseReason::Focus, resumed_at)
+        .expect("close Focus pause after grace and cleanup");
+    harness.progress_clock.publish(&harness.resources.playback);
+    harness.runtime.focus_restore_started_ticks = None;
+    assert!(!harness.resources.playback.is_paused());
+    assert!(
+        !harness
+            .progress_clock
+            .load()
+            .expect("resumed progress")
+            .paused
+    );
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.generation_accounting_for_test().cancelled, 1);
+    assert_eq!(harness.resources.scheduler.active_mask(), 0);
+
+    let before_resume_barrier = QpcTicks::from_raw(resume_barrier.as_u64() - 1);
+    assert_eq!(
+        harness
+            .evaluate_live_scheduler_for_test(
+                before_resume_barrier,
+                harness.resources.playback.epoch
+            )
+            .expect("B just before cleanup G"),
+        DispatchDecision::Wait {
+            deadline_qpc: resume_barrier
+        }
+    );
+    assert!(matches!(
+        harness
+            .evaluate_live_scheduler_for_test(resume_barrier, harness.resources.playback.epoch)
+            .expect("B at cleanup G"),
+        DispatchDecision::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+            timing_window,
+        } if chord.source_action_index == 6661
+            && timing_window.packet_not_before_qpc == resume_barrier
+    ));
+    while clock.now().expect("resume barrier QPC") < resume_barrier {
+        std::thread::yield_now();
+    }
+    let resumed_qpc = clock.now().expect("resumed B scheduler QPC");
+    let (b, evaluations) = stage_from_worker_outer_evaluation(&mut harness, resumed_qpc);
+    assert_eq!(evaluations, 1);
+    assert_eq!(b.source_action_index, 6661);
+    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 2));
+    assert!(b.timing_window.packet_not_before_qpc >= resume_barrier);
+    assert_eq!(
+        harness.pre_wait_candidate_admission_for_test(&b),
+        StagedDispatchOutcome::Dispatched
+    );
+    harness.set_mock_sender_start_qpc_for_test(resumed_qpc);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(b, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    let sent = packets.lock().expect("A then recovered B capture");
+    assert_eq!(sent.len(), 2, "B has no pre-recovery sender attempt");
+    assert_eq!(sent[0].0, PhysicalPacket::new(0, 1));
+    assert_eq!(sent[1].0, PhysicalPacket::new(0, 2));
+    assert_eq!(sent[1].1.attempts, 1);
+    assert!(sent[1].1.started_ticks.expect("B sender QPC") >= resume_barrier);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 2);
+    assert_eq!(harness.resources.backend.active_mask, 2);
+    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 2);
+    let b_origin = harness
+        .resources
+        .backend
+        .release_owner_proof_for_mask(2)
+        .expect("B owner proof after recovery")
+        .expect("B release obligation");
+    assert_eq!(b_origin.target_hwnd(), origin.hwnd);
+    assert_eq!(b_origin.target_generation(), origin.generation);
+    assert_eq!(b_origin.owner_pid(), Some(101));
+    assert!(harness.runtime.terminal_error.is_none());
+}
+
+#[test]
+fn focus_recovery_cleanup_rejects_rebound_and_same_hwnd_aba_owner() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    for rebound_hwnd in [2, 1] {
+        let actions = [
+            test_action(6670, ActionKind::Down, 0, 0x15),
+            test_action(6671, ActionKind::Up, 500_000, 0x15),
+        ];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let epoch = harness.qpc_now_for_test().expect("owner recovery epoch");
+        harness
+            .reanchor_playback_clock_for_test(epoch)
+            .expect("owner recovery epoch");
+        harness.configure_focus_owner_for_test(1, 101);
+        let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+        let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+        harness.attach_executor_for_test().expect("attach executor");
+        let origin = super::super::load_target_stamp(&harness.target).expect("origin stamp");
+        let first = harness
+            .stage_candidate_for_test(
+                0,
+                harness.current_executor_chord_for_test(),
+                TimelineTicks::ZERO,
+            )
+            .expect("stage origin Down")
+            .expect("origin Down candidate");
+        harness.set_mock_sender_start_qpc_for_test(epoch);
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(first, false),
+            StagedDispatchOutcome::Dispatched
+        );
+        let original_proof = harness
+            .resources
+            .backend
+            .release_owner_proof_for_mask(1)
+            .expect("origin proof lookup")
+            .expect("origin proof");
+
+        harness.republish_focus_owner_for_test(rebound_hwnd, 202);
+        let rebound = super::super::load_target_stamp(&harness.target).expect("rebound owner");
+        assert_ne!(rebound, origin);
+        let error = super::super::suspend_live_input_for_dispatch(
+            &mut harness.resources.backend,
+            &mut harness.resources.scheduler,
+            &harness.target,
+            Some(rebound),
+            true,
+            &harness.runtime,
+            || {
+                harness
+                    .resources
+                    .clock
+                    .now()
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )
+        .expect_err("recovery cannot release under a rebound HWND/PID/generation");
+        assert!(error.contains("origin target generation drifted"));
+        assert!(cleanup.lock().expect("no cross-owner cleanup").is_empty());
+        assert_eq!(packets.lock().expect("only original Down").len(), 1);
+        assert_eq!(harness.resources.backend.active_mask, 1);
+        assert_eq!(harness.release_obligation_mask_for_test(), 1);
+        assert!(
+            harness
+                .resources
+                .backend
+                .release_owner_proof_for_mask(1)
+                .expect("retained origin proof lookup")
+                .expect("retained origin proof")
+                .same_owner(&original_proof)
+        );
+    }
+}
+
+#[test]
+fn fresh_focus_rejection_keeps_qpc_failure_terminal() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+            sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+    let actions = [
+        test_action(6688, ActionKind::Down, 0, 0x15),
+        test_action(6689, ActionKind::Up, 100_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness
+        .qpc_now_for_test()
+        .expect("QPC failure fixture epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("QPC failure fixture epoch");
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+    harness.attach_executor_for_test().expect("attach executor");
+    let expected = super::super::load_target_stamp(&harness.target).expect("current owner");
+    let candidate = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage pending onset")
+        .expect("Down candidate");
+    assert_eq!(candidate.source_action_index, 6688);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
+    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(true);
+    let admission = super::super::verify_final_down_admission(
+        &harness.target,
+        expected,
+        true,
+        &harness.focus_active,
+        super::super::FinalControlSignals {
+            quit_requested: &harness.quit_requested,
+            skip_requested: &harness.skip_requested,
+            panic_requested: &harness.panic_requested,
+            desired_pause: &harness.desired_pause,
+            supervisor_expired: &harness.supervisor_expired,
+            system_power: Some(&harness.system_power),
+        },
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.progress_clock,
+        &harness.resources.backend,
+        &mut harness.resources.playback,
+        &mut harness.runtime,
+        &mut harness.local_metrics,
+    );
+    assert!(matches!(
+        admission,
+        FinalDownAdmissionResult::Terminal(error) if error.contains("QPC failure")
+    ));
+    assert!(
+        !harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
+    assert!(
+        packets
+            .lock()
+            .expect("no sender after QPC failure")
+            .is_empty()
+    );
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
 }
 
 #[test]

@@ -963,6 +963,14 @@ fn verify_final_musical_packet_admission<'a>(
         Ok(proof) => proof,
         Err(verdict) => {
             apply_final_down_rejection(verdict, target, expected, runtime, metrics);
+            if verdict == FinalDownVerdict::FocusLost
+                && let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+            {
+                return match step {
+                    DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
+                };
+            }
             return match verdict {
                 FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
                     FinalDownAdmissionResult::PermitBusy

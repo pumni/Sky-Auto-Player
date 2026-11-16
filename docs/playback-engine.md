@@ -179,6 +179,24 @@ mixed packet's Down gate is temporarily rejected while its independent Up is
 still eligible, the worker stages and admits that Up-only packet through the
 same fresh musical final gate; the rejected Down remains pending.
 
+The fresh foreground-owner query is authoritative even when the published
+focus hint still says focused. A `NotForeground` result enters the existing
+Focus pause transition, clears the verified-target stamp and restoration
+anchor, and publishes paused progress before returning `Replan`. This applies
+to Down-bearing and musical Up-only packets. Owner mismatch, unavailable
+queries, identity drift, lease rejection, target drift, and modifier rejection
+keep their separate fail-closed outcomes and do not become Focus pauses.
+
+After a staged candidate's deadline wait returns `Due`, the worker preserves
+and sends that candidate after final admission, even if the wake is late enough
+for another packet to become eligible. The next outer scheduler evaluation
+then selects newly eligible work and applies the normal Up-before-Down
+coalescing rule. `Interrupted` discards the staged candidate and returns to
+the worker loop for control/focus handling and fresh selection. A
+`PermitBusy` result also returns through fresh scheduler selection; its
+immediate retry and bounded backoff remain separate from the deadline `Due`
+path.
+
 The verified-target cache records only a successful all-instrument-keys-up
 preflight for one exact HWND/generation. It is not a cached foreground or
 process-owner proof. A transient owner-authority read or final-permit Busy
