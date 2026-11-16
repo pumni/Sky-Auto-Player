@@ -451,7 +451,7 @@ impl PreparedDispatchSchedule {
             intents: down_intents,
         } = build_down_arena(
             schedule,
-            || checkpoint(),
+            &mut checkpoint,
             true,
             false,
             "executor Down intent count changed during preparation",
@@ -757,7 +757,7 @@ impl DispatchExecutor {
             intents: down_intents,
         } = build_down_arena(
             schedule,
-            || checkpoint(),
+            &mut checkpoint,
             false,
             true,
             "executor Down intent count changed during compilation",
