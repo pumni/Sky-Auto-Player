@@ -3,6 +3,53 @@ use super::*;
 
 #[cfg(feature = "test-support")]
 #[test]
+fn playback_cpu_baselines_precede_epoch_qpc_without_rebasing_observer_metrics() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("CPU ordering session");
+
+    session.arm(0).expect("worker arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    let trace = hook.cpu_baseline_trace_for_test();
+    let (startup_order, startup_thread, startup_process) = trace.startup.expect("startup pair");
+    let (observer_order, observer_thread, observer_process) =
+        trace.observer.expect("observer startup pair");
+    let (playback_order, _, _) = trace.playback.expect("playback pair");
+    let epoch_qpc_order = trace
+        .epoch_qpc_sample_completed
+        .expect("selected playback epoch QPC sample");
+
+    assert!(startup_order < observer_order);
+    assert!(observer_order < playback_order);
+    assert!(playback_order < epoch_qpc_order);
+    assert_eq!(
+        (observer_thread, observer_process),
+        (startup_thread, startup_process),
+        "observer metrics retain their pre-Ready CPU attribution pair"
+    );
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+
+    session.quit().expect("quit before dispatch");
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
 fn worker_final_gate_rechecks_retained_process_identity_before_down() {
     struct ForegroundOverrideReset;
 

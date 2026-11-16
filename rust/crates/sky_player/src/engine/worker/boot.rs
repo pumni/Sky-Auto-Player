@@ -495,6 +495,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
 
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.record_startup_cpu_baseline(start_thread_cpu_us, start_process_cpu_us);
+    }
     worker_timing.start_wall_time_us = initial_now_us;
     worker_timing.start_thread_cpu_us = start_thread_cpu_us;
     worker_timing.start_process_cpu_us = start_process_cpu_us;
@@ -512,6 +516,13 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         let pending = super::dispatch::PendingObservationQueue::default();
         core.observer.pending = Some(pending.clone());
         let observer_timing = core.timing.expect("worker timing initialized");
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = startup_hook {
+            hook.record_observer_cpu_baseline(
+                observer_timing.start_thread_cpu_us,
+                observer_timing.start_process_cpu_us,
+            );
+        }
         core.observer.runtime = match super::ObserverRuntime::start(
             pending,
             qpc_clock,
@@ -796,6 +807,19 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         );
     }
 
+    // Capture playback CPU attribution after every pre-arm gate but before
+    // the selected epoch QPC sample. The observer keeps its earlier copied
+    // startup pair, which describes its own lifetime.
+    let playback_start_thread_cpu_us = current_thread_cpu_time_us();
+    let playback_start_process_cpu_us = current_process_cpu_time_us();
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.record_playback_cpu_baseline(
+            playback_start_thread_cpu_us,
+            playback_start_process_cpu_us,
+        );
+    }
+
     let epoch_base = match qpc_clock.now() {
         Ok(now) => now,
         Err(error) => {
@@ -806,6 +830,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.record_epoch_qpc_sample_completed();
+    }
     let (epoch_qpc, playback, epoch_wall_us) = match compute_playback_epoch(
         qpc_clock,
         epoch_base,
@@ -820,8 +848,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     if let Some(timing) = core.timing.as_mut() {
         timing.start_wall_time_us = epoch_wall_us;
         timing.last_cpu_metrics_sample_us = epoch_wall_us;
-        timing.start_thread_cpu_us = current_thread_cpu_time_us();
-        timing.start_process_cpu_us = current_process_cpu_time_us();
+        timing.start_thread_cpu_us = playback_start_thread_cpu_us;
+        timing.start_process_cpu_us = playback_start_process_cpu_us;
     }
 
     shared

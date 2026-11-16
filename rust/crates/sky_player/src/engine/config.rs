@@ -273,6 +273,7 @@ pub(crate) struct AdmittedNativeSessionOptions {
 #[derive(Debug, Default)]
 pub struct StartupOrderingHook {
     sequence: AtomicU64,
+    cpu_baseline_trace: std::sync::Mutex<CpuBaselineOrderingTrace>,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
     release_floor_control_enabled: AtomicBool,
@@ -316,6 +317,24 @@ pub struct StartupOrderingHook {
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CpuBaselineOrderingTrace {
+    next_sequence: u64,
+    pub(crate) startup: Option<(u64, u64, u64)>,
+    pub(crate) observer: Option<(u64, u64, u64)>,
+    pub(crate) playback: Option<(u64, u64, u64)>,
+    pub(crate) epoch_qpc_sample_completed: Option<u64>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+enum CpuBaselineDestination {
+    Startup,
+    Observer,
+    Playback,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum StartupCheckpoint {
@@ -345,6 +364,56 @@ pub enum StartupCheckpoint {
 
 #[cfg(any(test, feature = "test-support"))]
 impl StartupOrderingHook {
+    fn record_cpu_baseline_pair(&self, pair: (u64, u64), destination: CpuBaselineDestination) {
+        if let Ok(mut trace) = self.cpu_baseline_trace.lock() {
+            trace.next_sequence = trace.next_sequence.saturating_add(1);
+            let sequence = trace.next_sequence;
+            let event = Some((sequence, pair.0, pair.1));
+            match destination {
+                CpuBaselineDestination::Startup => trace.startup = event,
+                CpuBaselineDestination::Observer => trace.observer = event,
+                CpuBaselineDestination::Playback => trace.playback = event,
+            }
+        }
+    }
+
+    pub(crate) fn record_startup_cpu_baseline(&self, thread_cpu_us: u64, process_cpu_us: u64) {
+        self.record_cpu_baseline_pair(
+            (thread_cpu_us, process_cpu_us),
+            CpuBaselineDestination::Startup,
+        );
+    }
+
+    pub(crate) fn record_observer_cpu_baseline(&self, thread_cpu_us: u64, process_cpu_us: u64) {
+        self.record_cpu_baseline_pair(
+            (thread_cpu_us, process_cpu_us),
+            CpuBaselineDestination::Observer,
+        );
+    }
+
+    pub(crate) fn record_playback_cpu_baseline(&self, thread_cpu_us: u64, process_cpu_us: u64) {
+        self.record_cpu_baseline_pair(
+            (thread_cpu_us, process_cpu_us),
+            CpuBaselineDestination::Playback,
+        );
+    }
+
+    pub(crate) fn record_epoch_qpc_sample_completed(&self) {
+        if let Ok(mut trace) = self.cpu_baseline_trace.lock() {
+            trace.next_sequence = trace.next_sequence.saturating_add(1);
+            let sequence = trace.next_sequence;
+            trace.epoch_qpc_sample_completed = Some(sequence);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cpu_baseline_trace_for_test(&self) -> CpuBaselineOrderingTrace {
+        self.cpu_baseline_trace
+            .lock()
+            .map(|trace| *trace)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn record_unmatched_up_prepare(&self, intent_count: usize) {
         self.unmatched_up_prepare_count.fetch_add(
             u64::try_from(intent_count).unwrap_or(u64::MAX),
