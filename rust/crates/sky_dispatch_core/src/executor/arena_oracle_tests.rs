@@ -64,6 +64,31 @@ fn fixture() -> RuntimeSchedule {
     compile_runtime_intents(&actions, &allowed).expect("valid oracle schedule")
 }
 
+fn one_key_repeat_schedule(chord_count: usize) -> RuntimeSchedule {
+    let actions = (0..u32::try_from(chord_count).expect("test chord count"))
+        .flat_map(|index| {
+            let scheduled_us = u64::from(index) * 2;
+            [
+                KeyActionInput {
+                    source_action_index: index * 2,
+                    kind: ActionKind::Down,
+                    scheduled_us,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "capacity".into(),
+                },
+                KeyActionInput {
+                    source_action_index: index * 2 + 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: scheduled_us + 1,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "capacity".into(),
+                },
+            ]
+        })
+        .collect::<Vec<_>>();
+    compile_runtime_intents(&actions, &[0x15]).expect("valid one-key repeat schedule")
+}
+
 fn chord_oracle(schedule: &RuntimeSchedule, chords: &[DownChordHeaderTicks]) -> Vec<ChordOracle> {
     chords
         .iter()
@@ -377,28 +402,7 @@ fn caller_specific_invalid_range_and_timestamp_errors_remain_stable() {
 
 #[test]
 fn prepared_builder_keeps_its_first_chord_checkpoint_boundary() {
-    let actions = (0..5_000_u32)
-        .flat_map(|index| {
-            let scheduled_us = u64::from(index) * 2;
-            [
-                KeyActionInput {
-                    source_action_index: index * 2,
-                    kind: ActionKind::Down,
-                    scheduled_us,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: index * 2 + 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: scheduled_us + 1,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "up".into(),
-                },
-            ]
-        })
-        .collect::<Vec<_>>();
-    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("large schedule");
+    let schedule = one_key_repeat_schedule(5_000);
     assert_eq!(schedule.down_chords.len(), 5_000);
 
     let mut checkpoints = 0usize;
@@ -423,4 +427,28 @@ fn prepared_builder_keeps_its_first_chord_checkpoint_boundary() {
     };
     assert_eq!(error, "cancelled at prepared arena materialization");
     assert_eq!(checkpoints, 7);
+}
+
+#[test]
+fn prepared_retained_capacity_matrix_matches_reviewed_head() {
+    let frequency = NonZeroU64::new(1_000_000).expect("QPC frequency");
+    for (chord_count, expected_plan_bytes, expected_peak_bytes) in [
+        (0usize, 264usize, 480usize),
+        (1, 352, 1_574),
+        (100, 9_064, 82_358),
+        (5_000, 440_264, 4_080_758),
+    ] {
+        let schedule = one_key_repeat_schedule(chord_count);
+        let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
+            .expect("prepared capacity schedule");
+        let memory = prepared.memory_metrics();
+        assert_eq!(memory.chord_count, chord_count);
+        assert_eq!(memory.chord_capacity, chord_count);
+        assert_eq!(memory.intent_count, chord_count);
+        assert_eq!(memory.intent_capacity, chord_count);
+        assert_eq!(memory.unmatched_up_count, 0);
+        assert_eq!(memory.unmatched_up_capacity, 0);
+        assert_eq!(memory.plan_capacity_bytes, expected_plan_bytes);
+        assert_eq!(memory.overlapping_peak_capacity_bytes, expected_peak_bytes);
+    }
 }
